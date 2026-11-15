@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -125,9 +125,10 @@ test('real electron-builder resolves each native resource once from a complete c
   const configFile = await writePreviewBuildConfig({ configFile: path.join(root, 'resolved-build-config.json'), pkg, client, staged, output, version, buildIdentity });
   const resolved = await getConfig(client, configFile);
   assert.deepEqual(resolved.win.extraResources, sourceResources);
-  assert.equal(resolved.extraResources.length, pkg.build.extraResources.length + 2);
+  assert.equal(resolved.extraResources.length, pkg.build.extraResources.length + 3);
   assert.deepEqual(resolved.extraResources.slice(0, pkg.build.extraResources.length), pkg.build.extraResources);
   assert.deepEqual(resolved.extraResources.find(row => row.to === 'local-memory'), { from: staged, to: 'local-memory' });
+  assert.deepEqual(resolved.extraResources.find(row => row.to === 'local-memory/node_modules'), { from: path.join(staged, 'node_modules'), to: 'local-memory/node_modules' });
   assert.equal(resolved.afterPack, path.join(client, 'tools/package-client-native.mjs'));
   assert.equal(resolved.appId, pkg.build.appId);
   assert.equal(resolved.productName, pkg.build.productName);
@@ -208,4 +209,46 @@ test('SQLite lock guard rejects root 13 fallback independently in either staged 
       return true;
     });
   }
+});
+
+
+test('real electron-builder copies the complete SQLite dependency graph through explicit extraResources', async t => {
+  const f = await sqliteFixture(t);
+  await f.pkg('node_modules/bindings', 'bindings', '1.5.0');
+  await f.pkg('node_modules/better-sqlite3', 'better-sqlite3', '13.0.3', { bindings: '1.5.0' });
+  await f.pkg('Memory/AgentSourceReaders/node_modules/better-sqlite3', 'better-sqlite3', '12.11.1', { bindings: '1.5.0' });
+  const runtime = await stageLocalMemory(f.options);
+  const manifest = new URL('../../../wanx/apps/personal-client/package.json', import.meta.url);
+  const require = createRequire(manifest);
+  const configModule = process.env.MEMOBOX_TEST_BUILDER_CONFIG || require.resolve('app-builder-lib/out/util/config/config.js');
+  const { getConfig } = require(configModule);
+  const { getFileMatchers, copyFiles } = require(path.resolve(path.dirname(configModule), '../../fileMatcher.js'));
+  const pkg = JSON.parse(await readFile(manifest, 'utf8'));
+  const client = path.join(f.root, 'client'), output = path.join(f.root, 'artifacts'); await mkdir(client);
+  const options = { defaultSrc: client, customBuildOptions: {}, globalOutDir: output, macroExpander: value => value };
+  const legacy = path.join(f.root, 'legacy-resources');
+  await copyFiles(getFileMatchers({ extraResources: [{ from: f.destination, to: 'local-memory' }] }, 'extraResources', legacy, options));
+  const legacyRoot = path.join(legacy, 'local-memory');
+  await assert.rejects(readFile(path.join(legacyRoot, 'node_modules/bindings/package.json')), { code: 'ENOENT' });
+  assert.throws(() => createRequire(path.join(legacyRoot, 'Memory/AgentSourceReaders/node_modules/better-sqlite3/package.json')).resolve('bindings'), { code: 'MODULE_NOT_FOUND' });
+  const configFile = await writePreviewBuildConfig({ configFile: path.join(f.root, 'resolved-build-config.json'), pkg, client, staged: f.destination, output, version: '1.0.6-windows-preview.2', buildIdentity: { sourceCommit: 'fixture' } });
+  const config = await getConfig(client, configFile);
+  const resources = path.join(output, 'win-unpacked/resources');
+  const matchers = getFileMatchers(config, 'extraResources', resources, options).filter(matcher => matcher.from === f.destination || matcher.from === path.join(f.destination, 'node_modules'));
+  assert.equal(matchers.length, 2);
+  await copyFiles(matchers);
+  const copied = path.join(resources, 'local-memory');
+  assert.equal(JSON.parse(await readFile(path.join(copied, 'node_modules/bindings/package.json'))).version, '1.5.0');
+  const expected = { 'node_modules/better-sqlite3': '13.0.3', 'Memory/AgentSourceReaders/node_modules/better-sqlite3': '12.11.1', 'node_modules/@memmy/agent-source-readers/node_modules/better-sqlite3': '12.11.1' };
+  assert.deepEqual(Object.fromEntries(runtime.packages.filter(item => item.name === 'better-sqlite3').map(item => [item.path, item.version])), expected);
+  const bindingsEntry = await realpath(path.join(copied, 'node_modules/bindings/dist/index.js'));
+  for (const [relative, version] of Object.entries(expected)) {
+    const packageFile = path.join(copied, relative, 'package.json');
+    assert.equal(JSON.parse(await readFile(packageFile)).version, version);
+    const resolve = createRequire(packageFile).resolve;
+    assert.equal(await realpath(resolve('bindings')), bindingsEntry);
+    assert.equal(await realpath(resolve('./dist/index.js')), await realpath(path.join(copied, relative, 'dist/index.js')));
+  }
+  const diagnostics = await assertNativeSqliteLock({ source: f.source, destination: copied, packages: runtime.packages });
+  assert.equal(diagnostics.length, 5);
 });

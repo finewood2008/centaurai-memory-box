@@ -88,6 +88,9 @@ export async function writePreviewBuildConfig({ configFile, pkg, client, staged,
     directories: { ...pkg.build.directories, output },
     extraMetadata: { version, wanxBuild: buildIdentity },
     extraResources: [...(pkg.build.extraResources || []), { from: staged, to: 'local-memory' },
+      // electron-builder excludes a copy source's root node_modules even for
+      // extraResources. Copy that directory explicitly to preserve the graph.
+      { from: path.join(staged, 'node_modules'), to: 'local-memory/node_modules' },
       { from: path.join(client, 'shell/windows-private-acl.ps1'), to: 'security/windows-private-acl.ps1' }],
     win: { ...pkg.build.win, signExecutable: false, executableName: 'WANX', requestedExecutionLevel: 'asInvoker', target: [{ target: 'nsis', arch: ['x64'] }],
       artifactName: `CentaurAI-MemoBox-${version}-windows-x64.exe` },
