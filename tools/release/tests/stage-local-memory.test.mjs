@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { stageLocalMemory } from '../stage-local-memory.mjs';
-import { assertReleaseTargetFree, nodeGypRebuildArgs, previewVersion } from '../package-windows-preview.mjs';
+import { assertNativeSqliteLock, assertReleaseTargetFree, nodeGypRebuildArgs, previewVersion, writePreviewBuildConfig } from '../package-windows-preview.mjs';
 
 async function fixture(t) {
   const root = await mkdtemp(path.join(tmpdir(), 'memobox-release-stage-'));
@@ -100,4 +102,110 @@ test('real node-gyp parser keeps the Electron target out of positional gyp input
   assert.equal(current.opts.arch, 'x64');
   assert.equal(current.opts['dist-url'], 'https://electronjs.org/headers');
   assert.deepEqual(current.todo, [{ name: 'rebuild', args: [] }]);
+});
+
+
+test('real electron-builder resolves each native resource once from a complete config file', async t => {
+  const manifest = new URL('../../../wanx/apps/personal-client/package.json', import.meta.url);
+  const require = createRequire(manifest);
+  const { getConfig } = require(process.env.MEMOBOX_TEST_BUILDER_CONFIG || 'app-builder-lib/out/util/config/config.js');
+  const pkg = JSON.parse(await readFile(manifest, 'utf8'));
+  const root = await mkdtemp(path.join(tmpdir(), 'memobox-release-config-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const client = path.join(root, 'client'); await mkdir(client);
+  await writeFile(path.join(client, 'package.json'), JSON.stringify(pkg));
+  const sourceResources = pkg.build.win.extraResources;
+  assert.ok(sourceResources.length > 0, 'fixture includes the actual packaged Windows network binaries');
+  const old = await getConfig(client, null, structuredClone(pkg.build));
+  assert.equal(old.win.extraResources.length, sourceResources.length * 2, 'legacy object config schedules both disk and option FileSets');
+  const extendsOnly = await getConfig(client, null, { ...structuredClone(pkg.build), extends: null });
+  assert.equal(extendsOnly.win.extraResources.length, sourceResources.length * 2, 'extends:null alone cannot prevent the package build merge');
+  const version = '1.0.6-windows-preview.2', buildIdentity = { sourceCommit: 'fixture-commit', distributionClass: 'unsigned-internal-only' };
+  const staged = path.join(root, 'staged'), output = path.join(root, 'artifacts');
+  const configFile = await writePreviewBuildConfig({ configFile: path.join(root, 'resolved-build-config.json'), pkg, client, staged, output, version, buildIdentity });
+  const resolved = await getConfig(client, configFile);
+  assert.deepEqual(resolved.win.extraResources, sourceResources);
+  assert.equal(resolved.extraResources.length, pkg.build.extraResources.length + 2);
+  assert.deepEqual(resolved.extraResources.slice(0, pkg.build.extraResources.length), pkg.build.extraResources);
+  assert.deepEqual(resolved.extraResources.find(row => row.to === 'local-memory'), { from: staged, to: 'local-memory' });
+  assert.equal(resolved.afterPack, path.join(client, 'tools/package-client-native.mjs'));
+  assert.equal(resolved.appId, pkg.build.appId);
+  assert.equal(resolved.productName, pkg.build.productName);
+  assert.equal(resolved.win.executableName, 'WANX');
+  assert.equal(resolved.win.signExecutable, false);
+  assert.notEqual(resolved.win.signAndEditExecutable, false, 'unsigned previews retain icon and executable metadata editing');
+  assert.equal(resolved.forceCodeSigning, false);
+  assert.equal(resolved.nsis.include, path.join(client, 'shell/installer.nsh'));
+  assert.equal(resolved.nsis.deleteAppDataOnUninstall, false);
+  assert.equal(resolved.directories.output, output);
+  assert.deepEqual(resolved.extraMetadata, { version, wanxBuild: buildIdentity });
+  assert.deepEqual(resolved.files, (await getConfig(client)).files);
+});
+
+test('packaging CLI exits nonzero even if a dependency resets exitCode before exit', () => {
+  const script = new URL('../package-windows-preview.mjs', import.meta.url);
+  const result = spawnSync(process.execPath, ['--import', 'data:text/javascript,process.on("beforeExit",()=>{process.exitCode=0})', fileURLToPath(script), '--version', 'invalid'], { encoding: 'utf8', timeout: 10_000 });
+  assert.ifError(result.error);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /WINDOWS_PREVIEW_VERSION_REQUIRED/);
+});
+
+
+async function sqliteFixture(t) {
+  const f = await fixture(t);
+  await f.pkg('Memory', '@memmy/memory', '2.1.7', { 'better-sqlite3': '^13.0.3' });
+  await f.pkg('App/backend', '@memmy/backend', '0.0.0', { '@memmy/agent-source-readers': 'workspace:*' });
+  await f.pkg('Memory/AgentSourceReaders', '@memmy/agent-source-readers', '0.0.0', { 'better-sqlite3': '^12.6.3' });
+  await f.pkg('Memory/AgentSourceReaders/node_modules/better-sqlite3', 'better-sqlite3', '12.11.1');
+  await symlink(path.join(f.source, 'Memory/AgentSourceReaders'), path.join(f.source, 'node_modules/@memmy/agent-source-readers'), process.platform === 'win32' ? 'junction' : 'dir');
+  await f.file('package-lock.json', JSON.stringify({ lockfileVersion: 3, packages: {
+    'Memory': { name: '@memmy/memory', dependencies: { 'better-sqlite3': '^13.0.3' } },
+    'Memory/AgentSourceReaders': { name: '@memmy/agent-source-readers', dependencies: { 'better-sqlite3': '^12.6.3' } },
+    'node_modules/better-sqlite3': { version: '13.0.3' },
+    'Memory/AgentSourceReaders/node_modules/better-sqlite3': { version: '12.11.1' },
+  } }));
+  f.options.packages = ['Memory', 'Memory/AgentSourceReaders', 'App/backend'];
+  f.options.required = ['Memory/dist/index.js'];
+  return f;
+}
+
+test('SQLite lock guard accepts 12/13 and verifies canonical and aliased consumers with relative diagnostics', async t => {
+  const f = await sqliteFixture(t), runtime = await stageLocalMemory(f.options);
+  const diagnostics = await assertNativeSqliteLock({ source: f.source, destination: f.destination, packages: runtime.packages });
+  assert.equal(diagnostics.length, 5, 'two source consumers and three staged physical consumers');
+  assert.deepEqual([...new Set(diagnostics.map(item => item.version))].sort(), ['12.11.1', '13.0.3']);
+  assert.equal(diagnostics.filter(item => item.scope === 'staged' && item.version === '12.11.1').length, 2);
+  for (const item of diagnostics) {
+    assert.equal(item.version, item.expectedVersion);
+    assert.equal(path.isAbsolute(item.consumer), false);
+    assert.equal(path.isAbsolute(item.sqlitePath), false);
+    assert.equal(item.sqlitePath.includes(f.root), false);
+  }
+});
+
+test('SQLite lock guard rejects a source readers install silently falling back to root 13', async t => {
+  const f = await sqliteFixture(t);
+  await rm(path.join(f.source, 'Memory/AgentSourceReaders/node_modules/better-sqlite3'), { recursive: true });
+  const runtime = await stageLocalMemory(f.options);
+  await assert.rejects(assertNativeSqliteLock({ source: f.source, destination: f.destination, packages: runtime.packages }), error => {
+    assert.match(error.message, /SQLITE_LOCK_VERSION_MISMATCH/);
+    const detail = JSON.parse(error.message.slice(error.message.indexOf(':') + 1));
+    assert.deepEqual(detail, { scope: 'source', consumer: 'Memory/AgentSourceReaders', lockPath: 'Memory/AgentSourceReaders/node_modules/better-sqlite3', expectedVersion: '12.11.1', sqlitePath: 'node_modules/better-sqlite3', version: '13.0.3' });
+    return true;
+  });
+});
+
+test('SQLite lock guard rejects root 13 fallback independently in either staged reader copy', async t => {
+  for (const copy of ['Memory/AgentSourceReaders', 'node_modules/@memmy/agent-source-readers']) {
+    const f = await sqliteFixture(t), runtime = await stageLocalMemory(f.options);
+    await rm(path.join(f.destination, copy, 'node_modules/better-sqlite3'), { recursive: true });
+    await assert.rejects(assertNativeSqliteLock({ source: f.source, destination: f.destination, packages: runtime.packages }), error => {
+      assert.match(error.message, /SQLITE_LOCK_VERSION_MISMATCH/);
+      const detail = JSON.parse(error.message.slice(error.message.indexOf(':') + 1));
+      assert.equal(detail.scope, 'staged'); assert.equal(detail.consumer, copy);
+      assert.equal(detail.version, '13.0.3'); assert.equal(detail.expectedVersion, '12.11.1');
+      assert.equal(detail.sqlitePath, 'node_modules/better-sqlite3');
+      return true;
+    });
+  }
 });

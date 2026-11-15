@@ -140,7 +140,16 @@ jobs:
           node ../../../node_modules/vitest/vitest.mjs run src/pages/memory/tests/wanx-my-ai.interaction.test.tsx src/pages/memory/tests/wanx-memory-backup.interaction.test.tsx src/pages/memory/tests/source-collection-profile.interaction.test.tsx --cache=false --reporter=dot --silent=true
           if ($LASTEXITCODE -ne 0) { throw 'My AI interaction validation failed' }
       - name: Package and verify unpacked Windows runtime
-        run: node tools/release/package-windows-preview.mjs --out "$env:MEMOBOX_PREVIEW_OUT"
+        run: |
+          node tools/release/package-windows-preview.mjs --out "$env:MEMOBOX_PREVIEW_OUT"
+          if ($LASTEXITCODE -ne 0) { throw 'Windows packaging failed' }
+          $artifacts = Join-Path $env:MEMOBOX_PREVIEW_OUT 'artifacts'
+          $installerName = "CentaurAI-MemoBox-${env:MEMOBOX_RELEASE_VERSION}-windows-x64.exe"
+          foreach ($name in @($installerName, 'SHA256SUMS.txt', 'verification-windows-preview.json', 'release-notes.md')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $artifacts $name) -PathType Leaf)) { throw "Missing verified artifact: $name" }
+          }
+          $verified = Get-Content -LiteralPath (Join-Path $artifacts 'verification-windows-preview.json') -Raw | ConvertFrom-Json
+          if ($verified.sourceCommit -ne $env:GITHUB_SHA -or $verified.version -ne $env:MEMOBOX_RELEASE_VERSION -or $verified.smoke.ok -ne $true -or $verified.nativeSmoke.nativeModules -lt 1) { throw 'Packaged runtime verification is incomplete' }
       - name: Upload verified build outputs
         uses: actions/upload-artifact@v4
         with:
