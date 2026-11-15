@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "observedDate": "2026-10-30",
+  "timezone": "Asia/Singapore",
+  "status": "unresolved_handoff",
+  "diagnosticSourceBase": "3d16814b38b6edd3135454992852c6c6c260b2de",
+  "handoffBase": "a653a5f670ffd33a75f4b6d570057e1d04d1d3ff",
+  "device": {
+    "name": "CentaurOS-79",
+    "reportedRuntime": "build-adaa7c673af648bc94d193e7f62f9b50",
+    "overlayEndpoint": "http://100.120.61.157:8088/mcp/space",
+    "lanAddress": "192.168.0.79"
+  },
+  "network": {
+    "wanxClient": "embedded userspace NetBird",
+    "externalAgentSystemRouteInterface": "utun1024",
+    "externalAgentSystemRouteGateway": "198.18.0.1",
+    "directInitialize": "connection closed or HTTP timeout"
+  },
+  "observations": {
+    "boxOverlayHealthHTTP": 200,
+    "boxOverlayHealthOk": true,
+    "viaTemporaryRelayHTTP": 401,
+    "viaTemporaryRelayBody": {
+      "code": "BOX_PLATFORM_SESSION_EXPIRED",
+      "detail": "BOX_PLATFORM_SESSION_EXPIRED"
+    }
+  },
+  "tests": {
+    "scope": "targeted client regressions; not full backend or production acceptance",
+    "results": {
+      "personal": {
+        "tests": 306,
+        "pass": 306,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "team": {
+        "tests": 334,
+        "pass": 334,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      }
+    },
+    "realSDK": "official Python MCP SDK 1.28.1",
+    "realInitialize": "HTTP 401; initialization, tools and reads did not pass"
+  },
+  "installedTemporaryClient": {
+    "edition": "personal",
+    "buildId": "local-space-mcp-netbird-personal-20261030",
+    "asarSHA256": "e8834b91dfcb08d323a0f61d3bf21f364120ed6206669a24b1c9cd793ff456b1",
+    "originalAsarSHA256": "e8838e86e770daa38663827938c268c45494a2e4732102c91a1b6faf8d94fd60",
+    "otherPackagedFilesPreserved": 1558,
+    "appInstallationRecordsUnchanged": true
+  },
+  "referencePatch": {
+    "file": "wanx-space-mcp-local-relay-reference-20261030.patch",
+    "sha256": "2eb6619297a62197356d5f2d0f3aef58d75188ada9dbfe39e2b737456b761fd6",
+    "kind": "unadopted local experiment; do not auto-apply or deploy"
+  },
+  "boundaries": {
+    "serverChanged": false,
+    "serverRestarted": false,
+    "productionFileSHAConfirmed": false,
+    "productionAcceptancePassed": false,
+    "fullBackendMakeAllRun": false,
+    "referenceCodeIntegratedByThisHandoff": false
+  }
+}

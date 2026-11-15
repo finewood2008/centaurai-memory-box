@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 1,
+  "name": "好问",
+  "entry": "src/app.js",
+  "capabilities": [
+    "data",
+    "model",
+    "files",
+    "knowledge",
+    "dialogue"
+  ],
+  "collections": {
+    "settings": {
+      "name": "string",
+      "persona": "string",
+      "handoffMessage": "string",
+      "handoffWords": "string",
+      "threshold": "number",
+      "acceptance": "number",
+      "enabled": "boolean",
+      "revision": "number"
+    },
+    "config_versions": {
+      "snapshot": "string",
+      "note": "string",
+      "created": "number"
+    },
+    "documents": {
+      "title": "string",
+      "body": "string",
+      "sourceId": "string",
+      "digest": "string",
+      "status": "string",
+      "updated": "number"
+    },
+    "canons": {
+      "question": "string",
+      "answer": "string",
+      "category": "string",
+      "status": "string",
+      "source": "string",
+      "version": "number",
+      "updated": "number"
+    },
+    "canon_history": {
+      "canonId": "string",
+      "snapshot": "string",
+      "action": "string",
+      "created": "number"
+    },
+    "turns": {
+      "question": "string",
+      "answer": "string",
+      "kind": "string",
+      "evidence": "string",
+      "canonId": "string",
+      "feedback": "string",
+      "ticketId": "string",
+      "created": "number"
+    },
+    "handoffs": {
+      "turnId": "string",
+      "question": "string",
+      "answer": "string",
+      "status": "string",
+      "reason": "string",
+      "created": "number",
+      "draftId": "string"
+    },
+    "tests": {
+      "question": "string",
+      "expected": "string",
+      "contains": "string"
+    },
+    "runs": {
+      "fingerprint": "string",
+      "results": "string",
+      "previousId": "string",
+      "created": "number",
+      "reviewed": "boolean"
+    },
+    "audit": {
+      "action": "string",
+      "target": "string",
+      "detail": "string",
+      "created": "number"
+    },
+    "preferences": {
+      "name": "string",
+      "instructions": "string"
+    },
+    "conversations": {
+      "title": "string",
+      "created": "number",
+      "updated": "number",
+      "business": "boolean",
+      "sources": "string"
+    },
+    "messages": {
+      "conversationId": "string",
+      "role": "string",
+      "content": "string",
+      "supplement": "string",
+      "status": "string",
+      "evidence": "string",
+      "notes": "string",
+      "created": "number",
+      "sourceScope": "string"
+    }
+  }
+}

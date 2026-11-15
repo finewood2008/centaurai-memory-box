@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Commits run without automatic formatting, checks, tests, or builds.
+# Run make precommit / make all explicitly when needed, or rely on CI.
+exit 0

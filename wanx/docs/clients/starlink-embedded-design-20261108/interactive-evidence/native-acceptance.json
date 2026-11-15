@@ -1,0 +1,22 @@
+{
+  "kind": "installed-native-compact-acceptance",
+  "checks": [
+    "original_profile_and_previous_local_device",
+    "actual_node_drag_without_accidental_evidence_click",
+    "native_preview_and_correction_new_version_original_bytes_unchanged",
+    "official_host_installed_new_full_candidate_via_more"
+  ],
+  "warehouse": "b1cc7949-62b0-474e-8264-99ca2360e265",
+  "source": "e9efa516-aea5-4a7b-a34b-176d6c46ee3f",
+  "before": {
+    "version": "09386d9d-7029-4d5a-9910-ea6490dbe84d",
+    "raw_sha256": "2cdfbcaddfbfed726bff6cf7f20fc42544661704634b16663e6ae4ce3baf1d4b"
+  },
+  "after": {
+    "version": "f85e7652-2c45-4bb2-94e9-4e7563fd3479",
+    "raw_sha256": "2cdfbcaddfbfed726bff6cf7f20fc42544661704634b16663e6ae4ce3baf1d4b"
+  },
+  "fullVersion": "0.3.6-rc.20261108.compact.4",
+  "ready_for_full_gui": true,
+  "passed": true
+}

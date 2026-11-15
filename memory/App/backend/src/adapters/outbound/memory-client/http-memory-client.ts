@@ -1,0 +1,499 @@
+import { PanelTaskCheckOutputSchema } from "@memmy/local-api-contracts";
+import {PanelLogsOutputSchema,PanelLogDetailOutputSchema} from "@memmy/local-api-contracts";
+import {PanelStatsOutputSchema} from "@memmy/local-api-contracts";
+import {PanelOverviewStatsOutputSchema} from "@memmy/local-api-contracts";
+import { PanelBrowseOutputSchema } from "@memmy/local-api-contracts";
+import { PanelTaskSummariesOutputSchema, PanelTaskDetailOutputSchema, PanelTaskFieldOutputSchema } from "@memmy/local-api-contracts";
+/** Http memory client module. */
+import {
+  MemoryAgentSourceScanStateSchema,
+  MemoryScanControlResponseSchema,
+  MemoryAgentSourceListSchema,
+  AgentSourceScanJobResponseSchema,
+  ScanResultPageSchema,
+  OkResponseSchema,
+  AddMemoryOutputSchema,
+  ApiErrorBodySchema,
+  CloseSessionOutputSchema,
+  CompleteTurnOutputSchema,
+  SourceTurnCompleteOutputSchema,
+  DeleteMemoryOutputSchema,
+  EmbeddingInferenceOutputSchema,
+  DeletePanelTaskOutputSchema,
+  EnqueueImportSummariesOutputSchema,
+  GetMemoryOutputSchema,
+  MemoryApiLogsOutputSchema,
+  MemoryHealthSnapshotSchema,
+  MemoryTokenBudgetDtoSchema,
+  MemoryProcessingStatusOutputSchema,
+  MemoryReloadConfigOutputSchema,
+  RecallEvidenceOutputSchema,
+  PanelAnalysisOutputSchema,
+  PanelItemsOutputSchema,
+  PanelOverviewOutputSchema,
+  PanelTasksOutputSchema,
+  OpenSessionOutputSchema,
+  SearchOutputSchema,
+  StartTurnOutputSchema,
+  RetryMemoryProcessingOutputSchema,
+  WorkerRunOutputSchema
+} from "@memmy/local-api-contracts";
+import { z, type ZodType } from "zod";
+import { MemoryLayerError, MemoryLayerNetworkError } from "./errors.js";
+import { buildMemoryLayerUrl, MEMORY_LAYER_PATHS } from "./memory-layer-endpoints.js";
+import { retryWithBackoff } from "./retry.js";
+import type { MemoryClient, MemoryRequestContext } from "./types.js";
+import { normalizeTimeZoneOffset } from "../../../utils/time-zone.js";
+
+export interface MemoryLayerConfig {
+  /** Base url. */
+  baseUrl: string;
+  /** Token. */
+  token: string;
+  /** Timeout ms. */
+  timeoutMs: number;
+  /** Max retries. */
+  maxRetries: number;
+}
+
+export interface CreateHttpMemoryClientOptions {
+  /** Fetch impl. */
+  fetchImpl?: typeof fetch;
+}
+
+type PathKey = keyof typeof MEMORY_LAYER_PATHS;
+
+const ObservedSkillApprovalOutputSchema = z.object({
+  id: z.string().min(1),
+  status: z.literal("activated"),
+  serverTime: z.string().datetime()
+});
+const ObservedSkillUpdateOutputSchema = ObservedSkillApprovalOutputSchema.extend({
+  version: z.number().int().positive()
+});
+
+/** Creates create http memory client. */
+export function createHttpMemoryClient(
+  config: MemoryLayerConfig,
+  options: CreateHttpMemoryClientOptions = {}
+): MemoryClient {
+  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+
+  async function request<Output>(
+    method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
+    pathKey: PathKey,
+    responseSchema: ZodType<Output>,
+    requestOptions: {
+      body?: unknown;
+      params?: Readonly<Record<string, string>>;
+      query?: Readonly<Record<string, unknown>>;
+      signal?: AbortSignal;
+      timeoutMs?: number;
+      maxRetries?: number;
+      context?: MemoryRequestContext;
+    } = {}
+  ): Promise<Output> {
+    const url = appendQuery(buildMemoryLayerUrl(config.baseUrl, pathKey, requestOptions.params), requestOptions.query);
+
+    const json = await retryWithBackoff(
+      async () => {
+        const timeoutSignal = AbortSignal.timeout(requestOptions.timeoutMs ?? config.timeoutMs);
+        const hasBody = requestOptions.body !== undefined;
+        const response = await fetchWithMappedNetworkErrors(fetchImpl, url, {
+          method,
+          headers: {
+            ...(hasBody ? { "content-type": "application/json" } : {}),
+            "x-memmy-time-zone": normalizeTimeZoneOffset(requestOptions.context?.timeZone),
+            ...(requestOptions.context?.userId ? { "x-memmy-user-id": requestOptions.context.userId } : {}),
+            authorization: `Bearer ${config.token}`
+          },
+          body: hasBody ? JSON.stringify(requestOptions.body) : undefined,
+          signal: combineAbortSignals(timeoutSignal, requestOptions.signal ?? requestOptions.context?.signal)
+        }, requestOptions.signal ?? requestOptions.context?.signal);
+
+        if (response.ok) {
+          try {
+            return await response.json();
+          } catch (error) {
+            throw mappedAbortError(error, requestOptions.signal ?? requestOptions.context?.signal) ?? error;
+          }
+        }
+
+        // Older protocol-1 services expose scanning only to Viewer. Their health
+        // version does not prove support for the authenticated desktop scan API.
+        if (response.status === 404 && pathKey.startsWith("agentSource")) {
+          throw new MemoryLayerError("memory_scan_upgrade_required", 503,
+            "The running Memory service does not support unified scanning. Update and restart that service, then try again.");
+        }
+        if (response.status >= 500) {
+          throw new MemoryLayerError("memory_layer_unavailable", 503, "memory layer 5xx");
+        }
+
+        const rawBody = await response.json().catch(() => undefined);
+        const parsed = ApiErrorBodySchema.safeParse(rawBody);
+        if (parsed.success) {
+          throw new MemoryLayerError(parsed.data.error.code, response.status, parsed.data.error.message);
+        }
+        throw new MemoryLayerError(
+          response.status >= 500 ? "memory_layer_unavailable" : "internal",
+          response.status,
+          "memory layer returned an unrecognized error response",
+          rawBody
+        );
+      },
+      {
+        maxRetries: requestOptions.maxRetries ?? config.maxRetries,
+        signal: requestOptions.signal ?? requestOptions.context?.signal,
+        baseDelayMs: 100,
+        factor: 3,
+        jitter: 0.2,
+        shouldRetry: error => !requestOptions.signal?.aborted && !requestOptions.context?.signal?.aborted && shouldRetryMemoryLayerError(error)
+      }
+    );
+
+    return responseSchema.parse(json);
+  }
+
+  return {
+    agentSources: {
+      list: () => request("GET", "agentSources", MemoryAgentSourceListSchema),
+      getSyncAccess: () => request("GET", "agentSourcesSyncAccess", z.object({ disabledSourceIds: z.array(z.string()) })),
+      setSyncAccess: (sourceId, enabled) => request("PUT", "agentSourceSyncAccess", z.object({
+        ok: z.literal(true),
+        sourceId: z.string(),
+        syncDisabled: z.boolean()
+      }), { params: { sourceId }, body: { enabled }, maxRetries: 0 }),
+      start: (input) => request("POST", "agentSourceScan", AgentSourceScanJobResponseSchema, { body: input, maxRetries: 0 }),
+      status: () => request("GET", "agentSourceStatus", MemoryAgentSourceScanStateSchema),
+      results: (jobId, cursor = "0", limit = 100) => request("GET", "agentSourceResults", ScanResultPageSchema, { params: { jobId }, query: { cursor, limit } }),
+      pause: (input) => request("POST", "agentSourcePause", MemoryScanControlResponseSchema, { body: input ?? {}, maxRetries: 0 }),
+      cancel: (input) => request("POST", "agentSourceCancel", MemoryScanControlResponseSchema, { body: input ?? {}, maxRetries: 0 })
+    },
+    async health(context) {
+      return request("GET", "health", MemoryHealthSnapshotSchema, { context });
+    },
+
+    async reloadConfig(input = {}) {
+      return request("POST", "reloadConfig", MemoryReloadConfigOutputSchema, { body: input });
+    },
+
+    async getMemoryTokenBudget() {
+      return request("GET", "memoryTokenBudget", MemoryTokenBudgetDtoSchema);
+    },
+
+    async exportBundle() {
+      return request("GET", "exportBundle", z.record(z.string(), z.unknown()));
+    },
+
+    async getWanxStorage() {
+      return request("GET", "wanxStorage", z.object({
+        dataPath: z.string().min(1),
+        configured: z.boolean(),
+        result: z.object({ id: z.string(), failed: z.boolean() }).optional()
+      }), { maxRetries: 0, timeoutMs: 3000 });
+    },
+
+    async moveWanxStorage(input) {
+      return request("POST", "wanxStorage", z.object({ accepted: z.boolean() }), {
+        body: input, maxRetries: 0, timeoutMs: "restoreFrom" in input ? 120_000 : 5000
+      });
+    },
+
+    async snapshotWanxStorage(input) {
+      return request("POST", "wanxStorageSnapshot", z.object({ path: z.string().min(1) }), {
+        body: input, maxRetries: 0, timeoutMs: 120_000
+      });
+    },
+
+    async clearAllData() {
+      return request("DELETE", "clearAllData", z.object({
+        ok: z.literal(true),
+        clearedAt: z.string(),
+        cleared: z.record(z.string(), z.number())
+      }), { body: {} });
+    },
+
+    async openSession(input, context) {
+      return request("POST", "openSession", OpenSessionOutputSchema, { body: input, context });
+    },
+
+    async closeSession(input, context) {
+      const { sessionId, ...body } = input;
+      return request("POST", "closeSession", CloseSessionOutputSchema, {
+        params: { sessionId },
+        body,
+        context
+      });
+    },
+
+    async startTurn(input, context) {
+      return request("POST", "startTurn", StartTurnOutputSchema, { body: input, context });
+    },
+
+    async completeTurn(input, context) {
+      const { turnId, ...body } = input;
+      return request("POST", "completeTurn", CompleteTurnOutputSchema, {
+        params: { turnId },
+        body,
+        context
+      });
+    },
+
+    async completeSourceTurn(input, context) {
+      return request("POST", "completeSourceTurn", SourceTurnCompleteOutputSchema, { body: input, context });
+    },
+
+    async search(input, context) {
+      return request("POST", "search", SearchOutputSchema, { body: input, context });
+    },
+
+    async embeddingInference(input, options) {
+      return request("POST", "embeddingInference", EmbeddingInferenceOutputSchema, {
+        body: input,
+        signal: options?.signal,
+        maxRetries: 0
+      });
+    },
+
+    async addMemory(input, context) {
+      return request("POST", "addMemory", AddMemoryOutputSchema, { body: input, context });
+    },
+
+    async getMemory(input, context) {
+      return request("GET", "getMemory", GetMemoryOutputSchema, {
+        params: { id: input.memoryId },
+        context
+      });
+    },
+
+    async deleteMemory(input, context) {
+      const { memoryId, ...body } = input;
+      return request("DELETE", "deleteMemory", DeleteMemoryOutputSchema, {
+        params: { id: memoryId },
+        body,
+        context
+      });
+    },
+
+    async approveObservedSkill(memoryId, context) {
+      return request("POST", "approveObservedSkill", ObservedSkillApprovalOutputSchema, {
+        params: { id: memoryId }, body: {}, context, maxRetries: 0
+      });
+    },
+
+    async updateObservedSkill(memoryId, input, context) {
+      return request("PATCH", "updateObservedSkill", ObservedSkillUpdateOutputSchema, {
+        params: { id: memoryId }, body: input, context, maxRetries: 0
+      });
+    },
+
+    async recallEvidence(queryId, context) {
+      return request("GET", "recallEvidence", RecallEvidenceOutputSchema, {
+        params: { queryId },
+        context
+      });
+    },
+
+    async enqueueImportSummaries(memoryIds) {
+      return request("POST", "enqueueImportSummaries", EnqueueImportSummariesOutputSchema, {
+        body: memoryIds ? { memoryIds } : {}
+      });
+    },
+
+    async getMemoryProcessingStatus(memoryIds) {
+      return request("POST", "memoryProcessingStatus", MemoryProcessingStatusOutputSchema, {
+        body: { memoryIds }
+      });
+    },
+
+    async retryMemoryProcessing(memoryId) {
+      return request("POST", "retryMemoryProcessing", RetryMemoryProcessingOutputSchema, {
+        params: { id: memoryId },
+        body: {}
+      });
+    },
+
+    async runWorker(input) {
+      return request("POST", "runWorker", WorkerRunOutputSchema, {
+        body: {
+          limit: input.limit,
+          targetMemoryIds: input.targetMemoryIds,
+          priorityCohortOnly: input.priorityCohortOnly
+        },
+        signal: input.signal,
+        timeoutMs: input.timeoutMs,
+        maxRetries: 0
+      });
+    },
+
+    async panelMemory(id,context){
+      return request("GET","panelMemory",GetMemoryOutputSchema,{params:{memoryId:id},context,maxRetries:0});
+    },
+
+    async panelOverview(context) {
+      return request("GET", "panelOverview", PanelOverviewOutputSchema, { context, maxRetries: 0 });
+    },
+
+    async panelAnalysis(context) {
+      return request("GET", "panelAnalysis", PanelAnalysisOutputSchema, { context, maxRetries: 0 });
+    },
+
+    async panelItems(input, context) {
+      // Compatibility reads still run through the renderer's shared retry queue.
+      return request("GET", "panelItems", PanelItemsOutputSchema, { query: input, context, maxRetries: 0 });
+    },
+
+    async panelLogs(input,context) {return request("POST","panelLogs",PanelLogsOutputSchema,{body:input,context,maxRetries:0});},
+    async panelLogDetail(id,context) {return request("GET","panelLogDetail",PanelLogDetailOutputSchema,{params:{id:String(id)},context,maxRetries:0});},
+    async panelStats(context) {return request("GET","panelStats",PanelStatsOutputSchema,{context,maxRetries:0});},
+    async panelOverviewStats(context) {return request("GET","panelOverviewStats",PanelOverviewStatsOutputSchema,{context,maxRetries:0});},
+    async panelBrowse(input,context) {
+      return request("POST","panelBrowse",PanelBrowseOutputSchema,{body:input,context,maxRetries:0});
+    },
+    async panelTaskSummaries(input, context) {
+      return request("GET", "panelTaskSummaries", PanelTaskSummariesOutputSchema, {query: input, context, maxRetries: 0});
+    },
+    async panelTaskCheck(id, context) {
+      return request("GET", "panelTaskCheck", PanelTaskCheckOutputSchema, {params: {id}, context, maxRetries: 0});
+    },
+    async panelTaskDetail(id, cursor, context) {
+      return request("GET", "panelTaskDetail", PanelTaskDetailOutputSchema, {params: {id}, query: {cursor}, context});
+    },
+    async panelTaskField(id, turnId, input, context) {
+      return request("GET", "panelTaskField", PanelTaskFieldOutputSchema, {params: {id, turnId}, query: input, context});
+    },
+    async panelTasks(input, context) {
+      // Task details and legacy task lists share frontend-owned retries.
+      return request("GET", "panelTasks", PanelTasksOutputSchema, { query: input, context, maxRetries: 0 });
+    },
+
+    async deletePanelTask(taskId, context) {
+      return request("DELETE", "deletePanelTask", DeletePanelTaskOutputSchema, {
+        params: { id: taskId },
+        body: {},
+        context
+      });
+    },
+
+    async memoryApiLogs(input, context) {
+      return request("GET", "memoryApiLogs", MemoryApiLogsOutputSchema, {
+        context,
+        query: {
+          ...input,
+          tools: input.tools?.join(",")
+        }
+      });
+    }
+  };
+}
+
+function combineAbortSignals(primary: AbortSignal, secondary: AbortSignal | undefined): AbortSignal {
+  if (!secondary) {
+    return primary;
+  }
+
+  if (typeof AbortSignal.any === "function") {
+    return AbortSignal.any([primary, secondary]);
+  }
+
+  return secondary.aborted ? secondary : primary;
+}
+
+/**
+ * Executes fetch and maps network/timeout errors into MemoryClient errors.
+ *
+ * @param fetchImpl fetch implementation.
+ * @param url request URL.
+ * @param init fetch init.
+ * @returns the fetch Response.
+ */
+async function fetchWithMappedNetworkErrors(
+  fetchImpl: typeof fetch,
+  url: string,
+  init: RequestInit,
+  callerSignal?: AbortSignal
+): Promise<Response> {
+  try {
+    return await fetchImpl(url, init);
+  } catch (error) {
+    throw mappedAbortError(error, callerSignal) ?? new MemoryLayerNetworkError(error);
+  }
+}
+
+function mappedAbortError(error: unknown, callerSignal?: AbortSignal): MemoryLayerError | undefined {
+  if (callerSignal?.aborted)
+    return new MemoryLayerError("memory_layer_unavailable", 503, "memory layer request cancelled", error);
+  if (isTimeoutError(error))
+    return new MemoryLayerError("memory_layer_unavailable", 503, "memory layer timeout", error);
+  return undefined;
+}
+
+/**
+ * Determines whether the error comes from a request timeout or abort.
+ *
+ * @param error the caught fetch error.
+ * @returns whether it should be handled as a 503 timeout.
+ */
+function isTimeoutError(error: unknown): boolean {
+  return error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+}
+
+/**
+ * Determines whether a MemoryClient error is retryable.
+ *
+ * @param error the caught error.
+ * @returns whether it should be retried.
+ */
+function shouldRetryMemoryLayerError(error: unknown): boolean {
+  return (
+    error instanceof MemoryLayerNetworkError ||
+    (error instanceof MemoryLayerError && error.status >= 500 && error.code !== "memory_scan_upgrade_required")
+  );
+}
+
+/**
+ * Appends query parameters to a GET URL.
+ *
+ * @param url the original URL.
+ * @param query the query object.
+ * @returns the URL with the query appended.
+ */
+function appendQuery(url: string, query: Readonly<Record<string, unknown>> | undefined): string {
+  if (!query) {
+    return url;
+  }
+
+  const parsed = new URL(url);
+  for (const [key, value] of Object.entries(query)) {
+    appendQueryValue(parsed, key, value);
+  }
+
+  return parsed.toString();
+}
+
+/**
+ * Appends a single query value; arrays are expanded into repeated keys.
+ *
+ * @param url the URL object.
+ * @param key query key.
+ * @param value query value.
+ */
+function appendQueryValue(url: URL, key: string, value: unknown): void {
+  if (value === undefined || value === null) {
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      appendQueryValue(url, key, item);
+    }
+    return;
+  }
+
+  if (typeof value === "object") {
+    url.searchParams.append(key, JSON.stringify(value));
+    return;
+  }
+
+  url.searchParams.append(key, String(value));
+}

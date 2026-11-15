@@ -1,0 +1,502 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:wanx:kaiwu-release-directory:v1",
+  "title": "Kaiwu release directory intake v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "format": {
+      "const": "kaiwu-release-directory-v1"
+    },
+    "applicationId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "version": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "releaseId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "backend": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "expert"
+            },
+            "profileRef": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                },
+                "revision": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ]
+            },
+            "artifactId": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+            },
+            "template": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "resourceId": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                },
+                "version": {
+                  "type": "string",
+                  "maxLength": 128,
+                  "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"
+                },
+                "digest": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                }
+              },
+              "required": [
+                "resourceId",
+                "version",
+                "digest"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "profileRef",
+            "artifactId",
+            "template"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "miniapp"
+            },
+            "profileRef": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                },
+                "revision": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ]
+            },
+            "artifactId": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+            }
+          },
+          "required": [
+            "kind",
+            "profileRef",
+            "artifactId"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "service"
+            },
+            "profileRef": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                },
+                "revision": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ]
+            },
+            "artifactId": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+            },
+            "process": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "runtime": {
+                  "enum": [
+                    "node",
+                    "python"
+                  ]
+                },
+                "version": {
+                  "type": "string",
+                  "maxLength": 128,
+                  "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"
+                },
+                "entry": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$"
+                },
+                "args": {
+                  "type": "array",
+                  "maxItems": 32,
+                  "items": {
+                    "type": "string",
+                    "maxLength": 1024
+                  }
+                }
+              },
+              "required": [
+                "runtime",
+                "version",
+                "entry",
+                "args"
+              ]
+            },
+            "readiness": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "maxLength": 256,
+                  "pattern": "^/(?!/)[A-Za-z0-9/_-]*$"
+                },
+                "startupTimeoutSeconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 300
+                },
+                "requestTimeoutSeconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 30
+                }
+              },
+              "required": [
+                "path",
+                "startupTimeoutSeconds",
+                "requestTimeoutSeconds"
+              ]
+            },
+            "candidateMode": {
+              "const": true
+            }
+          },
+          "required": [
+            "kind",
+            "profileRef",
+            "artifactId",
+            "process",
+            "readiness",
+            "candidateMode"
+          ]
+        }
+      ]
+    },
+    "client": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "install"
+            },
+            "artifactId": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+            }
+          },
+          "required": [
+            "mode",
+            "artifactId"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "load"
+            },
+            "artifactId": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+            },
+            "runtimeRef": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                },
+                "revision": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ]
+            }
+          },
+          "required": [
+            "mode",
+            "artifactId",
+            "runtimeRef"
+          ]
+        }
+      ]
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "artifactId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          },
+          "role": {
+            "enum": [
+              "backend",
+              "client",
+              "support"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "maxLength": 512,
+            "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$"
+          },
+          "mediaType": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "digest": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          },
+          "sizeBytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "platforms": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 6,
+            "uniqueItems": true,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "os": {
+                  "enum": [
+                    "linux",
+                    "darwin",
+                    "win32"
+                  ]
+                },
+                "arch": {
+                  "enum": [
+                    "x64",
+                    "arm64"
+                  ]
+                }
+              },
+              "required": [
+                "os",
+                "arch"
+              ]
+            }
+          }
+        },
+        "required": [
+          "artifactId",
+          "role",
+          "path",
+          "mediaType",
+          "digest",
+          "sizeBytes",
+          "platforms"
+        ]
+      }
+    },
+    "resources": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          },
+          "kind": {
+            "enum": [
+              "model",
+              "files",
+              "knowledge",
+              "secret"
+            ]
+          },
+          "required": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "key",
+          "kind",
+          "required"
+        ]
+      }
+    },
+    "configurationArtifactId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "dependencyLockArtifactId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "upgradePolicy": {
+          "enum": [
+            "compatible",
+            "migration-required"
+          ]
+        },
+        "taskPolicy": {
+          "enum": [
+            "none",
+            "checkpoint-required"
+          ]
+        },
+        "migrationArtifactId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "checkpointArtifactId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "persistentPaths": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "maxLength": 512,
+            "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$"
+          }
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "upgradePolicy",
+        "taskPolicy",
+        "persistentPaths"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "upgradePolicy": {
+                "const": "migration-required"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "migrationArtifactId"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "taskPolicy": {
+                "const": "checkpoint-required"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "checkpointArtifactId"
+            ]
+          }
+        }
+      ]
+    },
+    "verificationArtifactId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "format",
+    "applicationId",
+    "version",
+    "releaseId",
+    "backend",
+    "client",
+    "artifacts",
+    "resources",
+    "configurationArtifactId",
+    "dependencyLockArtifactId",
+    "data",
+    "verificationArtifactId"
+  ]
+}

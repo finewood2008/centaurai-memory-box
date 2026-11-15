@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "receipt-recover-demo",
+  "operationId": "operation-recover-demo",
+  "operationRevision": 1,
+  "kind": "recover",
+  "target": {
+    "organizationId": "org-demo",
+    "boxId": "box-demo",
+    "applicationId": "app-demo",
+    "environment": "dev"
+  },
+  "requestedReleaseRef": {
+    "releaseId": "release-spec-demo-v1",
+    "bundleDigest": "sha256:fe1f6fe97dbab33261b84c56146641619dff68234c4d985ae7ae1f5657a20c92"
+  },
+  "previousGeneration": 1,
+  "committedGeneration": 1,
+  "environmentRevision": 2,
+  "commitStatus": "committed",
+  "outcome": "succeeded",
+  "componentResults": [
+    {
+      "componentId": "backend",
+      "role": "backend",
+      "required": true,
+      "status": "ready",
+      "actualReleaseRef": {
+        "releaseId": "release-spec-demo-v1",
+        "bundleDigest": "sha256:fe1f6fe97dbab33261b84c56146641619dff68234c4d985ae7ae1f5657a20c92"
+      },
+      "actualVersion": "demo-v1"
+    },
+    {
+      "componentId": "client",
+      "role": "client",
+      "required": true,
+      "status": "ready",
+      "actualReleaseRef": {
+        "releaseId": "release-spec-demo-v1",
+        "bundleDigest": "sha256:fe1f6fe97dbab33261b84c56146641619dff68234c4d985ae7ae1f5657a20c92"
+      },
+      "actualVersion": "demo-v1"
+    },
+    {
+      "componentId": "channel-demo",
+      "role": "channel",
+      "required": true,
+      "status": "ready",
+      "actualReleaseRef": {
+        "releaseId": "release-spec-demo-v1",
+        "bundleDigest": "sha256:fe1f6fe97dbab33261b84c56146641619dff68234c4d985ae7ae1f5657a20c92"
+      },
+      "actualVersion": "demo-v1"
+    }
+  ],
+  "observedAt": "2026-11-13T00:00:00.000Z",
+  "correlationId": "correlation-demo",
+  "recoveryOf": "operation-degraded-demo",
+  "checkpointRef": {
+    "id": "checkpoint-demo",
+    "revision": 1
+  }
+}

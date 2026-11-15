@@ -1,0 +1,1196 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+DESKTOP_DIR="$ROOT_DIR/App/shell/desktop"
+AGENT_DIR="$ROOT_DIR/App/memmy-agent"
+MEMORY_DIR="$ROOT_DIR/Memory"
+MIGRATIONS_DIR="$ROOT_DIR/Migrations"
+LOCAL_API_CONTRACTS_DIR="$ROOT_DIR/App/backend/local-api-contracts"
+RUNTIME_DIR="$DESKTOP_DIR/dist/runtime"
+MIGRATIONS_STAGING_DIR="$DESKTOP_DIR/dist/Migrations"
+CLI_BIN_DIR="$RUNTIME_DIR/bin"
+DMG_HELPER_DIR="$DESKTOP_DIR/dist/dmg"
+EMBEDDING_MODELS_DIR="$DESKTOP_DIR/dist/embedding-models"
+SQLCIPHER_STAGING_DIR="$DESKTOP_DIR/dist/native/sqlcipher"
+EMBEDDING_MODEL_ID="${MEMMY_EMBEDDING_MODEL:-Xenova/all-MiniLM-L6-v2}"
+source "$ROOT_DIR/scripts/internal/shared/package-logging.sh"
+package_log_init "mac-build-dmg" "$DESKTOP_DIR/release/logs"
+package_install_error_trap
+
+resolve_target_cpu() {
+  local target_cpu=""
+
+  for arg in "$@"; do
+    case "$arg" in
+      --arm64|arm64)
+        target_cpu="arm64"
+        ;;
+      --x64|x64)
+        target_cpu="x64"
+        ;;
+      --universal|universal)
+        echo "Universal macOS packaging is not supported by this script yet; build --arm64 and --x64 separately." >&2
+        exit 1
+        ;;
+    esac
+  done
+
+  if [ -z "$target_cpu" ]; then
+    case "$(uname -m)" in
+      arm64)
+        target_cpu="arm64"
+        ;;
+      x86_64)
+        target_cpu="x64"
+        ;;
+      *)
+        echo "Cannot infer macOS packaging CPU from uname -m. Pass --arm64 or --x64." >&2
+        exit 1
+        ;;
+    esac
+  fi
+
+  echo "$target_cpu"
+}
+
+write_desktop_edition_manifest() {
+  local account_channel="${MEMMY_ACCOUNT_CHANNEL:-phone}"
+  local package_signing="${MEMMY_PACKAGE_SIGNING:-}"
+  local edition="cn"
+
+  case "$account_channel" in
+    email)
+      edition="intl"
+      ;;
+    phone|"")
+      account_channel="phone"
+      ;;
+    *)
+      echo "Unsupported MEMMY_ACCOUNT_CHANNEL: $account_channel" >&2
+      exit 1
+      ;;
+  esac
+
+  if [ -z "$package_signing" ]; then
+    if [ "${MEMMY_SKIP_CODESIGN:-}" = "1" ]; then
+      package_signing="unsigned"
+    else
+      package_signing="signed"
+    fi
+  fi
+
+  case "$package_signing" in
+    signed|unsigned)
+      ;;
+    *)
+      echo "Unsupported MEMMY_PACKAGE_SIGNING: $package_signing" >&2
+      exit 1
+      ;;
+  esac
+
+  local manifest_args=(
+    --output "$DESKTOP_DIR/dist/main/desktop-edition.json"
+    --edition "$edition"
+    --account-channel "$account_channel"
+    --signing "$package_signing"
+  )
+  if [ -n "${MEMMY_SIGNED_LOCAL_TEST_BUILD:-}" ] && [ "${MEMMY_SIGNED_LOCAL_TEST_BUILD:-}" != "1" ]; then
+    echo "MEMMY_SIGNED_LOCAL_TEST_BUILD must be 1 when set" >&2
+    exit 1
+  fi
+  if [ "${MEMMY_SIGNED_LOCAL_TEST_BUILD:-}" = "1" ]; then
+    if [ "$package_signing" != "signed" ] || [ "${MEMMY_SKIP_CODESIGN:-}" = "1" ]; then
+      echo "MEMMY_SIGNED_LOCAL_TEST_BUILD requires real macOS code signing" >&2
+      exit 1
+    fi
+    manifest_args+=(--local-test-profile signed-local)
+  fi
+  node "$ROOT_DIR/scripts/internal/shared/write-desktop-edition-manifest.mjs" "${manifest_args[@]}"
+}
+
+# Resolves camera/microphone usage descriptions from the package edition (cn/intl).
+resolve_media_usage_description() {
+  local media="${1:-}"
+  local edition="${MEMMY_APP_EDITION:-}"
+
+  if [ -z "$edition" ]; then
+    case "${MEMMY_ACCOUNT_CHANNEL:-phone}" in
+      email)
+        edition="intl"
+        ;;
+      *)
+        edition="cn"
+        ;;
+    esac
+  fi
+
+  case "$edition:$media" in
+    intl:microphone)
+      printf '%s' "半人马AI 私人记忆盒子 uses the microphone for voice input and for website tasks you request."
+      ;;
+    cn:microphone)
+      printf '%s' "私人记忆盒子会在语音输入和你要求的网页任务中使用麦克风。"
+      ;;
+    intl:camera)
+      printf '%s' "半人马AI 私人记忆盒子 uses the camera for website tasks you request."
+      ;;
+    cn:camera)
+      printf '%s' "私人记忆盒子会在你要求的网页任务中使用摄像头。"
+      ;;
+    *)
+      echo "Unsupported package edition or media type for usage description: $edition:$media" >&2
+      exit 1
+      ;;
+  esac
+}
+
+resolve_microphone_usage_description() {
+  resolve_media_usage_description microphone
+}
+
+resolve_camera_usage_description() {
+  resolve_media_usage_description camera
+}
+
+create_cli_launcher() {
+  local output_path="$1"
+  local entry_path="$2"
+  local entry_kind="${3:-asar}"
+  local entry_expression
+
+  case "$entry_kind" in
+    asar)
+      entry_expression='"$RESOURCES_DIR/app.asar/'"$entry_path"'"'
+      ;;
+    resource)
+      entry_expression='"$RESOURCES_DIR/memory-runtime/'"$entry_path"'"'
+      ;;
+    *)
+      echo "Unsupported CLI launcher entry kind: $entry_kind" >&2
+      exit 1
+      ;;
+  esac
+
+  cat > "$output_path" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+SOURCE="\${BASH_SOURCE[0]}"
+while [ -L "\$SOURCE" ]; do
+  SOURCE_DIR="\$(cd -P "\$(dirname "\$SOURCE")" && pwd)"
+  TARGET="\$(readlink "\$SOURCE")"
+  if [[ "\$TARGET" == /* ]]; then
+    SOURCE="\$TARGET"
+  else
+    SOURCE="\$SOURCE_DIR/\$TARGET"
+  fi
+done
+SCRIPT_DIR="\$(cd -P "\$(dirname "\$SOURCE")" && pwd)"
+RESOURCES_DIR="\$(cd "\$SCRIPT_DIR/.." && pwd)"
+MACOS_DIR="\$RESOURCES_DIR/../MacOS"
+APP_EXEC="\$MACOS_DIR/CentaurAI"
+
+if [ ! -x "\$APP_EXEC" ]; then
+  for candidate in "\$MACOS_DIR"/*; do
+    if [ -f "\$candidate" ] && [ -x "\$candidate" ]; then
+      APP_EXEC="\$candidate"
+      break
+    fi
+  done
+fi
+
+if [ ! -x "\$APP_EXEC" ]; then
+  echo "Cannot find CentaurAI executable under \$MACOS_DIR" >&2
+  exit 1
+fi
+
+DEFAULT_CONFIG="\$HOME/.memmy/config.yaml"
+if [ -z "\${MEMMY_CONFIG:-}" ] && [ -f "\$DEFAULT_CONFIG" ]; then
+  export MEMMY_CONFIG="\$DEFAULT_CONFIG"
+fi
+
+export ELECTRON_RUN_AS_NODE=1
+export NODE_ENV="\${NODE_ENV:-production}"
+exec "\$APP_EXEC" $entry_expression "\$@"
+EOF
+
+  chmod 755 "$output_path"
+}
+
+create_cli_installer() {
+  local output_path="$1"
+
+  cat > "$output_path" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  SOURCE_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  TARGET="$(readlink "$SOURCE")"
+  if [[ "$TARGET" == /* ]]; then
+    SOURCE="$TARGET"
+  else
+    SOURCE="$SOURCE_DIR/$TARGET"
+  fi
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+PREFIX="${MEMMY_CLI_PREFIX:-}"
+
+usage() {
+  cat <<'USAGE'
+Usage: install-cli [--prefix <dir>]
+
+Installs symlinks for:
+  memmy-memory
+  memmy
+
+Default prefix:
+  ~/.local/bin
+USAGE
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --prefix)
+      if [ "$#" -lt 2 ]; then
+        echo "--prefix requires a directory" >&2
+        exit 1
+      fi
+      PREFIX="$2"
+      shift 2
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [ -z "$PREFIX" ]; then
+  PREFIX="$HOME/.local/bin"
+fi
+
+mkdir -p "$PREFIX"
+ln -sf "$SCRIPT_DIR/memmy-memory" "$PREFIX/memmy-memory"
+ln -sf "$SCRIPT_DIR/memmy" "$PREFIX/memmy"
+
+add_local_bin_to_profile() {
+  local profile_path="$1"
+  local marker="# Memmy CLI PATH"
+
+  if [ ! -f "$profile_path" ] || ! grep -Fq "$marker" "$profile_path"; then
+    {
+      echo ""
+      echo "$marker"
+      echo 'export PATH="$HOME/.local/bin:$PATH"'
+    } >> "$profile_path"
+  fi
+}
+
+cat <<MESSAGE
+Memmy CLI installed:
+  $PREFIX/memmy-memory -> $SCRIPT_DIR/memmy-memory
+  $PREFIX/memmy        -> $SCRIPT_DIR/memmy
+MESSAGE
+
+case ":$PATH:" in
+  *":$PREFIX:"*) ;;
+  *)
+    if [ "$PREFIX" = "$HOME/.local/bin" ]; then
+      add_local_bin_to_profile "$HOME/.zshrc"
+      add_local_bin_to_profile "$HOME/.bash_profile"
+      cat <<MESSAGE
+
+Added ~/.local/bin to ~/.zshrc and ~/.bash_profile when needed.
+Run the command for your shell now, or open a new terminal:
+
+  source ~/.zshrc
+  source ~/.bash_profile
+MESSAGE
+    else
+      cat <<MESSAGE
+
+Warning: $PREFIX is not in PATH for this shell.
+Add this line to ~/.zshrc, then open a new terminal:
+
+  export PATH="$PREFIX:\$PATH"
+MESSAGE
+    fi
+    ;;
+esac
+EOF
+
+  chmod 755 "$output_path"
+}
+
+create_dmg_cli_installer_command() {
+  local output_path="$1"
+
+  cat > "$output_path" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP_PATH="/Applications/CentaurAI.app"
+INSTALLER="$APP_PATH/Contents/Resources/cli/install-cli"
+
+if [ ! -x "$INSTALLER" ]; then
+  MESSAGE="Please drag CentaurAI to Applications first, then run Install CLI again."
+  if command -v osascript >/dev/null 2>&1; then
+    osascript -e "display dialog \"$MESSAGE\" buttons {\"OK\"} default button \"OK\" with icon caution" >/dev/null
+  else
+    echo "$MESSAGE" >&2
+  fi
+  exit 1
+fi
+
+"$INSTALLER"
+
+echo
+echo "Done. You can close this window."
+EOF
+
+  chmod 755 "$output_path"
+}
+
+create_memory_runtime_manifest() {
+  local output_dir="$1"
+
+  ROOT_DIR="$ROOT_DIR" MEMORY_DIR="$MEMORY_DIR" MEMORY_RUNTIME_DIR="$output_dir" TARGET_CPU="$TARGET_CPU" \
+    node --input-type=module <<'NODE'
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+
+const rootDir = requiredEnv("ROOT_DIR");
+const memoryDir = requiredEnv("MEMORY_DIR");
+const runtimeDir = requiredEnv("MEMORY_RUNTIME_DIR");
+const targetCpu = requiredEnv("TARGET_CPU");
+const runtimeName = "memmy-memory-runtime";
+const memoryPackage = JSON.parse(await readFile(join(memoryDir, "package.json"), "utf8"));
+const runtimeVersion = memoryPackage.version;
+const { memoryRuntimeBuildIdentity } = await import(pathToFileURL(join(rootDir, "scripts/internal/shared/memory-runtime-build-identity.mjs")));
+const buildIdentity = await memoryRuntimeBuildIdentity(rootDir);
+const rootLock = JSON.parse(await readFile(join(rootDir, "package-lock.json"), "utf8"));
+const dependencies = { ...(memoryPackage.dependencies ?? {}) };
+const workspacePackageDirs = new Map();
+for (const [packageKey, packageInfo] of Object.entries(rootLock.packages ?? {})) {
+  if (packageKey && !packageKey.startsWith("node_modules/") && packageInfo.name) {
+    workspacePackageDirs.set(packageInfo.name, packageKey);
+  }
+}
+for (const dependencyName of Object.keys(dependencies)) {
+  const workspaceDir = workspacePackageDirs.get(dependencyName);
+  if (workspaceDir) {
+    dependencies[dependencyName] = `file:../../../../../../${workspaceDir}`;
+  }
+}
+const runtimePackage = {
+  name: runtimeName,
+  version: runtimeVersion,
+  private: true,
+  type: "module",
+  dependencies
+};
+const sourcePackages = rootLock.packages ?? {};
+const runtimeLock = {
+  name: runtimeName,
+  version: runtimeVersion,
+  lockfileVersion: rootLock.lockfileVersion,
+  requires: rootLock.requires,
+  packages: {
+    "": {
+      name: runtimeName,
+      version: runtimeVersion,
+      private: true,
+      type: "module",
+      dependencies
+    }
+  }
+};
+const selectedPackageKeys = new Set([""]);
+
+for (const dependencyName of Object.keys(dependencies)) {
+  addDependency("", dependencyName, false);
+}
+
+for (const packageKey of selectedPackageKeys) {
+  if (packageKey === "") {
+    continue;
+  }
+  runtimeLock.packages[packageKey] = sourcePackages[packageKey];
+}
+
+await mkdir(runtimeDir, { recursive: true });
+await writeFile(join(runtimeDir, "package.json"), `${JSON.stringify(runtimePackage, null, 2)}\n`);
+await writeFile(join(runtimeDir, "package-lock.json"), `${JSON.stringify(runtimeLock, null, 2)}\n`);
+await writeFile(join(runtimeDir, "memory-runtime.json"), `${JSON.stringify({
+  version: runtimeVersion,
+  ...buildIdentity,
+  protocolVersion: 1,
+  target: `darwin-${targetCpu}`,
+  entrypoint: "dist/src/server/index.js",
+  viewer: "dist/viewer/index.html"
+}, null, 2)}\n`);
+
+function requiredEnv(name) {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`${name} is required`);
+  }
+  return value;
+}
+
+function addPackage(packageKey) {
+  if (selectedPackageKeys.has(packageKey)) {
+    return;
+  }
+
+  const packageInfo = sourcePackages[packageKey];
+  if (!packageInfo) {
+    throw new Error(`Missing package-lock entry for ${packageKey}`);
+  }
+  if (packageInfo.link || !packageMatchesTarget(packageInfo, targetCpu)) {
+    return;
+  }
+
+  selectedPackageKeys.add(packageKey);
+  for (const dependencyName of Object.keys(packageInfo.dependencies ?? {})) {
+    addDependency(packageKey, dependencyName, false);
+  }
+  for (const dependencyName of Object.keys(packageInfo.optionalDependencies ?? {})) {
+    addDependency(packageKey, dependencyName, true);
+  }
+}
+
+function addDependency(fromPackageKey, dependencyName, optional) {
+  const packageKey = resolvePackageKey(fromPackageKey, dependencyName);
+  if (!packageKey) {
+    if (optional) {
+      return;
+    }
+    throw new Error(`Cannot resolve ${dependencyName} from ${fromPackageKey || "runtime root"}`);
+  }
+  addPackage(packageKey);
+}
+
+function packageMatchesTarget(packageInfo, cpu) {
+  return matchesConstraint(packageInfo.os, "darwin") && matchesConstraint(packageInfo.cpu, cpu);
+}
+
+function matchesConstraint(list, actual) {
+  if (!Array.isArray(list) || list.length === 0) {
+    return true;
+  }
+  let matched = false;
+  let hasPositive = false;
+  for (const raw of list) {
+    const negated = raw.startsWith("!");
+    const name = negated ? raw.slice(1) : raw;
+    if (!negated) {
+      hasPositive = true;
+    }
+    if (name === actual) {
+      if (negated) {
+        return false;
+      }
+      matched = true;
+    }
+  }
+  return hasPositive ? matched : true;
+}
+
+function resolvePackageKey(fromPackageKey, dependencyName) {
+  const candidates = [];
+  if (fromPackageKey) {
+    candidates.push(`${fromPackageKey}/node_modules/${dependencyName}`);
+
+    let currentKey = fromPackageKey;
+    while (currentKey.includes("/node_modules/")) {
+      currentKey = currentKey.slice(0, currentKey.lastIndexOf("/node_modules/"));
+      candidates.push(`${currentKey}/node_modules/${dependencyName}`);
+    }
+  }
+  candidates.push(`node_modules/${dependencyName}`);
+  return candidates.find((candidate) => sourcePackages[candidate]);
+}
+NODE
+}
+
+prune_better_sqlite3_build_artifacts() {
+  local module_dir="$1"
+  local target_cpu="$2"
+
+  rm -rf "$module_dir/build" "$module_dir/deps" "$module_dir/src"
+  if [ -d "$module_dir/prebuilds" ]; then
+    find "$module_dir/prebuilds" -mindepth 1 -type f ! -name "darwin-$target_cpu.node" -delete
+  fi
+}
+
+prune_onnxruntime_native_artifacts() {
+  local target_cpu="$1"
+  local napi_dir="$2"
+
+  if [ ! -d "$napi_dir" ]; then
+    return
+  fi
+
+  find "$napi_dir" -mindepth 1 -maxdepth 1 -type d ! -name darwin -exec rm -rf {} +
+  case "$target_cpu" in
+    arm64)
+      rm -rf "$napi_dir/darwin/x64"
+      ;;
+    x64)
+      rm -rf "$napi_dir/darwin/arm64"
+      ;;
+  esac
+}
+
+prune_node_modules_non_runtime_files() {
+  local runtime_root="$1"
+
+  if [ ! -d "$runtime_root" ]; then
+    return
+  fi
+
+  local modules_dir
+  while IFS= read -r modules_dir; do
+    if [ ! -d "$modules_dir" ]; then
+      continue
+    fi
+
+    local package_dir disposable_dir
+    for package_dir in "$modules_dir"/* "$modules_dir"/@*/*; do
+      if [ ! -d "$package_dir" ]; then
+        continue
+      fi
+
+      for disposable_dir in \
+        "$package_dir/test" \
+        "$package_dir/tests" \
+        "$package_dir/__tests__" \
+        "$package_dir/doc" \
+        "$package_dir/docs" \
+        "$package_dir/example" \
+        "$package_dir/examples" \
+        "$package_dir/coverage" \
+        "$package_dir/.github"; do
+        rm -rf "$disposable_dir"
+      done
+    done
+
+    if [ ! -d "$modules_dir" ]; then
+      continue
+    fi
+
+    find "$modules_dir" -type f \( \
+      -iname "README" -o \
+      -iname "README*.md" -o \
+      -iname "README*.mdown" -o \
+      -iname "README*.markdown" -o \
+      -iname "README*.rst" -o \
+      -iname "README*.txt" -o \
+      -iname "CHANGELOG" -o \
+      -iname "CHANGELOG*.md" -o \
+      -iname "CHANGELOG*.mdown" -o \
+      -iname "CHANGELOG*.markdown" -o \
+      -iname "CHANGELOG*.rst" -o \
+      -iname "CHANGELOG*.txt" -o \
+      -iname "CONTRIBUTING" -o \
+      -iname "CONTRIBUTING*.md" -o \
+      -iname "CONTRIBUTING*.mdown" -o \
+      -iname "CONTRIBUTING*.markdown" -o \
+      -iname "CONTRIBUTING*.rst" -o \
+      -iname "CONTRIBUTING*.txt" -o \
+      -iname "CODE_OF_CONDUCT" -o \
+      -iname "CODE_OF_CONDUCT*.md" -o \
+      -iname "CODE_OF_CONDUCT*.mdown" -o \
+      -iname "CODE_OF_CONDUCT*.markdown" -o \
+      -iname "CODE_OF_CONDUCT*.rst" -o \
+      -iname "CODE_OF_CONDUCT*.txt" -o \
+      -iname "SECURITY" -o \
+      -iname "SECURITY*.md" -o \
+      -iname "SECURITY*.mdown" -o \
+      -iname "SECURITY*.markdown" -o \
+      -iname "SECURITY*.rst" -o \
+      -iname "SECURITY*.txt" \
+    \) ! \( \
+      -iname "LICENSE*" -o \
+      -iname "NOTICE*" -o \
+      -iname "COPYING*" \
+    \) -delete
+
+    find "$modules_dir" -type f \( \
+      -iname "*.test.js" -o \
+      -iname "*.test.cjs" -o \
+      -iname "*.test.mjs" -o \
+      -iname "*.test.ts" -o \
+      -iname "*.test.tsx" -o \
+      -iname "*.spec.js" -o \
+      -iname "*.spec.cjs" -o \
+      -iname "*.spec.mjs" -o \
+      -iname "*.spec.ts" -o \
+      -iname "*.spec.tsx" -o \
+      -iname "test.js" -o \
+      -iname "tests.json" \
+    \) -delete
+  done < <(find "$runtime_root" -type d -name node_modules)
+}
+
+require_packaged_runtime_file() {
+  local required_file="$1"
+
+  if [ ! -f "$required_file" ]; then
+    echo "Missing required packaged runtime file: $required_file" >&2
+    exit 1
+  fi
+}
+
+require_packaged_runtime_glob() {
+  local required_pattern="$1"
+
+  if ! compgen -G "$required_pattern" >/dev/null; then
+    echo "Missing required packaged runtime file matching: $required_pattern" >&2
+    exit 1
+  fi
+}
+
+verify_desktop_surface_artifacts() {
+  local desktop_dist="$1"
+  local cpu="$2"
+  if [ "$cpu" = "x64" ]; then cpu=x86_64; fi
+  require_packaged_runtime_file "$desktop_dist/main/computer-use-surface.html"
+  require_packaged_runtime_file "$desktop_dist/main/computer-use-surface-window.js"
+  require_packaged_runtime_file "$desktop_dist/preload/computer-use-surface-preload.cjs"
+  for addon in memmy-pip menu-bar-appearance; do
+    require_packaged_runtime_file "$desktop_dist/native/$addon.node"
+    lipo "$desktop_dist/native/$addon.node" -verify_arch "$cpu"
+    verify_desktop_native_deployment_target "$desktop_dist/native/$addon.node"
+  done
+}
+
+verify_desktop_native_deployment_target() {
+  local native_addon="$1"
+  local minos
+  minos="$(xcrun vtool -show-build "$native_addon" | awk '$1 == "minos" { print $2; exit }')"
+  if [ -z "$minos" ] || ! awk -v version="$minos" 'BEGIN { split(version, v, "."); exit (v[1] > 14 || (v[1] == 14 && v[2] > 0)) }'; then
+    echo "Desktop native addon requires unsupported macOS version $minos: $native_addon" >&2
+    exit 1
+  fi
+}
+
+verify_mac_memory_native_artifacts() {
+  local target_cpu="$1"
+
+  require_packaged_runtime_file "$RUNTIME_DIR/memory/node_modules/better-sqlite3/prebuilds/darwin-$target_cpu.node"
+  require_packaged_runtime_glob "$RUNTIME_DIR/memory/node_modules/sqlite-vec-darwin-$target_cpu/vec0.*"
+  require_packaged_runtime_file "$RUNTIME_DIR/memory/node_modules/onnxruntime-node/bin/napi-v3/darwin/$target_cpu/onnxruntime_binding.node"
+  require_packaged_runtime_glob "$RUNTIME_DIR/memory/node_modules/onnxruntime-node/bin/napi-v3/darwin/$target_cpu/libonnxruntime*.dylib"
+  require_packaged_runtime_file "$RUNTIME_DIR/memory/node_modules/@img/sharp-darwin-$target_cpu/lib/sharp-darwin-$target_cpu.node"
+  require_packaged_runtime_glob "$RUNTIME_DIR/memory/node_modules/@img/sharp-libvips-darwin-$target_cpu/lib/libvips*.dylib"
+}
+
+verify_mac_agent_native_artifacts() {
+  local target_cpu="$1"
+  local node_pty_dir="$RUNTIME_DIR/memmy-agent/node_modules/openclaw/node_modules/@lydell/node-pty-darwin-$target_cpu/prebuilds/darwin-$target_cpu"
+
+  verify_computer_history_helpers "$RUNTIME_DIR/memmy-agent/dist/tools/computer-history/mac" "$target_cpu"
+  verify_computer_use_helpers "$RUNTIME_DIR/memmy-agent/dist/tools/computer-use/mac" "$target_cpu"
+  if [ "$target_cpu" = arm64 ]; then
+    require_packaged_runtime_file "$SQLCIPHER_STAGING_DIR/libsqlcipher.dylib"
+    require_packaged_runtime_file "$SQLCIPHER_STAGING_DIR/libcrypto.4.dylib"
+  fi
+
+  require_packaged_runtime_file "$RUNTIME_DIR/memmy-agent/node_modules/@memmy/local-api-contracts/dist/index.js"
+  require_packaged_runtime_file "$RUNTIME_DIR/memmy-agent/dist/native-computer-use/Memmy Computer Use.app/Contents/MacOS/MemmyComputerUse"
+  node "$ROOT_DIR/scripts/internal/shared/check-open-computer-use.mjs" \
+    "$RUNTIME_DIR/memmy-agent/dist/native-computer-use/Memmy Computer Use.app/Contents/MacOS/MemmyComputerUse"
+  if [ -L "$RUNTIME_DIR/memmy-agent/node_modules/@memmy/local-api-contracts" ]; then
+    echo "Packaged local API contracts must not be a symbolic link." >&2
+    exit 1
+  fi
+  require_packaged_runtime_file "$node_pty_dir/pty.node"
+  require_packaged_runtime_file "$node_pty_dir/spawn-helper"
+  require_packaged_runtime_glob "$RUNTIME_DIR/memmy-agent/node_modules/openclaw/node_modules/sqlite-vec-darwin-$target_cpu/vec0.*"
+}
+
+verify_computer_history_helpers() {
+  local helper_dir="$1/native/$2"
+  local swift_cpu="$2"
+  local helper
+  if [ "$swift_cpu" = "x64" ]; then swift_cpu=x86_64; fi
+  if [ -e "$helper_dir/human-recorder" ]; then
+    echo "Standalone Computer History recorder must not be packaged: $helper_dir/human-recorder" >&2
+    exit 1
+  fi
+  for helper in app-icon; do
+    require_packaged_runtime_file "$helper_dir/$helper"
+    if [ ! -x "$helper_dir/$helper" ]; then
+      echo "Computer History helper is not executable: $helper_dir/$helper" >&2
+      exit 1
+    fi
+    lipo "$helper_dir/$helper" -verify_arch "$swift_cpu"
+  done
+  if [ "$2" = arm64 ]; then
+    require_packaged_runtime_file "$1/../wechat_identity.py"
+    for helper in MemmyWeChatPermissionProbe.dylib MemmyWeChatPrivateStorage.dylib MemmyWeChatKeyCapture.dylib; do
+      require_packaged_runtime_file "$1/wechat/native/arm64/$helper"
+      lipo "$1/wechat/native/arm64/$helper" -verify_arch arm64
+    done
+    require_packaged_runtime_file "$1/wechat/python/runtime.json"
+    require_packaged_runtime_file "$1/wechat/python/bin/python3.13"
+    lipo "$1/wechat/python/bin/python3.13" -verify_arch arm64
+  fi
+}
+
+verify_computer_use_helpers() {
+  local helper
+  local cpu="$2"
+  if [ "$cpu" = "x64" ]; then cpu=x86_64; fi
+  for name in list-windows focus-guard; do
+    helper="$1/native/$2/$name"
+    require_packaged_runtime_file "$helper"
+    if [ ! -x "$helper" ]; then
+      echo "Computer Use helper is not executable: $helper" >&2
+      exit 1
+    fi
+    lipo "$helper" -verify_arch "$cpu"
+  done
+}
+
+resolve_packaged_mac_app_path() {
+  local target_cpu="$1"
+  local app_path="$DESKTOP_DIR/release/mac-$target_cpu/CentaurAI.app"
+
+  if [ "$target_cpu" = "x64" ] && [ ! -d "$app_path" ]; then
+    app_path="$DESKTOP_DIR/release/mac/CentaurAI.app"
+  fi
+
+  printf '%s\n' "$app_path"
+}
+
+verify_packaged_mac_unpacked_artifacts() {
+  local target_cpu="$1"
+  local app_path
+  app_path="$(resolve_packaged_mac_app_path "$target_cpu")"
+  local unpacked_runtime="$app_path/Contents/Resources/app.asar.unpacked/dist/runtime"
+  local packaged_memory_runtime="$app_path/Contents/Resources/memory-runtime"
+  local packaged_agent_source_core="$packaged_memory_runtime/node_modules/@memmy/agent-source-core"
+  local packaged_embedding_model="$app_path/Contents/Resources/embedding-models/$EMBEDDING_MODEL_ID"
+
+  require_packaged_runtime_file "$app_path/Contents/Resources/app.asar"
+  node "$ROOT_DIR/scripts/internal/shared/verify-browser-extension.mjs" \
+    "$DESKTOP_DIR/extensions/memmy-browser" "$app_path/Contents/Resources/browser-extension"
+  local cpu="$target_cpu"
+  if [ "$cpu" = "x64" ]; then cpu=x86_64; fi
+  for addon in memmy-pip menu-bar-appearance; do
+    local native_addon="$app_path/Contents/Resources/app.asar.unpacked/dist/native/$addon.node"
+    require_packaged_runtime_file "$native_addon"
+    lipo "$native_addon" -verify_arch "$cpu"
+    verify_desktop_native_deployment_target "$native_addon"
+    if [ "${MEMMY_SKIP_CODESIGN:-}" != 1 ]; then codesign --verify --strict "$native_addon"; fi
+  done
+  verify_computer_history_helpers "$unpacked_runtime/memmy-agent/dist/tools/computer-history/mac" "$target_cpu"
+  verify_computer_use_helpers "$unpacked_runtime/memmy-agent/dist/tools/computer-use/mac" "$target_cpu"
+  if [ "$target_cpu" = arm64 ]; then
+    local packaged_sqlcipher="$app_path/Contents/Resources/native/sqlcipher"
+    require_packaged_runtime_file "$packaged_sqlcipher/libsqlcipher.dylib"
+    require_packaged_runtime_file "$packaged_sqlcipher/libcrypto.4.dylib"
+    codesign --verify --strict "$packaged_sqlcipher/libsqlcipher.dylib"
+    codesign --verify --strict "$packaged_sqlcipher/libcrypto.4.dylib"
+    if [ "${MEMMY_SKIP_CODESIGN:-}" != 1 ]; then
+      local app_team library_team
+      app_team="$(codesign -dv --verbose=4 "$app_path" 2>&1 | awk -F= '/^TeamIdentifier=/{print $2}')"
+      if [ -z "$app_team" ] || [ "$app_team" = "not set" ]; then
+        echo "Signed Memmy app has no Developer ID team identifier" >&2
+        exit 1
+      fi
+      for library in "$packaged_sqlcipher/libsqlcipher.dylib" "$packaged_sqlcipher/libcrypto.4.dylib"; do
+        library_team="$(codesign -dv --verbose=4 "$library" 2>&1 | awk -F= '/^TeamIdentifier=/{print $2}')"
+        if [ "$library_team" != "$app_team" ]; then
+          echo "Bundled SQLCipher library does not share the Memmy signing team: $library" >&2
+          exit 1
+        fi
+      done
+    fi
+    /usr/bin/python3 - "$packaged_sqlcipher/libsqlcipher.dylib" <<'PY'
+import ctypes
+import sys
+
+library = ctypes.CDLL(sys.argv[1])
+library.sqlite3_libversion.restype = ctypes.c_char_p
+if not library.sqlite3_libversion() or not hasattr(library, "sqlite3_key"):
+    raise SystemExit("Packaged SQLCipher cannot be loaded")
+PY
+  fi
+  verify_packaged_runtime_config_boundary "$app_path/Contents/Resources"
+  require_packaged_runtime_file "$packaged_memory_runtime/package.json"
+  require_packaged_runtime_file "$packaged_memory_runtime/package-lock.json"
+  require_packaged_runtime_file "$packaged_memory_runtime/memory-runtime.json"
+  require_packaged_runtime_file "$packaged_memory_runtime/dist/src/server/index.js"
+  require_packaged_runtime_file "$packaged_memory_runtime/dist/src/cli/index.js"
+  require_packaged_runtime_file "$packaged_memory_runtime/dist/src/agent-source/integration/workspace-bridge/memmy-workspace-bridge.mjs"
+  require_packaged_runtime_file "$packaged_agent_source_core/package.json"
+  require_packaged_runtime_file "$packaged_agent_source_core/dist/src/index.js"
+  require_packaged_runtime_file "$packaged_agent_source_core/dist/src/codex-source-turn.js"
+  if [ -L "$packaged_agent_source_core" ]; then
+    echo "Packaged offline Memory agent source core must not be a symbolic link." >&2
+    exit 1
+  fi
+  require_packaged_runtime_file "$packaged_memory_runtime/node_modules/better-sqlite3/prebuilds/darwin-$target_cpu.node"
+  require_packaged_runtime_glob "$packaged_memory_runtime/node_modules/sqlite-vec-darwin-$target_cpu/vec0.*"
+  require_packaged_runtime_file "$packaged_memory_runtime/node_modules/onnxruntime-node/bin/napi-v3/darwin/$target_cpu/onnxruntime_binding.node"
+  require_packaged_runtime_glob "$packaged_memory_runtime/node_modules/onnxruntime-node/bin/napi-v3/darwin/$target_cpu/libonnxruntime*.dylib"
+  require_packaged_runtime_file "$packaged_memory_runtime/node_modules/@img/sharp-darwin-$target_cpu/lib/sharp-darwin-$target_cpu.node"
+  require_packaged_runtime_glob "$packaged_memory_runtime/node_modules/@img/sharp-libvips-darwin-$target_cpu/lib/libvips*.dylib"
+  verify_packaged_memory_runtime_manifest "$packaged_memory_runtime" "$target_cpu"
+  require_packaged_runtime_file "$unpacked_runtime/memmy-agent/node_modules/@memmy/migrations/dist/index.js"
+  require_packaged_runtime_file "$unpacked_runtime/memmy-agent/dist/native-computer-use/Memmy Computer Use.app/Contents/MacOS/MemmyComputerUse"
+  node "$ROOT_DIR/scripts/internal/shared/check-open-computer-use.mjs" \
+    "$unpacked_runtime/memmy-agent/dist/native-computer-use/Memmy Computer Use.app/Contents/MacOS/MemmyComputerUse" \
+    --expected-app "$RUNTIME_DIR/memmy-agent/dist/native-computer-use/Memmy Computer Use.app"
+  require_packaged_runtime_file "$packaged_embedding_model/config.json"
+  require_packaged_runtime_file "$packaged_embedding_model/tokenizer.json"
+  require_packaged_runtime_file "$packaged_embedding_model/onnx/model_quantized.onnx"
+  if [ -L "$unpacked_runtime/memmy-agent/node_modules/@memmy/migrations" ]; then
+    echo "Packaged migrations package must not be a symbolic link." >&2
+    exit 1
+  fi
+  require_packaged_runtime_file "$unpacked_runtime/memmy-agent/node_modules/openclaw/node_modules/@lydell/node-pty-darwin-$target_cpu/prebuilds/darwin-$target_cpu/spawn-helper"
+}
+
+verify_packaged_memory_runtime_manifest() {
+  local packaged_memory_runtime="$1"
+  local target_cpu="$2"
+
+  node - "$MEMORY_DIR/package.json" "$packaged_memory_runtime/package.json" "$packaged_memory_runtime/package-lock.json" "$packaged_memory_runtime/memory-runtime.json" "$target_cpu" <<'NODE'
+const fs = require("node:fs");
+const [sourcePath, packagePath, lockPath, manifestPath, targetCpu] = process.argv.slice(2);
+const source = JSON.parse(fs.readFileSync(sourcePath, "utf8"));
+const packaged = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+const lock = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+if (packaged.version !== source.version) throw new Error("Packaged Memory version does not match source");
+if (lock.version !== source.version || lock.packages?.[""]?.version !== source.version) {
+  throw new Error("Packaged Memory lock version does not match source");
+}
+if (manifest.version !== source.version || manifest.target !== `darwin-${targetCpu}`) {
+  throw new Error("Packaged Memory runtime manifest does not match source or architecture");
+}
+if (manifest.entrypoint !== "dist/src/server/index.js" || manifest.viewer !== "dist/viewer/index.html") {
+  throw new Error("Packaged Memory runtime manifest entrypoints are invalid");
+}
+NODE
+}
+
+verify_packaged_runtime_config_boundary() {
+  local resources_root="$1"
+  local asar_file="$resources_root/app.asar"
+  local forbidden_env
+
+  forbidden_env="$(find "$resources_root" \( -type f -o -type l \) \( -name ".env" -o -name ".env.*" \) -print -quit)"
+  if [ -n "$forbidden_env" ]; then
+    echo "Packaged resources contain a forbidden environment file." >&2
+    exit 1
+  fi
+  node "$ROOT_DIR/scripts/internal/shared/verify-packaged-asar.mjs" \
+    --asar "$asar_file" \
+    --expected "$DESKTOP_VERSION" \
+    --platform darwin \
+    --arch "$target_cpu"
+  node "$ROOT_DIR/scripts/internal/shared/verify-renderer-bootstrap.mjs" \
+    --asar "$asar_file" --platform darwin
+}
+
+prune_mac_runtime_artifacts() {
+  local target_cpu="$1"
+
+  echo "Pruning macOS runtime artifacts for darwin-$target_cpu."
+  node "$ROOT_DIR/scripts/internal/shared/prune-native-platforms.mjs" \
+    --platform darwin --arch "$target_cpu" --runtime-root "$RUNTIME_DIR"
+  find "$RUNTIME_DIR" -type f -name "*.map" -delete
+  node "$ROOT_DIR/scripts/internal/shared/prune-runtime-env-files.mjs" "$RUNTIME_DIR"
+  prune_node_modules_non_runtime_files "$RUNTIME_DIR"
+  rm -f "$RUNTIME_DIR/memmy-agent/dist/skills/README.md"
+
+  while IFS= read -r module_dir; do
+    prune_better_sqlite3_build_artifacts "$module_dir" "$TARGET_CPU"
+  done < <(find "$RUNTIME_DIR" -path "*/node_modules/better-sqlite3" -type d)
+
+  while IFS= read -r napi_dir; do
+    prune_onnxruntime_native_artifacts "$target_cpu" "$napi_dir"
+  done < <(find "$RUNTIME_DIR" -path "*/node_modules/onnxruntime-node/bin/napi-v3" -type d)
+}
+
+cd "$ROOT_DIR"
+if [ -n "${MEMMY_DESKTOP_VERSION:-}" ]; then
+  DESKTOP_VERSION="$MEMMY_DESKTOP_VERSION"
+else
+  DESKTOP_VERSION="$(node -p "require('$DESKTOP_DIR/package.json').version")"
+fi
+package_step_start "Verify macOS package version metadata"
+node scripts/internal/shared/verify-package-version.mjs --expected "$DESKTOP_VERSION"
+export MEMMY_VERSION_SYNC_CHECK_ONLY=1
+
+for builder_arg in "$@"; do
+  case "$builder_arg" in
+    --config.extraMetadata.version="$DESKTOP_VERSION")
+      ;;
+    --config.extraMetadata.version|--config.extraMetadata.version=*)
+      echo "Desktop package version metadata must match $DESKTOP_VERSION." >&2
+      exit 1
+      ;;
+    --config|--config=*|--config.extraMetadata|--config.extraMetadata=*)
+      echo "Desktop package configuration is managed by the packaging scripts." >&2
+      exit 1
+      ;;
+  esac
+done
+
+BUILDER_CONFIG="electron-builder.yml"
+TARGET_CPU="$(resolve_target_cpu "$@")"
+if [ "${MEMMY_SKIP_CODESIGN:-}" = "1" ]; then
+  BUILDER_CONFIG="electron-builder.unsigned.yml"
+  echo "Building unsigned DMG for local testing. This build is not notarized."
+fi
+
+echo "Preparing macOS $TARGET_CPU package."
+package_log "macOS package context: version=$DESKTOP_VERSION arch=$TARGET_CPU builderConfig=$BUILDER_CONFIG signing=${MEMMY_PACKAGE_SIGNING:-${MEMMY_SKIP_CODESIGN:+unsigned}}"
+
+package_step_start "Install root workspace dependencies if needed"
+if [ ! -x "$ROOT_DIR/node_modules/.bin/tsc" ] || [ ! -x "$ROOT_DIR/node_modules/.bin/electron-builder" ]; then
+  npm install
+else
+  package_log "Root workspace dependencies already available."
+fi
+package_step_start "Install migrations workspace dev dependencies"
+npm install --workspace @memmy/migrations --include=dev
+package_step_start "Check frontend desktop workspace dependencies"
+if npm ls --workspace @memmy/frontend-desktop --depth=0 >/dev/null 2>&1; then
+  echo "Frontend desktop workspace dependencies already installed."
+else
+  npm install --workspace @memmy/frontend-desktop --no-package-lock
+fi
+
+echo "Building migrations package."
+package_step_start "Build migrations package"
+npm --prefix "$MIGRATIONS_DIR" run build
+
+echo "Building local API contracts package."
+package_step_start "Build local API contracts package"
+npm run build -w @memmy/local-api-contracts
+
+echo "Installing memmy-agent dependencies."
+package_step_start "Install memmy-agent workspace dependencies"
+PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci --prefix "$AGENT_DIR"
+
+package_step_start "Build Memory workspace"
+npm run build -w @memmy/memory
+package_step_start "Build memmy-agent runtime"
+npm --prefix "$AGENT_DIR" run build
+package_step_start "Build Electron desktop shell"
+MEMMY_DESKTOP_NATIVE_ARCH="$TARGET_CPU" npm run build -w @memmy/desktop
+verify_desktop_surface_artifacts "$DESKTOP_DIR/dist" "$TARGET_CPU"
+package_step_start "Verify production renderer initialization without GUI"
+node "$ROOT_DIR/scripts/internal/shared/verify-renderer-bootstrap.mjs" \
+  --renderer-dir "$DESKTOP_DIR/dist/renderer" --platform darwin
+package_step_start "Write desktop edition manifest"
+write_desktop_edition_manifest
+
+package_step_start "Prepare packaged runtime staging directories"
+rm -rf "$RUNTIME_DIR"
+rm -rf "$DMG_HELPER_DIR"
+rm -rf "$MIGRATIONS_STAGING_DIR"
+rm -rf "$EMBEDDING_MODELS_DIR"
+rm -rf "$SQLCIPHER_STAGING_DIR"
+mkdir -p "$RUNTIME_DIR/memory" "$RUNTIME_DIR/memmy-agent" "$CLI_BIN_DIR" "$DMG_HELPER_DIR"
+package_step_start "Stage self-contained WeChat SQLCipher library"
+bash "$ROOT_DIR/scripts/internal/mac/stage-wechat-sqlcipher.sh" "$SQLCIPHER_STAGING_DIR" "$TARGET_CPU"
+mkdir -p "$MIGRATIONS_STAGING_DIR"
+cp "$MIGRATIONS_DIR/package.json" "$MIGRATIONS_STAGING_DIR/package.json"
+cp -R "$MIGRATIONS_DIR/dist" "$MIGRATIONS_STAGING_DIR/dist"
+mkdir -p "$RUNTIME_DIR/memory/dist"
+if [ -d "$ROOT_DIR/Memory/AgentSourceCore/dist/src" ]; then
+  mkdir -p "$RUNTIME_DIR/memory/AgentSourceCore/dist/src"
+  cp -R "$ROOT_DIR/Memory/AgentSourceCore/dist/src/." "$RUNTIME_DIR/memory/AgentSourceCore/dist/src/"
+  cp "$ROOT_DIR/Memory/AgentSourceCore/package.json" "$RUNTIME_DIR/memory/AgentSourceCore/package.json"
+fi
+cp -R "$MEMORY_DIR/dist/src" "$RUNTIME_DIR/memory/dist/src"
+cp -R "$MEMORY_DIR/dist/viewer" "$RUNTIME_DIR/memory/dist/viewer"
+cp -R "$MEMORY_DIR/adapters" "$RUNTIME_DIR/memory/adapters"
+cp -R "$AGENT_DIR/dist" "$RUNTIME_DIR/memmy-agent/dist"
+node "$ROOT_DIR/scripts/internal/shared/check-office-slim-assets.mjs" "$RUNTIME_DIR/memmy-agent"
+package_step_start "Build Computer History native helpers"
+bash "$ROOT_DIR/scripts/internal/mac/build-computer-history-helpers.sh" \
+  "$RUNTIME_DIR/memmy-agent/dist/tools/computer-history/mac" "$TARGET_CPU"
+package_step_start "Stage self-contained WeChat Python runtime"
+bash "$ROOT_DIR/scripts/internal/mac/stage-wechat-python.sh" \
+  "$RUNTIME_DIR/memmy-agent/dist/tools/computer-history/mac/wechat/python" "$TARGET_CPU"
+package_step_start "Build Computer Use native helpers"
+bash "$ROOT_DIR/scripts/internal/mac/build-computer-use-helpers.sh" \
+  "$RUNTIME_DIR/memmy-agent/dist/tools/computer-use/mac" "$TARGET_CPU"
+package_step_start "Create Memory runtime manifest"
+create_memory_runtime_manifest "$RUNTIME_DIR/memory"
+package_step_start "Resolve Memory runtime lockfile"
+npm install --prefix "$RUNTIME_DIR/memory" --package-lock-only --ignore-scripts --install-links --os=darwin --cpu="$TARGET_CPU"
+package_step_start "Install Memory runtime production dependencies"
+npm ci --prefix "$RUNTIME_DIR/memory" --omit=dev --install-links --os=darwin --cpu="$TARGET_CPU"
+package_step_start "Install memmy-agent runtime production dependencies"
+cp "$AGENT_DIR/package.json" "$RUNTIME_DIR/memmy-agent/package.json"
+cp "$AGENT_DIR/package-lock.json" "$RUNTIME_DIR/memmy-agent/package-lock.json"
+PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci --prefix "$RUNTIME_DIR/memmy-agent" --omit=dev --os=darwin --cpu="$TARGET_CPU"
+package_step_start "Build Memmy Computer Use from source"
+OCU_APP="$RUNTIME_DIR/memmy-agent/dist/native-computer-use/Memmy Computer Use.app"
+if [ "${MEMMY_SKIP_CODESIGN:-}" = "1" ]; then
+  OCU_SIGNING_IDENTITY="-"
+else
+  OCU_SIGNING_IDENTITY="${CODESIGN_IDENTITY:-${CSC_NAME:-}}"
+  if [ -z "$OCU_SIGNING_IDENTITY" ]; then
+    echo "Memmy Computer Use requires CODESIGN_IDENTITY or CSC_NAME for a signed package." >&2
+    exit 1
+  fi
+  if [[ "$OCU_SIGNING_IDENTITY" != 'Developer ID Application:'* ]]; then
+    OCU_SIGNING_IDENTITY="Developer ID Application: $OCU_SIGNING_IDENTITY"
+  fi
+fi
+bash "$ROOT_DIR/scripts/internal/mac/build-memmy-computer-use.sh" "$OCU_APP" "$TARGET_CPU" "$OCU_SIGNING_IDENTITY" cn.memtensor.memmy
+package_step_start "Stage memmy-agent workspace runtime packages"
+# local-api-contracts shares scan ordering with Memory through this browser-safe package.
+RUNTIME_AGENT_SOURCE_CORE_DIR="$RUNTIME_DIR/memmy-agent/node_modules/@memmy/agent-source-core"
+rm -rf "$RUNTIME_AGENT_SOURCE_CORE_DIR"
+mkdir -p "$RUNTIME_AGENT_SOURCE_CORE_DIR"
+cp "$MEMORY_DIR/AgentSourceCore/package.json" "$RUNTIME_AGENT_SOURCE_CORE_DIR/package.json"
+cp -R "$MEMORY_DIR/AgentSourceCore/dist" "$RUNTIME_AGENT_SOURCE_CORE_DIR/dist"
+RUNTIME_LOCAL_API_CONTRACTS_DIR="$RUNTIME_DIR/memmy-agent/node_modules/@memmy/local-api-contracts"
+rm -rf "$RUNTIME_LOCAL_API_CONTRACTS_DIR"
+mkdir -p "$RUNTIME_LOCAL_API_CONTRACTS_DIR"
+cp "$LOCAL_API_CONTRACTS_DIR/package.json" "$RUNTIME_LOCAL_API_CONTRACTS_DIR/package.json"
+cp -R "$LOCAL_API_CONTRACTS_DIR/dist" "$RUNTIME_LOCAL_API_CONTRACTS_DIR/dist"
+if [ -L "$RUNTIME_LOCAL_API_CONTRACTS_DIR" ]; then
+  echo "Packaged local API contracts must not be a symbolic link." >&2
+  exit 1
+fi
+if [ ! -f "$RUNTIME_LOCAL_API_CONTRACTS_DIR/dist/index.js" ]; then
+  echo "Packaged local API contracts entrypoint is missing." >&2
+  exit 1
+fi
+RUNTIME_KNOWLEDGE_DIR="$RUNTIME_DIR/memmy-agent/node_modules/@memmy/knowledge"
+rm -rf "$RUNTIME_KNOWLEDGE_DIR"
+mkdir -p "$RUNTIME_KNOWLEDGE_DIR"
+cp "$ROOT_DIR/Knowledge/package.json" "$RUNTIME_KNOWLEDGE_DIR/package.json"
+cp -R "$ROOT_DIR/Knowledge/dist" "$RUNTIME_KNOWLEDGE_DIR/dist"
+RUNTIME_MIGRATIONS_DIR="$RUNTIME_DIR/memmy-agent/node_modules/@memmy/migrations"
+rm -rf "$RUNTIME_MIGRATIONS_DIR"
+mkdir -p "$RUNTIME_MIGRATIONS_DIR"
+cp "$MIGRATIONS_STAGING_DIR/package.json" "$RUNTIME_MIGRATIONS_DIR/package.json"
+cp -R "$MIGRATIONS_STAGING_DIR/dist" "$RUNTIME_MIGRATIONS_DIR/dist"
+if [ -L "$RUNTIME_MIGRATIONS_DIR" ]; then
+  echo "Packaged migrations package must not be a symbolic link." >&2
+  exit 1
+fi
+if [ ! -f "$RUNTIME_MIGRATIONS_DIR/dist/index.js" ]; then
+  echo "Packaged migrations entrypoint is missing." >&2
+  exit 1
+fi
+rm -rf "$MIGRATIONS_STAGING_DIR"
+if [ -e "$MIGRATIONS_STAGING_DIR" ]; then
+  echo "Migrations staging directory was not removed." >&2
+  exit 1
+fi
+package_step_start "Verify memmy-agent runtime exports"
+(
+  cd "$RUNTIME_DIR/memmy-agent"
+  node --input-type=module --eval '
+    import fs from "node:fs";
+    import path from "node:path";
+    import { createRequire } from "node:module";
+    import {
+      CURRENT_MIGRATION_STATE_FORMAT_VERSION,
+      SUPPORTED_MIGRATION_STATE_FORMAT_VERSIONS,
+      runMigrations,
+    } from "@memmy/migrations";
+    import { cloudServiceFromDesktopRuntimeManifest } from "@memmy/local-api-contracts";
+    import { createConnection } from "@playwright/mcp";
+    import { chromium } from "playwright";
+    const require = createRequire(import.meta.url);
+    const runtimePackage = require("./package.json");
+    const mcpPath = require.resolve("@playwright/mcp/package.json");
+    const playwrightPath = require.resolve("playwright/package.json");
+    const corePath = require.resolve("playwright-core/package.json");
+    const mcpPackage = require(mcpPath);
+    const playwrightPackage = require(playwrightPath);
+    const corePackage = require(corePath);
+    if (typeof runMigrations !== "function") throw new Error("Migrations runtime export is unavailable");
+    if (typeof cloudServiceFromDesktopRuntimeManifest !== "function") throw new Error("Local API contracts runtime export is unavailable");
+    if (CURRENT_MIGRATION_STATE_FORMAT_VERSION !== 2 || JSON.stringify(SUPPORTED_MIGRATION_STATE_FORMAT_VERSIONS) !== "[1,2]") throw new Error("Migrations runtime state compatibility mismatch");
+    if (typeof createConnection !== "function" || typeof chromium?.executablePath !== "function") throw new Error("Playwright MCP runtime exports are unavailable");
+    if (mcpPackage.version !== runtimePackage.dependencies["@playwright/mcp"]) throw new Error("Playwright MCP runtime version mismatch");
+    if (playwrightPackage.version !== runtimePackage.dependencies.playwright || corePackage.version !== runtimePackage.dependencies.playwright) throw new Error("Playwright runtime version mismatch");
+    if (!fs.existsSync(path.join(path.dirname(playwrightPath), "cli.js"))) throw new Error("Playwright runtime CLI is missing");
+    const commandEntrypoint = "./dist/entrypoints/cli/commands.js";
+    if (!fs.readFileSync(commandEntrypoint, "utf8").includes("browser-prepare")) throw new Error("browser-prepare command is missing");
+  '
+)
+package_step_start "Create CLI launchers"
+create_cli_launcher "$CLI_BIN_DIR/memmy-memory" "dist/src/cli/index.js" resource
+create_cli_launcher "$CLI_BIN_DIR/memmy" "dist/runtime/memmy-agent/dist/main.js"
+create_cli_installer "$CLI_BIN_DIR/install-cli"
+create_dmg_cli_installer_command "$DMG_HELPER_DIR/Install CLI.command"
+package_step_start "Prune and verify macOS runtime artifacts"
+prune_mac_runtime_artifacts "$TARGET_CPU"
+verify_mac_memory_native_artifacts "$TARGET_CPU"
+verify_mac_agent_native_artifacts "$TARGET_CPU"
+package_step_start "Verify packaged runtime versions"
+node "$ROOT_DIR/scripts/internal/shared/verify-package-version.mjs" \
+  --expected "$DESKTOP_VERSION" \
+  --runtime-root "$RUNTIME_DIR"
+package_step_start "Prepare legacy plugin migration state"
+node "$ROOT_DIR/scripts/internal/shared/prepare-plugin-migration-state.mjs" \
+  "$DESKTOP_DIR/dist/bundled-plugins"
+package_step_start "Prepare bundled embedding model"
+node "$ROOT_DIR/scripts/internal/shared/prepare-embedding-model.mjs" "$EMBEDDING_MODELS_DIR"
+cp -R "$EMBEDDING_MODELS_DIR" "$RUNTIME_DIR/memory/embedding-models"
+
+if [ "${MEMMY_PACKAGE_PREPARE_ONLY:-}" = "1" ]; then
+  echo "Prepared desktop runtime resources at $RUNTIME_DIR"
+  package_log_finish 0
+  exit 0
+fi
+
+cd "$DESKTOP_DIR"
+# DMG background images are committed static assets and are no longer generated during packaging.
+# For style changes, see the historical generator in git history.
+MEMMY_MICROPHONE_USAGE_DESCRIPTION="$(resolve_microphone_usage_description)"
+MEMMY_CAMERA_USAGE_DESCRIPTION="$(resolve_camera_usage_description)"
+echo "Using edition microphone usage description: $MEMMY_MICROPHONE_USAGE_DESCRIPTION"
+echo "Using edition camera usage description: $MEMMY_CAMERA_USAGE_DESCRIPTION"
+
+BUILDER_ARGS=(--config "$BUILDER_CONFIG")
+if [ -n "${MEMMY_ELECTRON_DIST:-}" ]; then
+  BUILDER_ARGS+=(--config.electronDist="$MEMMY_ELECTRON_DIST")
+fi
+BUILDER_ARGS+=(--config.mac.extendInfo.NSMicrophoneUsageDescription="$MEMMY_MICROPHONE_USAGE_DESCRIPTION")
+BUILDER_ARGS+=(--config.mac.extendInfo.NSCameraUsageDescription="$MEMMY_CAMERA_USAGE_DESCRIPTION")
+
+package_step_start "Run electron-builder macOS DMG packaging"
+npx electron-builder "${BUILDER_ARGS[@]}" --mac dmg "$@"
+package_step_start "Verify packaged macOS app artifacts"
+verify_packaged_mac_unpacked_artifacts "$TARGET_CPU"
+
+LATEST_DMG="$(ls -t release/*.dmg 2>/dev/null | head -1 || true)"
+if [ -n "$LATEST_DMG" ]; then
+  echo "Swapping oversized DMG background for resize tolerance..."
+  package_step_start "Patch DMG window background"
+  bash "$ROOT_DIR/scripts/internal/shared/fix-dmg-window-bounds.sh" "$LATEST_DMG" "半人马AI 私人记忆盒子" "$DESKTOP_DIR" || \
+    echo "Warning: could not swap DMG background — resize may show white edges."
+else
+  echo "Packaging completed without a DMG artifact." >&2
+  exit 1
+fi
+package_log_finish 0

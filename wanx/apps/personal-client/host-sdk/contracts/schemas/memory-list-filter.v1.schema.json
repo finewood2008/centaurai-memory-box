@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wanx-memory-list-filter/1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "entity_id": {
+      "type": "string"
+    },
+    "candidate_type": {
+      "type": "string"
+    },
+    "importance_min": {
+      "type": "string"
+    },
+    "include_deprecated": {
+      "type": "boolean"
+    },
+    "query": {
+      "type": "string"
+    },
+    "order_by": {
+      "type": "string"
+    },
+    "order": {
+      "enum": [
+        "asc",
+        "desc"
+      ]
+    },
+    "offset": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1
+    }
+  }
+}

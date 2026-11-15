@@ -1,0 +1,380 @@
+/** Account routes tests. */
+import { afterEach, describe, expect, it } from "vitest";
+import { createProgressBus } from "../../../../services/progress-bus.js";
+import { createLocalApiServer } from "../server.js";
+import type { FastifyInstance } from "fastify";
+import type { PermissionManager } from "../../../../permission/index.js";
+import type { BackendServices } from "../../../../services/index.js";
+
+let app: FastifyInstance | undefined;
+
+afterEach(async () => {
+  await app?.close();
+  app = undefined;
+});
+
+describe("account local api routes", () => {
+  it("keeps cloud authentication unavailable in the local workspace", async () => {
+    app = createServer({}, true);
+    const headers = { "x-memmy-local-token": "test-token" };
+    const [session, verification, mode] = await Promise.all([
+      app.inject({ method: "GET", url: "/api/account/session", headers }),
+      injectJson("POST", "/api/account/send-code", {}),
+      injectJson("PATCH", "/api/app/settings", { userMode: "account" })
+    ]);
+    expect([session.statusCode, verification.statusCode, mode.statusCode]).toEqual([404, 404, 403]);
+  });
+
+  it("keeps the retired knowledge, integrations, channels and plugin APIs off in the local workspace", async () => {
+    app = createServer({}, true);
+    const headers = { "x-memmy-local-token": "test-token" };
+    const retired = [
+      ["POST", "/api/knowledge/recall"], ["GET", "/api/v1/integrations/capabilities"],
+      ["GET", "/api/v1/channels/definitions"], ["GET", "/api/v1/plugins/catalog"],
+      ["POST", "/mcp/composio"], ["POST", "/mcp/plugins"],
+    ] as const;
+    for (const [method, url] of retired) {
+      expect((await app.inject({ method, url, headers })).statusCode, url).toBe(404);
+    }
+  });
+
+  it("forwards account session routes through AccountService", async () => {
+    const calls: string[] = [];
+    app = createServer({
+      account: {
+        async sendCode(input) {
+          calls.push(`send:${input.channel}:${input.email ?? input.phoneNumber}`);
+          return { ok: true, resendAfterSec: 60 };
+        },
+        async verifyCode(input) {
+          calls.push(`verify:${input.verificationCode}`);
+          return {
+            session: accountSession(),
+            invitationResult: { status: "success", inviteeRewardTokens: 500_000 }
+          };
+        },
+        async getInvitation() {
+          calls.push("invitation");
+          return {
+            enabled: true,
+            invitationCode: "MEMMY-A1B2C3",
+            usedInviteSlotsToday: 3,
+            dailySuccessLimit: 5,
+            remainingInvitesToday: 2,
+            dailyLimitReached: false
+          };
+        },
+        async updateProfile(input) {
+          calls.push(`profile:${input.nickname}`);
+          return { ...accountSession().profile, nickname: input.nickname };
+        },
+        async markGuideFinished() {
+          calls.push("guide-finished");
+          return { ok: true };
+        },
+        async logout() {
+          calls.push("logout");
+          return { ok: true };
+        },
+        async getSession() {
+          calls.push("session");
+          return accountSession();
+        }
+      }
+    });
+
+    const sendCode = await injectJson("POST", "/api/account/send-code", {
+      channel: "email",
+      email: "hello@example.com",
+      locale: "zh"
+    });
+    const verifyCode = await injectJson("POST", "/api/account/verify-code", {
+      channel: "email",
+      email: "hello@example.com",
+      verificationCode: "123456",
+      loginSource: "Memmy",
+      invitationCode: "MEMMY-A1B2C3"
+    });
+    const invitation = await injectJson("PUT", "/api/account/invitation", {});
+    const profile = await injectJson("PATCH", "/api/account/profile", { nickname: "Memmy User" });
+    const guideFinished = await injectJson("POST", "/api/account/guide-finished", {});
+    const logout = await injectJson("POST", "/api/account/logout", {});
+    const session = await app.inject({
+      method: "GET",
+      url: "/api/account/session",
+      headers: { "x-memmy-local-token": "test-token" }
+    });
+
+    expect(sendCode.json()).toEqual({ ok: true, resendAfterSec: 60 });
+    expect(verifyCode.json()).toMatchObject({
+      session: { authenticated: true, profile: { email: "hello@example.com" } },
+      invitationResult: { status: "success", inviteeRewardTokens: 500_000 }
+    });
+    expect(JSON.stringify(verifyCode.json())).not.toContain("cloud.login.uuid");
+    expect(invitation.json()).toMatchObject({
+      invitationCode: "MEMMY-A1B2C3",
+      remainingInvitesToday: 2
+    });
+    expect(profile.json()).toMatchObject({ nickname: "Memmy User" });
+    expect(guideFinished.json()).toEqual({ ok: true });
+    expect(logout.json()).toEqual({ ok: true });
+    expect(session.json()).toMatchObject({ authenticated: true });
+    expect(calls).toEqual([
+      "send:email:hello@example.com",
+      "verify:123456",
+      "invitation",
+      "profile:Memmy User",
+      "guide-finished",
+      "logout",
+      "session"
+    ]);
+  });
+
+  it("forwards lottery reward lookup and acknowledgement through AccountService", async () => {
+    const calls: unknown[] = [];
+    app = createServer({
+      account: {
+        async getLotteryReward() {
+          calls.push("get");
+          return { hasReward: true as const, drawId: "1", tokenAmount: 500_000 };
+        },
+        async ackLotteryReward(input: unknown) {
+          calls.push({ ack: input });
+          return { ok: true };
+        }
+      }
+    });
+
+    const reward = await app.inject({
+      method: "GET",
+      url: "/api/account/lottery/reward",
+      headers: { "x-memmy-local-token": "test-token" }
+    });
+    const ack = await injectJson("POST", "/api/account/lottery/reward/ack", { drawId: "1" });
+
+    expect(reward.statusCode).toBe(200);
+    expect(reward.json()).toEqual({ hasReward: true, drawId: "1", tokenAmount: 500_000 });
+    expect(ack.json()).toEqual({ ok: true });
+    expect(calls).toEqual(["get", { ack: { drawId: "1" } }]);
+  });
+
+  it("lists avatars and stores the selected avatar behind the runtime token", async () => {
+    const calls: string[] = [];
+    app = createServer({
+      appConfig: {
+        async listAvatars() {
+          calls.push("avatars");
+          return [{ id: "memmy-default", displayName: "Memmy", assetKey: "avatar.memmy", kind: "image" }];
+        },
+        async setAvatar(input) {
+          calls.push(`avatar:${input.avatarId}`);
+          return { avatarId: input.avatarId };
+        }
+      }
+    });
+
+    const avatars = await app.inject({
+      method: "GET",
+      url: "/api/account/avatars",
+      headers: { "x-memmy-local-token": "test-token" }
+    });
+    const avatar = await app.inject({
+      method: "PATCH",
+      url: "/api/account/avatar",
+      headers: { "x-memmy-local-token": "test-token" },
+      payload: { avatarId: "memmy-default" }
+    });
+
+    expect(avatars.statusCode).toBe(200);
+    expect(avatars.json()).toEqual([
+      { id: "memmy-default", displayName: "Memmy", assetKey: "avatar.memmy", kind: "image" }
+    ]);
+    expect(avatar.statusCode).toBe(200);
+    expect(avatar.json()).toEqual({ avatarId: "memmy-default" });
+    expect(calls).toEqual(["avatars", "avatar:memmy-default"]);
+  });
+
+  it("rejects avatar routes without a valid runtime token", async () => {
+    app = createServer();
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/account/avatars"
+    });
+
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("returns invalid_argument for invalid account payloads", async () => {
+    app = createServer();
+
+    const response = await injectJson("POST", "/api/account/send-code", {
+      channel: "email",
+      locale: "zh"
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      error: {
+        code: "invalid_argument"
+      }
+    });
+  });
+
+  it("forwards social-login start and status through the runtime-token boundary", async () => {
+    app = createServer();
+
+    const start = await injectJson("POST", "/api/account/oauth/start", {
+      provider: "google",
+      locale: "en",
+      loginSource: "Memmy"
+    });
+    const status = await injectJson("POST", "/api/account/oauth/status", {
+      flowId: "social-flow-id-0001",
+      pollToken: "social-poll-token-0000000000000001"
+    });
+
+    expect(start.json()).toMatchObject({
+      authorizationUrl: "https://accounts.google.com/o/oauth2/v2/auth",
+      expiresInSec: 600
+    });
+    expect(status.json()).toEqual({ status: "pending" });
+  });
+});
+
+async function injectJson(method: string, url: string, payload: unknown) {
+  if (!app) {
+    throw new Error("Test server is not initialized");
+  }
+
+  return app.inject({
+    method,
+    url,
+    headers: {
+      "x-memmy-local-token": "test-token"
+    },
+    payload
+  });
+}
+
+function createServer(overrides: Record<string, unknown> = {}, localWorkspace = false): FastifyInstance {
+  const services = {
+    bootstrap: {
+      async getBootstrap() {
+        throw new Error("bootstrap not used");
+      }
+    },
+    progressBus: createProgressBus(),
+    appConfig: {
+      async listAvatars() {
+        return [];
+      },
+      async setAvatar() {
+        return { avatarId: "memmy-default" };
+      }
+    },
+    account: {
+      async sendCode() {
+        return { ok: true, resendAfterSec: 60 };
+      },
+      async verifyCode() {
+        return {
+          session: accountSession(),
+          invitationResult: { status: "not_provided" }
+        };
+      },
+      async startSocialLogin() {
+        return {
+          flowId: "social-flow-id-0001",
+          pollToken: "social-poll-token-0000000000000001",
+          authorizationUrl: "https://accounts.google.com/o/oauth2/v2/auth",
+          expiresInSec: 600,
+          pollIntervalSec: 2
+        };
+      },
+      async getSocialLoginStatus() {
+        return { status: "pending" as const };
+      },
+      async getInvitation() {
+        return {
+          enabled: false,
+          invitationCode: null,
+          usedInviteSlotsToday: 0,
+          dailySuccessLimit: 0,
+          remainingInvitesToday: 0,
+          dailyLimitReached: false
+        };
+      },
+      async updateProfile() {
+        return accountSession().profile;
+      },
+      async markGuideFinished() {
+        return { ok: true };
+      },
+      async logout() {
+        return { ok: true };
+      },
+      async getSession() {
+        return { authenticated: false };
+      }
+    },
+    ...overrides
+  } as unknown as BackendServices;
+
+  return createLocalApiServer({
+    permissionManager: createPermissionManager(),
+    services,
+    localWorkspace,
+    heartbeatIntervalMs: 20
+  });
+}
+
+function accountSession() {
+  return {
+    authenticated: true,
+    isNewUser: true,
+    profile: {
+      userId: "user-1",
+      email: "hello@example.com",
+      phoneNumber: null,
+      nickname: "hello",
+      avatarUrl: null,
+      planType: "free",
+      hasFinishedGuide: false,
+      region: null,
+      registeredAt: "2026-06-02T10:00:00.000Z"
+    }
+  };
+}
+
+function createPermissionManager(): PermissionManager {
+  return {
+    async getRuntimeToken() {
+      return "test-token";
+    },
+    async verifyRuntimeToken(token) {
+      return token === "test-token";
+    },
+    async getScanPermission() {
+      return "scan_and_write_skill";
+    },
+    async setScanPermission() {
+      return undefined;
+    },
+    async canDetectAgentSources() {
+      return true;
+    },
+    async canScanAgentSource() {
+      return true;
+    },
+    async canWriteAgentSkill() {
+      return true;
+    },
+    async canSearchMemory() {
+      return true;
+    },
+    async revokeAgentSource() {
+      return undefined;
+    }
+  };
+}

@@ -1,0 +1,19 @@
+{
+  "kind": "observed-native-window-check",
+  "version": "0.3.6-rc.20261108.compact.4",
+  "passed": true,
+  "checks": [
+    "same_authenticated_account_and_synthetic_warehouse",
+    "native_compact_material_list",
+    "fixed_version_text_preview_with_saved_markers",
+    "native_body_editor",
+    "unfinished_edit_blocks_full_switch",
+    "cancel_draft_then_restore_full_graph_same_warehouse"
+  ],
+  "screenshots": [
+    "final-full-default.png",
+    "final-full-compact-preview.png",
+    "final-full-draft-guard.png",
+    "final-full-restored.png"
+  ]
+}

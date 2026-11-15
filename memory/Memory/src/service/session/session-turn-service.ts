@@ -1,0 +1,4674 @@
+import { setImmediate as yieldToIO } from "node:timers/promises";
+import { DEVICE_MEMORY_OWNER } from "../namespace/memory-owner.js";
+import { turnMigrationMemoryIds } from "../../storage/memory-relations.js";
+import { EpisodeSelectionRequired, selectionInput, selectionKey, selectEpisode, type EpisodeSelectionContext, type EpisodeSelectionResult } from "./episode-selection.js";
+import {
+  captureTurnSteps,
+  classifyIntent,
+  classifyTurnFeedback,
+  classifyTurnRelation,
+  classifyTurnRelationWithLlm,
+  policyMetaFromMemory,
+  retrievalLayersForMode,
+  retrievePluginMemories,
+  signatureFromTraceParts,
+  traceMetaFromMemory,
+  type IntentDecision,
+  type TurnRelationDecision
+} from "../../algorithm/plugin-algorithms.js";
+import {
+  type MemmyConfig
+} from "../../config/index.js";
+import type { LlmClient } from "../../model/types.js";
+import {
+  jobToRef,
+  L3WorldModelScopeWorkspaceConflictError,
+  Repositories,
+  type EpisodeRecord,
+  type EvolutionJobRecord,
+  type RawTurnRecord,
+  type SessionRecord,
+  type SourceTurnCaptureScope
+} from "../../storage/repositories.js";
+import type {
+  FeedbackRequest,
+  InjectedContext,
+  JobRef,
+  MemoryKind,
+  MemoryLayer,
+  MemoryRow,
+  RecallHit,
+  RecallMemoryLayer,
+  RepairSuggestionRequest,
+  RequestEnvelope,
+  SessionCompactRequest,
+  SessionOpenRequest,
+  SubagentCompleteRequest,
+  SubagentStartRequest,
+  ToolCallPayload,
+  ToolObserveRequest,
+  TurnCompleteRequest,
+  SourceTurnCompleteRequest,
+  SourceTurnCompleteResponse,
+  SourceTurnIdentity,
+  TurnCompletionResult,
+  TurnStartRequest
+} from "../../types.js";
+import { MemoryServiceError } from "../../utils/error.js";
+import { newId,stableHash,stableStringify } from "../../utils/id.js";
+import { isRecord } from "../../utils/json.js";
+import { memoryCaptureQaHash, normalizeMemoryCaptureSource } from "../../utils/memory-capture-claim.js";
+import { isMemmyRecallToolName } from "../../utils/memmy-context-tags.js";
+import { clip } from "../../utils/text.js";
+import { nowIso } from "../../utils/time.js";
+import {
+  buildUserMemory,
+  classifyUserMemory,
+  isDynamicCurrentFactQuery,
+  isPureUserMemoryStatement,
+  isQuestionLike,
+  isTaskLinkedUserFeedback,
+  isUserMemoryQuestion
+} from "../user-memory/user-memory.js";
+import { isSubagentCompleteTurnId, TURN_JUDGE_PROMPT_VERSION, turnJudgeNoiseKind } from "../evolution/turn-judge.js";
+import type {
+  DecisionRepairLlmDraft,
+  SynthesizeDecisionRepairDraft
+} from "../feedback/feedback-experience.js";
+import { recordApiLog } from "../model-audit/model-call-audit.js";
+import { deduplicateCrossAccountMemoryCandidates } from "../retrieval/cross-account-candidate-dedup.js";
+import {
+  namespaceForRawTurn,
+  namespaceForSession,
+  normalizeNamespace,
+  resolveV2WorkspaceIdentityForOpenRequest,
+  sessionScopeForOpenRequest
+} from "../namespace/namespace-scope.js";
+import {
+  detailSummaryForMemory,
+  firstDetailDisplayString
+} from "../read-model/memory.js";
+import {
+  buildRepairSuggestionQuery,
+  buildSearchQuery,
+  completeObservedRawTurn,
+  normalizeCompleteTurnArtifacts,
+  normalizeCompleteTurnSourceMemoryIds,
+  normalizeCompleteTurnToolCalls,
+  normalizeCompleteTurnToolResults,
+  rawTurnIdForSessionTurn,
+  sanitizeTurnCompleteRequest,
+  sanitizeTurnStartRequest,
+  turnStartContextHints
+} from "../turn/turn-normalization.js";
+
+type TraceMeta = NonNullable<ReturnType<typeof traceMetaFromMemory>>;
+interface ToolFailureRecord { toolId: string; context: string; step: number; reason: string; ts: number; rawTurnId?: string; sessionId?: string; episodeId?: string; }
+interface ToolFailureState { toolId: string; context: string; firstSeen: number; lastSeen: number; windowStart: number; occurrences: ToolFailureRecord[]; }
+interface ToolFailureBurst extends ToolFailureState { contextHash: string; failureCount: number; }
+interface DecisionRepairSummary { repairId?: string; contextHash?: string; skipped?: boolean; reason?: string; attachedPolicyIds?: string[]; }
+type SessionTurnDependencies = {
+  repos: Repositories;
+  writeTransaction?: <T>(operation: () => T, signal?: AbortSignal) => Promise<T>;
+  readonly config: MemmyConfig;
+  readonly llm: LlmClient;
+  readonly skillLlm: LlmClient;
+  synthesizeDecisionRepairDraft: SynthesizeDecisionRepairDraft;
+} & Record<string, any>;
+type CompleteTurnResponse = TurnCompletionResult;
+type EndTopicDecision = TurnRelationDecision & { relation: "end_topic" };
+interface EpisodeTurnRoute { episode: EpisodeRecord; endTopicDecision?: EndTopicDecision; }
+type TurnRouteAction = "create_first" | "append" | "split" | "end_topic";
+interface TurnRouteProposal {
+  action: TurnRouteAction;
+  baseEpisodeId?: string;
+  relationDecision: TurnRelationDecision;
+  proposedAt: string;
+  mergeMode: boolean;
+  withinMergeWindow: boolean;
+  gapMs: number;
+}
+interface CommittedTurnRoute extends EpisodeTurnRoute {
+  closedEpisodeIds: string[];
+  jobs: EvolutionJobRecord[];
+  proposal: TurnRouteProposal;
+  proposalStale: boolean;
+}
+
+export interface ToolOutcomeObservation { toolId: string; success?: boolean; reason?: string; }
+
+export function toolObservationEvent(input: ToolObserveRequest): { phase: "start" | "complete" | "error"; event: ToolCallPayload; toolCall: ToolCallPayload; toolResult?: ToolCallPayload } {
+  const error = errorMessageFromUnknown(input.error);
+  const success = input.error !== undefined ? false : input.result !== undefined ? true : undefined;
+  const phase = input.error !== undefined ? "error" : input.result !== undefined ? "complete" : "start";
+  const event: ToolCallPayload = { id: input.toolCallId, name: input.toolName, input: input.args, output: input.error === undefined ? input.result : undefined, error, success };
+  return { phase, event, toolCall: { id: input.toolCallId, name: input.toolName, input: input.args }, toolResult: phase === "start" ? undefined : event };
+}
+
+export function toolOutcomeFromObservation(input: ToolObserveRequest, rawTurn: RawTurnRecord, updatedRawTurn: RawTurnRecord): ToolOutcomeObservation | undefined {
+  const event = toolObservationEvent(input).event; const eventRecord = event as unknown as Record<string, unknown>;
+  const call = matchingObservedToolCall(eventRecord, rawTurn, updatedRawTurn);
+  const resultSuccess = input.result === undefined ? undefined : successFromToolObservation(eventRecord) ?? true;
+  return { toolId: input.toolName, success: input.error !== undefined ? false : resultSuccess, reason: failureReasonFromToolObservation(event, call) };
+}
+
+export function toolRepairContext(session: SessionRecord, episode: EpisodeRecord): string { return [session.projectId ?? session.workspaceId ?? session.conversationId ?? "default", episode.id].join(":"); }
+export function toolSignalKey(toolId: string, context: string): string { return `${toolId}|${context}`; }
+export function toolRepairContextHash(toolId: string, context: string): string { return stableHash(`${toolId}\n${context}`).slice(0, 16); }
+export function repairEvidenceValueDiff(high: MemoryRow[], low: MemoryRow[]): number { if (!high.length || !low.length) return Number.POSITIVE_INFINITY; return Math.abs(meanTraceValue(high) - meanTraceValue(low)); }
+export function isRepairFailureLikeTrace(trace: NonNullable<ReturnType<typeof traceMetaFromMemory>>): boolean { const blob = `${trace.agentText}\n${trace.reflection ?? ""}`.toLowerCase(); return /(error|failed|failure|exception|traceback|timeout|retry)/.test(blob) || trace.toolCalls.some((call) => Boolean(call.error ?? errorMessageFromUnknown(call.output))); }
+export function repairTraceContains(trace: NonNullable<ReturnType<typeof traceMetaFromMemory>>, needle: string): boolean { return `${trace.userText}\n${trace.agentText}\n${trace.reflection ?? ""}`.toLowerCase().includes(needle); }
+
+function matchingObservedToolCall(record: Record<string, unknown> | undefined, rawTurn: RawTurnRecord, updatedRawTurn: RawTurnRecord): ToolCallPayload | undefined { const id = stringFromMaybeRecord(record, "id") ?? stringFromMaybeRecord(record, "toolCallId"); const name = stringFromMaybeRecord(record, "name") ?? stringFromMaybeRecord(record, "toolName"); const calls = [...updatedRawTurn.toolCalls, ...rawTurn.toolCalls].filter(isToolCallPayload); return calls.find((call) => id && call.id === id) ?? calls.find((call) => name && call.name === name); }
+function successFromToolObservation(record: Record<string, unknown> | undefined): boolean | undefined { if (!record) return undefined; if (typeof record.success === "boolean") return record.success; if (typeof record.ok === "boolean") return record.ok; if (typeof record.exitCode === "number") return record.exitCode === 0; if (typeof record.status === "string") { const status = record.status.toLowerCase(); if (["succeeded","success","ok","passed"].includes(status)) return true; if (["failed","failure","error","cancelled"].includes(status)) return false; } return record.error !== undefined ? false : undefined; }
+function failureReasonFromToolObservation(event: unknown, call: ToolCallPayload | undefined): string | undefined { const reason = errorMessageFromUnknown(event) ?? (isRecord(event) ? stringFromMaybeRecord(event, "output") : undefined) ?? call?.error ?? errorMessageFromUnknown(call?.output); return reason ? clip(reason, 240) : undefined; }
+function meanTraceValue(memories: MemoryRow[]): number { const values = memories.map((memory) => traceMetaFromMemory(memory)?.value).filter((value): value is number => typeof value === "number" && Number.isFinite(value)); return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0; }
+function errorMessageFromUnknown(value: unknown): string | undefined { if (value === undefined || value === null) return undefined; if (value instanceof Error) return value.message; if (typeof value === "string") return value; if (isRecord(value)) { const message = value.error ?? value.message; if (typeof message === "string") return message; } return undefined; }
+function stringFromMaybeRecord(record: unknown, key: string): string | undefined { return isRecord(record) ? (typeof record[key] === "string" ? record[key] as string : undefined) : undefined; }
+function isToolCallPayload(value: unknown): value is ToolCallPayload { return isRecord(value) && typeof value.name === "string"; }
+
+
+function uniq<T>(values: readonly T[]): T[] { return [...new Set(values)]; }
+function objectField(value: unknown, key: string): string | undefined { return isRecord(value) && typeof value[key] === "string" ? value[key] as string : undefined; }
+const EXPLICIT_END_TOPIC_COMMANDS = new Set([
+  "结束会话",
+  "不聊了"
+]);
+
+// Where a turn goes before its turn.judge.v1 judgment, and the relation the
+// rules can settle: the session's first turn starts a task, a subagent
+// completion belongs to the task that started it; any other turn is pending.
+function provisionalTurnRouteProposal(
+  latest: EpisodeRecord | undefined,
+  turnId: string,
+  proposedAt: string
+): TurnRouteProposal {
+  const relationDecision: TurnRelationDecision = !latest
+    ? { relation: "new_task", reason: "first turn of the session", signals: ["first_turn"] }
+    : isSubagentCompleteTurnId(turnId)
+      ? { relation: "follow_up", reason: "subagent completion", signals: ["subagent_complete"] }
+      : { relation: "unknown", reason: "pending turn judgment", signals: [TURN_JUDGE_PROMPT_VERSION, "pending"] };
+  return {
+    action: !latest ? "create_first" : latest.status === "open" ? "append" : "split",
+    ...(latest ? { baseEpisodeId: latest.id } : {}),
+    relationDecision,
+    proposedAt,
+    mergeMode: true,
+    withinMergeWindow: true,
+    gapMs: 0
+  };
+}
+
+function turnRouteProposalFromRecallRequest(request: unknown): TurnRouteProposal | undefined {
+  if (!isRecord(request) || !isRecord(request.routeProposal)) return undefined;
+  const proposal = request.routeProposal;
+  const decision = isRecord(proposal.relationDecision) ? proposal.relationDecision : undefined;
+  const action = proposal.action;
+  if (
+    (action !== "create_first" && action !== "append" && action !== "split" && action !== "end_topic") ||
+    !decision ||
+    (decision.relation !== "revision" &&
+      decision.relation !== "follow_up" &&
+      decision.relation !== "new_task" &&
+      decision.relation !== "end_topic" &&
+      decision.relation !== "unknown") ||
+    (decision.confidence !== undefined && typeof decision.confidence !== "number") ||
+    typeof decision.reason !== "string" ||
+    !Array.isArray(decision.signals) ||
+    !decision.signals.every((signal) => typeof signal === "string") ||
+    typeof proposal.proposedAt !== "string" ||
+    typeof proposal.mergeMode !== "boolean" ||
+    typeof proposal.withinMergeWindow !== "boolean" ||
+    typeof proposal.gapMs !== "number"
+  ) {
+    return undefined;
+  }
+  return {
+    action,
+    ...(typeof proposal.baseEpisodeId === "string" ? { baseEpisodeId: proposal.baseEpisodeId } : {}),
+    relationDecision: {
+      relation: decision.relation,
+      ...(typeof decision.confidence === "number" ? { confidence: decision.confidence } : {}),
+      reason: decision.reason,
+      signals: decision.signals as string[],
+      ...(typeof decision.llmModel === "string" ? { llmModel: decision.llmModel } : {})
+    },
+    proposedAt: proposal.proposedAt,
+    mergeMode: proposal.mergeMode,
+    withinMergeWindow: proposal.withinMergeWindow,
+    gapMs: proposal.gapMs
+  };
+}
+
+function turnIntentDecisionFromRecallRequest(request: unknown): IntentDecision | undefined {
+  if (!isRecord(request) || !isRecord(request.turnIntentDecision)) return undefined;
+  const decision = request.turnIntentDecision;
+  const retrieval = isRecord(decision.retrieval) ? decision.retrieval : undefined;
+  if (
+    (decision.kind !== "task" &&
+      decision.kind !== "memory_probe" &&
+      decision.kind !== "chitchat" &&
+      decision.kind !== "meta" &&
+      decision.kind !== "unknown") ||
+    typeof decision.confidence !== "number" ||
+    typeof decision.reason !== "string" ||
+    !Array.isArray(decision.signals) ||
+    !decision.signals.every((signal) => typeof signal === "string") ||
+    !retrieval ||
+    typeof retrieval.tier1 !== "boolean" ||
+    typeof retrieval.tier2 !== "boolean" ||
+    typeof retrieval.tier3 !== "boolean"
+  ) {
+    return undefined;
+  }
+  return decision as unknown as IntentDecision;
+}
+
+function turnContextPacketId(
+  sessionId: string,
+  baseEpisodeId: string | undefined,
+  turnId: string,
+  searchEventId: string
+): string {
+  return `ctx_${stableHash(`${sessionId}:${baseEpisodeId ?? "unbound"}:${turnId}:${searchEventId}`).slice(0, 20)}`;
+}
+
+function explicitEndTopicDecision(text: string): EndTopicDecision | undefined {
+  const command = text
+    .trim()
+    .toLowerCase()
+    .replace(/[。！？!?.,，、;；:："'“”‘’]+$/gu, "")
+    .replace(/\s+/gu, " ");
+  if (!EXPLICIT_END_TOPIC_COMMANDS.has(command)) {
+    return undefined;
+  }
+  return {
+    relation: "end_topic",
+    confidence: 1,
+    reason: "explicit end-topic command",
+    signals: ["explicit_end_topic_command"]
+  };
+}
+
+function endTopicDecisionFromRawTurn(rawTurn: RawTurnRecord): EndTopicDecision | undefined {
+  const turnStart = isRecord(rawTurn.messagePayload?.turn_start)
+    ? rawTurn.messagePayload.turn_start
+    : undefined;
+  const close = turnStart && isRecord(turnStart.episode_close)
+    ? turnStart.episode_close
+    : undefined;
+  const decision = close && isRecord(close.decision) ? close.decision : undefined;
+  if (
+    close?.closeAfterComplete !== true ||
+    decision?.relation !== "end_topic" ||
+    typeof decision.confidence !== "number" ||
+    typeof decision.reason !== "string" ||
+    !Array.isArray(decision.signals) ||
+    !decision.signals.every((signal) => typeof signal === "string")
+  ) {
+    return undefined;
+  }
+  return {
+    relation: "end_topic",
+    confidence: decision.confidence,
+    reason: decision.reason,
+    signals: decision.signals,
+    ...(typeof decision.llmModel === "string" ? { llmModel: decision.llmModel } : {})
+  };
+}
+
+function rawTurnIsExcludedFromL1(rawTurn: RawTurnRecord): boolean {
+  const turnStart = isRecord(rawTurn.messagePayload?.turn_start)
+    ? rawTurn.messagePayload.turn_start
+    : undefined;
+  const intentDecision = turnStart && isRecord(turnStart.intent_decision)
+    ? turnStart.intent_decision
+    : undefined;
+  const kind = typeof intentDecision?.kind === "string"
+    ? intentDecision.kind
+    : classifyIntent(rawTurn.userText ?? "").kind;
+  if (kind === "chitchat" || kind === "meta" || kind === "memory_probe") return true;
+  if (isUserMemoryQuestion(rawTurn.userText ?? "")) return true;
+  if (isDynamicCurrentFactQuery(rawTurn.userText ?? "")) return true;
+  const taskLinkedFeedback = isTaskLinkedUserFeedback(rawTurn.userText ?? "");
+  const hasOnlyRecalledMemoryEvidence = rawTurn.sourceMemoryIds.length > 0 && (
+    (rawTurn.toolCalls.length === 0 && rawTurn.toolResults.length === 0) ||
+    (rawTurn.toolCalls.length > 0 && rawTurn.toolCalls.every((call) =>
+      isToolCallPayload(call) && isMemmyRecallToolName(call.name)
+    ))
+  );
+  if (
+    !taskLinkedFeedback &&
+    hasOnlyRecalledMemoryEvidence
+  ) return true;
+  if (
+    isPureUserMemoryStatement(rawTurn.userText ?? "") &&
+    rawTurn.toolCalls.length === 0 &&
+    rawTurn.toolResults.length === 0 &&
+    rawTurn.sourceMemoryIds.length === 0
+  ) return !taskLinkedFeedback;
+  return false;
+}
+
+function l1ObservationMetadata(
+  rawTurn: RawTurnRecord,
+  session: SessionRecord,
+  at: string,
+  options: { modelJudgesUnverified?: boolean } = {}
+): {
+  memoryKey?: string;
+  info: Record<string, unknown>;
+  internal: Record<string, unknown>;
+} {
+  const text = rawTurn.userText ?? "";
+  const hasToolEvidence = rawTurn.toolCalls.length > 0 && rawTurn.toolResults.length > 0;
+  const deviceMemoryObservation = hasToolEvidence &&
+    /(?:(?:电脑|计算机|设备|机器).{0,16}(?:内存|ram)|(?:内存|ram).{0,16}(?:电脑|计算机|设备|机器))|\b(?:computer|device|machine)\b.{0,24}\b(?:memory|ram)\b/i.test(text);
+  if (deviceMemoryObservation) {
+    const deviceId = stringFromMaybeRecord(session.meta, "device_id") ??
+      stringFromMaybeRecord(session.meta, "deviceId") ??
+      stringFromMaybeRecord(session.meta, "installation_id") ??
+      stringFromMaybeRecord(session.meta, "installationId") ??
+      "local";
+    const scopeKey = `device:${deviceId}:${session.profileId}`;
+    const claim = {
+      key: "device.total_memory",
+      source_role: "tool",
+      evidence_status: "verified",
+      observed_at: at,
+      scope_key: scopeKey,
+      policy_eligible: false
+    };
+    return {
+      memoryKey: `trace:environment:${scopeKey}:device.total_memory`,
+      info: {
+        scope_key: scopeKey,
+        observed_at: at,
+        evidence_status: "verified",
+        policy_eligible: false
+      },
+      internal: {
+        scope_key: scopeKey,
+        observed_at: at,
+        evidence_status: "verified",
+        policy_eligible: false,
+        claims: [claim]
+      }
+    };
+  }
+  if (hasToolEvidence) {
+    return {
+      info: { observed_at: at, evidence_status: "verified" },
+      internal: {
+        observed_at: at,
+        evidence_status: "verified",
+        claims: [{ source_role: "tool", evidence_status: "verified", observed_at: at }]
+      }
+    };
+  }
+  // With turn.judge.v1 the model decides whether an L1 is unverified.
+  if (!options.modelJudgesUnverified && isQuestionLike(text) && !isTaskLinkedUserFeedback(text)) {
+    return {
+      info: { observed_at: at, evidence_status: "provisional", policy_eligible: false },
+      internal: {
+        observed_at: at,
+        evidence_status: "provisional",
+        policy_eligible: false,
+        claims: [{ source_role: "agent", evidence_status: "provisional", observed_at: at }]
+      }
+    };
+  }
+  return { info: {}, internal: {} };
+}
+
+function pendingL1DecisionMetadata(observation: ReturnType<typeof l1ObservationMetadata>): ReturnType<typeof l1ObservationMetadata> {
+  const originalEvidenceStatus = typeof observation.internal.evidence_status === "string"
+    ? observation.internal.evidence_status
+    : undefined;
+  return {
+    memoryKey: observation.memoryKey,
+    info: {
+      ...observation.info,
+      evidence_status: "provisional"
+    },
+    internal: {
+      ...observation.internal,
+      evidence_status: "provisional",
+      capture_decision: {
+        status: "pending",
+        ...(originalEvidenceStatus ? { original_evidence_status: originalEvidenceStatus } : {})
+      }
+    }
+  };
+}
+
+function episodeClosedByEndTopicTurn(episode: EpisodeRecord, turnId: string): boolean {
+  return episode.status === "closed" &&
+    episode.meta.closeReason === "end_topic" &&
+    episode.meta.endTopicTurnId === turnId;
+}
+
+export function summarizeTurn(rawTurn: RawTurnRecord): string {
+  const parts = [
+    `Turn: ${rawTurn.turnId}`,
+    rawTurn.userText ? `User: ${clip(rawTurn.userText, 1200)}` : undefined,
+    rawTurn.assistantText ? `Assistant: ${clip(rawTurn.assistantText, 1600)}` : undefined,
+    rawTurn.reasoningSummary ? `Reasoning summary: ${clip(rawTurn.reasoningSummary, 800)}` : undefined,
+    rawTurn.toolCalls.length
+      ? `Tool calls: ${rawTurn.toolCalls.map((call) => objectField(call, "name") ?? "tool").join(", ")}`
+      : undefined,
+    rawTurn.toolResults.length ? `Tool results: ${rawTurn.toolResults.length}` : undefined
+  ].filter(Boolean);
+  return parts.join("\n");
+}
+
+export function rawTurnSummary(rawTurn: RawTurnRecord): {
+  rawTurnId: string;
+  episodeId?: string;
+  turnId: string;
+  userText?: string;
+  assistantText?: string;
+  reasoningSummary?: string;
+  toolCalls?: unknown[];
+  toolResults?: unknown[];
+  createdAt: string;
+} {
+  const redacted = Boolean(rawTurn.redactedAt || rawTurn.deletedAt);
+  return {
+    rawTurnId: rawTurn.id,
+    episodeId: rawTurn.episodeId,
+    turnId: rawTurn.turnId,
+    userText: redacted ? undefined : rawTurn.userText,
+    assistantText: redacted ? undefined : rawTurn.assistantText,
+    reasoningSummary: redacted ? undefined : rawTurn.reasoningSummary,
+    toolCalls: redacted ? undefined : rawTurn.toolCalls,
+    toolResults: redacted ? undefined : rawTurn.toolResults,
+    createdAt: rawTurn.createdAt
+  };
+}
+
+export function failureBurstPreference(
+  burst: ToolFailureBurst,
+  reason: string,
+  bestMemory: MemoryRow | undefined
+): string {
+  const trace = bestMemory ? traceMetaFromMemory(bestMemory) : null;
+  const bestText = trace?.reflection ?? trace?.agentText ?? trace?.summary;
+  if (bestText) return `Prefer: ${clip(bestText, 200)}`;
+  return `Prefer: switch strategy for ${burst.toolId} instead of repeating the same failing call.`;
+}
+
+export function failureBurstAntiPattern(burst: ToolFailureBurst, reason: string): string {
+  return `Avoid: repeating ${burst.toolId} after ${burst.failureCount} failures with ${clip(reason, 160)}.`;
+}
+
+export class SessionTurnService {
+  private readonly toolFailureStates = new Map<string, ToolFailureState>();
+  private readonly toolSuccessSteps = new Map<string, number>();
+  private readonly toolStepCounters = new Map<string, number>();
+
+  constructor(private readonly deps: SessionTurnDependencies) {}
+
+  private selectionScope?: { context: EpisodeSelectionContext; results: Map<string, EpisodeSelectionResult>; selectedEpisodeId?: string };
+
+  private async writeTransaction<T>(operation: () => T, signal?: AbortSignal): Promise<T> {
+    if (this.deps.writeTransaction) return this.deps.writeTransaction(operation, signal);
+    signal?.throwIfAborted();
+    return this.deps.repos.transaction(operation);
+  }
+
+  // Admission and busy backoff happen outside the complete synchronous transaction.
+  async withEpisodeSelection<T>(context: EpisodeSelectionContext, operation: () => T, signal?: AbortSignal): Promise<T> {
+    const raw = context.rawTurnId ? this.deps.repos.runtime.getRawTurn(context.rawTurnId) : undefined;
+    if (!raw || raw.messagePayload?.episode_assignment) return this.writeTransaction(operation, signal);
+    const results = new Map<string, EpisodeSelectionResult>();
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        return await this.writeTransaction(() => {
+          this.selectionScope = { context, results };
+          try { return operation(); }
+          finally { this.selectionScope = undefined; }
+        }, signal);
+      } catch (error) {
+        if (!(error instanceof EpisodeSelectionRequired)) throw error;
+        // Never retain the write lease while waiting for a model.
+        results.set(error.key, await selectEpisode(this.deps.llm, error.input));
+      }
+    }
+    throw new Error("episode candidates kept changing");
+  }
+
+  captureEpisode(session: SessionRecord, episodeId?: string): EpisodeRecord | undefined {
+    if (episodeId) {
+      const episode = this.deps.repos.runtime.getEpisode(episodeId);
+      if (!episode) return this.deps.llm.isConfigured() ? undefined : this.ensureEpisode(session, episodeId);
+      if (episode.sessionId !== session.id) throw new MemoryServiceError("forbidden", "episode belongs to another session");
+      return episode;
+    }
+    return this.deps.llm.isConfigured() ? undefined : this.ensureEpisode(session);
+  }
+
+  queueAssignment(raw: RawTurnRecord, turnJudge = false, requestedEpisodeId = raw.episodeId, captureOrigin?: "agent_source_scan"): EvolutionJobRecord[] {
+    if (!this.deps.llm.isConfigured()) return [];
+    const at = nowIso();
+    const generation = stableHash({ user: raw.userText, assistant: raw.assistantText, tools: raw.toolResults, turnJudge });
+    const previous = isRecord(raw.messagePayload?.episode_assignment) ? raw.messagePayload.episode_assignment : {};
+    this.deps.repos.runtime.updateRawTurn({ ...raw, messagePayload: {
+      ...raw.messagePayload, episode_assignment: previous.generation === generation ? previous : { status: "pending", turnJudge, requestedEpisodeId, generation }
+    } });
+    return (["episode_assignment", "episode_finalize"] as const).map(jobType => this.deps.enqueueJob({
+      jobType, userId: raw.userId, sessionId: raw.sessionId,
+      dedupeKey: `${jobType}:${raw.id}:${generation}`, payload: { rawTurnId: raw.id, turnAt: raw.createdAt, generation, ...(captureOrigin ? { captureOrigin } : {}) }, createdAt: at
+    }));
+  }
+
+
+  // One-time data conversion, not a worker or public-interface replay. Legacy
+  // commands are removed only in the transaction that creates their formal rows.
+  migrateLegacyCaptures(): void {
+    const rows = this.deps.repos.db.prepare("SELECT id, session_id, user_id, payload_json, created_at FROM evolution_jobs WHERE job_type='capture_replay' ORDER BY created_at, rowid").all() as Array<{ id: string; session_id: string | null; user_id: string; payload_json: string; created_at: string }>;
+    for (const row of rows) this.deps.repos.transaction(() => {
+      const payload = JSON.parse(row.payload_json) as Record<string, unknown>;
+      const command = isRecord(payload.command) ? payload.command : undefined;
+      if (!command || payload.rawTextExcluded) {
+        this.deps.repos.db.prepare("DELETE FROM evolution_jobs WHERE id=?").run(row.id);
+        return;
+      }
+      const args = Array.isArray(command.args) ? command.args : [];
+      const operation = String(command.operation);
+      const request = { ...(isRecord(args[1]) ? args[1] : isRecord(args[0]) ? args[0] : {}) };
+      let sessionId = typeof request.sessionId === "string" ? request.sessionId : row.session_id ?? undefined;
+      const source = operation === "completeSourceTurn" && isRecord(request.sourceTurn) ? request.sourceTurn as unknown as SourceTurnIdentity : undefined;
+      let scope: SourceTurnCaptureScope | undefined;
+      if (source) {
+        const namespace = normalizeNamespace({ source: source.source, profileId: source.profileId,
+          sessionKey: source.conversationId, ...(isRecord(request.namespace) ? request.namespace : {}), userId: row.user_id });
+        request.namespace = namespace;
+        scope = { userId: row.user_id, source: source.source, profileId: source.profileId, conversationId: source.conversationId,
+          namespaceKey: stableHash({ tenantId: namespace.tenantId ?? null, projectId: namespace.projectId ?? null, workspaceId: namespace.workspaceId ?? null }) };
+        const existing = this.deps.repos.runtime.getSourceTurnCapture(scope, source.turnId);
+        if (existing) { this.deps.repos.db.prepare("DELETE FROM evolution_jobs WHERE id=?").run(row.id); return; }
+        sessionId = this.deps.repos.runtime.sourceConversationSessions(scope)[0]?.id;
+        if (!sessionId) sessionId = this.openSession({ namespace, source: source.source, profileId: source.profileId,
+          meta: { conversationId: source.conversationId, source_namespace_key: scope.namespaceKey } }, { createNew: true, at: source.startedAt }).sessionId;
+      } else if (operation === "compactSession") sessionId = String(args[0]);
+      const session = sessionId ? this.deps.repos.runtime.getSession(sessionId) : undefined;
+      // A removed Session must not be resurrected by legacy recovery.
+      if (!session) { this.deps.repos.db.prepare("DELETE FROM evolution_jobs WHERE id=?").run(row.id); return; }
+      if (operation === "completeTurn" || source || operation === "subagentComplete") {
+        const turnId = source?.turnId ?? (operation === "completeTurn" ? String(args[0]) : `subagent:complete:${request.subagentId ?? row.id}`);
+        const normalized = sanitizeTurnCompleteRequest({ ...request, sessionId: session.id,
+          ...(operation === "subagentComplete" ? { query: `[Subagent completed] ${request.subagentId ?? ""}`, answer: String(request.summary ?? "") } : {}) } as TurnCompleteRequest & Record<string, unknown>);
+        const result = this.completeTurn(turnId, { ...normalized }, source, row.created_at);
+        if (source && scope) {
+          const contentHash = stableHash({ query: normalized.query, answer: normalized.answer, status: normalized.status ?? "succeeded",
+            reasoningSummary: normalized.reasoningSummary ?? null, toolCalls: normalizeCompleteTurnToolCalls(normalized), toolResults: normalizeCompleteTurnToolResults(normalized) });
+          this.deps.repos.runtime.insertSourceTurnCapture({ ...scope, turnId, contentHash, sessionId: session.id,
+            rawTurnId: result.rawTurnId, episodeId: result.episodeId, startedAt: new Date(source.startedAt).toISOString(),
+            completedAt: new Date(source.completedAt).toISOString(), sequence: source.sequence,
+            response: { status: "stored", result }, createdAt: row.created_at });
+        }
+      } else if (operation === "compactSession") {
+        this.compactSession(session.id, request as SessionCompactRequest, row.created_at);
+      } else {
+        const turnId = typeof request.turnId === "string" ? request.turnId : `legacy-event:${row.id}`;
+        let raw = this.deps.repos.runtime.getRawTurnBySessionTurn(session.id, turnId);
+        if (!raw) {
+          const observation = operation === "observeTool" ? toolObservationEvent(request as unknown as ToolObserveRequest) : undefined;
+          raw = this.deps.repos.runtime.insertRawTurn({ id: rawTurnIdForSessionTurn(session.id, turnId), sessionId: session.id,
+            userId: DEVICE_MEMORY_OWNER, conversationId: session.conversationId, turnId,
+            userText: typeof request.task === "string" ? request.task : undefined,
+            toolCalls: observation ? [observation.toolCall] : [], toolResults: observation?.toolResult ? [observation.toolResult] : [],
+            sourceMemoryIds: [], usage: {}, messagePayload: { legacy_event: { operation, subagentId: request.subagentId, metadata: request.metadata } },
+            status: operation === "subagentStart" ? "started" : "observed", createdAt: row.created_at });
+          this.deps.repos.runtime.insertArtifact({ sessionId: session.id, rawTurnId: raw.id, userId: DEVICE_MEMORY_OWNER,
+            kind: operation === "observeTool" ? "tool_call" : operation === "useSkill" ? "skill_use" : "subagent_start",
+            payload: observation ? { phase: observation.phase, value: observation.event } : { subagentId: request.subagentId, task: request.task, skillId: args[0], metadata: request.metadata }, createdAt: row.created_at });
+          this.queueAssignment(raw);
+          if (operation === "useSkill") this.deps.repos.runtime.insertSkillTrial({ id: `trial_${stableHash(row.id).slice(0, 20)}`,
+            userId: DEVICE_MEMORY_OWNER, sessionId: session.id, skillMemoryId: String(args[0]), rawTurnId: raw.id,
+            turnId, status: "pending", outcome: "unknown", createdAt: row.created_at });
+        }
+      }
+      this.deps.repos.db.prepare("DELETE FROM evolution_jobs WHERE id=?").run(row.id);
+    });
+  }
+
+  async assignEpisode(job: EvolutionJobRecord): Promise<void> {
+    const rawId = String(job.payload.rawTurnId ?? "");
+    const raw = this.deps.repos.runtime.getRawTurn(rawId);
+    if (!raw || raw.deletedAt || raw.redactedAt) return;
+    const session = this.deps.repos.runtime.getSession(raw.sessionId);
+    if (!session) return;
+    const state = isRecord(raw.messagePayload?.episode_assignment) ? raw.messagePayload.episode_assignment : {};
+    if ((job.payload.generation && state.generation !== job.payload.generation) || state.selection || state.status === "assigned") return;
+    const latest = !isRecord(raw.messagePayload?.turn_complete) ? this.deps.repos.runtime.latestEpisodeForSession(session.id) : undefined;
+    const requested = typeof state.requestedEpisodeId === "string" ? this.deps.repos.runtime.getEpisode(state.requestedEpisodeId)
+      : latest?.status === "open" ? latest : undefined;
+    let selection: EpisodeSelectionResult | undefined;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const input = selectionInput(this.deps.repos, session, { userText: raw.userText ?? "", rawTurnId: raw.id });
+      const proposed = requested
+        ? { episodeId: requested.id, title: requested.title || "Task", summary: requested.summary || raw.userText || "Task" }
+        : await selectEpisode(this.deps.llm, input);
+      if (requested || stableHash(input) === stableHash(selectionInput(this.deps.repos, session, { userText: raw.userText ?? "", rawTurnId: raw.id }))) {
+        selection = proposed;
+        break;
+      }
+    }
+    if (!selection) throw new Error("episode candidates kept changing");
+    this.deps.repos.transaction(() => {
+      const current = this.deps.repos.runtime.getRawTurn(raw.id);
+      const lease = this.deps.repos.runtime.getJob(job.id);
+      if (!current || current.deletedAt || current.redactedAt || !lease || lease.status !== "leased" || lease.leasedUntil !== job.leasedUntil) return;
+      const latest = isRecord(current.messagePayload?.episode_assignment) ? current.messagePayload.episode_assignment : {};
+      if (latest.generation !== state.generation) return;
+      this.deps.repos.runtime.updateRawTurn({ ...current, messagePayload: {
+        ...current.messagePayload, episode_assignment: { ...latest, selection, status: "selected" }
+      } });
+    });
+  }
+
+  // The model calls finish independently. Only the local application of their
+  // results joins here; no model or public capture API is invoked by this job.
+  finalizeAssignment(job: EvolutionJobRecord): void {
+    this.deps.repos.transaction(() => {
+      const raw = this.deps.repos.runtime.getRawTurn(String(job.payload.rawTurnId ?? ""));
+      if (!raw || raw.deletedAt || raw.redactedAt) return;
+      const session = this.deps.repos.runtime.getSession(raw.sessionId);
+      if (!session) return;
+      const state = isRecord(raw.messagePayload?.episode_assignment) ? raw.messagePayload.episode_assignment : {};
+      if (job.payload.generation && state.generation !== job.payload.generation) return;
+      if (state.status === "assigned") { this.applyDeferredToolOutcomes(raw, session, nowIso()); return; }
+      const selection = state.selection as EpisodeSelectionResult | undefined;
+      if (!selection) throw new Error("episode selection is not ready");
+      const judgment = state.judgment as Parameters<SessionTurnService["applyTurnJudgment"]>[0] | undefined;
+      const at = nowIso();
+      let legacyRoute: CommittedTurnRoute | undefined;
+      if (!state.turnJudge && isRecord(raw.messagePayload?.turn_complete)) {
+        const context = { userText: raw.userText ?? "", rawTurnId: raw.id };
+        this.selectionScope = { context, results: new Map([[selectionKey(session, selectionInput(this.deps.repos, session, context)), selection]]) };
+        try {
+          if (typeof state.requestedEpisodeId === "string") {
+            const episode = this.ensureEpisode(session, state.requestedEpisodeId, raw.createdAt);
+            legacyRoute = { episode, closedEpisodeIds: [], jobs: [], proposalStale: false,
+              proposal: this.buildTurnRouteProposal(episode, classifyTurnRelation({ prevUserText: "", prevAssistantText: "", newUserText: raw.userText ?? "", prevTags: [] }), undefined, at) };
+          } else {
+            const saved = isRecord(raw.messagePayload?.turn_start) ? raw.messagePayload.turn_start.routeProposal as TurnRouteProposal | undefined : undefined;
+            const latest = this.deps.repos.runtime.latestEpisodeForSession(session.id);
+            const proposal = saved && saved.baseEpisodeId === latest?.id && latest?.status === "open"
+              ? saved : this.proposeEpisodeRoute(session, raw.userText ?? "", explicitEndTopicDecision(raw.userText ?? ""), raw.createdAt);
+            legacyRoute = this.commitTurnRouteProposal(session, proposal, raw.userText ?? "", "episode.assignment", at, false, raw.createdAt);
+          }
+        } finally { this.selectionScope = undefined; }
+      }
+      const baseId = judgment?.baseEpisodeId ?? (judgment?.filedByRule === "previous_task_closed"
+        ? this.deps.repos.runtime.completedRawTurnsBefore(raw.id).at(-1)?.episodeId : undefined);
+      const base = this.deps.repos.runtime.getEpisode(baseId);
+      const late = this.deps.repos.runtime.sessionHasJudgedTurnAfter(raw.id);
+      const continueBase = base && (late || judgment?.relation === "follow_up" || judgment?.relation === "end_topic");
+      let target = legacyRoute?.episode ?? (continueBase ? base : selection.episodeId ? this.deps.repos.runtime.getEpisode(selection.episodeId) : undefined);
+      if (target && target.sessionId !== session.id) throw new Error("episode assignment crossed sessions");
+      if (selection.episodeId && !target && !continueBase) throw new Error("selected episode was removed");
+      if (!target) {
+        target = this.deps.repos.runtime.createEpisode({
+          id: typeof state.requestedEpisodeId === "string" ? state.requestedEpisodeId : newId("episode"), sessionId: session.id, userId: DEVICE_MEMORY_OWNER,
+          projectId: session.projectId ?? session.workspaceId, conversationId: session.conversationId,
+          status: "open", l1MemoryIds: [], rawTurnIds: [], feedbackIds: [], decisionRepairIds: [],
+          l2PolicyIds: [], l3WorldModelIds: [], skillMemoryIds: [], turnCount: 0,
+          rewardDetail: {}, pipelineStatus: "idle", meta: {}, openedAt: raw.createdAt, updatedAt: at
+        });
+      } else if (target.status !== "open" && !late) {
+        target = this.deps.repos.runtime.reopenEpisode(target.id, { reopenReason: "episode_selection", reopenedAt: at }, at)!;
+      }
+      if (!legacyRoute && (!continueBase || selection.episodeId === target.id)) {
+        this.writeSelectionTitle(target, selection, at, { rawTurnId: raw.id, userText: raw.userText ?? "" });
+      }
+      this.deps.repos.runtime.bindRawTurnEpisode(raw.id, target.id, at);
+      // New-task closure must precede feedback application, but evidence freezes
+      // below only after the feedback has been persisted.
+      if (base && base.id !== target.id && judgment?.relation === "new_task" && !late && base.status === "open") {
+        this.closeForJudgedTurn(session, base, { closeReason: "topic_boundary", relation: "new_task", closedBy: "turn.judge" }, at);
+      }
+      if (base && target.id !== base.id && (judgment?.relation === "new_task" || judgment?.filedByRule === "previous_task_closed")) {
+        this.deps.repos.runtime.updateEpisodeMeta(target.id, { relation: "new_task", previousEpisodeId: base.id }, at);
+      }
+      const bound = this.deps.repos.runtime.getRawTurn(raw.id)!;
+      this.deps.repos.runtime.updateRawTurn({ ...bound, messagePayload: {
+        ...bound.messagePayload,
+        turn_start: { ...(isRecord(bound.messagePayload?.turn_start) ? bound.messagePayload.turn_start : {}), ...(!late ? { episodeSelection: { episodeId: target.id } } : {}) },
+        episode_assignment: { ...state, status: "applying" }
+      } });
+      if (judgment) this.applyTurnJudgment(judgment);
+      const current = this.deps.repos.runtime.getRawTurn(raw.id)!;
+      this.deps.repos.runtime.updateRawTurn({ ...current, messagePayload: {
+        ...current.messagePayload, episode_assignment: { ...state, status: "assigned", assignedAt: at }
+      } });
+      this.deps.repos.runtime.appendChange({ memoryId: raw.id, entityId: raw.id, kind: "raw_turn", op: "updated",
+        userId: raw.userId, namespaceId: this.deps.namespaceIdFromSession(session), changeType: "raw_turn_assigned",
+        before: raw, after: this.deps.repos.runtime.getRawTurn(raw.id), source: "episode.assignment", createdAt: at });
+      this.applyDeferredToolOutcomes(this.deps.repos.runtime.getRawTurn(raw.id)!, session, at);
+      if (legacyRoute?.endTopicDecision) {
+        this.deps.repos.runtime.closeEpisode(target.id, { closeReason: "end_topic", topicState: "ended", endTopicTurnId: raw.turnId,
+          relationDecision: legacyRoute.endTopicDecision, closedBy: "turn.complete" }, at);
+      }
+      if (session.status !== "open") {
+        const closed = this.deps.repos.runtime.closeEpisode(target.id, { closeReason: "session_closed" }, at);
+        if (closed) this.deps.finalizeClosedEpisode(closed, at, "session_closed");
+      } else {
+        this.deps.enqueueJob({ jobType: "episode_idle_close", userId: DEVICE_MEMORY_OWNER, sessionId: session.id,
+          episodeId: target.id, dedupeKey: `episode_idle_close:${raw.id}`,
+          payload: { triggerRawTurnId: raw.id, triggerEpisodeId: target.id, triggeredAt: raw.createdAt }, createdAt: at });
+      }
+      if (!this.deps.repos.runtime.hasUnassignedTurns(session.id)) {
+        // Finalization waits for attribution across the whole Session. Once it
+        // drains, revisit every closed Episode, including earlier deferred ones
+        // outside this turn's target/base. Existing completion and job guards
+        // make repeated sweeps safe; an open Session can also have closed tasks.
+        for (const episode of this.deps.repos.runtime.listEpisodesForSession(session.id)) {
+          if (episode.status === "closed") this.deps.finalizeClosedEpisode(episode, at, "capture_decided");
+        }
+        if (session.status !== "open" && session.meta.l3_world_model_protocol_version === 2) {
+          this.deps.repos.l3WorldModels.freezeBatches({ sessionId: session.id, trigger: "session_close", at });
+          this.deps.extractUnextractedWorkMemory(session.id, this.deps.repos.l3WorldModels.maxInputTraceSeq(session.id), at);
+        }
+      }
+    });
+  }
+
+  openSession(request: SessionOpenRequest, options: { createNew?: boolean; at?: string } = {}): {
+    sessionId: string;
+    userId: string;
+    source: string;
+    profileId: string;
+    projectId?: string | null;
+    workspaceId?: string;
+    conversationId?: string;
+    status: "open";
+    resumed: boolean;
+    changeSeq?: number;
+    syncCursor?: string;
+    duplicate?: boolean;
+    openedAt: string;
+    serverTime: string;
+  } {
+    if (!this.deps.memoryAddEnabled()) {
+      return this.deps.openSessionNoWrite(request);
+    }
+    const idempotencyKey = request.adapterId && request.requestId
+      ? `session.open:${request.adapterId}:${request.requestId}`
+      : undefined;
+    const requestHash = stableHash({ operation: "session.open", request });
+    if (idempotencyKey) {
+      const existing = this.deps.repos.runtime.getIdempotency(idempotencyKey);
+      if (existing) {
+        if (existing.requestHash !== requestHash) {
+          throw new MemoryServiceError("conflict", "idempotency key reused with different session.open request body");
+        }
+        return this.deps.withDuplicateFlag(existing.response) as ReturnType<SessionTurnService["openSession"]>;
+      }
+    }
+    const namespace = normalizeNamespace(request.namespace);
+    const at = options.at ?? nowIso();
+    if (request.l3WorldModelProtocolVersion === undefined && (
+      request.l3WorldModelTransition !== undefined ||
+      request.workspaceUri !== undefined ||
+      request.workspaceHostId !== undefined
+    )) {
+      throw new MemoryServiceError("invalid_argument", "L3 World Model v2 fields require protocol version 2");
+    }
+    if (request.l3WorldModelProtocolVersion === 2) {
+      const body = this.openV2Session(request, namespace, at);
+      if (idempotencyKey) {
+        this.deps.repos.runtime.saveIdempotency(idempotencyKey, requestHash, body, at);
+      }
+      return body;
+    }
+    if (request.sessionId && !options.createNew) {
+      const existingSession = this.deps.repos.runtime.getSession(request.sessionId);
+      if (existingSession) {
+        this.deps.assertSessionInScope(existingSession, request.namespace);
+        if (existingSession.status !== "open") {
+          throw new MemoryServiceError("conflict", `session is not open: ${request.sessionId}`);
+        }
+        const refreshed = this.deps.repos.runtime.updateSessionScope(
+          existingSession.id,
+          sessionScopeForOpenRequest(request, namespace),
+          at
+        ) ?? existingSession;
+        const body = {
+          sessionId: refreshed.id,
+          userId: refreshed.userId,
+          source: refreshed.source,
+          profileId: refreshed.profileId,
+          projectId: refreshed.projectId,
+          workspaceId: refreshed.workspaceId,
+          conversationId: refreshed.conversationId,
+          status: "open" as const,
+          resumed: true,
+          openedAt: refreshed.openedAt,
+          serverTime: nowIso()
+        };
+        if (idempotencyKey) {
+          this.deps.repos.runtime.saveIdempotency(idempotencyKey, requestHash, body, at);
+        }
+        return body;
+      }
+    }
+    const hostSessionKey = namespace.sessionKey;
+    if (hostSessionKey && !options.createNew) {
+      const existingSession = this.deps.repos.runtime.findOpenSessionByHostKey({
+        userId: namespace.userId,
+        source: request.source ?? namespace.source,
+        profileId: request.profileId ?? namespace.profileId,
+        hostSessionKey
+      });
+      if (existingSession) {
+        this.deps.assertSessionInScope(existingSession, request.namespace);
+        const touched = this.deps.repos.runtime.updateSessionScope(
+          existingSession.id,
+          sessionScopeForOpenRequest(request, namespace),
+          at
+        ) ?? existingSession;
+        const body = {
+          sessionId: touched.id,
+          userId: touched.userId,
+          source: touched.source,
+          profileId: touched.profileId,
+          projectId: touched.projectId,
+          workspaceId: touched.workspaceId,
+          conversationId: touched.conversationId,
+          status: "open" as const,
+          resumed: true,
+          openedAt: touched.openedAt,
+          serverTime: nowIso()
+        };
+        if (idempotencyKey) {
+          this.deps.repos.runtime.saveIdempotency(idempotencyKey, requestHash, body, at);
+        }
+        return body;
+      }
+    }
+    const session: SessionRecord = {
+      id: request.sessionId ?? newId("session"),
+      userId: namespace.userId,
+      source: request.source ?? namespace.source,
+      profileId: request.profileId ?? namespace.profileId,
+      profileLabel: namespace.profileLabel,
+      projectId: request.projectId ?? namespace.projectId ?? namespace.workspaceId,
+      workspaceId: request.workspaceId ?? namespace.workspaceId,
+      workspacePath: request.workspacePath ?? namespace.workspacePath,
+      hostSessionKey,
+      conversationId: this.deps.stringFromMeta(request.meta, "conversationId"),
+      status: "open" as const,
+      meta: {
+        ...sanitizedSessionMeta(request.meta),
+        ...(request.timeZone ? { time_zone: request.timeZone } : {})
+      },
+      openedAt: at,
+      lastSeenAt: at,
+      updatedAt: at
+    };
+
+    this.deps.repos.runtime.createSession(session);
+    const changeSeq = this.deps.repos.runtime.appendChange({
+      memoryId: session.id,
+      namespaceId: this.deps.namespaceIdFromContext(namespace),
+      kind: "session",
+      op: "created",
+      entityId: session.id,
+      userId: DEVICE_MEMORY_OWNER,
+      changeType: "session_opened",
+      after: session,
+      source: "session.open",
+      createdAt: at
+    });
+    const body = {
+      sessionId: session.id,
+      userId: DEVICE_MEMORY_OWNER,
+      source: session.source,
+      profileId: session.profileId,
+      projectId: session.projectId,
+      workspaceId: session.workspaceId,
+      conversationId: session.conversationId,
+      status: "open" as const,
+      resumed: false,
+      changeSeq,
+      syncCursor: this.deps.encodeChangeCursor(changeSeq, namespace),
+      openedAt: at,
+      serverTime: nowIso()
+    };
+    if (idempotencyKey) {
+      this.deps.repos.runtime.saveIdempotency(idempotencyKey, requestHash, body, at);
+    }
+    return body;
+  }
+
+  private openV2Session(
+    request: SessionOpenRequest,
+    namespace: ReturnType<typeof normalizeNamespace>,
+    at: string
+  ): ReturnType<SessionTurnService["openSession"]> {
+    if (!request.l3WorldModelTransition) {
+      throw new MemoryServiceError("invalid_argument", "l3WorldModelTransition is required for protocol v2");
+    }
+    if (!namespace.sessionKey) {
+      throw new MemoryServiceError("invalid_argument", "namespace.sessionKey is required for protocol v2");
+    }
+    let workspace: ReturnType<typeof resolveV2WorkspaceIdentityForOpenRequest>;
+    try {
+      workspace = resolveV2WorkspaceIdentityForOpenRequest(request, namespace);
+    } catch (error) {
+      throw new MemoryServiceError(
+        "invalid_argument",
+        error instanceof Error ? error.message : "invalid workspace identity"
+      );
+    }
+
+    return this.deps.repos.transaction(() => {
+      const source = request.source ?? namespace.source;
+      const profileId = request.profileId ?? namespace.profileId;
+      let existing = request.sessionId
+        ? this.deps.repos.runtime.getSession(request.sessionId)
+        : this.deps.repos.runtime.findOpenSessionByHostKey({
+            userId: namespace.userId,
+            source,
+            profileId,
+            hostSessionKey: namespace.sessionKey!
+          });
+
+      if (request.sessionId && !existing) {
+        throw new MemoryServiceError("conflict", "l3_world_model_v2_session_not_open");
+      }
+      if (existing) {
+        if (existing.status !== "open") {
+          throw new MemoryServiceError("conflict", "l3_world_model_v2_session_not_open");
+        }
+        const protocol = existing.meta.l3_world_model_protocol_version;
+        if (protocol === 2) {
+          this.assertV2SessionIdentity(existing, request, namespace, workspace);
+          this.bindV2SessionWorkspace(existing, optionalMetaString(existing.meta, "workspace_uri"), at);
+          const touched = this.deps.repos.runtime.updateSessionScope(existing.id, {}, at) ?? existing;
+          return this.v2SessionOpenBody(touched, true);
+        }
+        if (request.sessionId || request.l3WorldModelTransition !== "allow_legacy_rollover") {
+          throw new MemoryServiceError("conflict", "l3_world_model_v2_session_not_open");
+        }
+        this.closeLegacySessionForV2Rollover(existing, at);
+        existing = undefined;
+      }
+
+      const explicitProjectId = request.projectId ?? request.namespace?.projectId;
+      const explicitWorkspaceId = request.workspaceId ?? request.namespace?.workspaceId;
+      if (explicitProjectId || explicitWorkspaceId) {
+        throw new MemoryServiceError(
+          "invalid_argument",
+          "protocol v2 derives projectId and workspaceId from workspace identity"
+        );
+      }
+      const session: SessionRecord = {
+        id: newId("session"),
+        userId: namespace.userId,
+        source,
+        profileId,
+        profileLabel: namespace.profileLabel,
+        projectId: workspace.projectId ?? undefined,
+        workspaceId: workspace.workspaceId ?? undefined,
+        workspacePath: request.workspacePath ?? namespace.workspacePath,
+        hostSessionKey: namespace.sessionKey,
+        conversationId: this.deps.stringFromMeta(request.meta, "conversationId"),
+        status: "open",
+        meta: v2SessionMeta(request, workspace, request.timeZone),
+        openedAt: at,
+        lastSeenAt: at,
+        updatedAt: at
+      };
+      this.deps.repos.runtime.createSession(session);
+      this.bindV2SessionWorkspace(session, workspace.workspaceUri, at);
+      const scopedNamespace = {
+        ...namespace,
+        projectId: session.projectId,
+        workspaceId: session.workspaceId
+      };
+      const changeSeq = this.deps.repos.runtime.appendChange({
+        memoryId: session.id,
+        namespaceId: this.deps.namespaceIdFromContext(scopedNamespace),
+        kind: "session",
+        op: "created",
+        entityId: session.id,
+        userId: DEVICE_MEMORY_OWNER,
+        changeType: "session_opened",
+        after: session,
+        source: "session.open",
+        createdAt: at
+      });
+      return {
+        ...this.v2SessionOpenBody(session, false),
+        changeSeq,
+        syncCursor: this.deps.encodeChangeCursor(changeSeq, scopedNamespace)
+      };
+    });
+  }
+
+  private bindV2SessionWorkspace(
+    session: SessionRecord,
+    workspaceUri: SessionOpenRequest["workspaceUri"] | null,
+    at: string
+  ): void {
+    if (!session.projectId) return;
+    if (!workspaceUri) {
+      throw new MemoryServiceError("conflict", "l3_world_model_v2_session_workspace_missing");
+    }
+    try {
+      this.deps.repos.l3WorldModels.bindWorkspaceUri(session.userId, session.projectId, workspaceUri, at);
+    } catch (error) {
+      if (error instanceof L3WorldModelScopeWorkspaceConflictError) {
+        throw new MemoryServiceError("conflict", "l3_world_model_v2_session_scope_conflict");
+      }
+      throw error;
+    }
+  }
+
+  private assertV2SessionIdentity(
+    session: SessionRecord,
+    request: SessionOpenRequest,
+    namespace: ReturnType<typeof normalizeNamespace>,
+    workspace: ReturnType<typeof resolveV2WorkspaceIdentityForOpenRequest>
+  ): void {
+    const savedWorkspaceUri = optionalMetaString(session.meta, "workspace_uri");
+    const savedWorkspaceHostId = optionalMetaString(session.meta, "workspace_host_id");
+    const requestProjectId = request.projectId ?? request.namespace?.projectId;
+    const requestWorkspaceId = request.workspaceId ?? request.namespace?.workspaceId;
+    const mismatch = session.source !== (request.source ?? namespace.source) ||
+      session.profileId !== (request.profileId ?? namespace.profileId) ||
+      session.hostSessionKey !== namespace.sessionKey ||
+      (requestProjectId !== undefined && requestProjectId !== session.projectId) ||
+      (requestWorkspaceId !== undefined && requestWorkspaceId !== session.workspaceId) ||
+      (request.workspaceUri !== undefined && request.workspaceUri !== savedWorkspaceUri) ||
+      (request.workspaceHostId !== undefined && request.workspaceHostId !== savedWorkspaceHostId) ||
+      (request.workspaceUri !== undefined && !savedWorkspaceUri && workspace.projectId !== (session.projectId ?? null));
+    if (mismatch) {
+      throw new MemoryServiceError("conflict", "l3_world_model_v2_session_scope_conflict");
+    }
+  }
+
+  private closeLegacySessionForV2Rollover(session: SessionRecord, at: string): void {
+    const closedEpisodes = this.deps.repos.runtime.closeOpenEpisodesForSession(session.id, at);
+    const closed = this.deps.repos.runtime.closeSession(session.id, at);
+    if (!closed) throw new MemoryServiceError("conflict", "l3_world_model_v2_session_not_open");
+    const closedWithMeta = this.deps.repos.runtime.updateSessionMeta(session.id, {
+      close_reason: "l3_world_model_protocol_v2"
+    }, at) ?? closed;
+    for (const episode of closedEpisodes) {
+      this.deps.repos.runtime.appendChange({
+        memoryId: episode.id,
+        namespaceId: this.deps.namespaceIdFromSession(closedWithMeta),
+        kind: "episode",
+        op: "updated",
+        entityId: episode.id,
+        userId: episode.userId,
+        changeType: "episode_closed",
+        after: episode,
+        source: "session.open.v2_rollover",
+        createdAt: at
+      });
+      this.deps.finalizeClosedEpisode(episode, at, "session_closed");
+    }
+    if (session.meta.l3_world_model_protocol_version === 2) {
+      this.deps.extractUnextractedWorkMemory(
+        session.id,
+        this.deps.repos.l3WorldModels.maxInputTraceSeq(session.id),
+        at
+      );
+    }
+    this.deps.repos.runtime.appendChange({
+      memoryId: session.id,
+      namespaceId: this.deps.namespaceIdFromSession(closedWithMeta),
+      kind: "session",
+      op: "updated",
+      entityId: session.id,
+      userId: DEVICE_MEMORY_OWNER,
+      changeType: "session_closed",
+      before: session,
+      after: closedWithMeta,
+      source: "session.open.v2_rollover",
+      createdAt: at
+    });
+  }
+
+  private v2SessionOpenBody(
+    session: SessionRecord,
+    resumed: boolean
+  ): ReturnType<SessionTurnService["openSession"]> {
+    return {
+      sessionId: session.id,
+      userId: DEVICE_MEMORY_OWNER,
+      source: session.source,
+      profileId: session.profileId,
+      projectId: session.projectId ?? null,
+      workspaceId: session.workspaceId,
+      conversationId: session.conversationId,
+      status: "open",
+      resumed,
+      openedAt: session.openedAt,
+      serverTime: nowIso()
+    };
+  }
+
+  closeSession(sessionId: string, request: RequestEnvelope = {}): {
+    ok: true;
+    sessionId: string;
+    status: "closed";
+    closedEpisodeIds: string[];
+    changeSeq: number;
+    syncCursor: string;
+    closedAt: string;
+    serverTime: string;
+  } {
+    if (!this.deps.memoryAddEnabled()) {
+      return this.deps.closeSessionNoWrite(sessionId, request);
+    }
+    return this.deps.repos.transaction(() => {
+      const existing = this.deps.repos.runtime.getSession(sessionId);
+      if (!existing) {
+        throw new MemoryServiceError("not_found", `session not found: ${sessionId}`);
+      }
+      this.deps.assertSessionInScope(existing, request.namespace);
+      const at = nowIso();
+      const closedEpisodes = this.deps.repos.runtime.closeOpenEpisodesForSession(sessionId, at);
+      const session = this.deps.repos.runtime.closeSession(sessionId, at);
+      if (!session) {
+        throw new MemoryServiceError("not_found", `session not found: ${sessionId}`);
+      }
+      for (const episode of closedEpisodes) {
+        this.deps.repos.runtime.appendChange({
+          memoryId: episode.id,
+          namespaceId: this.deps.namespaceIdFromSession(session),
+          kind: "episode",
+          op: "updated",
+          entityId: episode.id,
+          userId: episode.userId,
+          changeType: "episode_closed",
+          after: episode,
+          source: "session.close",
+          createdAt: at
+        });
+        this.deps.finalizeClosedEpisode(episode, at, "session_closed");
+      }
+      if (session.meta.l3_world_model_protocol_version === 2 && !this.deps.repos.runtime.hasUnassignedTurns(session.id)) {
+        this.deps.repos.l3WorldModels.freezeBatches({
+          sessionId,
+          trigger: "session_close",
+          at
+        });
+        this.deps.extractUnextractedWorkMemory(
+          sessionId,
+          this.deps.repos.l3WorldModels.maxInputTraceSeq(sessionId),
+          at
+        );
+      }
+      const changeSeq = this.deps.repos.runtime.appendChange({
+        memoryId: sessionId,
+        namespaceId: this.deps.namespaceIdFromSession(session),
+        kind: "session",
+        op: "updated",
+        entityId: sessionId,
+        userId: DEVICE_MEMORY_OWNER,
+        changeType: "session_closed",
+        before: existing,
+        after: session,
+        source: "session.close",
+        createdAt: at
+      });
+      return {
+        ok: true,
+        sessionId,
+        status: "closed" as const,
+        closedEpisodeIds: closedEpisodes.map((episode) => episode.id),
+        changeSeq,
+        syncCursor: this.deps.encodeChangeCursor(changeSeq, namespaceForSession(session)),
+        closedAt: session.closedAt ?? nowIso(),
+        serverTime: nowIso()
+      };
+    });
+  }
+
+  compactSession(sessionId: string, request: SessionCompactRequest = {}, acceptedAt?: string): {
+    memorySnapshot: {
+      summary: string;
+      sourceTurnIds: string[];
+      sourceMemoryIds: string[];
+      tokenEstimate?: number;
+    };
+    contextPacketId: string;
+    rawTurnId?: string;
+    l1MemoryId?: string;
+    changeSeq?: number;
+    syncCursor?: string;
+    jobs: JobRef[];
+    serverTime: string;
+  } {
+    this.deps.assertMemoryAddEnabled();
+    const session = this.deps.requireSession(sessionId);
+    this.deps.assertSessionInScope(session, request.namespace);
+    const episode = this.captureEpisode(session, request.episodeId);
+    const at = acceptedAt ?? nowIso();
+    const sourceMemoryIds = request.sourceMemoryIds?.length
+      ? request.sourceMemoryIds
+      : (episode?.l1MemoryIds ?? []).slice(-12);
+    const sourceMemories = this.deps.repos.memories.getMany(sourceMemoryIds);
+    const sourceTurnIds = request.sourceTurnIds?.length
+      ? request.sourceTurnIds
+      : sourceMemories
+          .map((memory) => stringFromMaybeRecord(memory.info, "turn_id"))
+          .filter((value): value is string => Boolean(value));
+    const summary = request.summary?.trim() ||
+      sourceMemories.map((memory) => this.deps.firstLine(memory.memoryValue)).filter(Boolean).slice(0, 8).join("\n") ||
+      `Compact snapshot for session ${sessionId}`;
+    const rawTurnId = newId("raw");
+    const contextPacketId = `ctx_${stableHash(`${sessionId}:${episode?.id}:${summary}:${rawTurnId}`).slice(0, 20)}`;
+    const turnId = `compact:${contextPacketId}`;
+    const rawTurn = this.deps.repos.runtime.insertRawTurn({
+      id: rawTurnId,
+      sessionId: session.id,
+      episodeId: episode?.id,
+      turnId,
+      userId: DEVICE_MEMORY_OWNER,
+      conversationId: session.conversationId,
+      assistantText: summary,
+      toolCalls: [],
+      toolResults: [],
+      sourceMemoryIds,
+      usage: {},
+      messagePayload: {
+        captured_memory_ids: [],
+        time_zone: request.timeZone ?? stringFromMaybeRecord(session.meta, "time_zone"),
+        compact: {
+          contextPacketId,
+          sourceTurnIds,
+          sourceMemoryIds,
+          tokenEstimate: request.tokenEstimate
+        }
+      },
+      status: "succeeded",
+      createdAt: at
+    });
+    if (episode) this.deps.repos.runtime.appendEpisodeRawTurn(episode?.id, rawTurn.id, at);
+    this.queueAssignment(this.deps.repos.runtime.getRawTurn(rawTurn.id)!);
+    this.deps.repos.runtime.appendChange({
+      memoryId: rawTurn.id,
+      namespaceId: this.deps.namespaceIdFromSession(session),
+      kind: "raw_turn",
+      op: "created",
+      entityId: rawTurn.id,
+      userId: DEVICE_MEMORY_OWNER,
+      changeType: "raw_turn_created",
+      after: rawTurn,
+      source: "session.compact",
+      createdAt: at
+    });
+
+    let l1MemoryId: string | undefined;
+    const jobs: EvolutionJobRecord[] = [];
+    if (request.createL1 !== false) {
+      const timeZone = request.timeZone ?? stringFromMaybeRecord(session.meta, "time_zone");
+      const l1 = this.deps.buildMemory({
+        id: `trace_${stableHash(`compact:L1:${rawTurn.id}`).slice(0, 20)}`,
+        userId: DEVICE_MEMORY_OWNER,
+        conversationId: session.conversationId,
+        sessionId: session.id,
+        agentId: session.source,
+        appId: session.workspaceId,
+        projectId: session.projectId,
+        profileId: session.profileId,
+        layer: "L1",
+        kind: "trace",
+        memoryType: "LongTermMemory",
+        key: `trace:${session.id}:${turnId}:compact`,
+        value: [
+          `Summary: ${summary}`,
+          `RawTurn: ${rawTurn.id}`,
+          "TraceStep: compact",
+          "Alpha: 0.5",
+          "Value: 0",
+          "Priority: 0.5"
+        ].join("\n"),
+        tags: ["trace", "compact", "summary"],
+        info: {
+          turn_id: turnId,
+          raw_turn_id: rawTurn.id,
+          episode_id: episode?.id,
+          summary,
+          source_memory_ids: sourceMemoryIds,
+          time_zone: timeZone
+        },
+        internal: {
+          source: "session.compact",
+          plugin_algorithm: "capture.compact.v1",
+          source_raw_turn_id: rawTurn.id,
+          source_memory_ids: sourceMemoryIds,
+          summary,
+          reflection: null,
+          alpha: 0.5,
+          value: 0,
+          priority: 0.5,
+          time_zone: timeZone,
+          raw_turn_id: rawTurn.id,
+          raw_span: { compact: true },
+          error_signatures: [],
+          trace: {
+            key: `${episode?.id}:${Date.parse(at)}:compact`,
+            ts: Date.parse(at),
+            time_zone: timeZone,
+            turn_id: turnId,
+            raw_turn_id: rawTurn.id,
+            raw_span: { compact: true },
+            episode_id: episode?.id,
+            step_index: 0,
+            sub_step_total: 1,
+            tool_calls: [],
+            reflection: null,
+            alpha: 0.5,
+            usable: true,
+            reflection_source: "synth",
+            summary,
+            tags: ["compact", "summary"],
+            value: 0,
+            priority: 0.5,
+            signature: "compact|summary|_|_",
+            error_signatures: []
+          }
+        },
+        createdAt: at
+      });
+      const upsert = this.deps.repos.memories.upsertByKey(l1);
+      l1MemoryId = upsert.memory.id;
+      this.deps.repos.runtime.appendChange({
+        memoryId: upsert.memory.id,
+        namespaceId: this.deps.namespaceIdFromMemory(upsert.memory),
+        kind: "trace",
+        op: upsert.created ? "created" : "updated",
+        entityId: upsert.memory.id,
+        userId: DEVICE_MEMORY_OWNER,
+        changeType: upsert.created ? "create" : "update",
+        before: upsert.previous,
+        after: upsert.memory,
+        source: "session.compact",
+        createdAt: at
+      });
+      if (episode) this.deps.repos.runtime.appendEpisodeTurn(episode?.id, rawTurn.id, upsert.memory.id, at);
+      jobs.push(this.deps.enqueueJob({
+        jobType: "embedding",
+        userId: DEVICE_MEMORY_OWNER,
+        sessionId: session.id,
+        episodeId: episode?.id,
+        targetMemoryId: upsert.memory.id,
+        payload: { reason: "compact.snapshot" },
+        createdAt: at
+      }));
+    }
+    this.deps.repos.runtime.insertAudit({
+      userId: DEVICE_MEMORY_OWNER,
+      sessionId: session.id,
+      actor: request.namespace ? { ...request.namespace } : {},
+      action: "compact",
+      targetKind: "session",
+      targetId: session.id,
+      meta: { rawTurnId: rawTurn.id, l1MemoryId, contextPacketId },
+      createdAt: at
+    });
+    const changeSeq = this.deps.repos.runtime.latestChangeSeq(session.userId, this.deps.namespaceIdFromSession(session));
+    return {
+      memorySnapshot: {
+        summary,
+        sourceTurnIds,
+        sourceMemoryIds,
+        tokenEstimate: request.tokenEstimate
+      },
+      contextPacketId,
+      rawTurnId: rawTurn.id,
+      l1MemoryId,
+      changeSeq,
+      syncCursor: changeSeq === undefined ? undefined : this.deps.encodeChangeCursor(changeSeq, namespaceForSession(session)),
+      jobs: jobs.map(jobToRef),
+      serverTime: nowIso()
+    };
+  }
+
+  async startTurn(request: TurnStartRequest & Record<string, unknown>): Promise<{
+    contextPacketId: string;
+    turnId: string;
+    sessionId: string;
+    searchEventId: string;
+    hits: RecallHit[];
+    injectedContext: InjectedContext;
+    sourceMemoryIds: string[];
+    droppedDueToBudget: Array<{
+      id: string;
+      kind: MemoryKind;
+      memoryLayer: RecallMemoryLayer;
+      reason: "token_budget";
+      tokenEstimate?: number;
+    }>;
+    status: string[];
+    serverTime: string;
+  }> {
+    request = sanitizeTurnStartRequest(request);
+    if (!this.deps.memoryAddEnabled()) {
+      return this.deps.startTurnNoWrite(request);
+    }
+    const session = this.deps.requireOpenSession(request.sessionId);
+    this.deps.assertSessionInScope(session, request.namespace);
+    const turnId = request.turnId ?? newId("turn");
+    const intentDecision = classifyIntent(request.query);
+    const turnJudgeRouting = this.turnJudgeRouting();
+    const endTopicDecision = turnJudgeRouting ? undefined : explicitEndTopicDecision(request.query);
+    const latestEpisode = this.deps.repos.runtime.latestEpisodeForSession(session.id);
+    const skipsRetrieval = intentDecision.kind === "chitchat" || intentDecision.kind === "meta";
+    // With turn.judge.v1 the relation is judged after the turn; the start of a
+    // turn calls no model and only records where the turn will be filed for now.
+    const routeProposalPromise = turnJudgeRouting
+      ? Promise.resolve(provisionalTurnRouteProposal(latestEpisode, turnId, nowIso()))
+      : skipsRetrieval
+        ? Promise.resolve(this.proposeEpisodeRoute(session, request.query, endTopicDecision))
+        : this.proposeEpisodeRouteWithLlm(
+            latestEpisode,
+            request.query,
+            endTopicDecision
+          );
+    const contextHints = turnStartContextHints(request);
+    const requestedLayers: MemoryLayer[] = this.deps.turnStartMemoryLayers(
+      this.deps.memoryLayersForIntent(intentDecision.kind),
+      request.layers
+    );
+    const searchPromise = this.deps.search({
+      requestId: request.requestId,
+      adapterId: request.adapterId,
+      namespace: namespaceForSession(session),
+      sessionId: session.id,
+      episodeId: latestEpisode?.id,
+      turnId,
+      query: buildSearchQuery({ ...request, contextHints }, this.deps.config.domain),
+      layers: endTopicDecision
+        ? []
+        : requestedLayers,
+      limit: this.deps.turnStartRetrievalLimit(),
+      contextBudget: typeof request.contextBudget === "number" ? request.contextBudget : undefined,
+      includeInjectedContext: true,
+      retrievalMode: "turn_start",
+      contextHints,
+      injectedContextQuery: request.query,
+      turnIntentDecision: intentDecision
+    });
+    const [routeProposal, search] = await Promise.all([routeProposalPromise, searchPromise]);
+    await this.writeTransaction(() => {
+      this.persistTurnStartRouteProposal(search.searchEventId, routeProposal);
+      this.deps.repos.runtime.touchSession(session.id, nowIso());
+    });
+    const contextPacketId = turnContextPacketId(
+      session.id,
+      routeProposal.baseEpisodeId,
+      turnId,
+      search.searchEventId
+    );
+
+    return {
+      contextPacketId,
+      turnId,
+      sessionId: session.id,
+      searchEventId: search.searchEventId,
+      hits: search.hits,
+      injectedContext: search.injectedContext,
+      sourceMemoryIds: search.sourceMemoryIds,
+      droppedDueToBudget: search.droppedDueToBudget,
+      status: [
+        ...search.status,
+        ...(skipsRetrieval
+          ? [`intent:${intentDecision.kind}:retrieval_skipped`]
+          : []),
+        `relation:${turnJudgeRouting && routeProposal.relationDecision.signals.includes("pending")
+          ? "pending"
+          : routeProposal.relationDecision.relation}:proposed`
+      ],
+      serverTime: nowIso()
+    };
+  }
+
+  completeSourceTurn(request: SourceTurnCompleteRequest): SourceTurnCompleteResponse {
+    const identity = request.sourceTurn;
+    if (!identity || ![identity.source, identity.profileId, identity.conversationId, identity.turnId,
+      identity.startedAt, identity.completedAt, identity.completionEvidence].every((value) => typeof value === "string" && value.trim())) {
+      return { status: "pending", reason: "identity_unresolved" };
+    }
+    const startedAtMs = Date.parse(identity.startedAt);
+    const completedAtMs = Date.parse(identity.completedAt);
+    if (!Number.isFinite(startedAtMs) || !Number.isFinite(completedAtMs) || completedAtMs < startedAtMs ||
+        (identity.sequence !== undefined && (!Number.isSafeInteger(identity.sequence) || identity.sequence < 0))) {
+      return { status: "pending", reason: "source_turn_boundary_unresolved" };
+    }
+    if (request.channel !== "hook" && request.channel !== "agent_source_scan") {
+      throw new MemoryServiceError("invalid_argument", "invalid source capture channel");
+    }
+    const namespace = normalizeNamespace(request.namespace ?? {
+      source: identity.source, profileId: identity.profileId, sessionKey: identity.conversationId
+    });
+    if (namespace.source !== identity.source || namespace.profileId !== identity.profileId ||
+        (request.source && request.source !== identity.source) ||
+        (namespace.sessionKey && namespace.sessionKey !== identity.conversationId)) {
+      throw new MemoryServiceError("forbidden", "source_turn_namespace_conflict");
+    }
+    const sourceTurn: SourceTurnIdentity = {
+      ...identity,
+      startedAt: new Date(startedAtMs).toISOString(),
+      completedAt: new Date(completedAtMs).toISOString()
+    };
+    const scope: SourceTurnCaptureScope = {
+      userId: namespace.userId,
+      source: identity.source,
+      profileId: identity.profileId,
+      namespaceKey: stableHash({ tenantId: namespace.tenantId ?? null, projectId: namespace.projectId ?? null,
+        workspaceId: namespace.workspaceId ?? null }),
+      conversationId: identity.conversationId
+    };
+    const normalized = sanitizeTurnCompleteRequest({ ...request, sessionId: request.sessionId ?? "" });
+    const contentHash = stableHash({
+      query: normalized.query, answer: normalized.answer, status: normalized.status ?? "succeeded",
+      reasoningSummary: normalized.reasoningSummary ?? null,
+      toolCalls: normalizeCompleteTurnToolCalls(normalized), toolResults: normalizeCompleteTurnToolResults(normalized)
+    });
+    return this.deps.repos.transaction(() => {
+      // Native captures belong to the local source conversation, not the cloud account
+      // currently sending them. Check before opening a Session or scheduling any work.
+      const existing = this.deps.repos.runtime.getSourceTurnCapture(scope, identity.turnId);
+      if (existing) {
+        if (existing.contentHash !== contentHash) {
+          return { status: "conflict", reason: "source_turn_content_conflict" };
+        }
+        if (existing.response.legacyImportMemoryId) {
+          const memory = this.deps.repos.memories.getIncludingDeleted(existing.response.legacyImportMemoryId);
+          if (!memory || memory.status === "deleted" || memory.deletedAt) {
+            return { status: "rejected", reason: "capture_deleted", legacyImportMemoryId: existing.response.legacyImportMemoryId };
+          }
+          return { status: "existing", legacyImportMemoryId: memory.id };
+        }
+        const result = existing.response.result;
+        if (!result) return existing.response;
+        const assigned = this.deps.repos.runtime.getRawTurn(result.rawTurnId);
+        const responseResult = { ...result, episodeId: assigned?.episodeId, assignmentStatus: assigned?.episodeId ? "assigned" as const : "pending" as const, duplicate: true, scheduledEvolution: false, jobs: [] };
+        const memories = result.l1MemoryIds.map((id) => this.deps.repos.memories.getIncludingDeleted(id));
+        if (memories.some((memory) => isRecord(memory?.properties.internal_info.capture_decision) &&
+            memory.properties.internal_info.capture_decision.status === "rejected")) {
+          return { status: "rejected", reason: "capture_policy", result: responseResult };
+        }
+        if (memories.length > 0 && memories.every((memory) => !memory || memory.status === "deleted" || memory.deletedAt)) {
+          return { status: "rejected", reason: "capture_deleted", result: responseResult };
+        }
+        if (existing.response.status === "rejected") {
+          return { ...existing.response, result: responseResult };
+        }
+        return { status: "existing", result: responseResult };
+      }
+      const activation = this.deps.repos.runtime.getKv("source_turn_capture_activated_at")?.value;
+      if (typeof activation !== "string" || !Number.isFinite(Date.parse(activation))) {
+        return { status: "pending", reason: "source_capture_activation_unresolved" };
+      }
+      if (completedAtMs <= Date.parse(activation) && !allowsLegacyHistoryCapture(request)) {
+        return { status: "rejected", reason: "legacy_before_activation" };
+      }
+      const hasTools = normalizeCompleteTurnToolCalls(normalized).length > 0
+        || normalizeCompleteTurnToolResults(normalized).length > 0;
+      if (!normalized.query.trim() || normalized.status === "cancelled"
+        || (!normalized.answer.trim() && !hasTools)) {
+        return { status: "pending", reason: "source_turn_incomplete" };
+      }
+      if (!this.deps.memoryAddEnabled()) {
+        return { status: "pending", reason: "memory_add_disabled" };
+      }
+      const adoptedImport = this.adoptLegacyImport(request, namespace, normalized, scope, contentHash);
+      if (adoptedImport) return adoptedImport;
+      const previous = this.deps.repos.runtime.latestSourceTurnCapture(scope);
+      normalized.namespace = namespace;
+      request = { ...request, namespace };
+      let gapEpisode: EpisodeRecord | undefined;
+      let targetSessionId = previous?.sessionId;
+      // A replayed capture was accepted before later turns were stored. Keep it as
+      // detached history instead of dropping it as out of order.
+      const legacyBackfill = allowsLegacyHistoryCapture(request);
+      const detachLegacyHistory = (reason: string): SourceTurnCompleteResponse => {
+        if (!legacyBackfill) return { status: "pending", reason };
+        return this.captureDetachedLegacyHistory(request, normalized, sourceTurn, scope, contentHash);
+      };
+      if (previous && (startedAtMs < Date.parse(previous.startedAt) || completedAtMs < Date.parse(previous.completedAt))) {
+        const neighbors = this.deps.repos.runtime.sourceTurnCaptureNeighbors(scope, sourceTurn.startedAt);
+        const before = neighbors.before;
+        const after = neighbors.after;
+        if (!before?.episodeId || before.episodeId !== after?.episodeId || before.sessionId !== after.sessionId ||
+            Date.parse(before.completedAt) > startedAtMs || completedAtMs > Date.parse(after.startedAt)) {
+          return detachLegacyHistory("source_turn_out_of_order");
+        }
+        const candidate = this.deps.repos.runtime.getEpisode(before.episodeId);
+        const beforeRaw = before.rawTurnId ? this.deps.repos.runtime.getRawTurn(before.rawTurnId) : undefined;
+        if (!candidate || candidate.status !== "open" || !beforeRaw) {
+          return detachLegacyHistory("source_episode_closed");
+        }
+        // With turn.judge.v1 the late turn is filed between its neighbours and
+        // judged afterwards; its judgment is recorded but does not move it.
+        if (!this.turnJudgeRouting()) {
+          const relation = classifyTurnRelation({
+            prevUserText: beforeRaw.userText ?? "", prevAssistantText: beforeRaw.assistantText ?? "",
+            newUserText: normalized.query, gapMs: startedAtMs - Date.parse(before.completedAt), prevTags: []
+          });
+          if (relation.relation === "new_task" || relation.relation === "end_topic" || explicitEndTopicDecision(normalized.query)) {
+            return detachLegacyHistory("source_turn_out_of_order");
+          }
+        }
+        gapEpisode = candidate;
+        targetSessionId = before.sessionId;
+      }
+      const resolved = this.resolveSourceSession({ ...request, namespace }, sourceTurn, scope, targetSessionId);
+      if ("status" in resolved && resolved.status === "pending") {
+        return resolved.reason === "source_session_closed"
+          ? detachLegacyHistory(resolved.reason)
+          : resolved;
+      }
+      const session = resolved as SessionRecord;
+      // A scan may be the first completion of a Hook Session opened by another account.
+      // Keep the Session owner and all persisted capture references consistent.
+      const observed = this.deps.repos.runtime.getRawTurnBySessionTurn(session.id, identity.turnId);
+      if (observed?.episodeId && this.deps.repos.runtime.getEpisode(observed.episodeId)?.status !== "open") {
+        return detachLegacyHistory("source_episode_closed");
+      }
+      const requestedEpisodeId = gapEpisode?.id ?? request.episodeId;
+      const episode = requestedEpisodeId
+        ? this.deps.repos.runtime.getEpisode(requestedEpisodeId)
+        : this.deps.repos.runtime.latestEpisodeForSession(session.id);
+      if (request.episodeId && (!episode || episode.sessionId !== session.id)) {
+        throw new MemoryServiceError("forbidden", "source_episode_scope_conflict");
+      }
+      if (episode && episode.status !== "open") {
+        // Never reopen an evaluated Episode merely because an offline turn arrived late.
+        // With turn.judge.v1 a turn that started after the closure is filed like any
+        // other turn and judged afterwards; otherwise only an unambiguously new task
+        // after closure may create a fresh Episode.
+        const startsNewTask = this.turnJudgeRouting() ||
+          this.proposeEpisodeRoute(session, normalized.query, undefined, sourceTurn.startedAt).relationDecision.relation === "new_task";
+        if (request.episodeId || !startsNewTask ||
+            startedAtMs < Date.parse(episode.closedAt ?? episode.updatedAt)) {
+          return detachLegacyHistory("source_episode_closed");
+        }
+      }
+      if (episode && !gapEpisode && this.deps.repos.runtime.episodeHasLaterRawTurn(episode.id, identity.turnId, sourceTurn.startedAt)) {
+        return detachLegacyHistory("source_turn_out_of_order");
+      }
+      if (observed && isRecord(observed.messagePayload?.turn_complete)) {
+        // An old writer has already completed this turn without the source ledger. Do not
+        // adopt it into the new lifecycle or rewrite its contents during this release.
+        return { status: "pending", reason: "legacy_source_turn_already_completed" };
+      }
+      // Bind only this verified live Session immediately before capture. Keep its original
+      // host key, workspace and protocol so Hook recall and SessionEnd still reach it.
+      if (!session.conversationId && !this.deps.repos.runtime.bindSessionSourceConversation(session.id, identity.conversationId)) {
+        throw new MemoryServiceError("conflict", "source_session_scope_conflict");
+      }
+      if (observed && !this.deps.repos.runtime.bindRawTurnSourceConversation({
+        id: observed.id, sessionId: session.id, userId: DEVICE_MEMORY_OWNER, turnId: identity.turnId
+      }, identity.conversationId)) {
+        throw new MemoryServiceError("forbidden", "source_raw_turn_scope_conflict");
+      }
+      const result = this.completeTurn(identity.turnId, { ...normalized, sessionId: session.id,
+        ...(gapEpisode ? { episodeId: gapEpisode.id } : {}) }, sourceTurn, undefined,
+        allowsLegacyHistoryCapture(request) ? "agent_source_scan" : undefined);
+      if (gapEpisode) this.deps.repos.runtime.orderEpisodeTurnsBySourceTime(gapEpisode.id);
+      const response: SourceTurnCompleteResponse = result.l1MemoryIds.length > 0
+        ? { status: "stored", result }
+        : { status: "rejected", reason: "capture_policy", result };
+      this.deps.repos.runtime.insertSourceTurnCapture({
+        ...scope, turnId: identity.turnId, contentHash,
+        sessionId: result.sessionId, episodeId: result.episodeId, rawTurnId: result.rawTurnId,
+        startedAt: sourceTurn.startedAt, completedAt: sourceTurn.completedAt, sequence: identity.sequence,
+        response, createdAt: nowIso()
+      });
+      return response;
+    });
+  }
+
+  private adoptLegacyImport(
+    request: SourceTurnCompleteRequest,
+    namespace: ReturnType<typeof normalizeNamespace>,
+    normalized: TurnCompleteRequest,
+    scope: SourceTurnCaptureScope,
+    contentHash: string
+  ): SourceTurnCompleteResponse | undefined {
+    const legacyTurnId = request.legacyImportTurnId?.trim();
+    if (!legacyTurnId) return undefined;
+    const source = request.sourceTurn.source;
+    const memories = this.deps.repos.memories.listUserMemoriesByKeyIncludingDeleted(
+      namespace.userId,
+      `memory.add:agent-source:${source}:turn:${legacyTurnId}`
+    ).filter((memory) => legacyImportMatchesScope(memory, namespace, source, legacyTurnId));
+    if (memories.length === 0) return undefined;
+    if (memories.length > 1) return { status: "pending", reason: "legacy_identity_unresolved" };
+    const memory = memories[0]!;
+    const texts = legacyImportTexts(memory);
+    const deleted = memory.status === "deleted" || Boolean(memory.deletedAt);
+    if (!deleted && texts.user && texts.agent && (texts.user !== normalized.query || texts.agent !== normalized.answer)) {
+      return { status: "conflict", reason: "legacy_import_content_conflict" };
+    }
+    const response: SourceTurnCompleteResponse = deleted
+      ? { status: "rejected", reason: "capture_deleted", legacyImportMemoryId: memory.id }
+      : { status: "existing", legacyImportMemoryId: memory.id };
+    this.deps.repos.runtime.insertSourceTurnCapture({
+      ...scope,
+      turnId: request.sourceTurn.turnId,
+      contentHash,
+      startedAt: request.sourceTurn.startedAt,
+      completedAt: request.sourceTurn.completedAt,
+      sequence: request.sourceTurn.sequence,
+      response,
+      createdAt: nowIso()
+    });
+    return response;
+  }
+
+  private captureDetachedLegacyHistory(
+    request: SourceTurnCompleteRequest,
+    normalized: TurnCompleteRequest,
+    sourceTurn: SourceTurnIdentity,
+    scope: SourceTurnCaptureScope,
+    contentHash: string
+  ): SourceTurnCompleteResponse {
+    const namespace = normalizeNamespace(request.namespace);
+    this.assertExplicitEpisodeInSourceScope(request, namespace, sourceTurn, scope);
+    if (this.completedLegacySourceTurn(namespace, scope, sourceTurn.turnId)) {
+      return { status: "pending", reason: "legacy_source_turn_already_completed" };
+    }
+    const opened = this.openSession({
+      namespace: { ...namespace, sessionKey: sourceTurn.conversationId },
+      source: sourceTurn.source,
+      profileId: sourceTurn.profileId,
+      workspacePath: request.workspacePath,
+      meta: {
+        conversationId: sourceTurn.conversationId,
+        source_namespace_key: scope.namespaceKey,
+        legacy_history_backfill: true
+      },
+      timeZone: request.timeZone
+    }, { createNew: true, at: sourceTurn.startedAt });
+    const withoutEpisode = { ...normalized };
+    delete withoutEpisode.episodeId;
+    const result = this.completeTurn(sourceTurn.turnId, {
+      ...withoutEpisode,
+      sessionId: opened.sessionId
+    }, sourceTurn, undefined, allowsLegacyHistoryCapture(request) ? "agent_source_scan" : undefined);
+    const response: SourceTurnCompleteResponse = result.l1MemoryIds.length > 0
+      ? { status: "stored", result }
+      : { status: "rejected", reason: "capture_policy", result };
+    this.deps.repos.runtime.insertSourceTurnCapture({
+      ...scope,
+      turnId: sourceTurn.turnId,
+      contentHash,
+      sessionId: result.sessionId,
+      episodeId: result.episodeId,
+      rawTurnId: result.rawTurnId,
+      startedAt: sourceTurn.startedAt,
+      completedAt: sourceTurn.completedAt,
+      sequence: sourceTurn.sequence,
+      response,
+      createdAt: nowIso()
+    });
+    this.sealDetachedLegacySession(opened.sessionId, sourceTurn.completedAt);
+    return response;
+  }
+
+  private assertExplicitEpisodeInSourceScope(
+    request: SourceTurnCompleteRequest,
+    namespace: ReturnType<typeof normalizeNamespace>,
+    sourceTurn: SourceTurnIdentity,
+    scope: SourceTurnCaptureScope
+  ): void {
+    if (!request.episodeId) return;
+    const episode = this.deps.repos.runtime.getEpisode(request.episodeId);
+    const episodeSession = episode ? this.deps.repos.runtime.getSession(episode.sessionId) : undefined;
+    const inScope = Boolean(episode && episodeSession &&
+      episodeSession.source === sourceTurn.source &&
+      episodeSession.profileId === sourceTurn.profileId &&
+      (!episodeSession.conversationId || episodeSession.conversationId === sourceTurn.conversationId) &&
+      (episodeSession.hostSessionKey === sourceTurn.conversationId ||
+        episodeSession.conversationId === sourceTurn.conversationId ||
+        episodeSession.hostSessionKey === `${sourceTurn.source}-memory-${sourceTurn.conversationId}`) &&
+      (!namespace.projectId || episodeSession.projectId === namespace.projectId) &&
+      (!namespace.workspaceId || episodeSession.workspaceId === namespace.workspaceId) &&
+      (episodeSession.meta.source_namespace_key === undefined ||
+        episodeSession.meta.source_namespace_key === scope.namespaceKey) &&
+      (!namespace.tenantId || episodeSession.meta.source_namespace_key === scope.namespaceKey));
+    if (!inScope) {
+      throw new MemoryServiceError("forbidden", "source_episode_scope_conflict");
+    }
+  }
+
+  private completedLegacySourceTurn(
+    namespace: ReturnType<typeof normalizeNamespace>,
+    scope: SourceTurnCaptureScope,
+    turnId: string
+  ): boolean {
+    return this.deps.repos.runtime.hasCompletedSourceTurnInScope({
+      userId: scope.userId,
+      source: scope.source,
+      profileId: scope.profileId,
+      conversationId: scope.conversationId,
+      turnId,
+      namespaceKey: scope.namespaceKey,
+      defaultNamespaceKey: stableHash({ tenantId: null, projectId: null, workspaceId: null }),
+      tenantId: namespace.tenantId ?? null,
+      storedProjectId: namespace.projectId ?? namespace.workspaceId ?? null,
+      workspaceId: namespace.workspaceId ?? null
+    });
+  }
+
+  /** Close only the session created for one historical turn. Live sessions stay untouched. */
+  private sealDetachedLegacySession(sessionId: string, at: string): void {
+    const existing = this.deps.repos.runtime.getSession(sessionId);
+    if (!existing || existing.status !== "open") return;
+    const closedEpisodes = this.deps.repos.runtime.closeOpenEpisodesForSession(sessionId, at);
+    const session = this.deps.repos.runtime.closeSession(sessionId, at);
+    if (!session) return;
+    for (const episode of closedEpisodes) {
+      this.deps.repos.runtime.appendChange({
+        memoryId: episode.id,
+        namespaceId: this.deps.namespaceIdFromSession(session),
+        kind: "episode",
+        op: "updated",
+        entityId: episode.id,
+        userId: episode.userId,
+        changeType: "episode_closed",
+        after: episode,
+        source: "source_turn.legacy_history",
+        createdAt: at
+      });
+      this.deps.finalizeClosedEpisode(episode, at, "session_closed");
+    }
+    this.deps.repos.runtime.appendChange({
+      memoryId: session.id,
+      namespaceId: this.deps.namespaceIdFromSession(session),
+      kind: "session",
+      op: "updated",
+      entityId: session.id,
+      userId: DEVICE_MEMORY_OWNER,
+      changeType: "session_closed",
+      before: existing,
+      after: session,
+      source: "source_turn.legacy_history",
+      createdAt: at
+    });
+  }
+
+  private resolveSourceSession(
+    request: SourceTurnCompleteRequest,
+    identity: SourceTurnIdentity,
+    scope: SourceTurnCaptureScope,
+    mappedSessionId?: string
+  ): SessionRecord | { status: "pending"; reason: string } {
+    const namespace = normalizeNamespace(request.namespace);
+    const inScope = (candidate: SessionRecord): boolean =>
+      candidate.source === identity.source && candidate.profileId === identity.profileId &&
+      (!candidate.conversationId || candidate.conversationId === identity.conversationId) &&
+      (candidate.hostSessionKey === identity.conversationId || candidate.conversationId === identity.conversationId ||
+        candidate.hostSessionKey === `${identity.source}-memory-${identity.conversationId}`) &&
+      (!namespace.projectId || candidate.projectId === namespace.projectId) &&
+      (!namespace.workspaceId || candidate.workspaceId === namespace.workspaceId) &&
+      (candidate.meta.source_namespace_key === undefined || candidate.meta.source_namespace_key === scope.namespaceKey) &&
+      (!namespace.tenantId || candidate.meta.source_namespace_key === scope.namespaceKey);
+    const canStartAfter = (candidate: SessionRecord): boolean => candidate.status === "closed" &&
+      Date.parse(identity.startedAt) >= Date.parse(candidate.closedAt ?? candidate.updatedAt);
+    if (mappedSessionId) {
+      const mapped = this.deps.repos.runtime.getSession(mappedSessionId);
+      if (!mapped) return { status: "pending", reason: "source_session_missing" };
+      if (!inScope(mapped)) throw new MemoryServiceError("forbidden", "source_session_scope_conflict");
+      if (mapped.status === "open") return mapped;
+      if (!canStartAfter(mapped)) return { status: "pending", reason: "source_session_closed" };
+    }
+    if (request.sessionId) {
+      const supplied = this.deps.repos.runtime.getSession(request.sessionId);
+      if (!supplied) return { status: "pending", reason: "source_session_missing" };
+      if (!inScope(supplied)) throw new MemoryServiceError("forbidden", "source_session_scope_conflict");
+      if (supplied.status === "open") return supplied;
+      if (!canStartAfter(supplied)) return { status: "pending", reason: "source_session_closed" };
+    }
+    const candidates = this.deps.repos.runtime.sourceConversationSessions(scope).filter(inScope);
+    const open = candidates.filter((candidate) => candidate.status === "open");
+    if (open.length > 1) return { status: "pending", reason: "source_session_ambiguous" };
+    if (candidates.some((candidate) => candidate.status !== "open" && !canStartAfter(candidate))) {
+      return { status: "pending", reason: "source_session_closed" };
+    }
+    if (open[0]) return open[0];
+    // The source lookup has already made the strict reuse decision. The legacy host-key
+    // lookup does not include every namespace dimension and must not run a second time.
+    const opened = this.openSession({
+      namespace: { ...namespace, sessionKey: identity.conversationId },
+      source: identity.source,
+      profileId: identity.profileId,
+      workspacePath: request.workspacePath,
+      meta: { conversationId: identity.conversationId, source_namespace_key: scope.namespaceKey },
+      timeZone: request.timeZone
+    }, { createNew: true, at: identity.startedAt });
+    return this.deps.repos.runtime.getSession(opened.sessionId)!;
+  }
+
+  completeTurn(
+    turnId: string,
+    request: TurnCompleteRequest & Record<string, unknown>,
+    sourceTurn?: SourceTurnIdentity,
+    acceptedAt?: string,
+    captureOrigin?: "agent_source_scan"
+  ): CompleteTurnResponse {
+    request = sanitizeTurnCompleteRequest(request);
+    if (request.status === "cancelled") {
+      throw new MemoryServiceError("invalid_argument", "cancelled turns are not persisted");
+    }
+    const hasTools = normalizeCompleteTurnToolCalls(request).length > 0
+      || normalizeCompleteTurnToolResults(request).length > 0;
+    if (!request.query.trim() || (!request.answer.trim() && !hasTools)) {
+      throw new MemoryServiceError(
+        "invalid_argument",
+        "turn.complete requires a non-empty user query and assistant result"
+      );
+    }
+    if (!this.deps.memoryAddEnabled()) {
+      return this.deps.completeTurnNoWrite(turnId, request);
+    }
+    const startedAt = Date.now();
+    const idempotencyKey = !sourceTurn && request.adapterId && request.requestId
+      ? `turn.complete:${request.adapterId}:${request.requestId}`
+      : undefined;
+    const requestHash = stableHash({
+      turnId,
+      request
+    });
+
+    if (idempotencyKey) {
+      const existing = this.deps.repos.runtime.getIdempotency(idempotencyKey);
+      if (existing) {
+        if (existing.requestHash !== requestHash) {
+          throw new MemoryServiceError("conflict", "idempotency key reused with different request body");
+        }
+        const raw = this.deps.repos.runtime.getRawTurn((existing.response as CompleteTurnResponse).rawTurnId);
+        return {
+          ...(existing.response as CompleteTurnResponse),
+          episodeId: raw?.episodeId,
+          assignmentStatus: raw?.episodeId ? "assigned" : "pending",
+          scheduledEvolution: false,
+          jobs: [],
+          duplicate: true
+        };
+      }
+    }
+
+    const newlyStoredL1MemoryIds: string[] = [];
+    const response = this.deps.repos.transaction(() => {
+      const session = this.deps.requireSession(request.sessionId);
+      this.deps.assertSessionInScope(session, request.namespace);
+      const existingRawTurn = this.deps.repos.runtime.getRawTurnBySessionTurn(session.id, turnId);
+      if (existingRawTurn) {
+        this.deps.assertRawTurnInScope(existingRawTurn, request.namespace);
+      }
+      if (existingRawTurn && isRecord(existingRawTurn.messagePayload?.turn_complete)) {
+        const at = nowIso();
+        const episode = this.deps.repos.runtime.getEpisode(existingRawTurn.episodeId);
+        const existingCaptureClaim = !sourceTurn && existingRawTurn.userText && existingRawTurn.assistantText
+          ? this.deps.repos.captureClaims.get(
+              session.userId,
+              normalizeMemoryCaptureSource(session.source),
+              memoryCaptureQaHash(existingRawTurn.userText, existingRawTurn.assistantText)
+            )
+          : undefined;
+        const l1MemoryIds = this.deps.repos.runtime.l1MemoryIdsForRawTurn(existingRawTurn.id).filter((memoryId: string) => {
+          const memory = this.deps.repos.memories.get(memoryId);
+          return memory && (
+            this.deps.rawTurnIdFromMemory(memory) === existingRawTurn.id ||
+            memory.id === existingCaptureClaim?.primaryMemoryId
+          );
+        });
+        const userMemoryIds = this.deps.repos.userMemories
+          .listActive(session.userId)
+          .filter((memory) => memory.sourceTurnRefs.includes(existingRawTurn.id))
+          .map((memory) => memory.id);
+        const responseChangeSeq = this.deps.repos.runtime.latestChangeSeq(
+          session.userId,
+          this.deps.namespaceIdFromSession(session)
+        );
+        const body: CompleteTurnResponse = {
+          turnId,
+          sessionId: session.id,
+          episodeId: episode?.id,
+          assignmentStatus: episode ? "assigned" : "pending",
+          rawTurnId: existingRawTurn.id,
+          userMemoryId: userMemoryIds[0] ?? "",
+          userMemoryIds,
+          l1MemoryId: l1MemoryIds[0] ?? "",
+          l1MemoryIds,
+          closedEpisodeIds: (episode && episodeClosedByEndTopicTurn(episode, turnId)) ? [episode?.id] : [],
+          scheduledEvolution: false,
+          jobs: [],
+          changeSeq: responseChangeSeq,
+          syncCursor: this.deps.encodeChangeCursor(responseChangeSeq, namespaceForSession(session)),
+          etag: stableHash({
+            changeSeq: responseChangeSeq,
+            l1MemoryIds,
+            rawTurnId: existingRawTurn.id
+          }),
+          serverTime: at,
+          duplicate: true
+        };
+        if (idempotencyKey) {
+          this.deps.repos.runtime.saveIdempotency(idempotencyKey, requestHash, body, at);
+        }
+        return body;
+      }
+      if (!acceptedAt) this.deps.requireOpenSession(session.id);
+      const turnStartRecall = this.deps.repos.runtime.getTurnStartRecallEvent(session.id, turnId);
+      const requestSourceMemoryIds = normalizeCompleteTurnSourceMemoryIds(request);
+      const sourceMemoryIds = requestSourceMemoryIds.length > 0
+        ? requestSourceMemoryIds
+        : request.recallApplied === false ? [] : turnStartRecall?.injectedMemoryIds ?? [];
+      const completionRequest = sourceMemoryIds === requestSourceMemoryIds
+        ? request
+        : { ...request, sourceMemoryIds };
+      const intentDecision = turnIntentDecisionFromRecallRequest(turnStartRecall?.request) ??
+        classifyIntent(request.query);
+      const turnJudgeRouting = this.turnJudgeRouting();
+      const endTopicDecision = turnJudgeRouting
+        ? undefined
+        : explicitEndTopicDecision(request.query) ??
+          (existingRawTurn ? endTopicDecisionFromRawTurn(existingRawTurn) : undefined);
+      const at = sourceTurn?.completedAt ?? acceptedAt ?? nowIso();
+      const recalledProposal = turnJudgeRouting ? undefined : turnRouteProposalFromRecallRequest(turnStartRecall?.request);
+      let route: Omit<CommittedTurnRoute, "episode"> & { episode?: EpisodeRecord };
+      if (this.deps.llm.isConfigured()) {
+        route = { episode: this.captureEpisode(session, request.episodeId), closedEpisodeIds: [], jobs: [],
+          proposal: provisionalTurnRouteProposal(this.deps.repos.runtime.latestEpisodeForSession(session.id), turnId, at), proposalStale: false };
+      } else if (turnJudgeRouting) {
+        route = this.attachTurnProvisionally(session, turnId, request.episodeId, existingRawTurn, at, sourceTurn?.startedAt);
+      } else if (request.episodeId) {
+        const episode = this.ensureEpisode(session, request.episodeId);
+        const decision = endTopicDecision ?? recalledProposal?.relationDecision ?? classifyTurnRelation({
+          prevUserText: "",
+          prevAssistantText: "",
+          newUserText: request.query,
+          prevTags: []
+        });
+        const routedEndTopicDecision = endTopicDecision ?? (
+          decision.relation === "end_topic" ? decision as EndTopicDecision : undefined
+        );
+        route = {
+          episode,
+          ...(routedEndTopicDecision ? { endTopicDecision: routedEndTopicDecision } : {}),
+          closedEpisodeIds: [],
+          jobs: [],
+          proposal: {
+            ...(recalledProposal ?? this.buildTurnRouteProposal(episode, decision, undefined, at)),
+            action: routedEndTopicDecision ? "end_topic" : "append",
+            baseEpisodeId: episode?.id,
+            relationDecision: decision
+          },
+          proposalStale: false
+        };
+      } else {
+        const latest = this.deps.repos.runtime.latestEpisodeForSession(session.id);
+        const proposalUsesObservedUnboundEpisode = Boolean(
+          (recalledProposal?.action === "create_first" || recalledProposal?.action === "end_topic") &&
+          recalledProposal.baseEpisodeId === undefined &&
+          existingRawTurn &&
+          latest?.id === existingRawTurn.episodeId &&
+          !this.episodeRelationContext(latest!).prevUserText
+        );
+        const proposalIsCurrent = Boolean(recalledProposal) &&
+          !(sourceTurn && latest && latest.status !== "open") &&
+          (recalledProposal?.baseEpisodeId === latest?.id || proposalUsesObservedUnboundEpisode) &&
+          !(recalledProposal?.action === "append" &&
+            latest?.status === "closed" &&
+            latest.meta.closeReason === "end_topic");
+        if (!recalledProposal && existingRawTurn) {
+          const episode = this.deps.requireEpisode(existingRawTurn.episodeId);
+          const decision = endTopicDecision ?? classifyTurnRelation({
+            prevUserText: "",
+            prevAssistantText: "",
+            newUserText: request.query,
+            prevTags: []
+          });
+          const routedEndTopicDecision = decision.relation === "end_topic"
+            ? decision as EndTopicDecision
+            : undefined;
+          route = {
+            episode,
+            ...(routedEndTopicDecision ? { endTopicDecision: routedEndTopicDecision } : {}),
+            closedEpisodeIds: [],
+            jobs: [],
+            proposal: {
+              ...this.buildTurnRouteProposal(episode, decision, undefined, at),
+              action: routedEndTopicDecision ? "end_topic" : "append",
+              baseEpisodeId: episode?.id
+            },
+            proposalStale: true
+          };
+        } else {
+          const proposal = proposalIsCurrent
+            ? recalledProposal!
+            : this.proposeEpisodeRoute(session, request.query, endTopicDecision, sourceTurn?.startedAt);
+          route = this.commitTurnRouteProposal(
+            session,
+            proposal,
+            request.query,
+            "turn.complete",
+            at,
+            !proposalIsCurrent,
+            sourceTurn?.startedAt
+          );
+        }
+      }
+      const episode = route.episode;
+      const committedEndTopicDecision = route.endTopicDecision ?? endTopicDecision;
+      const closedEpisodeIds = [...route.closedEpisodeIds];
+      if (episode) this.deps.assertEpisodeInScope(episode, request.namespace);
+      if (episode && existingRawTurn && existingRawTurn.episodeId !== episode.id) {
+        this.deps.repos.runtime.rebindRawTurnEpisode(
+          existingRawTurn.id,
+          existingRawTurn.episodeId!,
+          episode.id,
+          at
+        );
+      }
+      let activityAt = at;
+      if (sourceTurn) {
+        activityAt = new Date(Math.max(Date.parse(at), Date.parse(session.lastSeenAt ?? session.updatedAt),
+          Date.parse(episode?.updatedAt ?? at))).toISOString();
+      }
+      this.deps.repos.runtime.touchSession(session.id, activityAt);
+      const rawTurnId = rawTurnIdForSessionTurn(session.id, turnId);
+      const requestToolCalls = normalizeCompleteTurnToolCalls(completionRequest);
+      const requestToolResults = normalizeCompleteTurnToolResults(completionRequest);
+      const requestArtifacts = normalizeCompleteTurnArtifacts(completionRequest);
+      const turnStartPayload = {
+        ...(episode && this.selectionScope?.selectedEpisodeId === episode.id ? { episodeSelection: { episodeId: episode?.id } } : {}),
+        intent_decision: intentDecision,
+        routeProposal: recalledProposal ?? route.proposal,
+        ...(route.proposalStale ? { routeProposalStale: true } : {}),
+        ...(turnStartRecall
+          ? {
+              contextPacketId: turnContextPacketId(
+                session.id,
+                turnStartRecall.episodeId,
+                turnId,
+                turnStartRecall.id
+              ),
+              searchEventId: turnStartRecall.id,
+              sourceMemoryIds
+            }
+          : {}),
+        ...(committedEndTopicDecision
+          ? {
+              episode_close: {
+                closeAfterComplete: true,
+                decision: committedEndTopicDecision
+              }
+            }
+          : {})
+      };
+
+      const insertedRawTurn: RawTurnRecord =
+        existingRawTurn ??
+        this.deps.repos.runtime.insertRawTurn({
+          id: rawTurnId,
+          sessionId: session.id,
+          episodeId: episode?.id,
+          turnId,
+          userId: DEVICE_MEMORY_OWNER,
+          conversationId: session.conversationId,
+          userText: request.query,
+          assistantText: request.answer,
+          reasoningSummary: stringFromMaybeRecord(request, "reasoningSummary"),
+          toolCalls: requestToolCalls,
+          toolResults: requestToolResults,
+          sourceMemoryIds,
+          usage: isRecord(request.usage) ? request.usage : {},
+          messagePayload: {
+            captured_memory_ids: [],
+            ...(sourceTurn ? { source_turn: sourceTurn } : {}),
+            turn_start: turnStartPayload,
+            turn_complete: {
+              completed_at: at,
+              source_memory_ids: sourceMemoryIds,
+              time_zone: request.timeZone ?? stringFromMaybeRecord(session.meta, "time_zone")
+            }
+          },
+          status: request.status ?? "succeeded",
+          createdAt: sourceTurn?.startedAt ?? at
+        });
+      const rawTurnCreated = !existingRawTurn;
+      const rawTurnFirstCompleted = rawTurnCreated
+        || !isRecord(existingRawTurn.messagePayload?.turn_complete);
+      const completedObservedRawTurn = existingRawTurn
+        ? {
+            ...completeObservedRawTurn(existingRawTurn, completionRequest, at),
+            ...(sourceTurn ? { createdAt: sourceTurn.startedAt } : {}),
+            episodeId: episode?.id
+          }
+        : undefined;
+      const rawTurn = completedObservedRawTurn
+        ? this.deps.repos.runtime.updateRawTurn({
+            ...completedObservedRawTurn,
+            messagePayload: {
+              ...completedObservedRawTurn.messagePayload,
+              ...(sourceTurn ? { source_turn: sourceTurn } : {}),
+              turn_start: turnStartPayload
+            }
+          })
+        : insertedRawTurn;
+      if (rawTurnCreated) {
+        this.deps.repos.runtime.appendChange({
+          memoryId: rawTurn.id,
+          namespaceId: this.deps.namespaceIdFromSession(session),
+          kind: "raw_turn",
+          op: "created",
+          entityId: rawTurn.id,
+          userId: DEVICE_MEMORY_OWNER,
+          changeType: "raw_turn_created",
+          after: rawTurn,
+          source: "turn.complete",
+          createdAt: at
+        });
+      } else if (stableHash(existingRawTurn) !== stableHash(rawTurn)) {
+        this.deps.repos.runtime.appendChange({
+          memoryId: rawTurn.id,
+          namespaceId: this.deps.namespaceIdFromSession(session),
+          kind: "raw_turn",
+          op: "updated",
+          entityId: rawTurn.id,
+          userId: DEVICE_MEMORY_OWNER,
+          changeType: "raw_turn_update",
+          before: existingRawTurn,
+          after: rawTurn,
+          source: "turn.complete",
+          createdAt: at
+        });
+      }
+      if (episode && episode.rawTurnIds.every((rawTurnId) => rawTurnId === rawTurn.id)) {
+        this.deps.repos.runtime.updateEpisodeMeta(episode?.id, {
+          intentDecision
+        });
+      }
+      if (episode) this.deps.repos.runtime.appendEpisodeRawTurn(episode?.id, rawTurn.id, activityAt);
+
+      const userMemoryCapture = this.captureUserMemory(rawTurn, request, at);
+      const requestTags = this.deps.normalizeRequestTags(request.tags);
+      const capturedSteps = this.captureEpisodeIncrementalSteps(episode, rawTurn, at, !episode || Boolean(sourceTurn))
+        .map((step) => {
+          const stepRawTurnId = step.rawTurnId ?? rawTurn.id;
+          return stepRawTurnId === rawTurn.id && requestTags.length > 0
+            ? { ...step, tags: uniq([...step.tags, ...requestTags]) }
+            : step;
+        });
+
+      const l1MemoryIds: string[] = [];
+      const captureClaimByRawTurnId = new Map<string, boolean>();
+      let changeSeq = 0;
+      const jobs: EvolutionJobRecord[] = [...route.jobs, ...userMemoryCapture.jobs, ...this.queueAssignment(rawTurn, this.deps.config.algorithm.session.turnJudge && this.deps.llm.isConfigured(), request.episodeId, captureOrigin)];
+
+      for (const step of capturedSteps) {
+        const stepRawTurnId = step.rawTurnId ?? rawTurn.id;
+        const sourceRawTurn = stepRawTurnId === rawTurn.id
+          ? rawTurn
+          : this.deps.repos.runtime.getRawTurn(stepRawTurnId) ?? rawTurn;
+        const modelDecidesCapture = this.deps.llm.isConfigured();
+        const turnJudge = modelDecidesCapture && this.deps.config.algorithm.session.turnJudge;
+        const observation = modelDecidesCapture
+          ? pendingL1DecisionMetadata(l1ObservationMetadata(sourceRawTurn, session, at, { modelJudgesUnverified: turnJudge }))
+          : l1ObservationMetadata(sourceRawTurn, session, at);
+        const signature = signatureFromTraceParts(step.tags, step.toolCalls, step.reflection.text ?? "");
+        const l1Memory = this.deps.buildMemory({
+          id: `trace_${stableHash(`L1:${session.id}:${step.turnId}:${step.stepIndex}`).slice(0, 20)}`,
+          userId: DEVICE_MEMORY_OWNER,
+          conversationId: session.conversationId,
+          sessionId: session.id,
+          agentId: session.source,
+          appId: session.workspaceId,
+          projectId: session.projectId,
+          profileId: session.profileId,
+          layer: "L1",
+          kind: "trace",
+          lifecycleStatus: modelDecidesCapture ? "candidate" : "active",
+          memoryType: "LongTermMemory",
+          key: observation.memoryKey ?? `trace:${session.id}:${step.turnId}:${step.stepIndex}`,
+          value: this.deps.renderTraceMemoryValue({
+            ...step,
+            summary: "",
+            rawTurnId: stepRawTurnId
+          }),
+          tags: step.tags,
+          info: {
+            turn_id: step.turnId,
+            raw_turn_id: stepRawTurnId,
+            episode_id: episode?.id,
+            status: rawTurn.status,
+            summary: "",
+            time_zone: step.timeZone,
+            ...observation.info
+          },
+          internal: {
+            source: "turn.complete",
+            plugin_algorithm: "capture.v7",
+            source_raw_turn_id: stepRawTurnId,
+            source_memory_ids: rawTurn.sourceMemoryIds,
+            summary: "",
+            reflection: step.reflection.text,
+            alpha: step.reflection.alpha,
+            value: step.value,
+            priority: step.priority,
+            time_zone: step.timeZone,
+            raw_turn_id: stepRawTurnId,
+            raw_span: {
+              user_text: Boolean(step.userText),
+              agent_text: Boolean(step.agentText),
+              tool_call_count: step.toolCalls.length
+            },
+            error_signatures: step.errorSignatures,
+            ...observation.internal,
+            // Scheduling provenance is separate from the native capture pipeline.
+            ...(captureOrigin ? { capture_origin: captureOrigin } : {}),
+            trace: {
+              key: step.key,
+              ts: step.ts,
+              time_zone: step.timeZone,
+              turn_id: step.turnId,
+              raw_turn_id: stepRawTurnId,
+              raw_span: {
+                user_text: Boolean(step.userText),
+                agent_text: Boolean(step.agentText),
+                tool_call_count: step.toolCalls.length
+              },
+              episode_id: episode?.id,
+              step_index: step.stepIndex,
+              sub_step_total: step.subStepTotal,
+              agent_thinking: step.agentThinking,
+              userText: step.userText,
+              agentText: step.agentText,
+              tool_calls: this.deps.sanitizeTraceToolCalls(step.toolCalls),
+              reflection: step.reflection.text,
+              alpha: step.reflection.alpha,
+              usable: step.reflection.usable,
+              reflection_source: step.reflection.source,
+              summary: "",
+              tags: step.tags,
+              value: step.value,
+              priority: step.priority,
+              signature,
+              error_signatures: step.errorSignatures,
+              vec_summary: step.vecSummary,
+              vec_action: step.vecAction
+            }
+          },
+          createdAt: at
+        });
+
+        let captureClaimed = sourceTurn ? true : captureClaimByRawTurnId.get(stepRawTurnId);
+        if (captureClaimed === undefined) {
+          const qaQuery = sourceRawTurn.userText ?? "";
+          const qaAnswer = sourceRawTurn.assistantText ?? "";
+          if (qaQuery.trim() && qaAnswer.trim()) {
+            const capture = this.deps.repos.captureClaims.claim({
+              userId: DEVICE_MEMORY_OWNER,
+              source: normalizeMemoryCaptureSource(session.source),
+              qaHash: memoryCaptureQaHash(qaQuery, qaAnswer),
+              primaryMemoryId: l1Memory.id,
+              capturedBy: "turn_complete",
+              createdAt: at
+            });
+            captureClaimed = capture.claimed || capture.claim.capturedBy === "turn_complete";
+            captureClaimByRawTurnId.set(stepRawTurnId, captureClaimed);
+            if (!captureClaimed) {
+              const existing = this.deps.repos.memories.getIncludingDeleted(capture.claim.primaryMemoryId);
+              if (!existing) {
+                throw new MemoryServiceError("conflict", "memory capture claim points to a missing memory");
+              }
+              if (existing.status !== "deleted" && !existing.deletedAt) {
+                l1MemoryIds.push(existing.id);
+                if (session.meta.l3_world_model_protocol_version === 2) {
+                  this.deps.repos.l3WorldModels.registerInputTrace({
+                    sessionId: session.id,
+                    l1MemoryId: existing.id,
+                    rawTurnId: stepRawTurnId,
+                    episodeId: episode?.id,
+                    createdAt: at
+                  });
+                }
+                if (episode) this.deps.repos.runtime.appendEpisodeTurn(episode?.id, stepRawTurnId, existing.id, activityAt);
+              }
+            }
+          } else {
+            captureClaimed = true;
+            captureClaimByRawTurnId.set(stepRawTurnId, true);
+          }
+        }
+        if (!captureClaimed) continue;
+
+        const upsert = this.deps.repos.memories.upsertByKey(l1Memory);
+        l1MemoryIds.push(upsert.memory.id);
+        newlyStoredL1MemoryIds.push(upsert.memory.id);
+        if (session.meta.l3_world_model_protocol_version === 2) {
+          this.deps.repos.l3WorldModels.registerInputTrace({
+            sessionId: session.id,
+            l1MemoryId: upsert.memory.id,
+            rawTurnId: stepRawTurnId,
+            episodeId: episode?.id,
+            createdAt: at
+          });
+        }
+        changeSeq = this.deps.repos.runtime.appendChange({
+          memoryId: upsert.memory.id,
+          namespaceId: this.deps.namespaceIdFromMemory(upsert.memory),
+          kind: "trace",
+          op: upsert.created ? "created" : "updated",
+          entityId: upsert.memory.id,
+          userId: DEVICE_MEMORY_OWNER,
+          changeType: upsert.created ? "create" : "update",
+          before: upsert.previous,
+          after: upsert.memory,
+          source: "turn.complete.capture.v7",
+          createdAt: at
+        });
+        if (episode) this.deps.repos.runtime.appendEpisodeTurn(episode?.id, stepRawTurnId, upsert.memory.id, activityAt);
+        const existingProcessing = this.deps.repos.processing.get(upsert.memory.id);
+        const contentChanged = Boolean(
+          !upsert.created && upsert.previous?.contentHash !== upsert.memory.contentHash
+        );
+        if (!existingProcessing || contentChanged) {
+          if (contentChanged) {
+            this.deps.repos.memories.deleteVector(upsert.memory.id, "vec_summary");
+            this.deps.repos.memories.deleteVector(upsert.memory.id, "vec_action");
+          }
+          this.deps.repos.processing.save({
+            memoryId: upsert.memory.id,
+            state: "summary_pending",
+            stage: "summary",
+            activeJobId: null,
+            attemptCount: 0,
+            manualRetryCount: existingProcessing?.manualRetryCount ?? 0,
+            retryAction: "retry",
+            errorCode: null,
+            errorMessage: null,
+            failedAt: null,
+            updatedAt: at
+          });
+          jobs.push(this.deps.enqueueJob({
+            jobType: "trace_summary",
+            userId: DEVICE_MEMORY_OWNER,
+            sessionId: session.id,
+            episodeId: episode?.id,
+            targetMemoryId: upsert.memory.id,
+            payload: {
+              source: "turn.complete.capture",
+              rawTurnId: sourceRawTurn.id,
+              turnAt: sourceRawTurn.createdAt,
+              contentHash: upsert.memory.contentHash,
+              decideCapture: modelDecidesCapture,
+              ...(turnJudge ? {
+                turnJudge: true,
+                promptVersion: TURN_JUDGE_PROMPT_VERSION,
+                // Judgments of one session run in turn order (see leaseQueuedJobs).
+                ...(stepRawTurnId !== rawTurn.id ? { turnJudgeCatchUp: true } : {}),
+                ...(turnJudgeNoiseKind(sourceRawTurn.userText) ? { turnJudgeNoise: turnJudgeNoiseKind(sourceRawTurn.userText) } : {})
+              } : {}),
+              captureUserMemory: modelDecidesCapture && !request.userMemoryCorrection && step.stepIndex === 0,
+              capturedUserMemoryIds: userMemoryCapture.memoryIds,
+              ...(request.userMemoryCorrection ? {
+                capturedUserMemoryAction: "corrected",
+                capturedUserMemoryTargetId: request.userMemoryCorrection.targetMemoryId
+              } : {})
+            },
+            maxAttempts: 3,
+            createdAt: at
+          }));
+        }
+      }
+      for (const artifact of requestArtifacts) {
+        const artifactId = this.deps.repos.runtime.insertArtifact({
+          sessionId: session.id,
+          episodeId: episode?.id,
+          rawTurnId: rawTurn.id,
+          userId: DEVICE_MEMORY_OWNER,
+          kind: artifact.kind,
+          uri: artifact.uri,
+          payload: artifact.payload,
+          createdAt: at
+        });
+        this.deps.repos.runtime.appendChange({
+          memoryId: artifactId,
+          namespaceId: this.deps.namespaceIdFromSession(session),
+          kind: "artifact",
+          op: "created",
+          entityId: artifactId,
+          userId: DEVICE_MEMORY_OWNER,
+          changeType: "artifact_created",
+          after: {
+            id: artifactId,
+            sessionId: session.id,
+            episodeId: episode?.id,
+            rawTurnId: rawTurn.id,
+            userId: DEVICE_MEMORY_OWNER,
+            kind: artifact.kind,
+            uri: artifact.uri,
+            payload: artifact.payload,
+            createdAt: at
+          },
+          source: "turn.complete.artifact",
+          createdAt: at
+        });
+      }
+      const completedEndTopicDecision = committedEndTopicDecision ?? endTopicDecisionFromRawTurn(rawTurn);
+      if (episode && rawTurnFirstCompleted && completedEndTopicDecision) {
+        const beforeClose = this.deps.repos.runtime.getEpisode(episode?.id) ?? episode;
+        const closed = this.deps.repos.runtime.closeEpisode(episode?.id, {
+          closeReason: "end_topic",
+          topicState: "ended",
+          relationDecision: completedEndTopicDecision,
+          endTopicTurnId: turnId,
+          closedBy: "turn.complete"
+        }, at);
+        if (closed) {
+          this.deps.repos.runtime.appendChange({
+            memoryId: closed.id,
+            namespaceId: this.deps.namespaceIdFromSession(session),
+            kind: "episode",
+            op: "updated",
+            entityId: closed.id,
+            userId: closed.userId,
+            changeType: "episode_closed",
+            before: beforeClose,
+            after: closed,
+            source: "turn.complete.end_topic",
+            createdAt: at
+          });
+          jobs.push(...this.deps.finalizeClosedEpisode(closed, at, "end_topic"));
+          closedEpisodeIds.push(closed.id);
+        }
+      } else if ((episode && episodeClosedByEndTopicTurn(episode, turnId))) {
+        closedEpisodeIds.push(episode?.id);
+      }
+      if (episode && rawTurnFirstCompleted && !completedEndTopicDecision) {
+        jobs.push(this.deps.enqueueJob({
+          jobType: "episode_idle_close",
+          userId: DEVICE_MEMORY_OWNER,
+          sessionId: session.id,
+          episodeId: episode?.id,
+          dedupeKey: `episode_idle_close:${rawTurn.id}`,
+          payload: {
+            triggerRawTurnId: rawTurn.id,
+            triggerEpisodeId: episode?.id,
+            triggeredAt: at
+          },
+          createdAt: at
+        }));
+        // Give the still-open episode a provisional title so the task panel does
+        // not fall back to rendering the first user message. An episode closed by
+        // this same turn is skipped: finalizeClosedEpisode queues the final pass.
+        if (!episode.title?.trim()) {
+          jobs.push(this.deps.enqueueJob({
+            jobType: "episode_title",
+            userId: DEVICE_MEMORY_OWNER,
+            sessionId: session.id,
+            episodeId: episode?.id,
+            payload: { stage: "provisional" },
+            createdAt: at
+          }));
+        }
+      }
+      if (
+        rawTurnFirstCompleted &&
+        !completedEndTopicDecision &&
+        session.meta.l3_world_model_protocol_version === 2
+      ) {
+        this.deps.armWorkMemoryIdleFlush(session.id, at);
+      }
+      const uniqueClosedEpisodeIds = uniq(closedEpisodeIds);
+      const responseChangeSeq = this.deps.repos.runtime.latestChangeSeq(session.userId, this.deps.namespaceIdFromSession(session));
+      const body: CompleteTurnResponse = {
+        turnId,
+        sessionId: session.id,
+        episodeId: episode?.id,
+        assignmentStatus: episode ? "assigned" : "pending",
+        rawTurnId: rawTurn.id,
+        userMemoryId: userMemoryCapture.memoryIds[0] ?? "",
+        userMemoryIds: userMemoryCapture.memoryIds,
+        l1MemoryId: l1MemoryIds[0] ?? "",
+        l1MemoryIds,
+        closedEpisodeIds: uniqueClosedEpisodeIds,
+        scheduledEvolution: true,
+        jobs: jobs.map(jobToRef),
+        changeSeq: responseChangeSeq,
+        syncCursor: this.deps.encodeChangeCursor(responseChangeSeq, namespaceForSession(session)),
+        etag: stableHash({
+          changeSeq: responseChangeSeq,
+          userMemoryIds: userMemoryCapture.memoryIds,
+          l1MemoryIds,
+          rawTurnId: rawTurn.id
+        }),
+        serverTime: nowIso()
+      };
+
+      if (idempotencyKey) {
+        this.deps.repos.runtime.saveIdempotency(idempotencyKey, requestHash, body, at);
+      }
+      return body;
+    });
+
+    for (const memoryId of response.duplicate ? [] : newlyStoredL1MemoryIds) {
+      const memory = this.deps.repos.memories.get(memoryId);
+      recordApiLog(this.deps.repos.runtime, "memory_add", {
+        sessionId: response.sessionId,
+        turnId,
+        episodeId: response.episodeId,
+        source: "turn.complete",
+        sourceAgent: memory?.agentId,
+        query: request.query,
+        toolCallCount: normalizeCompleteTurnToolCalls(request).length
+      }, {
+        stored: 1,
+        details: [{
+          role: "trace",
+          action: "stored",
+          sourceAgent: memory?.agentId,
+          traceId: memoryId,
+          episodeId: response.episodeId,
+          query: request.query,
+          agent: request.answer,
+          summary: memory ? detailSummaryForMemory(memory) : undefined
+        }]
+      }, Date.now() - startedAt, true, response.serverTime, memory?.agentId);
+    }
+
+    return response;
+  }
+
+  async observeTool(input: ToolObserveRequest): Promise<{
+    ok: true;
+    eventId: string;
+    rawTurnId?: string;
+    repair?: DecisionRepairSummary;
+    changeSeq?: number;
+    syncCursor?: string;
+    serverTime: string;
+  }> {
+    if (!this.deps.memoryAddEnabled()) {
+      return this.deps.observeToolNoWrite(input);
+    }
+    const session = this.deps.requireOpenSession(input.sessionId);
+    this.deps.assertSessionInScope(session, input.namespace);
+    const at = nowIso();
+    const observation = toolObservationEvent(input);
+    const turnId = input.turnId ?? `observe:${stableHash(`${session.id}:${at}:${stableStringify(observation.event)}`).slice(0, 16)}`;
+    const { episode, rawTurn, updatedRawTurn, eventId } = await this.withEpisodeSelection({ userText: "", turnId }, () => {
+      this.deps.requireOpenSession(session.id);
+      const latest = this.deps.repos.runtime.latestEpisodeForSession(session.id);
+      const episode = this.captureEpisode(session, input.episodeId) ?? (latest?.status === "open" ? latest : undefined);
+      const existing = this.deps.repos.runtime.getRawTurnBySessionTurn(session.id, turnId);
+      if (existing) {
+        this.deps.assertRawTurnInScope(existing, input.namespace);
+        if (existing.sessionId !== session.id) {
+          throw new MemoryServiceError("conflict", "observed raw turn belongs to a different session");
+        }
+        if (input.episodeId && existing.episodeId !== input.episodeId) {
+          throw new MemoryServiceError("conflict", "observed raw turn belongs to a different episode");
+        }
+      }
+      const createdRawTurn = !existing;
+      const rawTurn = existing ?? this.deps.repos.runtime.insertRawTurn({
+        id: `raw_${stableHash(`${session.id}:${turnId}`).slice(0, 20)}`,
+        sessionId: session.id,
+        episodeId: episode?.id,
+        turnId,
+        userId: DEVICE_MEMORY_OWNER,
+        conversationId: session.conversationId,
+        toolCalls: [],
+        toolResults: [],
+        sourceMemoryIds: [],
+        usage: {},
+        messagePayload: {
+          captured_memory_ids: [],
+          observe: {
+            requestId: input.requestId,
+            adapterId: input.adapterId
+          }
+        },
+        status: "observed",
+        createdAt: at
+      });
+      const nextToolCalls = rawTurn.toolCalls.some((call) =>
+        isToolCallPayload(call) &&
+        ((input.toolCallId && call.id === input.toolCallId) || call.name === input.toolName)
+      )
+        ? rawTurn.toolCalls
+        : [...rawTurn.toolCalls, observation.toolCall];
+      const updatedRawTurn: RawTurnRecord = {
+        ...rawTurn,
+        toolCalls: nextToolCalls,
+        toolResults: observation.toolResult === undefined ? rawTurn.toolResults : [...rawTurn.toolResults, observation.toolResult],
+        messagePayload: {
+          ...(rawTurn.messagePayload ?? {}),
+          last_observation: {
+            phase: observation.phase,
+            observed_at: at
+          }
+        }
+      };
+      this.deps.repos.runtime.updateRawTurn(updatedRawTurn);
+      if (episode) this.deps.repos.runtime.appendEpisodeRawTurn(episode?.id, rawTurn.id, at);
+      const eventId = this.deps.repos.runtime.insertArtifact({
+        sessionId: session.id,
+        episodeId: episode?.id,
+        rawTurnId: rawTurn.id,
+        userId: DEVICE_MEMORY_OWNER,
+        kind: "tool_call",
+        payload: {
+          phase: observation.phase,
+          value: observation.event
+        },
+        createdAt: at
+      });
+      if (!episode) {
+        const outcome = toolOutcomeFromObservation(input, rawTurn, updatedRawTurn);
+        const saved = this.deps.repos.runtime.getRawTurn(rawTurn.id)!;
+        const outcomes = Array.isArray(saved.messagePayload?.tool_outcomes) ? saved.messagePayload.tool_outcomes : [];
+        this.deps.repos.runtime.updateRawTurn({ ...saved, messagePayload: { ...saved.messagePayload,
+          tool_outcomes: [...outcomes, { eventId, at, ...outcome }] } });
+        this.queueAssignment(this.deps.repos.runtime.getRawTurn(rawTurn.id)!);
+      }
+      this.deps.repos.runtime.appendChange({
+        memoryId: rawTurn.id,
+        namespaceId: this.deps.namespaceIdFromSession(session),
+        kind: "raw_turn",
+        op: createdRawTurn ? "created" : "updated",
+        entityId: rawTurn.id,
+        userId: DEVICE_MEMORY_OWNER,
+        changeType: createdRawTurn ? "raw_turn_created" : "raw_turn_update",
+        before: createdRawTurn ? undefined : rawTurn,
+        after: updatedRawTurn,
+        source: "tools.observe",
+        createdAt: at
+      });
+      return { episode, rawTurn, updatedRawTurn, eventId };
+    });
+    const repair = await this.recordToolOutcomeForRepair(input, session, episode, rawTurn, updatedRawTurn, at);
+    const responseChangeSeq = this.deps.repos.runtime.latestChangeSeq(session.userId, this.deps.namespaceIdFromSession(session));
+    return {
+      ok: true,
+      eventId,
+      rawTurnId: rawTurn.id,
+      repair,
+      changeSeq: responseChangeSeq,
+      syncCursor: this.deps.encodeChangeCursor(responseChangeSeq, namespaceForSession(session)),
+      serverTime: nowIso()
+    };
+  }
+
+  private applyDeferredToolOutcomes(raw: RawTurnRecord, session: SessionRecord, at: string): void {
+    const episode = this.deps.repos.runtime.getEpisode(raw.episodeId);
+    const own = raw.messagePayload?.tool_outcomes;
+    if (!episode || !Array.isArray(own) || raw.messagePayload?.tool_outcomes_applied === own.length) return;
+    const rows = this.deps.repos.db.prepare("SELECT id, message_payload_json FROM raw_turns WHERE session_id=? AND episode_id=? AND deleted_at IS NULL AND redacted_at IS NULL ORDER BY created_at,rowid")
+      .all(session.id, episode.id) as Array<{ id: string; message_payload_json: string }>;
+    const events: Array<{ rawTurnId: string; eventId: string; at: string; toolId: string; success?: boolean; reason?: string }> = [];
+    for (const row of rows) {
+      const outcomes = JSON.parse(row.message_payload_json).tool_outcomes;
+      if (Array.isArray(outcomes)) for (const item of outcomes) events.push({ ...item, rawTurnId: row.id });
+      if (row.id === raw.id) break;
+    }
+    const applied = Number(raw.messagePayload?.tool_outcomes_applied ?? 0);
+    const context = toolRepairContext(session, episode);
+    for (const event of own.slice(applied) as typeof events) {
+      if (event.success !== false) continue;
+      const index = events.findIndex(item => item.eventId === event.eventId);
+      const series = events.slice(0, index + 1).filter(item => item.toolId === event.toolId && item.success !== undefined);
+      const window = series.slice(-this.deps.config.algorithm.feedback.failureWindow);
+      if (window.some(item => item.success) || window.length < this.deps.config.algorithm.feedback.failureThreshold) continue;
+      const contextHash = toolRepairContextHash(event.toolId, context);
+      const since = new Date(Date.parse(event.at) - this.deps.config.algorithm.feedback.cooldownMs).toISOString();
+      if (this.deps.config.algorithm.feedback.cooldownMs > 0 && this.deps.repos.runtime.listDecisionRepairs({ userId: DEVICE_MEMORY_OWNER, contextHash, since, limit: 1 }).length) continue;
+      const evidence = this.failureBurstRepairEvidence({ session, toolId: event.toolId, reason: event.reason ?? "tool failed", limit: this.deps.config.algorithm.feedback.evidenceLimit });
+      const valueDiff = repairEvidenceValueDiff(evidence.highValueMemories, evidence.lowValueMemories);
+      if (valueDiff < this.deps.config.algorithm.feedback.valueDelta) continue;
+      const burst: ToolFailureBurst = { toolId: event.toolId, context, contextHash, firstSeen: Date.parse(window[0]!.at), lastSeen: Date.parse(event.at),
+        windowStart: series.length - window.length + 1, failureCount: window.length,
+        occurrences: window.map((item, i) => ({ toolId: item.toolId, context, step: series.length - window.length + i + 1,
+          reason: item.reason ?? "tool failed", ts: Date.parse(item.at), rawTurnId: item.rawTurnId, sessionId: session.id, episodeId: episode.id })) };
+      this.persistFailureBurstRepair({ burst, session, episode, rawTurn: raw, reason: event.reason ?? "tool failed", at }, evidence, valueDiff, undefined, true);
+    }
+    const latest = this.deps.repos.runtime.getRawTurn(raw.id)!;
+    this.deps.repos.runtime.updateRawTurn({ ...latest, messagePayload: { ...latest.messagePayload, tool_outcomes_applied: own.length } });
+  }
+
+  private async recordToolOutcomeForRepair(
+    input: ToolObserveRequest,
+    session: SessionRecord,
+    episode: EpisodeRecord | undefined,
+    rawTurn: RawTurnRecord,
+    updatedRawTurn: RawTurnRecord,
+    at: string
+  ): Promise<DecisionRepairSummary | undefined> {
+    const outcome = toolOutcomeFromObservation(input, rawTurn, updatedRawTurn);
+    if (!outcome || outcome.success === undefined) return undefined;
+    if (!episode) return undefined; // Saved observations are assigned before Episode-dependent repair.
+    const context = toolRepairContext(session, episode);
+    const step = this.nextToolObservationStep(outcome.toolId, context);
+    if (outcome.success) {
+      this.recordToolSuccess(outcome.toolId, context, step);
+      return undefined;
+    }
+    const burst = this.recordToolFailure({
+      toolId: outcome.toolId,
+      context,
+      step,
+      reason: outcome.reason ?? "tool failed",
+      ts: Date.parse(at),
+      rawTurnId: rawTurn.id,
+      sessionId: session.id,
+      episodeId: episode.id
+    });
+    if (!burst) return undefined;
+    return this.maybeCreateFailureBurstRepair({
+      burst,
+      session,
+      episode,
+      rawTurn,
+      reason: outcome.reason ?? "tool failed",
+      at
+    });
+  }
+
+  private nextToolObservationStep(toolId: string, context: string): number {
+    const key = toolSignalKey(toolId, context);
+    const next = (this.toolStepCounters.get(key) ?? 0) + 1;
+    this.toolStepCounters.set(key, next);
+    return next;
+  }
+
+  private recordToolFailure(record: ToolFailureRecord): ToolFailureBurst | undefined {
+    const key = toolSignalKey(record.toolId, record.context);
+    const existing = this.toolFailureStates.get(key);
+    const state: ToolFailureState = existing ?? {
+      toolId: record.toolId,
+      context: record.context,
+      firstSeen: record.ts,
+      lastSeen: record.ts,
+      windowStart: record.step,
+      occurrences: []
+    };
+    const minStep = record.step - this.deps.config.algorithm.feedback.failureWindow + 1;
+    state.occurrences = state.occurrences.filter((item) => item.step >= minStep);
+    state.occurrences.push(record);
+    state.lastSeen = record.ts;
+    state.windowStart = minStep;
+    if (!existing) state.firstSeen = record.ts;
+    this.toolFailureStates.set(key, state);
+
+    const successAt = this.toolSuccessSteps.get(key);
+    const successInWindow = successAt !== undefined && successAt >= state.windowStart;
+    if (state.occurrences.length >= this.deps.config.algorithm.feedback.failureThreshold && !successInWindow) {
+      return {
+        ...state,
+        contextHash: toolRepairContextHash(record.toolId, record.context),
+        failureCount: state.occurrences.length
+      };
+    }
+    return undefined;
+  }
+
+  private recordToolSuccess(toolId: string, context: string, step: number): void {
+    const key = toolSignalKey(toolId, context);
+    this.toolSuccessSteps.set(key, step);
+    const state = this.toolFailureStates.get(key);
+    if (!state) return;
+    state.occurrences = state.occurrences.filter((item) => item.step >= step);
+  }
+
+  private async maybeCreateFailureBurstRepair(input: {
+    burst: ToolFailureBurst;
+    session: SessionRecord;
+    episode: EpisodeRecord;
+    rawTurn: RawTurnRecord;
+    reason: string;
+    at: string;
+  }): Promise<DecisionRepairSummary> {
+    const { burst, session, episode, rawTurn, reason, at } = input;
+    const cooldownMs = this.deps.config.algorithm.feedback.cooldownMs;
+    if (cooldownMs > 0) {
+      const since = new Date(Date.parse(at) - cooldownMs).toISOString();
+      const recent = this.deps.repos.runtime.listDecisionRepairs({
+        userId: DEVICE_MEMORY_OWNER,
+        contextHash: burst.contextHash,
+        since,
+        limit: 1
+      });
+      if (recent.length > 0) {
+        return {
+          contextHash: burst.contextHash,
+          skipped: true,
+          reason: "cooldown"
+        };
+      }
+    }
+
+    const evidence = this.failureBurstRepairEvidence({
+      session,
+      toolId: burst.toolId,
+      reason,
+      limit: this.deps.config.algorithm.feedback.evidenceLimit
+    });
+    const valueDiff = repairEvidenceValueDiff(evidence.highValueMemories, evidence.lowValueMemories);
+    if (valueDiff < this.deps.config.algorithm.feedback.valueDelta) {
+      return {
+        contextHash: burst.contextHash,
+        skipped: true,
+        reason: "value-delta-low"
+      };
+    }
+
+    const deferDecisionRepair = this.deps.shouldDeferBudgetedEvolutionLlm?.() === true;
+    const llmDraft = deferDecisionRepair
+      ? undefined
+      : await this.maybeSynthesizeFailureBurstDecisionRepair(burst, reason, evidence);
+    // The observation transaction has already committed. Re-enter admission for
+    // this post-model write, keeping the repair, episode link and jobs atomic.
+    return this.writeTransaction(() => this.persistFailureBurstRepair(input, evidence, valueDiff, llmDraft, deferDecisionRepair));
+  }
+
+  private persistFailureBurstRepair(
+    input: { burst: ToolFailureBurst; session: SessionRecord; episode: EpisodeRecord; rawTurn: RawTurnRecord; reason: string; at: string },
+    evidence: ReturnType<SessionTurnService["failureBurstRepairEvidence"]>, valueDiff: number,
+    llmDraft: Awaited<ReturnType<SessionTurnService["maybeSynthesizeFailureBurstDecisionRepair"]>>,
+    deferDecisionRepair: boolean
+  ): DecisionRepairSummary {
+    const { burst, session, episode, rawTurn, reason, at } = input;
+    const preference = llmDraft?.preference ?? failureBurstPreference(burst, reason, evidence.highValueMemories[0]);
+    const antiPattern = llmDraft?.antiPattern ?? failureBurstAntiPattern(burst, reason);
+    const repair = this.deps.repos.runtime.insertDecisionRepair({
+      id: newId("repair"),
+      sessionId: session.id,
+      episodeId: episode.id,
+      rawTurnId: rawTurn.id,
+      userId: DEVICE_MEMORY_OWNER,
+      projectId: session.projectId ?? session.workspaceId,
+      contextHash: burst.contextHash,
+      issue: `Repeated ${burst.toolId} failure: ${clip(reason, 180)}`,
+      suggestion: preference,
+      preference,
+      antiPattern,
+      highValueMemoryIds: evidence.highValueMemories.map((memory) => memory.id),
+      lowValueMemoryIds: evidence.lowValueMemories.map((memory) => memory.id),
+      attachedPolicyMemoryIds: [],
+      validated: false,
+      source: {
+        source: "tools.observe.decision_repair.v7",
+        trigger: "failure-burst",
+        ...(llmDraft ? { synthesis: "llm" } : {}),
+        burst: {
+          toolId: burst.toolId,
+          context: burst.context,
+          contextHash: burst.contextHash,
+          failureCount: burst.failureCount,
+          failures: burst.occurrences.map((failure) => ({
+            step: failure.step,
+            reason: failure.reason,
+            rawTurnId: failure.rawTurnId
+          }))
+        }
+      },
+      meta: {
+        trigger: "failure-burst",
+        severity: llmDraft?.severity ?? "warn",
+        confidence: llmDraft?.confidence ??
+          (evidence.highValueMemories.length > 0 && evidence.lowValueMemories.length > 0 ? 0.6 : 0.4),
+        valueDiff
+      },
+      createdAt: at
+    });
+    this.deps.repos.runtime.appendEpisodeDecisionRepair(episode.id, repair.id, at);
+    this.deps.repos.runtime.appendChange({
+      memoryId: repair.id,
+      namespaceId: this.deps.namespaceIdFromSession(session),
+      userId: DEVICE_MEMORY_OWNER,
+      kind: "repair",
+      op: "created",
+      entityId: repair.id,
+      changeType: "decision_repair_created",
+      after: repair,
+      source: "tools.observe.decision_repair.v7",
+      createdAt: at
+    });
+    this.deps.enqueueJob({
+      jobType: "negative_experience",
+      userId: DEVICE_MEMORY_OWNER,
+      sessionId: session.id,
+      episodeId: episode.id,
+      payload: {
+        source: "tool_failure_burst",
+        sourceEventId: repair.id,
+        repairId: repair.id,
+        triggerCondition: `${burst.toolId}:${burst.context}`,
+        confidence: repair.meta.confidence
+      },
+      createdAt: at
+    });
+    if (deferDecisionRepair) {
+      this.deps.enqueueJob({
+        jobType: "decision_repair",
+        userId: DEVICE_MEMORY_OWNER,
+        sessionId: session.id,
+        episodeId: episode.id,
+        dedupeKey: `decision_repair:${repair.id}`,
+        payload: {
+          repairId: repair.id,
+          trigger: "failure-burst",
+          feedbackText: `${burst.toolId}: ${reason}`
+        },
+        createdAt: at
+      });
+    }
+    return {
+      repairId: repair.id,
+      contextHash: burst.contextHash,
+      skipped: false,
+      attachedPolicyIds: []
+    };
+  }
+
+  private failureBurstRepairEvidence(input: {
+    session: SessionRecord;
+    toolId: string;
+    reason: string;
+    limit: number;
+  }): {
+    highValueMemories: MemoryRow[];
+    lowValueMemories: MemoryRow[];
+  } {
+    const query = `${input.toolId}\n${input.reason}`;
+    const policies = this.deps.repos.memories.search(
+      query,
+      {
+        memoryLayer: "L2",
+        status: "activated"
+      },
+      input.limit
+    );
+    const policyIds = policies.map((policy) => policy.id);
+    const l1Hits = this.deps.repos.memories.search(
+      query,
+      {
+        memoryLayer: "L1",
+        status: "activated"
+      },
+      input.limit * 4
+    );
+    const highValueMemories: MemoryRow[] = [];
+    const lowValueMemories: MemoryRow[] = [];
+    for (const hit of l1Hits) {
+      const memory = this.deps.repos.memories.get(hit.id);
+      if (!memory) continue;
+      const trace = this.deps.traceMeta(memory);
+      if (!trace) continue;
+      if (trace.value > 0 && highValueMemories.length < input.limit) {
+        highValueMemories.push(memory);
+      }
+      if (
+        trace.value < -this.deps.config.algorithm.feedback.minLowValueThreshold &&
+        lowValueMemories.length < input.limit
+      ) {
+        lowValueMemories.push(memory);
+      }
+    }
+    for (const policy of this.deps.repos.memories.getMany(policyIds)) {
+      const meta = policyMetaFromMemory(policy);
+      if (!meta) continue;
+      for (const memory of this.deps.repos.memories.getMany(meta.sourceTraceIds)) {
+        const trace = this.deps.traceMeta(memory);
+        if (!trace) continue;
+        if (trace.value > 0 && highValueMemories.length < input.limit && !highValueMemories.some((item) => item.id === memory.id)) {
+          highValueMemories.push(memory);
+        }
+        if (
+          trace.value < -this.deps.config.algorithm.feedback.minLowValueThreshold &&
+          lowValueMemories.length < input.limit &&
+          !lowValueMemories.some((item) => item.id === memory.id)
+        ) {
+          lowValueMemories.push(memory);
+        }
+      }
+    }
+    return {
+      highValueMemories,
+      lowValueMemories
+    };
+  }
+
+  private async maybeSynthesizeFailureBurstDecisionRepair(
+    burst: ToolFailureBurst,
+    reason: string,
+    evidence: {
+      highValueMemories: MemoryRow[];
+      lowValueMemories: MemoryRow[];
+    }
+  ): Promise<DecisionRepairLlmDraft | undefined> {
+    return this.deps.synthesizeDecisionRepairDraft({
+      trigger: "failure-burst",
+      contextHash: burst.contextHash,
+      feedbackText: `${burst.toolId}: ${reason}`,
+      classification: {
+        shape: "negative",
+        confidence: 0.6,
+        avoid: reason,
+        text: reason
+      },
+      highValue: this.deps.decisionRepairTraceSources(evidence.highValueMemories),
+      lowValue: this.deps.decisionRepairTraceSources(evidence.lowValueMemories),
+      traceCharCap: this.deps.config.algorithm.feedback.traceCharCap
+    });
+  }
+
+  subagentStart(input: SubagentStartRequest): {
+    ok: true;
+    eventId: string;
+    childSessionId?: string;
+    rawTurnId: string;
+    changeSeq: number;
+    syncCursor: string;
+    serverTime: string;
+  } {
+    if (!this.deps.memoryAddEnabled()) {
+      return this.deps.subagentStartNoWrite(input);
+    }
+    const session = this.deps.requireOpenSession(input.sessionId);
+    this.deps.assertSessionInScope(session, input.namespace);
+    const episode = this.captureEpisode(session, input.episodeId);
+    const at = nowIso();
+    const metadata = input.metadata ?? {};
+    const subagentId = input.subagentId ?? newId("subagent");
+    const rawTurnId = newId("raw");
+    const turnId = `subagent:start:${subagentId}:${rawTurnId.slice("raw_".length, "raw_".length + 12)}`;
+    const rawTurn = this.deps.repos.runtime.insertRawTurn({
+      id: rawTurnId,
+      sessionId: session.id,
+      episodeId: episode?.id,
+      turnId,
+      userId: DEVICE_MEMORY_OWNER,
+      conversationId: session.conversationId,
+      userText: input.task,
+      toolCalls: [],
+      toolResults: [],
+      sourceMemoryIds: [],
+      usage: {},
+      messagePayload: {
+        captured_memory_ids: [],
+        subagentStart: {
+          subagentId,
+          task: input.task,
+          metadata
+        }
+      },
+      status: "started",
+      createdAt: at
+    });
+    if (episode) this.deps.repos.runtime.appendEpisodeRawTurn(episode?.id, rawTurn.id, at);
+    this.queueAssignment(this.deps.repos.runtime.getRawTurn(rawTurn.id)!);
+    const changeSeq = this.deps.repos.runtime.appendChange({
+      memoryId: rawTurn.id,
+      namespaceId: this.deps.namespaceIdFromSession(session),
+      kind: "raw_turn",
+      op: "created",
+      entityId: rawTurn.id,
+      userId: DEVICE_MEMORY_OWNER,
+      changeType: "raw_turn_created",
+      after: rawTurn,
+      source: "subagent.start",
+      createdAt: at
+    });
+    const eventId = this.deps.repos.runtime.insertArtifact({
+      sessionId: session.id,
+      episodeId: episode?.id,
+      rawTurnId: rawTurn.id,
+      userId: DEVICE_MEMORY_OWNER,
+      kind: "subagent_start",
+      payload: {
+        subagentId,
+        task: input.task,
+        metadata
+      },
+      createdAt: at
+    });
+    this.deps.repos.runtime.insertAudit({
+      userId: DEVICE_MEMORY_OWNER,
+      sessionId: session.id,
+      actor: input.namespace ? { ...input.namespace } : {},
+      action: "subagent_start",
+      targetKind: "raw_turn",
+      targetId: rawTurn.id,
+      meta: { subagentId },
+      createdAt: at
+    });
+    return {
+      ok: true,
+      eventId,
+      rawTurnId: rawTurn.id,
+      changeSeq,
+      syncCursor: this.deps.encodeChangeCursor(changeSeq, namespaceForSession(session)),
+      serverTime: nowIso()
+    };
+  }
+
+  subagentComplete(input: SubagentCompleteRequest): CompleteTurnResponse {
+    const metadata = input.metadata ?? {};
+    const subagentId = input.subagentId ?? "subagent";
+    const turnId = `subagent:complete:${subagentId}:${stableHash(stableStringify(input.result ?? input.summary ?? "")).slice(0, 12)}`;
+    const result = this.completeTurn(turnId, {
+      adapterId: input.adapterId,
+      requestId: input.requestId,
+      namespace: input.namespace,
+      sessionId: input.sessionId,
+      query: `Subagent ${subagentId} completed.`,
+      answer: input.result ?? input.summary ?? "Subagent completed.",
+      status: input.status ?? "succeeded",
+    });
+    const rawTurn = this.deps.repos.runtime.getRawTurn(result.rawTurnId);
+    if (rawTurn) {
+      const at = nowIso();
+      const nextRawTurn = {
+        ...rawTurn,
+        messagePayload: {
+          ...(rawTurn.messagePayload ?? {}),
+          subagentComplete: {
+            subagentId,
+            summary: input.summary,
+            metadata
+          }
+        }
+      };
+      const updatedRawTurn = this.deps.repos.runtime.updateRawTurn(nextRawTurn);
+      if (stableHash(rawTurn) !== stableHash(updatedRawTurn)) {
+        const session = this.deps.repos.runtime.getSession(updatedRawTurn.sessionId);
+        const cursorNamespace = session ? namespaceForSession(session) : namespaceForRawTurn(updatedRawTurn);
+        const changeSeq = this.deps.repos.runtime.appendChange({
+          memoryId: updatedRawTurn.id,
+          namespaceId: this.deps.namespaceIdFromContext(cursorNamespace),
+          kind: "raw_turn",
+          op: "updated",
+          entityId: updatedRawTurn.id,
+          userId: updatedRawTurn.userId,
+          changeType: "raw_turn_update",
+          before: rawTurn,
+          after: updatedRawTurn,
+          source: "subagent.complete",
+          createdAt: at
+        });
+        return {
+          ...result,
+          changeSeq,
+          syncCursor: this.deps.encodeChangeCursor(changeSeq, cursorNamespace),
+          etag: stableHash({
+            etag: result.etag,
+            rawTurnId: updatedRawTurn.id,
+            changeSeq
+          }),
+          serverTime: nowIso()
+        };
+      }
+    }
+    return result;
+  }
+
+  async repairSuggestion(input: RepairSuggestionRequest): Promise<{
+    suggestedAction: "none" | "append_hint" | "replacement_suggestion";
+    appendHint?: {
+      content: string;
+      sourceMemoryIds: string[];
+    };
+    replacementSuggestion?: {
+      content: string;
+      sourceMemoryIds: string[];
+    };
+    reason?: string;
+    sourceMemoryIds: string[];
+  }> {
+    if (!this.deps.memorySearchEnabled()) {
+      return {
+        suggestedAction: "none",
+        reason: "memory_search:disabled",
+        sourceMemoryIds: []
+      };
+    }
+    const session = this.deps.requireOpenSession(input.sessionId);
+    this.deps.assertSessionInScope(session, input.namespace);
+    const episode = this.deps.repos.runtime.latestEpisodeForSession(input.sessionId);
+    const contextHash = input.toolName && episode
+      ? toolRepairContextHash(input.toolName, toolRepairContext(session, episode))
+      : undefined;
+    const query = buildRepairSuggestionQuery(input);
+    const repairLayers = retrievalLayersForMode("decision_repair");
+    const filter = {memoryLayer: repairLayers, status: ["activated", "resolving"] as MemoryRow["status"][]};
+    const excluded = new Set<string>();
+    let candidates: MemoryRow[] = [];
+    const deadline = Date.now() + 5_000;
+    while (candidates.length < 500 && excluded.size < 10_000 && Date.now() < deadline) {
+      const batch = this.deps.repos.memories.list({...filter, excludedIds: [...excluded]}, Math.min(500,10_000-excluded.size));
+      const fresh = batch.filter(memory => !excluded.has(memory.id));
+      if (!fresh.length) break;
+      for (const memory of fresh) excluded.add(memory.id);
+      candidates = deduplicateCrossAccountMemoryCandidates({
+        memories: [...candidates,...fresh.filter(memory => this.deps.isMemoryReadyForRetrieval(memory))],
+        repos: this.deps.repos
+      }).memories;
+      if (batch.length < Math.min(500,10_000-(excluded.size-fresh.length))) break;
+      await yieldToIO();
+    }
+    const retrieval = retrievePluginMemories({
+      query,
+      queryVector: await this.deps.queryVector(query),
+      memories: candidates,
+      mode: "decision_repair",
+      layers: repairLayers,
+      limit: 5,
+      config: this.deps.retrievalTuningConfig()
+    });
+    const expected = new Map(candidates.map(memory => [memory.id,memory]));
+    const revision = (memory: MemoryRow) => JSON.stringify([memory.userId,memory.version,memory.memoryValue,memory.info,memory.properties,memory.tags]);
+    const retrievedMemories = this.deps.repos.memories.getMany(retrieval.hits.map((hit) => hit.id))
+      .filter(memory => expected.has(memory.id) && (memory.status === "activated" || memory.status === "resolving") &&
+        revision(memory) === revision(expected.get(memory.id)!));
+    const policyMemories = retrievedMemories.filter((memory) => memory.memoryLayer === "L2");
+    const retrievedMemoryById = new Map(retrievedMemories.map((memory) => [memory.id, memory]));
+    const policyGuidance = policyMemories.flatMap((memory) => {
+      const policy = policyMetaFromMemory(memory);
+      if (!policy) return [];
+      return [
+        ...policy.decisionGuidance.preference,
+        ...policy.decisionGuidance.antiPattern,
+        policy.procedure ? `Related policy: ${clip(policy.procedure, 220)}` : undefined
+      ].filter((item): item is string => Boolean(item));
+    });
+    const retrievalGuidance = retrieval.hits
+      .filter((hit) => retrievedMemoryById.has(hit.id) && !policyMemories.some((memory) => memory.id === hit.id))
+      .map((hit) => {
+        const memory = retrievedMemoryById.get(hit.id);
+        const trace = memory ? traceMetaFromMemory(memory) : null;
+        const toolText = trace?.toolCalls
+          .map((call) => [
+            call.name,
+            this.deps.stringifyForMemory(call.input),
+            this.deps.stringifyForMemory(call.output),
+            call.error
+          ].filter(Boolean).join(" "))
+          .join("\n");
+        const snippet = memory
+          ? firstDetailDisplayString(toolText, memory.memoryValue, detailSummaryForMemory(memory), hit.snippet)
+          : hit.snippet;
+        return `Relevant ${hit.kind}: ${clip(snippet ?? "", 500)}`;
+      });
+    const repairs = contextHash
+      ? this.deps.repos.runtime.listDecisionRepairs({
+          userId: DEVICE_MEMORY_OWNER,
+          contextHash,
+          limit: 5
+        })
+      : [];
+    const repairGuidance = repairs.flatMap((repair) => [
+      repair.preference,
+      repair.antiPattern
+    ].filter((item): item is string => Boolean(item)));
+    const hint = uniq([
+      ...repairGuidance,
+      ...policyGuidance,
+      ...retrievalGuidance
+    ]).join("\n");
+    const retrievedRawTurnIds = new Set(
+      retrievedMemories
+        .map((memory) => this.deps.rawTurnIdFromMemory(memory))
+        .filter((id): id is string => Boolean(id))
+    );
+    const siblingCandidates = candidates.filter(memory => memory.memoryLayer === "L1" &&
+      retrievedRawTurnIds.has(this.deps.rawTurnIdFromMemory(memory) ?? ""));
+    const retrievedSiblingTraceIds = this.deps.repos.memories.getMany(siblingCandidates.map(memory => memory.id))
+      .filter(memory => expected.has(memory.id) && (memory.status === "activated" || memory.status === "resolving") &&
+        revision(memory) === revision(expected.get(memory.id)!)).map(memory => memory.id);
+    const sourceMemoryIds = uniq([
+      ...retrievedMemories.flatMap((memory) => this.deps.retrievedMemorySourceIds(memory)),
+      ...retrievedSiblingTraceIds,
+      ...repairs.flatMap((repair) => repair.attachedPolicyMemoryIds),
+      ...repairs.flatMap((repair) => repair.highValueMemoryIds)
+    ]);
+    return {
+      suggestedAction: hint ? "append_hint" : "none",
+      appendHint: hint ? {
+        content: hint,
+        sourceMemoryIds
+      } : undefined,
+      reason: repairGuidance.length > 0
+        ? "matched decision repair guidance"
+        : policyGuidance.length > 0
+          ? "matched L2 repair policies"
+            : retrievalGuidance.length > 0
+              ? "matched decision repair retrieval"
+              : "no repair guidance found",
+      sourceMemoryIds
+    };
+  }
+
+  private captureEpisodeIncrementalSteps(
+    episode: EpisodeRecord | undefined,
+    currentRawTurn: RawTurnRecord,
+    at: string,
+    currentTurnOnly = false
+  ): ReturnType<typeof captureTurnSteps> {
+    const seenRawTurnIds = currentTurnOnly
+      ? new Set<string>()
+      : new Set(
+          (episode?.l1MemoryIds ?? [])
+            .map((id) => this.deps.repos.memories.getIncludingDeleted(id))
+            .filter((memory): memory is MemoryRow => Boolean(memory))
+            .map((memory) => this.deps.rawTurnIdFromMemory(memory))
+            .filter((id): id is string => Boolean(id))
+        );
+    const rawTurns = uniq(currentTurnOnly ? [currentRawTurn.id] : [...(episode?.rawTurnIds ?? []), currentRawTurn.id])
+      .map((id) => id === currentRawTurn.id ? currentRawTurn : this.deps.repos.runtime.getRawTurn(id))
+      .filter((rawTurn): rawTurn is RawTurnRecord =>
+        Boolean(rawTurn && (rawTurn.id === currentRawTurn.id || !seenRawTurnIds.has(rawTurn.id)))
+      )
+      .filter((rawTurn) => isRecord(rawTurn.messagePayload?.turn_complete))
+      // A bare end-topic command has nothing to remember. Any other end_topic turn can still
+      // carry feedback or instructions, so it goes through the same capture decision.
+      .filter((rawTurn) => this.turnJudgeRouting() || !explicitEndTopicDecision(rawTurn.userText ?? ""))
+      .filter((rawTurn) => this.deps.llm.isConfigured() || !rawTurnIsExcludedFromL1(rawTurn))
+      .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+    return rawTurns.flatMap((rawTurn) =>
+      captureTurnSteps({
+        episodeId: episode?.id,
+        sessionId: rawTurn.sessionId,
+        turnId: rawTurn.turnId,
+        userText: rawTurn.userText ?? "",
+        assistantText: rawTurn.assistantText ?? "",
+        reasoningSummary: rawTurn.reasoningSummary,
+        toolCalls: rawTurn.toolCalls.filter(isToolCallPayload),
+        toolResults: rawTurn.toolResults,
+        createdAtIso: rawTurn.createdAt || at,
+        timeZone: stringFromMaybeRecord(rawTurn.messagePayload, "time_zone") ??
+          stringFromMaybeRecord(rawTurn.messagePayload?.turn_complete, "time_zone"),
+        maxTextChars: this.deps.config.algorithm.capture.maxTextChars,
+        maxToolOutputChars: this.deps.config.algorithm.capture.maxToolOutputChars
+      }).map((step) => ({ ...step, rawTurnId: rawTurn.id }))
+    );
+  }
+
+  private captureUserMemory(
+    rawTurn: RawTurnRecord,
+    request: TurnCompleteRequest,
+    at: string
+  ): { memoryIds: string[]; jobs: EvolutionJobRecord[] } {
+    const correction = request.userMemoryCorrection;
+    if (correction) {
+      const target = this.deps.repos.userMemories.get(correction.targetMemoryId);
+      if (!target || target.status !== "active") {
+        throw new MemoryServiceError("not_found", `active user memory not found: ${correction.targetMemoryId}`);
+      }
+      const content = correction.revisedContent.trim();
+      const memoryTypes = classifyUserMemory(content);
+      if (!content || memoryTypes.length === 0) {
+        throw new MemoryServiceError("invalid_argument", "user memory correction requires complete revised user content");
+      }
+      const replacement = buildUserMemory({
+        id: `user_memory_${stableHash(`${rawTurn.id}:${target.id}:${content}`).slice(0, 20)}`,
+        sourceTurnId: rawTurn.id,
+        userId: rawTurn.userId,
+        memoryTypes,
+        content,
+        createdAt: at,
+        replacesMemoryId: target.id
+      });
+      if (replacement.normalizedUserTextHash === target.normalizedUserTextHash) {
+        throw new MemoryServiceError("invalid_argument", "user memory correction must change the target content");
+      }
+      const upsert = this.deps.repos.userMemories.upsertExact(replacement);
+      const inserted = upsert.memory;
+      const archived = this.deps.repos.userMemories.archiveForCorrection(target.id, inserted.id, at);
+      this.appendUserMemoryChange(
+        inserted,
+        upsert.previous,
+        upsert.created ? "created" : "updated",
+        at
+      );
+      if (archived) this.appendUserMemoryChange(archived, target, "archived", at);
+      return {
+        memoryIds: [inserted.id],
+        jobs: upsert.created ? this.userMemoryEmbeddingJobs(inserted, rawTurn, at) : []
+      };
+    }
+
+    if (this.deps.llm.isConfigured()) return { memoryIds: [], jobs: [] };
+
+    const content = rawTurn.userText?.trim() ?? "";
+    const memoryTypes = classifyUserMemory(content);
+    if (memoryTypes.length === 0) return { memoryIds: [], jobs: [] };
+    const candidate = buildUserMemory({
+      id: `user_memory_${stableHash(`${rawTurn.id}:${content}`).slice(0, 20)}`,
+      sourceTurnId: rawTurn.id,
+      userId: rawTurn.userId,
+      memoryTypes,
+      content,
+      createdAt: at
+    });
+    const upsert = this.deps.repos.userMemories.upsertExact(candidate);
+    this.appendUserMemoryChange(
+      upsert.memory,
+      upsert.previous,
+      upsert.created ? "created" : "updated",
+      at
+    );
+    return {
+      memoryIds: [upsert.memory.id],
+      jobs: upsert.created ? this.userMemoryEmbeddingJobs(upsert.memory, rawTurn, at) : []
+    };
+  }
+
+  private userMemoryEmbeddingJobs(
+    memory: { id: string; userId: string; content: string },
+    rawTurn: RawTurnRecord,
+    at: string
+  ): EvolutionJobRecord[] {
+    if (!this.deps.config.algorithm.capture.embedAfterCapture) return [];
+    return [this.deps.enqueueJob({
+      jobType: "user_memory_embedding",
+      userId: memory.userId,
+      sessionId: rawTurn.sessionId,
+      episodeId: rawTurn.episodeId,
+      targetMemoryId: memory.id,
+      payload: { contentHash: stableHash(memory.content) },
+      maxAttempts: 6,
+      createdAt: at
+    })];
+  }
+
+  private appendUserMemoryChange(
+    memory: { id: string; userId: string },
+    before: unknown,
+    op: "created" | "updated" | "archived",
+    at: string
+  ): void {
+    this.deps.repos.runtime.appendChange({
+      memoryId: memory.id,
+      kind: "user_memory",
+      op,
+      entityId: memory.id,
+      userId: memory.userId,
+      changeType: `user_memory_${op}`,
+      before,
+      after: memory,
+      source: "turn.complete.user_memory",
+      createdAt: at
+    });
+  }
+
+  private buildTurnRouteProposal(
+    latest: EpisodeRecord | undefined,
+    decision: TurnRelationDecision,
+    lastTurnAtMs?: number,
+    proposedAt = nowIso()
+  ): TurnRouteProposal {
+    const mergeMode = this.deps.config.algorithm.session.followUpMode === "merge_follow_ups";
+    const proposedAtMs = Date.parse(proposedAt);
+    const gapMs = lastTurnAtMs
+      ? Math.max(0, (Number.isFinite(proposedAtMs) ? proposedAtMs : Date.now()) - lastTurnAtMs)
+      : 0;
+    const withinMergeWindow =
+      this.deps.config.algorithm.session.mergeMaxGapMs === 0 ||
+      gapMs <= this.deps.config.algorithm.session.mergeMaxGapMs;
+    const shouldAppendOpen =
+      mergeMode &&
+      withinMergeWindow &&
+      (decision.relation === "revision" ||
+        decision.relation === "follow_up" ||
+        decision.relation === "unknown");
+    const shouldReopenClosed = latest !== undefined && latest.meta.closeReason !== "end_topic" && (
+      decision.relation === "revision" ||
+      (mergeMode &&
+        withinMergeWindow &&
+        (decision.relation === "follow_up" || decision.relation === "unknown"))
+    );
+    const action: TurnRouteAction = decision.relation === "end_topic"
+      ? "end_topic"
+      : !latest
+        ? "create_first"
+        : latest.status === "open"
+          ? (shouldAppendOpen ? "append" : "split")
+          : (shouldReopenClosed ? "append" : "split");
+    return {
+      action,
+      ...(latest ? { baseEpisodeId: latest.id } : {}),
+      relationDecision: decision,
+      proposedAt,
+      mergeMode,
+      withinMergeWindow,
+      gapMs
+    };
+  }
+
+  // Applies a turn.judge.v1 judgment inside the capture job's transaction:
+  // files the turn by its relation to the task it was judged against, and
+  // records its attitude on the previous result. The caller finalizes the
+  // returned closed episodes after the transaction commits.
+  applyTurnJudgment(input: {
+    rawTurnId: string;
+    relation: "follow_up" | "new_task" | "end_topic" | null;
+    feedback: "positive" | "negative" | "neutral" | null;
+    reason: string;
+    filedByRule?: string;
+    baseEpisodeId?: string;
+    previousRawTurnId?: string;
+    previousL1MemoryId?: string;
+    at: string;
+  }): { affectedEpisodeIds: string[]; jobs: EvolutionJobRecord[] } {
+    const rawTurn = this.deps.repos.runtime.getRawTurn(input.rawTurnId);
+    const session = rawTurn ? this.deps.repos.runtime.getSession(rawTurn.sessionId) : undefined;
+    // The episode-per-turn mode keeps its own routing and feedback.
+    if (!rawTurn || !session || !this.turnJudgeRouting()) return { affectedEpisodeIds: [], jobs: [] };
+    const assignment = isRecord(rawTurn.messagePayload?.episode_assignment) ? rawTurn.messagePayload.episode_assignment : undefined;
+    if (assignment && assignment.status !== "applying" && assignment.status !== "assigned") {
+      this.deps.repos.runtime.updateRawTurn({ ...rawTurn, messagePayload: {
+        ...rawTurn.messagePayload, episode_assignment: { ...assignment, judgment: input }
+      } });
+      return { affectedEpisodeIds: [], jobs: [] };
+    }
+    const affected = new Set<string>();
+    const jobs: EvolutionJobRecord[] = [];
+    const decision: TurnRelationDecision | undefined = input.relation
+      ? { relation: input.relation, reason: input.reason, signals: ["llm", TURN_JUDGE_PROMPT_VERSION] }
+      : undefined;
+    let route: Record<string, unknown> = { action: "filed_by_rule" };
+    const turnStartSelection = isRecord(rawTurn.messagePayload?.turn_start) ? rawTurn.messagePayload.turn_start.episodeSelection : undefined;
+    const selectedBeforeCapture = isRecord(turnStartSelection) && turnStartSelection.episodeId === rawTurn.episodeId;
+    if (this.deps.repos.runtime.sessionHasJudgedTurnAfter(rawTurn.id)) {
+      route = { action: "kept", reason: "later_turn_already_judged", episodeId: rawTurn.episodeId };
+    } else if (selectedBeforeCapture && (decision?.relation === "new_task" || input.filedByRule === "previous_task_closed")) {
+      route = { action: "selected_before_capture", episodeId: rawTurn.episodeId };
+    } else if (input.filedByRule === "previous_task_closed") {
+      route = this.startTaskAfterClosedOne(session, rawTurn, input.at, affected);
+    } else if (decision && input.baseEpisodeId) {
+      route = this.deps.repos.runtime.sessionHasJudgedTurnAfter(rawTurn.id)
+        ? { action: "kept", reason: "later_turn_already_judged", episodeId: rawTurn.episodeId }
+        : this.routeJudgedTurn(session, rawTurn, decision, input.baseEpisodeId, input.at, affected, jobs);
+    }
+    if (input.feedback && input.previousRawTurnId) {
+      this.recordTurnJudgeFeedback(session, rawTurn, input.feedback, input.reason, input.previousRawTurnId, input.previousL1MemoryId, input.at, jobs);
+    }
+    // Freeze only after routing and feedback persistence. A batch is an immutable
+    // evidence snapshot: feedback saved afterwards cannot be picked up by it.
+    if (decision?.relation === "new_task" && input.baseEpisodeId &&
+        session.meta.l3_world_model_protocol_version === 2 &&
+        route.reason !== "later_turn_already_judged") {
+      this.deps.repos.l3WorldModels.freezeBatches({ sessionId: session.id, trigger: "new_task",
+        episodeId: input.baseEpisodeId, at: input.at });
+    }
+    const current = this.deps.repos.runtime.getRawTurn(rawTurn.id) ?? rawTurn;
+    const turnStart = isRecord(current.messagePayload?.turn_start) ? current.messagePayload.turn_start : {};
+    const routeProposal = isRecord(turnStart.routeProposal) ? turnStart.routeProposal : undefined;
+    const turnJudge = isRecord(current.messagePayload?.turn_judge) ? current.messagePayload.turn_judge : {};
+    this.deps.repos.runtime.updateRawTurn({
+      ...current,
+      messagePayload: {
+        ...current.messagePayload,
+        ...(routeProposal && decision ? {
+          turn_start: { ...turnStart, routeProposal: { ...routeProposal, relationDecision: decision } }
+        } : {}),
+        turn_judge: { ...turnJudge, route }
+      }
+    });
+    return { affectedEpisodeIds: [...affected], jobs };
+  }
+
+  private routeJudgedTurn(
+    session: SessionRecord,
+    rawTurn: RawTurnRecord,
+    decision: TurnRelationDecision,
+    baseEpisodeId: string,
+    at: string,
+    affected: Set<string>,
+    jobs: EvolutionJobRecord[]
+  ): Record<string, unknown> {
+    const provisional: EpisodeRecord = this.deps.requireEpisode(rawTurn.episodeId);
+    const base = this.deps.repos.runtime.getEpisode(baseEpisodeId);
+    if (!base) return { action: "kept", reason: "base_episode_missing", episodeId: provisional.id };
+    let target: EpisodeRecord = provisional;
+    let action: string;
+    if (decision.relation === "follow_up") {
+      // The judged task is open: a closed one leaves TASK SO FAR empty and the
+      // turn is filed by rule (startTaskAfterClosedOne).
+      if (base.status === "open") {
+        target = base;
+        action = base.id === provisional.id ? "append" : "append_to_judged_task";
+      } else {
+        action = "keep_new_episode";
+      }
+    } else if (decision.relation === "new_task") {
+      if (base.status === "open") {
+        const closed = this.closeForJudgedTurn(session, base, {
+          closeReason: "topic_boundary",
+          relation: decision.relation,
+          relationDecision: decision,
+          relationRouting: { action: "close_open_and_start_new_task" },
+          closedBy: "turn.judge"
+        }, at);
+        if (closed) affected.add(closed.id);
+      }
+      action = "start_new_task_episode";
+      target = provisional.id !== base.id && provisional.status === "open"
+        ? provisional
+        : this.ensureEpisode(session, newId("episode"), at);
+      target = this.deps.repos.runtime.updateEpisodeMeta(target.id, {
+        relation: decision.relation,
+        relationDecision: decision,
+        previousEpisodeId: base.id,
+        relationRouting: { action }
+      }, at) ?? target;
+    } else {
+      target = base.status === "open" ? base : provisional;
+      action = "end_topic";
+    }
+    // A provisional episode may have been closed by an earlier judgment while
+    // this turn waited in it; a turn is never left in a closed episode it was
+    // not judged to end.
+    if (target.status !== "open" && !(decision.relation === "end_topic" && target.id === base.id)) {
+      target = this.ensureEpisode(session, newId("episode"), at);
+      target = this.deps.repos.runtime.updateEpisodeMeta(target.id, {
+        relation: decision.relation,
+        relationDecision: decision,
+        previousEpisodeId: base.id,
+        relationRouting: { action: "start_new_episode" }
+      }, at) ?? target;
+      action = `${action}_in_new_episode`;
+    }
+    if (target.id !== provisional.id) {
+      this.moveJudgedTurn(session, rawTurn, provisional.id, target.id, at);
+      affected.add(provisional.id);
+      affected.add(target.id);
+      const emptied = this.deps.repos.runtime.getEpisode(provisional.id);
+      if (emptied?.status === "open" && emptied.rawTurnIds.length === 0) {
+        this.closeForJudgedTurn(session, emptied, { closeReason: "emptied_by_turn_judge", closedBy: "turn.judge" }, at);
+      }
+    } else if (decision.relation !== "new_task") {
+      this.deps.repos.runtime.updateEpisodeMeta(target.id, {
+        relation: decision.relation,
+        relationDecision: decision,
+        relationRouting: { action }
+      }, at);
+    }
+    if (decision.relation === "end_topic") {
+      const ending: EpisodeRecord = this.deps.requireEpisode(target.id);
+      if (ending.status === "open") {
+        const closed = this.closeForJudgedTurn(session, ending, {
+          closeReason: "end_topic",
+          topicState: "ended",
+          relationDecision: decision,
+          endTopicTurnId: rawTurn.turnId,
+          closedBy: "turn.judge"
+        }, at);
+        if (closed) affected.add(closed.id);
+      }
+    }
+    void jobs;
+    return { action, fromEpisodeId: provisional.id, episodeId: target.id, baseEpisodeId: base.id };
+  }
+
+  // The previous turn's task was already closed when this turn was judged:
+  // the turn starts a new task by rule. It normally waits in a new provisional
+  // task already; if it was filed in the task that closed, it moves out.
+  private startTaskAfterClosedOne(
+    session: SessionRecord,
+    rawTurn: RawTurnRecord,
+    at: string,
+    affected: Set<string>
+  ): Record<string, unknown> {
+    const current: EpisodeRecord = this.deps.requireEpisode(rawTurn.episodeId);
+    const decision: TurnRelationDecision = {
+      relation: "new_task",
+      reason: "previous task closed",
+      signals: ["previous_task_closed"]
+    };
+    if (current.status === "open") {
+      this.deps.repos.runtime.updateEpisodeMeta(current.id, {
+        relation: decision.relation,
+        relationDecision: decision,
+        relationRouting: { action: "start_new_task_episode" }
+      }, at);
+      return { action: "filed_by_rule", reason: "previous_task_closed", episodeId: current.id };
+    }
+    const fresh = this.ensureEpisode(session, newId("episode"), at);
+    this.deps.repos.runtime.updateEpisodeMeta(fresh.id, {
+      relation: decision.relation,
+      relationDecision: decision,
+      previousEpisodeId: current.id,
+      relationRouting: { action: "start_new_task_episode" }
+    }, at);
+    this.moveJudgedTurn(session, rawTurn, current.id, fresh.id, at);
+    affected.add(current.id);
+    affected.add(fresh.id);
+    return { action: "start_new_task_episode", reason: "previous_task_closed", fromEpisodeId: current.id, episodeId: fresh.id };
+  }
+
+  private closeForJudgedTurn(
+    session: SessionRecord,
+    episode: EpisodeRecord,
+    meta: Record<string, unknown>,
+    at: string
+  ): EpisodeRecord | undefined {
+    const closed = this.deps.repos.runtime.closeEpisode(episode.id, meta, at);
+    if (!closed) return undefined;
+    this.deps.repos.runtime.appendChange({
+      memoryId: closed.id,
+      namespaceId: this.deps.namespaceIdFromSession(session),
+      kind: "episode",
+      op: "updated",
+      entityId: closed.id,
+      userId: closed.userId,
+      changeType: "episode_closed",
+      before: episode,
+      after: closed,
+      source: "turn.judge",
+      createdAt: at
+    });
+    return closed;
+  }
+
+  // Moves the turn with its L1 and every row tied to it (see moveTurnLinks).
+  private moveJudgedTurn(
+    session: SessionRecord,
+    rawTurn: RawTurnRecord,
+    fromEpisodeId: string,
+    toEpisodeId: string,
+    at: string
+  ): void {
+    const l1Memories = turnMigrationMemoryIds(this.deps.repos.db, rawTurn)
+      .map((id) => this.deps.repos.memories.getIncludingDeleted(id))
+      .filter((memory): memory is MemoryRow => Boolean(memory));
+    this.deps.repos.runtime.moveTurnLinks({
+      rawTurnId: rawTurn.id,
+      l1MemoryIds: l1Memories.map((memory) => memory.id),
+      fromEpisodeId,
+      toEpisodeId,
+      at
+    });
+    // The common transaction also updates spans and soft-deleted source metadata.
+    for (const memory of l1Memories) {
+      if (memory.deletedAt) continue;
+      const moved = this.deps.repos.memories.get(memory.id)!;
+      this.deps.repos.runtime.appendChange({
+        memoryId: moved.id,
+        namespaceId: this.deps.namespaceIdFromSession(session),
+        kind: "trace",
+        op: "updated",
+        entityId: moved.id,
+        userId: moved.userId,
+        changeType: "update",
+        before: memory,
+        after: moved,
+        source: "turn.judge.move",
+        createdAt: at
+      });
+    }
+  }
+
+  // The attitude of this turn to the previous result, written every turn
+  // (neutral too) on the episode that holds the previous turn, pointing at that
+  // turn and its L1. One record per judged turn: a retry does not add another.
+  private recordTurnJudgeFeedback(
+    session: SessionRecord,
+    rawTurn: RawTurnRecord,
+    attitude: "positive" | "negative" | "neutral",
+    reason: string,
+    previousRawTurnId: string,
+    previousL1MemoryId: string | undefined,
+    at: string,
+    jobs: EvolutionJobRecord[]
+  ): void {
+    const previous = this.deps.repos.runtime.getRawTurn(previousRawTurnId);
+    if (!previous) return;
+    const contextHash = stableHash({ source: TURN_JUDGE_PROMPT_VERSION, rawTurnId: rawTurn.id }).slice(0, 32);
+    const duplicate = this.deps.repos.runtime.listFeedback({ rawTurnId: previous.id, limit: 200 })
+      .some((feedback) => feedback.contextHash === contextHash);
+    if (duplicate) return;
+    const target = previousL1MemoryId ? this.deps.repos.memories.get(previousL1MemoryId) : undefined;
+    const feedback = this.deps.repos.runtime.insertFeedback({
+      id: newId("feedback"),
+      userId: DEVICE_MEMORY_OWNER,
+      projectId: session.projectId,
+      conversationId: session.conversationId,
+      sessionId: session.id,
+      episodeId: previous.episodeId,
+      ...(target ? { l1MemoryId: target.id } : {}),
+      rawTurnId: previous.id,
+      channel: "explicit",
+      polarity: attitude,
+      magnitude: attitude === "neutral" ? 0 : 1,
+      rationale: rawTurn.userText ?? "",
+      rawPayload: {
+        source: "turn_judge",
+        method: "llm",
+        promptVersion: TURN_JUDGE_PROMPT_VERSION,
+        feedback: attitude,
+        reason,
+        sourceRawTurnId: rawTurn.id
+      },
+      contextHash,
+      createdAt: at
+    });
+    this.deps.repos.runtime.appendEpisodeFeedback(previous.episodeId!, feedback.id, at);
+    if (attitude === "negative") {
+      jobs.push(this.deps.enqueueJob({
+        jobType: "decision_repair",
+        userId: DEVICE_MEMORY_OWNER,
+        sessionId: session.id,
+        episodeId: previous.episodeId,
+        payload: {
+          feedbackId: feedback.id,
+          contextHash,
+          namespaceId: this.deps.namespaceIdFromSession(session)
+        },
+        createdAt: at
+      }));
+    }
+    if (attitude !== "neutral") {
+      for (const trial of this.deps.pendingTrialsForFeedback(feedback)) {
+        jobs.push(this.deps.enqueueJob({
+          jobType: "skill_trial_resolve",
+          userId: DEVICE_MEMORY_OWNER,
+          sessionId: trial.sessionId,
+          episodeId: trial.episodeId,
+          payload: {
+            trialId: trial.id,
+            feedbackId: feedback.id,
+            targetKind: "skill_trial",
+            trigger: "turn_judge_feedback"
+          },
+          createdAt: at
+        }));
+      }
+    }
+    this.deps.repos.runtime.appendChange({
+      memoryId: target?.id ?? previous.id,
+      namespaceId: this.deps.namespaceIdFromSession(session),
+      kind: "feedback",
+      op: "created",
+      entityId: feedback.id,
+      userId: DEVICE_MEMORY_OWNER,
+      changeType: "feedback",
+      after: feedback,
+      source: "turn.judge",
+      createdAt: at
+    });
+  }
+
+  // turn.judge.v1 routing: on while the switch is on in the default merge mode.
+  // The episode-per-turn mode keeps its own routing.
+  private turnJudgeRouting(): boolean {
+    return this.deps.config.algorithm.session.turnJudge &&
+      this.deps.config.algorithm.session.followUpMode === "merge_follow_ups";
+  }
+
+  // Files a completed turn where it can go without a judgment: the episode the
+  // caller names, the episode an observed turn already sits in, the open
+  // episode, or a new one. The per-turn judgment moves it later if needed.
+  private attachTurnProvisionally(
+    session: SessionRecord,
+    turnId: string,
+    requestedEpisodeId: string | undefined,
+    existingRawTurn: RawTurnRecord | undefined,
+    at: string,
+    sourceStartedAt?: string
+  ): CommittedTurnRoute {
+    const latest = this.deps.repos.runtime.latestEpisodeForSession(session.id);
+    const proposal = provisionalTurnRouteProposal(latest, turnId, at);
+    const observed = existingRawTurn ? this.deps.repos.runtime.getEpisode(existingRawTurn.episodeId) : undefined;
+    let episode: EpisodeRecord;
+    if (requestedEpisodeId) {
+      episode = this.ensureEpisode(session, requestedEpisodeId);
+    } else if (observed?.status === "open") {
+      episode = observed;
+    } else {
+      episode = this.ensureEpisode(session, undefined, sourceStartedAt);
+      if (latest && episode.id !== latest.id) {
+        episode = this.deps.repos.runtime.updateEpisodeMeta(episode.id, {
+          previousEpisodeId: latest.id,
+          relation: "new_task",
+          relationRouting: { action: "selected_before_capture" }
+        }, at) ?? episode;
+      }
+    }
+    return {
+      episode,
+      closedEpisodeIds: [],
+      jobs: [],
+      proposal: { ...proposal, baseEpisodeId: proposal.baseEpisodeId ?? episode.id },
+      proposalStale: false
+    };
+  }
+
+  private proposeEpisodeRoute(
+    session: SessionRecord,
+    userText: string,
+    forcedDecision?: TurnRelationDecision,
+    at = nowIso()
+  ): TurnRouteProposal {
+    const latest = this.deps.repos.runtime.latestEpisodeForSession(session.id);
+    const relationContext = latest ? this.episodeRelationContext(latest) : undefined;
+    const decision = forcedDecision ?? classifyTurnRelation({
+      prevUserText: relationContext?.prevUserText ?? "",
+      prevAssistantText: relationContext?.prevAssistantText ?? "",
+      newUserText: userText,
+      gapMs: relationContext?.lastTurnAtMs
+        ? Math.max(0, Date.parse(at) - relationContext.lastTurnAtMs)
+        : undefined,
+      prevTags: relationContext?.tags ?? []
+    });
+    return this.buildTurnRouteProposal(latest, decision, relationContext?.lastTurnAtMs, at);
+  }
+
+  private async proposeEpisodeRouteWithLlm(
+    latest: EpisodeRecord | undefined,
+    userText: string,
+    forcedDecision?: TurnRelationDecision
+  ): Promise<TurnRouteProposal> {
+    const relationContext = latest ? this.episodeRelationContext(latest) : undefined;
+    if (forcedDecision || !latest || !relationContext?.prevUserText) {
+      const decision = forcedDecision ?? classifyTurnRelation({
+        prevUserText: relationContext?.prevUserText ?? "",
+        prevAssistantText: relationContext?.prevAssistantText ?? "",
+        newUserText: userText,
+        gapMs: relationContext?.lastTurnAtMs
+          ? Math.max(0, Date.now() - relationContext.lastTurnAtMs)
+          : undefined,
+        prevTags: relationContext?.tags ?? []
+      });
+      return this.buildTurnRouteProposal(latest, decision, relationContext?.lastTurnAtMs);
+    }
+    const decision = await classifyTurnRelationWithLlm({
+      prevUserText: relationContext.prevUserText,
+      prevAssistantText: relationContext.prevAssistantText,
+      newUserText: userText,
+      gapMs: relationContext.lastTurnAtMs
+        ? Math.max(0, Date.now() - relationContext.lastTurnAtMs)
+        : undefined,
+      prevTags: relationContext.tags
+    }, {
+      llm: this.deps.llm
+    });
+    return this.buildTurnRouteProposal(latest, decision, relationContext.lastTurnAtMs);
+  }
+
+  private persistTurnStartRouteProposal(searchEventId: string, routeProposal: TurnRouteProposal): void {
+    const recall = this.deps.repos.runtime.getRecallEvent(searchEventId);
+    if (!recall) return;
+    const request = isRecord(recall.request) ? recall.request : {};
+    this.deps.repos.runtime.updateRecallEventRequest(searchEventId, {
+      ...request,
+      routeProposal
+    });
+  }
+
+  private commitTurnRouteProposal(
+    session: SessionRecord,
+    proposal: TurnRouteProposal,
+    userText: string,
+    source: string,
+    at: string,
+    proposalStale: boolean,
+    sourceStartedAt?: string
+  ): CommittedTurnRoute {
+    const decision = proposal.relationDecision;
+    const closedEpisodeIds: string[] = [];
+    const jobs: EvolutionJobRecord[] = [];
+    if (proposal.action === "create_first") {
+      return {
+        episode: this.ensureEpisode(session, undefined, sourceStartedAt),
+        closedEpisodeIds,
+        jobs,
+        proposal,
+        proposalStale
+      };
+    }
+    if (proposal.action === "end_topic") {
+      const base = proposal.baseEpisodeId
+        ? this.deps.repos.runtime.getEpisode(proposal.baseEpisodeId)
+        : undefined;
+      const episode = base?.status === "open" ? base : this.ensureEpisode(session);
+      return {
+        episode,
+        endTopicDecision: decision as EndTopicDecision,
+        closedEpisodeIds,
+        jobs,
+        proposal,
+        proposalStale
+      };
+    }
+
+    const baseEpisodeId = proposal.baseEpisodeId;
+    if (!baseEpisodeId) {
+      throw new MemoryServiceError("conflict", "episode route proposal is missing its base episode");
+    }
+    const latest = this.deps.requireEpisode(baseEpisodeId);
+    if (proposal.action === "append") {
+      if (latest.status === "open") {
+        if (decision.relation === "revision") {
+          this.recordRevisionFeedback(session, latest, userText, source);
+        }
+        const episode = this.deps.repos.runtime.updateEpisodeMeta(latest.id, {
+          relation: decision.relation,
+          relationDecision: decision,
+          relationRouting: {
+            action: "append_to_open_episode",
+            mergeMode: proposal.mergeMode,
+            withinMergeWindow: proposal.withinMergeWindow,
+            gapMs: proposal.gapMs
+          }
+        }, at) ?? latest;
+        return { episode, closedEpisodeIds, jobs, proposal, proposalStale };
+      }
+      const reopened = this.deps.repos.runtime.reopenEpisode(latest.id, {
+        relation: decision.relation,
+        relationDecision: decision,
+        reopenedAt: at,
+        reopenReason: decision.relation === "revision" ? "revision" : "follow_up",
+        relationRouting: {
+          action: "reopen_previous_episode",
+          mergeMode: proposal.mergeMode,
+          withinMergeWindow: proposal.withinMergeWindow,
+          gapMs: proposal.gapMs
+        },
+        rewardDirty: {
+          reason: "episode_reopened",
+          reopenedFor: decision.relation,
+          at
+        }
+      }, at);
+      if (!reopened) {
+        throw new MemoryServiceError("conflict", "failed to reopen the proposed episode");
+      }
+      this.deps.repos.runtime.appendChange({
+        memoryId: reopened.id,
+        namespaceId: this.deps.namespaceIdFromSession(session),
+        kind: "episode",
+        op: "updated",
+        entityId: reopened.id,
+        userId: reopened.userId,
+        changeType: "episode_reopened",
+        before: latest,
+        after: reopened,
+        source,
+        createdAt: at
+      });
+      if (decision.relation === "revision") {
+        this.recordRevisionFeedback(session, reopened, userText, source);
+      }
+      return { episode: reopened, closedEpisodeIds, jobs, proposal, proposalStale };
+    }
+
+    this.recordImplicitTurnFeedback(session, latest, userText);
+    if (latest.status === "open") {
+      const closed = this.deps.repos.runtime.closeEpisode(latest.id, {
+        closeReason: "topic_boundary",
+        relation: decision.relation,
+        relationDecision: decision,
+        relationRouting: {
+          action: decision.relation === "new_task"
+            ? "close_open_and_start_new_task"
+            : "close_open_and_start_new_episode",
+          mergeMode: proposal.mergeMode,
+          withinMergeWindow: proposal.withinMergeWindow,
+          gapMs: proposal.gapMs
+        },
+        closedBy: source
+      }, at);
+      if (closed) {
+        this.deps.repos.runtime.appendChange({
+          memoryId: closed.id,
+          namespaceId: this.deps.namespaceIdFromSession(session),
+          kind: "episode",
+          op: "updated",
+          entityId: closed.id,
+          userId: closed.userId,
+          changeType: "episode_closed",
+          before: latest,
+          after: closed,
+          source,
+          createdAt: at
+        });
+        jobs.push(...this.deps.finalizeClosedEpisode(closed, at, "topic_boundary"));
+        closedEpisodeIds.push(closed.id);
+        if (decision.relation === "new_task" && session.meta.l3_world_model_protocol_version === 2) {
+          this.deps.repos.l3WorldModels.freezeBatches({
+            sessionId: session.id,
+            trigger: "new_task",
+            at
+          });
+        }
+      }
+    } else {
+      jobs.push(...this.deps.finalizeClosedEpisode(latest, at, "topic_boundary"));
+      if (decision.relation === "new_task" && session.meta.l3_world_model_protocol_version === 2) {
+        this.deps.repos.l3WorldModels.freezeBatches({
+          sessionId: session.id,
+          trigger: "new_task",
+          at
+        });
+      }
+    }
+    const next = this.ensureEpisode(session, undefined, sourceStartedAt);
+    const episode = this.deps.repos.runtime.updateEpisodeMeta(next.id, {
+      relation: decision.relation,
+      relationDecision: decision,
+      previousEpisodeId: latest.id,
+      relationRouting: {
+        action: decision.relation === "new_task" ? "start_new_task_episode" : "start_new_episode",
+        mergeMode: proposal.mergeMode,
+        withinMergeWindow: proposal.withinMergeWindow,
+        gapMs: proposal.gapMs
+      }
+    }, at) ?? next;
+    return { episode, closedEpisodeIds, jobs, proposal, proposalStale };
+  }
+
+  private episodeRelationContext(episode: EpisodeRecord): {
+    prevUserText: string;
+    prevAssistantText: string;
+    lastTurnAtMs?: number;
+    tags: string[];
+  } {
+    const relationTexts = this.deps.repos.runtime.episodeRelationTexts(episode.id, episode.rawTurnIds);
+    const firstUser = relationTexts.firstUser;
+    const lastUser = relationTexts.lastUser;
+    const lastAssistant = relationTexts.lastAssistant;
+    const prevUserText = firstUser && lastUser && firstUser !== lastUser
+      ? [
+          `[Task topic]: ${firstUser.slice(0, 300)}`,
+          `[Latest user message]: ${lastUser.slice(0, 700)}`
+        ].join("\n\n")
+      : (lastUser || firstUser).slice(0, 1000);
+    const tags = this.deps.repos.memories.listMemoryTags(episode.l1MemoryIds);
+    const lastTurnAtMs = relationTexts.lastCompletedAt ? Date.parse(relationTexts.lastCompletedAt) : undefined;
+    return {
+      prevUserText,
+      prevAssistantText: lastAssistant.slice(0, 2000),
+      lastTurnAtMs: Number.isFinite(lastTurnAtMs) ? lastTurnAtMs : undefined,
+      tags
+    };
+  }
+
+  private recordImplicitTurnFeedback(
+    session: SessionRecord,
+    episode: EpisodeRecord,
+    userText: string
+  ): void {
+    const target = this.deps.feedbackTargetFromEpisode(episode);
+    if (!target) return;
+    const rawTurnId = this.deps.rawTurnIdFromMemory(target);
+    const rawTurn = rawTurnId ? this.deps.repos.runtime.getRawTurn(rawTurnId) : undefined;
+    const trace = this.deps.traceMeta(target);
+    const classification = classifyTurnFeedback({
+      userText,
+      agentText: rawTurn?.assistantText ?? trace?.agentText
+    });
+    if (!classification.isFeedback || classification.confidence < 0.6) return;
+    const polarity = this.deps.polarityFromTurnFeedback(classification);
+    if (polarity === "neutral" && classification.magnitude <= 0) return;
+
+    const contextHash = stableHash({
+      source: "turn.feedback_classifier",
+      sessionId: session.id,
+      episodeId: episode.id,
+      l1MemoryId: target.id,
+      userText,
+      polarity,
+      method: classification.method
+    }).slice(0, 32);
+    const duplicate = this.deps.repos.runtime.listFeedback({
+      userId: DEVICE_MEMORY_OWNER,
+      sessionId: session.id,
+      episodeId: episode.id,
+      l1MemoryId: target.id,
+      limit: 20
+    }).some((feedback) => feedback.contextHash === contextHash);
+    if (duplicate) return;
+
+    const at = nowIso();
+    const rawPayload = {
+      source: "turn_feedback_classifier",
+      method: classification.method,
+      confidence: classification.confidence,
+      classifierPolarity: classification.polarity
+    };
+    const feedback = this.deps.repos.runtime.insertFeedback({
+      id: newId("feedback"),
+      userId: DEVICE_MEMORY_OWNER,
+      projectId: session.projectId,
+      conversationId: session.conversationId,
+      sessionId: session.id,
+      episodeId: episode.id,
+      l1MemoryId: target.id,
+      rawTurnId,
+      channel: "implicit",
+      polarity,
+      magnitude: classification.magnitude,
+      rationale: classification.rationale,
+      rawPayload,
+      contextHash,
+      createdAt: at
+    });
+    this.deps.repos.runtime.appendEpisodeFeedback(episode.id, feedback.id, at);
+    this.deps.enqueueJob({
+      jobType: "decision_repair",
+      userId: DEVICE_MEMORY_OWNER,
+      sessionId: session.id,
+      episodeId: episode.id,
+      payload: {
+        feedbackId: feedback.id,
+        contextHash,
+        namespaceId: this.deps.namespaceIdFromSession(session)
+      },
+      createdAt: at
+    });
+    for (const trial of this.deps.pendingTrialsForFeedback(feedback)) {
+      this.deps.enqueueJob({
+        jobType: "skill_trial_resolve",
+        userId: DEVICE_MEMORY_OWNER,
+        sessionId: trial.sessionId,
+        episodeId: trial.episodeId,
+        payload: {
+          trialId: trial.id,
+          feedbackId: feedback.id,
+          targetKind: "skill_trial",
+          trigger: "implicit_turn_feedback"
+        },
+        createdAt: at
+      });
+    }
+    this.deps.repos.runtime.appendChange({
+      memoryId: target.id,
+      namespaceId: this.deps.namespaceIdFromSession(session),
+      kind: "feedback",
+      op: "created",
+      entityId: feedback.id,
+      userId: DEVICE_MEMORY_OWNER,
+      changeType: "feedback",
+      after: feedback,
+      source: "turn.feedback_classifier",
+      createdAt: at
+    });
+  }
+
+  private recordRevisionFeedback(
+    session: SessionRecord,
+    episode: EpisodeRecord,
+    userText: string,
+    source: string
+  ): void {
+    const target = this.deps.feedbackTargetFromEpisode(episode);
+    if (!target) return;
+    const contextHash = stableHash({
+      source: "relation.revision",
+      sessionId: session.id,
+      episodeId: episode.id,
+      l1MemoryId: target.id,
+      userText
+    }).slice(0, 32);
+    const duplicate = this.deps.repos.runtime.listFeedback({
+      userId: DEVICE_MEMORY_OWNER,
+      sessionId: session.id,
+      episodeId: episode.id,
+      l1MemoryId: target.id,
+      limit: 20
+    }).some((feedback) => feedback.contextHash === contextHash);
+    if (duplicate) return;
+
+    const at = nowIso();
+    const rawTurnId = this.deps.rawTurnIdFromMemory(target);
+    const rawPayload = {
+      source: "relation_classifier",
+      relation: "revision"
+    };
+    const feedback = this.deps.repos.runtime.insertFeedback({
+      id: newId("feedback"),
+      userId: DEVICE_MEMORY_OWNER,
+      projectId: session.projectId,
+      conversationId: session.conversationId,
+      sessionId: session.id,
+      episodeId: episode.id,
+      l1MemoryId: target.id,
+      rawTurnId,
+      channel: "explicit",
+      polarity: "negative",
+      magnitude: 1,
+      rationale: userText,
+      rawPayload,
+      contextHash,
+      createdAt: at
+    });
+    this.deps.repos.runtime.appendEpisodeFeedback(episode.id, feedback.id, at);
+    this.deps.enqueueJob({
+      jobType: "decision_repair",
+      userId: DEVICE_MEMORY_OWNER,
+      sessionId: session.id,
+      episodeId: episode.id,
+      payload: {
+        feedbackId: feedback.id,
+        contextHash,
+        namespaceId: this.deps.namespaceIdFromSession(session)
+      },
+      createdAt: at
+    });
+    for (const trial of this.deps.pendingTrialsForFeedback(feedback)) {
+      this.deps.enqueueJob({
+        jobType: "skill_trial_resolve",
+        userId: DEVICE_MEMORY_OWNER,
+        sessionId: trial.sessionId,
+        episodeId: trial.episodeId,
+        payload: {
+          trialId: trial.id,
+          feedbackId: feedback.id,
+          targetKind: "skill_trial",
+          trigger: "revision_feedback"
+        },
+        createdAt: at
+      });
+    }
+    this.deps.repos.runtime.appendChange({
+      memoryId: target.id,
+      namespaceId: this.deps.namespaceIdFromSession(session),
+      kind: "feedback",
+      op: "created",
+      entityId: feedback.id,
+      userId: DEVICE_MEMORY_OWNER,
+      changeType: "feedback",
+      after: feedback,
+      source,
+      createdAt: at
+    });
+  }
+
+  private writeSelectionTitle(episode: EpisodeRecord, selection: EpisodeSelectionResult, at: string, selectionContext?: EpisodeSelectionContext): EpisodeRecord {
+    if (this.selectionScope) this.selectionScope.selectedEpisodeId = episode.id;
+    const context = selectionContext ?? this.selectionScope!.context;
+    const current = context.rawTurnId ? this.deps.repos.runtime.getRawTurn(context.rawTurnId) : undefined;
+    const before = current ? new Set(this.deps.repos.runtime.completedRawTurnsBefore(current.id).map(t => t.id)) : undefined;
+    const coveredUserTurns = episode.rawTurnIds.map(id => this.deps.repos.runtime.getRawTurn(id))
+      .filter((t): t is RawTurnRecord => Boolean(t && (!before || before.has(t.id))))
+      .map(t => ({ id: t.id, hash: stableHash(t.userText ?? "") }));
+    const currentId = context.rawTurnId ?? (context.turnId ? rawTurnIdForSessionTurn(episode.sessionId, context.turnId) : undefined);
+    if (currentId) coveredUserTurns.push({ id: currentId, hash: stableHash(context.userText) });
+    const saved = this.deps.repos.runtime.updateEpisodeTitle(episode.id, {
+      title: selection.title, summary: selection.summary,
+      // Selection sees user messages, not the complete assistant outcomes. Never
+      // mark it final or suppress the normal final title pass.
+      meta: { episodeSelection: { model: this.deps.llm.config.model ?? "", at, episodeId: selection.episodeId },
+        episodeTitle: { stage: "provisional", generatedAt: at, model: this.deps.llm.config.model ?? "",
+          sourceTurnCount: coveredUserTurns.length, sourceHash: stableHash({ selection, coveredUserTurns }), coveredUserTurns } }
+    }, at) ?? episode;
+    const session = this.deps.requireSession(episode.sessionId);
+    this.deps.repos.runtime.appendChange({
+      memoryId: saved.id, namespaceId: this.deps.namespaceIdFromSession(session),
+      kind: "episode", op: "updated", entityId: saved.id, userId: saved.userId,
+      changeType: "episode_title_update", before: episode, after: saved,
+      source: "episode.select.v1", createdAt: at
+    });
+    return saved;
+  }
+
+  ensureEpisode(session: SessionRecord, episodeId?: string, at = nowIso()): EpisodeRecord {
+    if (episodeId) {
+      const existing = this.deps.repos.runtime.getEpisode(episodeId);
+      if (existing) {
+        if (existing.sessionId !== session.id) throw new MemoryServiceError("forbidden", "episode belongs to another session");
+        return existing;
+      }
+    }
+
+    const latest = episodeId ? undefined : this.deps.repos.runtime.latestEpisodeForSession(session.id);
+    if (latest && latest.status === "open") {
+      return latest;
+    }
+
+    let selection: EpisodeSelectionResult | undefined;
+    // Without a summary model, capture stays in the offline mode (see
+    // modelDecidesCapture) instead of refusing the turn.
+    if (this.deps.llm.isConfigured()) {
+      const scope = this.selectionScope;
+      if (!scope) throw new Error("episode creation requires withEpisodeSelection");
+      const input = selectionInput(this.deps.repos, session, scope.context);
+      const key = selectionKey(session, input);
+      selection = scope.results.get(key);
+      if (!selection) throw new EpisodeSelectionRequired(key, input);
+      if (selection.episodeId) {
+        const matched = this.deps.requireEpisode(selection.episodeId);
+        if (matched.sessionId !== session.id) throw new MemoryServiceError("conflict", "episode selection crossed sessions");
+        const reopened = matched.status === "open" ? matched : this.deps.repos.runtime.reopenEpisode(matched.id, {
+          reopenedAt: at, reopenReason: "episode_selection",
+          rewardDirty: { reason: "episode_reopened", at }
+        }, at)!;
+        this.deps.repos.runtime.appendChange({
+          memoryId: reopened.id, namespaceId: this.deps.namespaceIdFromSession(session), kind: "episode", op: "updated",
+          entityId: reopened.id, userId: reopened.userId, changeType: "episode_reopened", before: matched, after: reopened,
+          source: "episode.select", createdAt: at
+        });
+        return this.writeSelectionTitle(reopened, selection, at);
+      }
+    }
+    const episode = this.deps.repos.runtime.createEpisode({
+      id: episodeId ?? newId("episode"),
+      sessionId: session.id,
+      userId: DEVICE_MEMORY_OWNER,
+      projectId: session.projectId ?? session.workspaceId,
+      conversationId: session.conversationId,
+      status: "open",
+      l1MemoryIds: [],
+      rawTurnIds: [],
+      feedbackIds: [],
+      decisionRepairIds: [],
+      l2PolicyIds: [],
+      l3WorldModelIds: [],
+      skillMemoryIds: [],
+      turnCount: 0,
+      rewardDetail: {},
+      pipelineStatus: "idle",
+      meta: {},
+      openedAt: at,
+      updatedAt: at
+    });
+    this.deps.repos.runtime.appendChange({
+      memoryId: episode.id,
+      namespaceId: this.deps.namespaceIdFromSession(session),
+      kind: "episode",
+      op: "created",
+      entityId: episode.id,
+      userId: episode.userId,
+      changeType: "episode_opened",
+      after: episode,
+      source: "session.episode",
+      createdAt: at
+    });
+    return selection ? this.writeSelectionTitle(episode, selection, at) : episode;
+  }
+}
+
+function sanitizedSessionMeta(meta?: Record<string, unknown>): Record<string, unknown> {
+  const sanitized = { ...(meta ?? {}) };
+  delete sanitized.l3_world_model_protocol_version;
+  delete sanitized.workspace_uri;
+  delete sanitized.workspace_host_id;
+  return sanitized;
+}
+
+function v2SessionMeta(
+  request: SessionOpenRequest,
+  workspace: ReturnType<typeof resolveV2WorkspaceIdentityForOpenRequest>,
+  timeZone?: string
+): Record<string, unknown> {
+  return {
+    ...sanitizedSessionMeta(request.meta),
+    l3_world_model_protocol_version: 2,
+    ...(workspace.workspaceUri ? { workspace_uri: workspace.workspaceUri } : {}),
+    ...(workspace.workspaceHostId ? { workspace_host_id: workspace.workspaceHostId } : {}),
+    ...(timeZone ? { time_zone: timeZone } : {})
+  };
+}
+
+function optionalMetaString(meta: Record<string, unknown>, key: string): string | undefined {
+  const value = meta[key];
+  return typeof value === "string" && value ? value : undefined;
+}
+
+/** Historical backfill is limited to initial and full scans. Hooks cannot opt in. */
+function allowsLegacyHistoryCapture(request: SourceTurnCompleteRequest): boolean {
+  return request.channel === "agent_source_scan" && request.captureLegacyHistory === true;
+}
+
+function recordText(record: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function legacyImportTexts(memory: MemoryRow): { user?: string; agent?: string } {
+  const internal = memory.properties.internal_info;
+  const trace = isRecord(internal.trace) ? internal.trace : isRecord(memory.info.trace) ? memory.info.trace : undefined;
+  return {
+    user: recordText(trace, "user_text") ?? recordText(trace, "userText"),
+    agent: recordText(trace, "agent_text") ?? recordText(trace, "agentText")
+  };
+}
+
+function legacyImportMatchesScope(
+  memory: MemoryRow,
+  namespace: ReturnType<typeof normalizeNamespace>,
+  source: string,
+  legacyTurnId: string
+): boolean {
+  const info = memory.info;
+  const internal = memory.properties.internal_info;
+  const turnId = recordText(info, "turn_id") ?? recordText(internal, "turn_id");
+  const memorySource = recordText(info, "source") ?? memory.agentId;
+  const profileId = recordText(info, "profile_id");
+  const projectId = recordText(info, "project_id");
+  if (turnId && turnId !== legacyTurnId) return false;
+  if (memorySource && memorySource !== source) return false;
+  if (profileId && profileId !== namespace.profileId) return false;
+  if (namespace.tenantId) return false;
+  const requestProject = namespace.projectId ?? null;
+  const requestWorkspace = namespace.workspaceId ?? null;
+  const memoryProject = projectId ?? null;
+  const memoryWorkspace = memory.appId ?? null;
+  if (requestWorkspace && !requestProject) {
+    return memoryWorkspace === requestWorkspace && (memoryProject === requestWorkspace || memoryProject === null);
+  }
+  if (requestProject !== memoryProject) return false;
+  if (requestWorkspace !== memoryWorkspace) return false;
+  return true;
+}

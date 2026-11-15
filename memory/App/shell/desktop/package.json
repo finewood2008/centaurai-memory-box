@@ -1,0 +1,37 @@
+{
+  "name": "@memmy/desktop",
+  "version": "1.2.6",
+  "private": true,
+  "type": "module",
+  "description": "半人马AI 私人记忆盒子 desktop client.",
+  "author": "MemTensor",
+  "main": "./dist/main/main.js",
+  "scripts": {
+    "version:sync": "npm --prefix ../../.. run version:sync",
+    "prebuild": "npm run version:sync",
+    "pretypecheck": "npm run version:sync",
+    "pretest": "npm run version:sync",
+    "build": "npm run build -w @memmy/frontend-desktop && npm run build:main && node -e \"require('node:fs').cpSync('../../frontend/desktop/dist', 'dist/renderer', { recursive: true })\"",
+    "build:main": "npm run build -w @memmy/desktop-interface && npm run build -w @memmy/backend && node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json && node stage-main-assets.mjs && node native-pip/build.mjs",
+    "build:runtime": "npm --prefix ../../.. run memory:build && npm --prefix ../../memmy-agent run build",
+    "prepare:plugin-migration-state": "node ../../../scripts/internal/shared/prepare-plugin-migration-state.mjs dist/bundled-plugins",
+    "dev": "npm run build:runtime && npm run build:main && npm run prepare:plugin-migration-state && electron dist/main/main.js",
+    "dist:mac": "bash ../../../scripts/internal/mac/build-dmg.sh",
+    "dist:mac:unsigned": "MEMMY_SKIP_CODESIGN=1 bash ../../../scripts/internal/mac/build-dmg.sh",
+    "test": "vitest run --reporter=dot --silent=true tests",
+    "typecheck": "npm run build -w @memmy/desktop-interface && npm run build -w @memmy/backend && tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@memmy/backend": "0.0.0",
+    "@memmy/desktop-interface": "0.0.0",
+    "@memmy/local-api-contracts": "0.0.0",
+    "@memmy/migrations": "0.0.0",
+    "dotenv": "^16.6.1",
+    "electron-log": "^5.4.4",
+    "yaml": "^2.9.0"
+  },
+  "devDependencies": {
+    "electron": "43.8.1",
+    "electron-builder": "^26.0.12"
+  }
+}

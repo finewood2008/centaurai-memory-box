@@ -1,0 +1,20 @@
+[
+  {
+    "edition": "personal",
+    "asar_sha256": "cd3ccb95bcd26b4828f051eaf43a7df0b38a866b6d3f42f26aa9e7fff8465623",
+    "resources_match_source": true
+  },
+  {
+    "edition": "team",
+    "asar_sha256": "fffd4ef0370585aaaf006d70f601d070a23ae0940aedc040cc2fadae4b2797e2",
+    "resources_match_source": true
+  },
+  {
+    "full_version": "0.3.6-rc.20261108.compact.4",
+    "checked_files": 102,
+    "installer_omits": [
+      "package-lock.json"
+    ],
+    "installed_runtime_matches_receipt": true
+  }
+]

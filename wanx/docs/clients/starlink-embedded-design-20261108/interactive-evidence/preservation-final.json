@@ -1,0 +1,51 @@
+{
+  "documents": {
+    "original_rows": 93,
+    "new_rows": 4,
+    "original_rows_changed": 0
+  },
+  "document_versions": {
+    "original_rows": 91,
+    "new_rows": 14,
+    "original_rows_changed": 0
+  },
+  "content_segments": {
+    "original_rows": 7433,
+    "new_rows": 80,
+    "original_rows_changed": 0
+  },
+  "published_entities": {
+    "original_rows": 193,
+    "new_rows": 0,
+    "original_rows_changed": 0
+  },
+  "published_facts": {
+    "original_rows": 157,
+    "new_rows": 0,
+    "original_rows_changed": 0
+  },
+  "fact_evidence": {
+    "original_rows": 328,
+    "new_rows": 0,
+    "original_rows_changed": 0
+  },
+  "knowledge_correction_drafts": {
+    "original_rows": 0,
+    "new_rows": 0,
+    "original_rows_changed": 0
+  },
+  "xingtu_access_keys": {
+    "original_rows": 17,
+    "new_rows": 0,
+    "original_rows_changed": 0
+  },
+  "xingtu_warehouses": {
+    "original_rows": 22,
+    "new_rows": 1,
+    "original_rows_changed": 0
+  },
+  "database": {
+    "schema": 24,
+    "foreign_key_violations": 0
+  }
+}

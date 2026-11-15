@@ -1,0 +1,74 @@
+{
+  "phase": "completed",
+  "backup": "/Users/finewood/.codex/worktrees/wanx-starlink-embedded/wanx-master-client-20261108/.runtime/starlink-conversation-repair-20261108/backup/backend-20261108T122353Z",
+  "same_filesystem_code_backup": "/Volumes/ORICO/wanx/apps/starlink-ontology-fix-20261031/.runtime/materials/backend-backup-20261108T122353Z",
+  "status": "installed",
+  "other_8089_8090_untouched": true,
+  "original_service_launcher_retained": true,
+  "before": {
+    "documents": 99,
+    "document_versions": 108,
+    "content_segments": 7582,
+    "published_entities": 197,
+    "published_facts": 160,
+    "fact_evidence": 332,
+    "xingtu_access_keys": 17,
+    "xingtu_warehouses": 24,
+    "knowledge_governance_reviews": 0,
+    "knowledge_governance_proposals": 0,
+    "knowledge_governance_operations": 0
+  },
+  "schema": 30,
+  "preservation": {
+    "documents": {
+      "rows": 99,
+      "unchanged": true
+    },
+    "document_versions": {
+      "rows": 108,
+      "unchanged": true
+    },
+    "content_segments": {
+      "rows": 7582,
+      "unchanged": true
+    },
+    "published_entities": {
+      "rows": 197,
+      "unchanged": true
+    },
+    "published_facts": {
+      "rows": 160,
+      "unchanged": true
+    },
+    "fact_evidence": {
+      "rows": 332,
+      "unchanged": true
+    },
+    "xingtu_access_keys": {
+      "rows": 17,
+      "unchanged": true
+    },
+    "xingtu_warehouses": {
+      "rows": 24,
+      "unchanged": true
+    },
+    "knowledge_governance_reviews": {
+      "rows": 0,
+      "unchanged": true
+    },
+    "knowledge_governance_proposals": {
+      "rows": 0,
+      "unchanged": true
+    },
+    "knowledge_governance_operations": {
+      "rows": 0,
+      "unchanged": true
+    }
+  },
+  "rolled_back": false,
+  "new_backend_retained": true,
+  "data_restored": false,
+  "relay_stopped": false,
+  "passed": true,
+  "relay_startup_wait_fixed": true
+}

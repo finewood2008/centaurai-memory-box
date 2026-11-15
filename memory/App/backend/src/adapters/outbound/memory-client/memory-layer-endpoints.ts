@@ -1,0 +1,81 @@
+/** Definition for memory layer paths. */
+
+export const MEMORY_LAYER_PATHS = Object.freeze({
+  agentSources: "/api/v1/agent-sources",
+  agentSourcesSyncAccess: "/api/v1/agent-sources/sync-access",
+  agentSourceSyncAccess: "/api/v1/agent-sources/:sourceId/sync-access",
+  agentSourceScan: "/api/v1/agent-sources/scan",
+  agentSourceStatus: "/api/v1/agent-sources/scan/status",
+  agentSourceResults: "/api/v1/agent-sources/scan/jobs/:jobId/results",
+  agentSourcePause: "/api/v1/agent-sources/scan/stop",
+  agentSourceCancel: "/api/v1/agent-sources/scan/cancel",
+
+  health: "/api/v1/health",
+  reloadConfig: "/api/v1/admin/reload-config",
+  memoryTokenBudget: "/api/v1/admin/memory-token-budget",
+  exportBundle: "/api/v1/admin/export",
+  wanxStorage: "/api/v1/admin/wanx-storage",
+  wanxStorageSnapshot: "/api/v1/admin/wanx-storage/snapshot",
+  clearAllData: "/api/v1/admin/data",
+  openSession: "/api/v1/sessions/open",
+  closeSession: "/api/v1/sessions/:sessionId/close",
+  startTurn: "/api/v1/turns/start",
+  completeTurn: "/api/v1/turns/:turnId/complete",
+  completeSourceTurn: "/api/v1/source-turns/complete",
+  search: "/api/v1/memory/search",
+  embeddingInference: "/api/v1/models/embedding/infer",
+  addMemory: "/api/v1/memory/add",
+  getMemory: "/api/v1/memory/:id",
+  deleteMemory: "/api/v1/memory/:id",
+  approveObservedSkill: "/api/v1/evidence/skills/:id/approve",
+  updateObservedSkill: "/api/v1/evidence/skills/:id",
+  recallEvidence: "/api/v1/memory/recalls/:queryId",
+  runWorker: "/api/v1/worker/run",
+  enqueueImportSummaries: "/api/v1/worker/import-summaries/enqueue",
+  memoryProcessingStatus: "/api/v1/memory/processing/status",
+  retryMemoryProcessing: "/api/v1/memory/:id/processing/retry",
+  memoryApiLogs: "/api/v1/memory/logs",
+  panelMemory: "/api/v1/panel/memory/:memoryId",
+  panelOverview: "/api/v1/panel/overview",
+  panelAnalysis: "/api/v1/panel/analysis",
+  panelItems: "/api/v1/panel/items",
+  panelLogs: "/api/v1/panel/logs",
+  panelLogDetail: "/api/v1/panel/logs/:id",
+  panelStats: "/api/v1/panel/stats",
+  panelOverviewStats: "/api/v1/panel/overview-stats",
+  panelBrowse: "/api/v1/panel/browse",
+  panelTaskSummaries: "/api/v1/panel/task-summaries",
+  panelTaskCheck: "/api/v1/panel/task-details/:id/check",
+  panelTaskDetail: "/api/v1/panel/task-details/:id",
+  panelTaskField: "/api/v1/panel/task-details/:id/turns/:turnId/field",
+  panelTasks: "/api/v1/panel/tasks",
+  deletePanelTask: "/api/v1/panel/tasks/:id"
+} as const);
+
+/** Builds build memory layer url. */
+export function buildMemoryLayerUrl(
+  baseUrl: string,
+  pathKey: keyof typeof MEMORY_LAYER_PATHS,
+  params: Readonly<Record<string, string>> = {}
+): string {
+  const path = MEMORY_LAYER_PATHS[pathKey].replace(/:([A-Za-z0-9_]+)/g, (_match, key: string) => {
+    const value = params[key];
+    if (!value) {
+      throw new Error(`Missing path param: ${key}`);
+    }
+
+    return encodeURIComponent(value);
+  });
+
+  return new URL(path, normalizeBaseUrl(baseUrl)).toString();
+}
+
+/**
+ * Normalizes the base URL.
+ *
+ * @param baseUrl the user-configured base URL.
+ * @returns a base URL that can be safely passed to the URL constructor.
+ */
+function normalizeBaseUrl(baseUrl: string): string {
+  return baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
+}

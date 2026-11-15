@@ -1,0 +1,758 @@
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { createServer } from "node:http";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  compareVersions,
+  currentInstalledRuntime,
+  DEFAULT_HEALTH_CHECK_TIMEOUT_MS,
+  installMemoryRuntime,
+  runtimeTarget,
+  stopInstalledMemoryService,
+  userServiceRestartCommand
+} from "../src/cli/runtime-installer.js";
+
+const roots: string[] = [];
+
+afterEach(() => {
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+describe("standalone Memory runtime installer", () => {
+  it("maps all supported release targets", () => {
+    expect(runtimeTarget("darwin", "arm64")).toBe("darwin-arm64");
+    expect(runtimeTarget("darwin", "x64")).toBe("darwin-x64");
+    expect(runtimeTarget("linux", "arm64")).toBe("linux-arm64");
+    expect(runtimeTarget("linux", "x64")).toBe("linux-x64");
+    expect(runtimeTarget("win32", "arm64")).toBe("windows-arm64");
+    expect(runtimeTarget("win32", "x64")).toBe("windows-x64");
+    expect(() => runtimeTarget("freebsd", "x64")).toThrow("unsupported platform");
+  });
+
+  it("maps service restarts to each user service manager", () => {
+    expect(userServiceRestartCommand("darwin", 501)).toEqual({
+      command: "launchctl",
+      args: ["kickstart", "-k", "gui/501/com.memtensor.memmy-memory"]
+    });
+    expect(userServiceRestartCommand("linux")).toEqual({
+      command: "systemctl",
+      args: ["--user", "restart", "memmy-memory.service"]
+    });
+    expect(userServiceRestartCommand("win32")).toMatchObject({
+      command: "powershell.exe"
+    });
+  });
+
+  it("compares complete version identifiers by character", () => {
+    expect(compareVersions("2.1.0", "2.0.9")).toBe(1);
+    expect(compareVersions("2.1.0", "2.1.0")).toBe(0);
+    expect(compareVersions("2.1.0-beta.1", "2.1.0")).toBe(1);
+  });
+
+  it.each([
+    ["1.2.4", "1.2.401"],
+    ["1.2.401", "1.2.402"],
+    ["1.2.402", "1.2.5"],
+    ["1.2.5", "1.2.6"],
+    ["1.2.6", "1.3.0"],
+    ["1.2.10", "1.2.9"],
+    ["2.1.0-rc.10", "2.1.0-rc.2"],
+    ["2.1.0-alpha", "2.1.0-alpha.1"],
+    ["2.1.0-alpha.1", "2.1.0-alpha.beta"],
+    ["2.1.0-beta.11", "2.1.0-rc.1"],
+    ["2.1.0", "2.1.0-rc.10"],
+    ["2.1.0-rc.9007199254740992", "2.1.0-rc.9007199254740993"],
+  ])("orders %s before %s by character", (older, newer) => {
+    expect(compareVersions(older, newer)).toBe(-1);
+    expect(compareVersions(newer, older)).toBe(1);
+  });
+
+  it("includes build metadata in character comparisons", () => {
+    expect(compareVersions("2.1.0-rc.1+first", "2.1.0-rc.1+second")).toBe(-1);
+  });
+
+  it.each(["2.1.0-rc..1", "2.1.0-rc.01", "02.1.0", "2.1.0-"])(
+    "rejects malformed semantic version %s",
+    (version) => {
+      expect(() => compareVersions(version, "2.1.0")).toThrow("invalid semantic version");
+      expect(() => compareVersions("2.1.0", version)).toThrow("invalid semantic version");
+    }
+  );
+
+  it.each([true, false])("activates a character-newer runtime and prevents reverting it (preferInstalledCompatible=%s)", async (preferInstalledCompatible) => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const flags = { home, skipServiceRegistration: true, skipHealthCheck: true, agents: [] };
+    const older = createRuntimeDirectory(root, "1.2.401");
+    const newer = createRuntimeDirectory(root, "1.2.5");
+    await installMemoryRuntime({ ...flags, runtimeDirectory: older });
+    await expect(installMemoryRuntime({ ...flags, preferInstalledCompatible, version: "1.2.5", dryRun: true }))
+      .resolves.toMatchObject({ pointer: { version: "1.2.5" } });
+    await expect(installMemoryRuntime({ ...flags, preferInstalledCompatible, runtimeDirectory: newer }))
+      .resolves.toMatchObject({ version: "1.2.5" });
+    for (const dryRun of [true, false]) {
+      await expect(installMemoryRuntime({ ...flags, version: "1.2.401", runtimeDirectory: older, dryRun }))
+        .rejects.toThrow("refusing to downgrade Memory");
+    }
+    expect(await currentInstalledRuntime(home)).toMatchObject({ version: "1.2.5" });
+  });
+
+  it("plans a service-only install without downloading or mutating disk", async () => {
+    const home = tempRoot();
+    const result = await installMemoryRuntime({ home, dryRun: true });
+    expect(result).toMatchObject({ ok: true, dryRun: true, home });
+    expect(await currentInstalledRuntime(home)).toBeUndefined();
+  });
+
+  it("installs and atomically activates a verified local runtime", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const fixture = createRuntimeArchive(root, "2.1.0");
+    const result = await installMemoryRuntime({
+      home,
+      version: "2.1.0",
+      runtimeAsset: fixture.archive,
+      runtimeSha256: fixture.sha256,
+      skipServiceRegistration: true,
+      skipHealthCheck: true,
+      agents: ["openclaw", "hermes"]
+    });
+    expect(result).toMatchObject({ ok: true, version: "2.1.0", target: fixture.target });
+    const pointer = await currentInstalledRuntime(home);
+    expect(pointer?.version).toBe("2.1.0");
+    expect(readFileSync(pointer!.entrypoint, "utf8")).toContain("runtime fixture");
+    const launcher = readFileSync(join(home, "bin", "memmy-memory-service.cjs"), "utf8");
+    expect(launcher).toContain(`MEMMY_HOME: ${JSON.stringify(home)}`);
+    expect(launcher).toContain(`MEMMY_CONFIG: ${JSON.stringify(join(home, "config.yaml"))}`);
+    expect(launcher).toContain("MEMMY_EMBEDDING_MODEL_ROOT");
+    expect(JSON.parse(readFileSync(join(home, "memory-service", "installation.json"), "utf8"))).toMatchObject({
+      agents: ["openclaw", "hermes"]
+    });
+  });
+
+  it("activates the unpacked offline runtime bundled with Desktop", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const runtimeDirectory = createRuntimeDirectory(root, "2.1.0");
+    const result = await installMemoryRuntime({
+      home,
+      runtimeDirectory,
+      skipServiceRegistration: true,
+      skipHealthCheck: true
+    });
+    expect(result).toMatchObject({ ok: true, version: "2.1.0" });
+    const pointer = await currentInstalledRuntime(home);
+    expect(pointer?.runtimeDir).not.toBe(runtimeDirectory);
+    expect(readFileSync(pointer!.entrypoint, "utf8")).toContain("runtime fixture");
+  });
+
+  it("keeps the original runtime executable when another installer reuses the same version", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const runtimeDirectory = createRuntimeDirectory(root, "2.1.0");
+    await installMemoryRuntime({
+      home,
+      runtimeDirectory,
+      nodeExecutable: "/original/node",
+      skipServiceRegistration: true,
+      skipHealthCheck: true
+    });
+
+    const reused = await installMemoryRuntime({
+      home,
+      runtimeDirectory,
+      nodeExecutable: "/desktop/electron",
+      preferInstalledCompatible: true,
+      skipServiceRegistration: true,
+      skipHealthCheck: true
+    });
+
+    expect(reused).toMatchObject({ reused: true, runtimeExecutable: "/original/node" });
+    const launcher = readFileSync(join(home, "bin", process.platform === "win32" ? "memmy-memory-service.cmd" : "memmy-memory-service"), "utf8");
+    expect(launcher).toContain("/original/node");
+    expect(launcher).not.toContain("/desktop/electron");
+  }, 15_000);
+
+  it("holds the installer lock until a reused runtime finishes activation", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const runtimeDirectory = createRuntimeDirectory(root, "2.1.0");
+    await installMemoryRuntime({ home, runtimeDirectory, skipServiceRegistration: true, skipHealthCheck: true });
+    let resolveStarted!: () => void;
+    const started = new Promise<void>((resolve) => { resolveStarted = resolve; });
+    let releaseHealth!: () => void;
+    const healthReady = new Promise<void>((resolve) => { releaseHealth = resolve; });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      resolveStarted();
+      await healthReady;
+      return { ok: true, json: async () => ({ ok: true, protocolVersion: 1, serviceVersion: "2.1.0" }) } as Response;
+    });
+    const install = installMemoryRuntime({ home, runtimeDirectory, preferInstalledCompatible: true,
+      skipServiceRegistration: true, endpoint: "http://127.0.0.1:18960" });
+    try {
+      await started;
+      expect(existsSync(join(home, "memory-service", "install.lock"))).toBe(true);
+    } finally {
+      releaseHealth();
+      try { await expect(install).resolves.toMatchObject({ reused: true, version: "2.1.0" }); }
+      finally { fetchSpy.mockRestore(); }
+    }
+    expect(existsSync(join(home, "memory-service", "install.lock"))).toBe(false);
+  }, 20_000);
+
+  it.each([true, false])("replaces changed same-version builds (preferInstalledCompatible=%s) without touching data", async (preferInstalledCompatible) => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const legacy = createRuntimeDirectory(root, "2.1.3");
+    const flags = { home, skipServiceRegistration: true, skipHealthCheck: true, agents: [] };
+    const old = await installMemoryRuntime({ ...flags, runtimeDirectory: legacy });
+    const dbPath = join(home, "memory-service", "memory.sqlite");
+    writeFileSync(dbPath, "existing schema 9 database");
+    const bundle = createRuntimeDirectory(root, "2.1.3", { buildId: "a".repeat(64), schemaVersion: 9 });
+    writeFileSync(join(bundle, "dist/src/server/index.js"), "// schema 9 implementation");
+    const upgraded = await installMemoryRuntime({ ...flags, runtimeDirectory: bundle, preferInstalledCompatible });
+    expect(upgraded).toMatchObject({ buildId: "a".repeat(64), schemaVersion: 9, upgraded: true });
+    expect(upgraded.entrypoint).not.toBe(old.entrypoint);
+    expect(readFileSync(String(upgraded.entrypoint), "utf8")).toContain("schema 9 implementation");
+    expect(readFileSync(String(old.entrypoint), "utf8")).toContain("runtime fixture");
+    expect(readFileSync(dbPath, "utf8")).toBe("existing schema 9 database");
+    const next = createRuntimeDirectory(root, "2.1.3", { buildId: "b".repeat(64), schemaVersion: 9 });
+    const changed = await installMemoryRuntime({ ...flags, runtimeDirectory: next, preferInstalledCompatible });
+    expect(changed.entrypoint).not.toBe(upgraded.entrypoint);
+    const reused = await installMemoryRuntime({ ...flags, runtimeDirectory: next, preferInstalledCompatible: true });
+    expect(reused).toMatchObject({ reused: true, buildId: "b".repeat(64) });
+  }, 20_000);
+
+  it("keeps the previous pointer after a changed same-version build fails activation", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const flags = { home, skipServiceRegistration: true, skipHealthCheck: true, agents: [] };
+    await installMemoryRuntime({ ...flags, runtimeDirectory: createRuntimeDirectory(root, "2.1.3", { buildId: "a".repeat(64), schemaVersion: 9 }) });
+    const before = await currentInstalledRuntime(home);
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("fixture unavailable"));
+    try {
+      await expect(installMemoryRuntime({
+        ...flags, runtimeDirectory: createRuntimeDirectory(root, "2.1.3", { buildId: "b".repeat(64), schemaVersion: 9 }),
+        preferInstalledCompatible: true, skipHealthCheck: false, healthCheckTimeoutMs: 1
+      })).rejects.toThrow("failed its activation health check");
+      expect(await currentInstalledRuntime(home)).toEqual(before);
+      expect(readFileSync(before!.entrypoint, "utf8")).toContain("runtime fixture");
+    } finally { fetchSpy.mockRestore(); }
+  });
+
+  it("repairs an installed build whose files were removed", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const runtimeDirectory = createRuntimeDirectory(root, "2.1.3", { buildId: "a".repeat(64), schemaVersion: 9 });
+    const flags = { home, runtimeDirectory, skipServiceRegistration: true, skipHealthCheck: true, agents: [] };
+    const installed = await installMemoryRuntime(flags);
+    rmSync(String(installed.runtimeDir), { recursive: true });
+    await installMemoryRuntime({ ...flags, preferInstalledCompatible: true });
+    expect(existsSync(String(installed.entrypoint))).toBe(true);
+  });
+
+  it("keeps the new runtime after a failed activation may have advanced the schema", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const flags = { home, skipServiceRegistration: true, skipHealthCheck: true, agents: [] };
+    await installMemoryRuntime({ ...flags, runtimeDirectory: createRuntimeDirectory(root, "2.1.3") });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("fixture unavailable"));
+    try {
+      await expect(installMemoryRuntime({ ...flags, preferInstalledCompatible: true, skipHealthCheck: false, healthCheckTimeoutMs: 1,
+        runtimeDirectory: createRuntimeDirectory(root, "2.1.3", { buildId: "b".repeat(64), schemaVersion: 9 })
+      })).rejects.toThrow("kept the runtime supporting schema 9");
+      expect(await currentInstalledRuntime(home)).toMatchObject({ buildId: "b".repeat(64), schemaVersion: 9 });
+    } finally { fetchSpy.mockRestore(); }
+  });
+
+  it("does not accept health from another same-version build", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ ok: true, protocolVersion: 1, serviceVersion: "2.1.3", buildId: "b".repeat(64) })));
+    try {
+      await expect(installMemoryRuntime({ home, skipServiceRegistration: true, healthCheckTimeoutMs: 1, agents: [],
+        runtimeDirectory: createRuntimeDirectory(root, "2.1.3", { buildId: "a".repeat(64), schemaVersion: 9 })
+      })).rejects.toThrow("failed its activation health check");
+      expect(await currentInstalledRuntime(home)).toBeUndefined();
+    } finally { fetchSpy.mockRestore(); }
+  });
+
+  it("waits for the old service to release storage before switching the pointer", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const flags = { home, skipServiceRegistration: true, skipHealthCheck: true, agents: [] };
+    await installMemoryRuntime({ ...flags, runtimeDirectory: createRuntimeDirectory(root, "2.1.3") });
+    const before = await currentInstalledRuntime(home);
+    const lockPath = join(home, "memory-service/service.lock");
+    writeFileSync(lockPath, JSON.stringify({ pid: process.pid }));
+    const install = installMemoryRuntime({ ...flags,
+      runtimeDirectory: createRuntimeDirectory(root, "2.1.3", { buildId: "a".repeat(64), schemaVersion: 9 })
+    });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(await currentInstalledRuntime(home)).toEqual(before);
+    } finally { rmSync(lockPath); }
+    await expect(install).resolves.toMatchObject({ buildId: "a".repeat(64) });
+  });
+
+  it("rechecks the installed version after waiting for another installer", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const flags = { home, skipServiceRegistration: true, skipHealthCheck: true, agents: [] };
+    await installMemoryRuntime({ ...flags, runtimeDirectory: createRuntimeDirectory(root, "2.1.3") });
+    const before = await currentInstalledRuntime(home);
+    const lockPath = join(home, "memory-service/install.lock");
+    writeFileSync(lockPath, String(process.pid));
+    const install = installMemoryRuntime({ ...flags, runtimeDirectory: createRuntimeDirectory(root, "2.1.4") });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const newer = { ...before, version: "3.0.0" };
+    writeFileSync(join(home, "memory-service/current.json"), JSON.stringify(newer));
+    rmSync(lockPath);
+    await expect(install).rejects.toThrow("refusing to downgrade Memory from 3.0.0");
+    expect(await currentInstalledRuntime(home)).toEqual(newer);
+  });
+
+  it("installs a release archive using its advertised build identity", async () => {
+    const root = tempRoot();
+    const identity = { buildId: "a".repeat(64), schemaVersion: 9 };
+    const fixture = createRuntimeArchive(root, "2.1.3", identity);
+    const releaseManifest = join(root, "memory-release.json");
+    writeFileSync(releaseManifest, JSON.stringify({ version: "2.1.3", protocolVersion: 1, assets: {
+      [fixture.target]: { ...identity, name: "runtime.tar.gz", sha256: fixture.sha256, url: fixture.archive }
+    } }));
+    const installed = await installMemoryRuntime({ home: join(root, "home"), releaseManifest,
+      skipServiceRegistration: true, skipHealthCheck: true, agents: []
+    });
+    expect(installed).toMatchObject(identity);
+    expect(String(installed.runtimeDir)).toContain(identity.buildId);
+  });
+
+  it("rejects same-version schema downgrades before changing the pointer", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const flags = { home, skipServiceRegistration: true, skipHealthCheck: true, agents: [] };
+    await installMemoryRuntime({ ...flags, runtimeDirectory: createRuntimeDirectory(root, "2.1.3", { buildId: "a".repeat(64), schemaVersion: 9 }) });
+    const before = await currentInstalledRuntime(home);
+    await expect(installMemoryRuntime({ ...flags, preferInstalledCompatible: true,
+      runtimeDirectory: createRuntimeDirectory(root, "2.1.3", { buildId: "b".repeat(64), schemaVersion: 8 })
+    })).rejects.toThrow("refusing to downgrade Memory schema");
+    expect(await currentInstalledRuntime(home)).toEqual(before);
+  });
+
+  it("rejects checksum failures without activating the staged runtime", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const fixture = createRuntimeArchive(root, "2.1.0");
+    await expect(installMemoryRuntime({
+      home,
+      runtimeAsset: fixture.archive,
+      runtimeSha256: "f".repeat(64),
+      skipServiceRegistration: true,
+      skipHealthCheck: true
+    })).rejects.toThrow("checksum mismatch");
+    expect(await currentInstalledRuntime(home)).toBeUndefined();
+  });
+
+  it("waits for a migration-delayed health response instead of failing at 15 seconds", async () => {
+    expect(DEFAULT_HEALTH_CHECK_TIMEOUT_MS).toBe(120_000);
+    const root = tempRoot();
+    const home = join(root, "home");
+    const runtimeDirectory = createRuntimeDirectory(root, "2.1.0");
+    vi.useFakeTimers();
+    let resolveStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    const startedAt = Date.now();
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      resolveStarted();
+      const ready = Date.now() - startedAt >= 16_000;
+      return {
+        ok: true,
+        json: async () => ready
+          ? { ok: true, protocolVersion: 1, serviceVersion: "2.1.0" }
+          : { ok: true, protocolVersion: 1, serviceVersion: "old" },
+      } as Response;
+    });
+
+    try {
+      const install = installMemoryRuntime({
+        home,
+        runtimeDirectory,
+        endpoint: "http://127.0.0.1:18960",
+        skipServiceRegistration: true,
+      });
+      await started;
+      await vi.advanceTimersByTimeAsync(16_000);
+      await expect(install).resolves.toMatchObject({ ok: true, version: "2.1.0" });
+    } finally {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
+  });
+
+  it("caps retry backoff at the activation health deadline", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const runtimeDirectory = createRuntimeDirectory(root, "2.1.0");
+    vi.useFakeTimers();
+    let resolveStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      resolveStarted();
+      return {
+        ok: true,
+        json: async () => ({ ok: true, protocolVersion: 1, serviceVersion: "old" })
+      } as Response;
+    });
+
+    try {
+      const install = installMemoryRuntime({
+        home,
+        runtimeDirectory,
+        endpoint: "http://127.0.0.1:18960",
+        skipServiceRegistration: true,
+        healthCheckTimeoutMs: 1
+      });
+      await started;
+      await vi.advanceTimersByTimeAsync(1);
+      expect(vi.getTimerCount()).toBe(0);
+      await expect(install).rejects.toThrow("activation health check");
+    } finally {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
+  });
+
+  it("restores the previous runtime when the bounded activation health timeout expires", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const previousDirectory = createRuntimeDirectory(root, "2.0.0");
+    await installMemoryRuntime({
+      home,
+      runtimeDirectory: previousDirectory,
+      skipServiceRegistration: true,
+      skipHealthCheck: true
+    });
+    const nextDirectory = createRuntimeDirectory(root, "2.1.0");
+    vi.useFakeTimers();
+    let resolveStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      resolveStarted();
+      return {
+        ok: true,
+        json: async () => ({ ok: true, protocolVersion: 1, serviceVersion: "old" })
+      } as Response;
+    });
+
+    try {
+      const install = installMemoryRuntime({
+        home,
+        runtimeDirectory: nextDirectory,
+        endpoint: "http://127.0.0.1:18960",
+        skipServiceRegistration: true,
+        healthCheckTimeoutMs: 1_000
+      });
+      await started;
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(install).rejects.toThrow("activation health check");
+      expect((await currentInstalledRuntime(home))?.version).toBe("2.0.0");
+      expect(JSON.parse(readFileSync(join(home, "memory-service", "installation.json"), "utf8"))).toMatchObject({
+        serviceVersion: "2.0.0"
+      });
+    } finally {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
+  });
+
+  it("cleans first-install launchers and metadata when activation health times out", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const runtimeDirectory = createRuntimeDirectory(root, "2.1.0");
+    const launcherName = process.platform === "win32"
+      ? "memmy-memory-service.cmd"
+      : "memmy-memory-service";
+    mkdirSync(join(home, "bin"), { recursive: true });
+    writeFileSync(join(home, "bin", launcherName), "stale launcher");
+    writeFileSync(join(home, "bin", "memmy-memory-service.cjs"), "stale script");
+    mkdirSync(join(home, "memory-service"), { recursive: true });
+    writeFileSync(join(home, "memory-service", "installation.json"), JSON.stringify({
+      serviceVersion: "stale"
+    }));
+    writeFileSync(join(home, "memory-service", "runtime.json"), JSON.stringify({
+      endpoint: "http://127.0.0.1:18960"
+    }));
+    vi.useFakeTimers();
+    let resolveStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      resolveStarted();
+      return {
+        ok: true,
+        json: async () => ({ ok: true, protocolVersion: 1, serviceVersion: "old" })
+      } as Response;
+    });
+
+    try {
+      const install = installMemoryRuntime({
+        home,
+        runtimeDirectory,
+        endpoint: "http://127.0.0.1:18960",
+        skipServiceRegistration: true,
+        healthCheckTimeoutMs: 1_000
+      });
+      await started;
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(install).rejects.toThrow("activation health check");
+      expect(await currentInstalledRuntime(home)).toBeUndefined();
+      expect(existsSync(join(home, "bin", launcherName))).toBe(false);
+      expect(existsSync(join(home, "bin", "memmy-memory-service.cjs"))).toBe(false);
+      expect(existsSync(join(home, "memory-service", "installation.json"))).toBe(false);
+      expect(existsSync(join(home, "memory-service", "runtime.json"))).toBe(false);
+      expect(existsSync(join(home, "memory-service", "runtime", "2.1.0", runtimeTarget(process.platform, process.arch)))).toBe(false);
+    } finally {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    "rejects an invalid activation health timeout (%s)",
+    async (healthCheckTimeoutMs) => {
+      await expect(installMemoryRuntime({
+        home: tempRoot(),
+        dryRun: true,
+        healthCheckTimeoutMs
+      })).rejects.toThrow("healthCheckTimeoutMs must be a positive integer");
+    }
+  );
+
+  it("never replaces a newer installed version with an older one", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    mkdirSync(join(home, "memory-service"), { recursive: true });
+    writeFileSync(join(home, "memory-service", "current.json"), JSON.stringify({
+      version: "3.0.0",
+      protocolVersion: 1,
+      target: runtimeTarget(process.platform, process.arch),
+      runtimeDir: join(home, "runtime-3"),
+      entrypoint: join(home, "runtime-3", "index.js"),
+      activatedAt: new Date().toISOString()
+    }));
+    await expect(installMemoryRuntime({ home, version: "2.1.0", dryRun: true }))
+      .rejects.toThrow("refusing to downgrade");
+  });
+
+  it("stops a running Memory process even when no user service is registered", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const configPath = join(home, "config.yaml");
+    mkdirSync(join(home, "memory-service"), { recursive: true });
+    writeFileSync(configPath, [
+      "memmyMemory:",
+      "  storage:",
+      "    mode: local",
+      "    backend: sqlite",
+      `    sqlitePath: ${JSON.stringify(join(home, "memory-service", "memory.sqlite"))}`,
+      "    token: service-token",
+      ""
+    ].join("\n"));
+
+    let shutdownRequests = 0;
+    const server = createServer((request, response) => {
+      expect(request.headers.authorization).toBe("Bearer service-token");
+      if (request.method === "GET" && request.url === "/api/v1/health") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ ok: true, protocolVersion: 1 }));
+        return;
+      }
+      if (request.method === "POST" && request.url === "/api/v1/admin/shutdown") {
+        shutdownRequests += 1;
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ ok: true }));
+        response.once("finish", () => server.close());
+        return;
+      }
+      response.writeHead(404).end();
+    });
+    await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("test server did not bind a TCP port");
+    writeFileSync(join(home, "memory-service", "runtime.json"), JSON.stringify({
+      pid: 12345,
+      endpoint: `http://127.0.0.1:${address.port}`,
+      configPath
+    }));
+    let managerStops = 0;
+
+    await expect(stopInstalledMemoryService(home, {
+      stopUserService: () => { managerStops += 1; }
+    })).resolves.toMatchObject({ ok: true, action: "stop", pid: 12345 });
+
+    expect(managerStops).toBe(1);
+    expect(shutdownRequests).toBe(1);
+  });
+});
+
+describe("installer lock recovery", () => {
+  it.each([false, true])("rechecks a newer activation after waiting for install.lock (reuse=%s)", async (preferInstalledCompatible) => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    await installMemoryRuntime({
+      home,
+      runtimeDirectory: createRuntimeDirectory(root, "2.1.0"),
+      skipServiceRegistration: true,
+      skipHealthCheck: true,
+    });
+    const previous = (await currentInstalledRuntime(home))!;
+    const newerDirectory = createRuntimeDirectory(root, "2.3.0");
+    const newerPointer = {
+      ...previous, version: "2.3.0", runtimeDir: newerDirectory,
+      entrypoint: join(newerDirectory, "dist", "src", "server", "index.js"),
+      runtimeExecutable: "/original/node",
+    };
+    const lockPath = join(home, "memory-service", "install.lock");
+    writeFileSync(lockPath, `${process.pid}\n`);
+    let resolveWaiting!: () => void;
+    const waiting = new Promise<void>((resolveWait) => { resolveWaiting = resolveWait; });
+    const originalSetTimeout = globalThis.setTimeout;
+    const timerSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation((handler, milliseconds, ...args) => {
+      const timer = originalSetTimeout(handler, milliseconds, ...args);
+      if (milliseconds === 50) resolveWaiting();
+      return timer;
+    });
+    try {
+      const install = installMemoryRuntime({
+        home,
+        runtimeDirectory: createRuntimeDirectory(root, "2.2.0"),
+        nodeExecutable: "/desktop/electron",
+        preferInstalledCompatible,
+        skipServiceRegistration: true,
+        skipHealthCheck: true,
+      }).then((value) => ({ value, error: undefined }), (error: unknown) => ({ value: undefined, error }));
+      await waiting;
+      // The lock holder activates a newer runtime before releasing its lock.
+      writeFileSync(join(home, "memory-service", "current.json"), JSON.stringify(newerPointer));
+      writeFileSync(join(home, "memory-service", "installation.json"), JSON.stringify({ serviceVersion: "2.3.0" }));
+      rmSync(lockPath);
+      const result = await install;
+      if (preferInstalledCompatible) {
+        expect(result.error).toBeUndefined();
+        expect(result.value).toMatchObject({ reused: true, version: "2.3.0", runtimeExecutable: "/original/node" });
+      } else {
+        expect(result.error).toBeInstanceOf(Error);
+        expect((result.error as Error).message).toContain("refusing to downgrade Memory from 2.3.0 to 2.2.0");
+      }
+      expect((await currentInstalledRuntime(home))?.version).toBe("2.3.0");
+      expect(JSON.parse(readFileSync(join(home, "memory-service", "installation.json"), "utf8"))).toMatchObject({ serviceVersion: "2.3.0" });
+      expect(existsSync(join(home, "memory-service", "runtime", "2.2.0"))).toBe(false);
+      expect(existsSync(lockPath)).toBe(false);
+    } finally {
+      timerSpy.mockRestore();
+    }
+  });
+
+  it("reclaims a lock abandoned by a crashed installer", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const runtimeDirectory = createRuntimeDirectory(root, "2.1.0");
+    const lockPath = join(home, "memory-service", "install.lock");
+    mkdirSync(join(home, "memory-service"), { recursive: true });
+    writeFileSync(lockPath, `${deadPid()}\n`);
+
+    const result = await installMemoryRuntime({
+      home,
+      runtimeDirectory,
+      skipServiceRegistration: true,
+      skipHealthCheck: true
+    });
+
+    expect(result).toMatchObject({ ok: true, version: "2.1.0" });
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  it("reclaims an empty lock left behind before its owner was recorded", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const runtimeDirectory = createRuntimeDirectory(root, "2.1.0");
+    const lockPath = join(home, "memory-service", "install.lock");
+    mkdirSync(join(home, "memory-service"), { recursive: true });
+    writeFileSync(lockPath, "");
+    const stale = new Date(Date.now() - 60_000);
+    utimesSync(lockPath, stale, stale);
+
+    const result = await installMemoryRuntime({
+      home,
+      runtimeDirectory,
+      skipServiceRegistration: true,
+      skipHealthCheck: true
+    });
+
+    expect(result).toMatchObject({ ok: true, version: "2.1.0" });
+  });
+
+  it("waits for a lock still held by a live installer", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const runtimeDirectory = createRuntimeDirectory(root, "2.1.0");
+    const lockPath = join(home, "memory-service", "install.lock");
+    mkdirSync(join(home, "memory-service"), { recursive: true });
+    writeFileSync(lockPath, `${process.pid}\n`);
+
+    await expect(installMemoryRuntime({
+      home,
+      runtimeDirectory,
+      skipServiceRegistration: true,
+      skipHealthCheck: true
+    })).rejects.toThrow(/timed out waiting for installer lock/);
+
+    expect(existsSync(lockPath)).toBe(true);
+  }, 20_000);
+});
+
+function deadPid(): number {
+  for (let candidate = 999_999; candidate > 100_000; candidate -= 7) {
+    try {
+      process.kill(candidate, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") return candidate;
+    }
+  }
+  throw new Error("could not find an unused pid for the test");
+}
+
+function tempRoot(): string {
+  const root = mkdtempSync(join(tmpdir(), "memmy-runtime-installer-"));
+  roots.push(root);
+  return root;
+}
+
+function createRuntimeArchive(root: string, version: string, identity: { buildId?: string; schemaVersion?: number } = {}): { archive: string; sha256: string; target: string } {
+  const target = runtimeTarget(process.platform, process.arch);
+  const stage = createRuntimeDirectory(root, version, identity);
+  const archive = join(root, `memmy-memory-runtime-${version}-${target}.tar.gz`);
+  const packed = spawnSync("tar", ["-czf", archive, "-C", stage, "."], { encoding: "utf8" });
+  if (packed.status !== 0) throw new Error(packed.stderr || "failed to create runtime fixture");
+  const sha256 = createHash("sha256").update(readFileSync(archive)).digest("hex");
+  return { archive, sha256, target };
+}
+
+function createRuntimeDirectory(root: string, version: string, identity: { buildId?: string; schemaVersion?: number } = {}): string {
+  const target = runtimeTarget(process.platform, process.arch);
+  const stage = join(root, `runtime-${version}-${Math.random().toString(36).slice(2)}`);
+  mkdirSync(join(stage, "dist", "src", "server"), { recursive: true });
+  writeFileSync(join(stage, "dist", "src", "server", "index.js"), "// runtime fixture\n");
+  writeFileSync(join(stage, "memory-runtime.json"), `${JSON.stringify({ version, protocolVersion: 1, target, ...identity })}\n`);
+  return stage;
+}

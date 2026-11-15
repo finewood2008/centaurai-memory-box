@@ -1,0 +1,16 @@
+{
+  "model_catalog_entries": 9,
+  "existing_catalog_revisions_equal": true,
+  "identities": [
+    {
+      "scope": "personal",
+      "root_and_warehouse_claims_equal": true
+    },
+    {
+      "scope": "team",
+      "root_and_warehouse_claims_equal": true
+    }
+  ],
+  "source_db_readonly": true,
+  "network_calls": 0
+}

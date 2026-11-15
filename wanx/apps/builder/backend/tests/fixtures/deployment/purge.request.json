@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "kind": "purge",
+  "target": {
+    "organizationId": "org-demo",
+    "boxId": "box-demo",
+    "applicationId": "app-demo",
+    "environment": "prod"
+  },
+  "expectedGeneration": 1,
+  "idempotencyKey": "request-purge-demo",
+  "decisionRef": {
+    "id": "decision-purge-demo",
+    "revision": 1
+  },
+  "purgeConfirmationRef": {
+    "id": "purge-confirmation-demo",
+    "revision": 1
+  }
+}

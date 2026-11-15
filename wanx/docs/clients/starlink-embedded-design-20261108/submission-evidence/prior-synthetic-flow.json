@@ -1,0 +1,44 @@
+{
+  "warehouse_id": "a0ec9278-5679-4f83-b51e-3eb4f2545a84",
+  "document_id": "aebad334-800f-4079-9706-bea8d6d1cf28",
+  "edited_version_id": "484a42e0-ff1d-4910-bfc8-27f9bea2cd8b",
+  "checks": {
+    "original_hash_unchanged": true,
+    "actual_graph_nodes_relations": true,
+    "graph_evidence_bound_to_edited_version": true,
+    "edited_marker_search_with_current_source": true,
+    "phone_masked_in_delivered_search": true,
+    "zhijun_remains_product": true,
+    "retrieval_evidence_readable_and_masked": true,
+    "all_test_warehouse_jobs_idle": true
+  },
+  "passed": true,
+  "source_evidence": [
+    {
+      "id": "e9cb73a3-b6c4-5f60-b1c3-89f5b48eb812",
+      "source_current_version": true,
+      "locator_present": true
+    },
+    {
+      "id": "1bc4c4bb-90a6-5a6b-8518-fbbdbce96196",
+      "source_current_version": true,
+      "locator_present": true
+    },
+    {
+      "id": "1db4fd01-3cc6-5afc-b990-e0a925b236b0",
+      "source_current_version": true,
+      "locator_present": true
+    },
+    {
+      "id": "f27c9d34-d114-5cba-94ab-f8738abfa167",
+      "source_current_version": true,
+      "locator_present": true
+    }
+  ],
+  "graph": {
+    "nodes": 4,
+    "relations": 3,
+    "evidence": 4
+  },
+  "search_items": 1
+}

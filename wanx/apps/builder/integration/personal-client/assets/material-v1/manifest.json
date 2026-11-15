@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "generatedBy": "built-in imagegen",
+  "createdOn": "2026-11-04",
+  "assets": [
+    {
+      "file": "apps.png",
+      "sha256": "b4b2b2a55e0f3c365dcafc2c4f4c520b39ba3426c78b2882d4602918775398e3"
+    },
+    {
+      "file": "boxes.png",
+      "sha256": "b2fc47ec0ce067ffc68bc70e65ee45646b310472cb2fb72c5cbc8c4069cd3f32"
+    },
+    {
+      "file": "chat.png",
+      "sha256": "cc4ba7d4e578dc82a82e5e18b267b3f680ec5e455bf699f9e2d9f9c6aecc9f76"
+    },
+    {
+      "file": "space.png",
+      "sha256": "a5d987847a3a6accb4805929bd45e705803f9ad7092e61f9e4c8effd5d9df469"
+    },
+    {
+      "file": "starlink.png",
+      "sha256": "3521861ec5338570af118e34e4298cf3438232704a1eaac2c7b3a262d3f871a7"
+    },
+    {
+      "file": "workshop.png",
+      "sha256": "3de78744094f5e851423af5b524ec8fe1e3a4559bfc328d695f6bd41d60a8124"
+    }
+  ]
+}

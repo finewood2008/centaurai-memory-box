@@ -1,0 +1,12 @@
+[
+  {
+    "edition": "personal",
+    "asar_sha256": "a79edee9746dd8ae67d9a1cf447b97d954b6bf441136ce47ab9a780031c35cec",
+    "installed_ui_matches_source": true
+  },
+  {
+    "edition": "team",
+    "asar_sha256": "9492c3da09dc88da675db58bff3933ebc06613f77c9ca7491b43bae4e3442ee6",
+    "installed_ui_matches_source": true
+  }
+]

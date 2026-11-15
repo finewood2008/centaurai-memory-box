@@ -1,0 +1,89 @@
+.topbar__brand-mark {
+  width: 34px;
+  height: 34px;
+  background: none;
+  box-shadow: none;
+}
+
+.topbar__brand-mark img { object-fit: contain; }
+.topbar__brand-text { gap: 3px; white-space: nowrap; }
+.topbar__brand-title { font-weight: var(--fw-bold); }
+
+.view-header {
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background:
+    linear-gradient(112deg, var(--bg-card-hover), var(--bg-elev-1) 74%);
+  box-shadow: var(--shadow-sm);
+}
+
+.card { box-shadow: var(--shadow-sm); }
+.metric-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 165px), 1fr)); }
+
+.viewer-auth {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  justify-items: center;
+  align-items: safe center;
+  padding: 24px;
+  overflow: auto;
+  background:
+    radial-gradient(ellipse at 22% 2%, var(--accent-soft), transparent 62%),
+    var(--bg-canvas);
+}
+
+.viewer-auth__card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 17px;
+  width: min(100%, 408px);
+  padding: clamp(22px, 5vw, 34px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--bg-elev-1);
+  box-shadow: var(--shadow-md);
+  color: var(--fg);
+  text-align: center;
+}
+
+.viewer-auth__brand { display: grid; justify-items: center; gap: 3px; }
+.viewer-auth__brand img { object-fit: contain; margin-bottom: 5px; }
+.viewer-auth__brand strong { font-size: var(--fs-xl); }
+.viewer-auth__brand small { color: var(--fg-muted); }
+.viewer-auth__heading h1 { margin: 0; font-size: var(--fs-xl); }
+.viewer-auth__heading p { margin: 6px 0 0; color: var(--fg-muted); }
+
+.memos-auth-input {
+  width: 100%;
+  padding: 11px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-canvas);
+  color: var(--fg);
+  font: inherit;
+}
+
+.memos-auth-input::placeholder { color: var(--fg-placeholder); }
+.memos-auth-input:focus { outline: none; border-color: var(--border-focus); box-shadow: var(--shadow-focus); }
+
+.memos-auth-submit {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 11px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font: inherit;
+  font-weight: var(--fw-semi);
+  cursor: pointer;
+}
+
+.memos-auth-submit:hover:not(:disabled) { background: var(--accent-hover); }
+.memos-auth-submit:disabled { opacity: .55; cursor: not-allowed; }

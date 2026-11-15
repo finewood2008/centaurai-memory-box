@@ -1,0 +1,43 @@
+{
+  "name": "wanx-app-studio",
+  "version": "1.0.3",
+  "private": true,
+  "type": "module",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22.14"
+  },
+  "scripts": {
+    "dev": "node tools/dev.mjs",
+    "build": "tsc --noEmit && vite build",
+    "test": "node --test tests/*.test.mjs",
+    "test:python": "PYTHONPATH=backend:../../octop/src:../../shared/packages/local-data-gate uv run --project ../../server/bridge pytest backend/tests -q",
+    "check": "npm test && npm run test:python",
+    "probe:codex": "node tools/probe-codex.mjs",
+    "probe:dsh": "node tools/probe-dsh.mjs",
+    "package": "node tools/package.mjs",
+    "package:macos": "npm run build && npm run package && node tools/package-macos.mjs",
+    "pretest": "npm run build && npm run package"
+  },
+  "dependencies": {
+    "@centaurai/wanx-host-sdk": "file:vendor/centaurai-wanx-host-sdk-0.3.0.tgz",
+    "@openai/codex": "0.169.0",
+    "@xterm/addon-fit": "0.10.0",
+    "@xterm/xterm": "5.5.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "semver": "7.8.5",
+    "ws": "8.22.0"
+  },
+  "devDependencies": {
+    "@agentclientprotocol/codex-acp": "2.2.2",
+    "@agentclientprotocol/sdk": "1.5.0",
+    "@deepseek-ai/dsh": "0.2.1-rc.2",
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2",
+    "esbuild": "0.28.2",
+    "sharp": "0.35.5",
+    "typescript": "5.9.3",
+    "vite": "8.3.4"
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "services": {
+    "huohua.workbench": {
+      "enabled": true,
+      "upstream": "http://127.0.0.1:8093",
+      "uid": 10006,
+      "tokenAudience": "wanx-bridge",
+      "protocolVersion": 1,
+      "minWanxVersion": ">=0.1.0",
+      "version": "1.0.0",
+      "routes": [
+        {
+          "prefix": "/api/huohua/v1",
+          "methods": [
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE"
+          ],
+          "sse": true,
+          "websocket": false
+        }
+      ],
+      "health": {
+        "liveness": "/healthz",
+        "readiness": "/readyz",
+        "version": "/version"
+      },
+      "servicePublicKeyFile": "/etc/wanx/bridge/huohua-workbench.pub",
+      "activation": {
+        "mode": "ota",
+        "path": "/var/lib/wanx/services/huohua.workbench/activation.json"
+      }
+    }
+  }
+}

@@ -1,0 +1,77 @@
+---
+title: Other AI memory
+description: Import existing chats so supported AI tools can use the same memory in new tasks.
+icon: ScanSearch
+---
+
+import scanScreen from "../../assets/agent-sources-scan-full-en.jpg";
+import connectedScreen from "../../assets/agent-sources-connected-full-en.jpg";
+import preferencesScreen from "../../assets/agent-sources-preferences-full-en.jpg";
+import manualScreen from "../../assets/agent-sources-manual-full-en.jpg";
+
+If you use tools such as Cursor, Claude Code, and Codex, you can bring their chat history into Memmy, then decide whether they keep using and updating that memory.
+
+## Import existing chats
+
+1. Open **Memory → Cross-Agent access**.
+2. Find the tool under **Detected Agents**. If it has not synced, choose **First scan**. After that, use **Sync new**.
+3. Wait until summaries and indexing finish, then open **Memory → Memories** and search for a project name you recognize.
+
+The first scan organizes some recent history. Later scans only sync new conversations. Scanning chats and installing the memory connector are two separate buttons.
+
+<details>
+<summary>The tool is missing, or you need older history</summary>
+
+Built-in sources include Cursor, Claude Code, Codex, OpenCode, OpenClaw, Hermes, DeepSeek Harness, WorkBuddy, Pi, and qwenwork. The list only shows sources detected on this computer. Confirm that the tool has been used and that it saved local history.
+
+At the bottom of the list, expand **Advanced** and choose **Add another Agent**. Choose or type the framework name. The history path can stay empty. After you confirm, Memmy creates a task that helps find the history folder and finish the connection.
+
+<ProductScreenshot src={manualScreen} alt="Memmy dialog for adding another Agent name and an optional history path" caption="The name is required. Add a path if you know where the history is stored, or leave it empty." />
+
+To add older history, choose **Scan all history** under **Advanced**. It can take longer and use more of the model.
+
+</details>
+
+## Let other AIs use memory
+
+On the tool’s row, choose **Install Hook**, **Install plugin**, or **Install Skill**. After installation, the status becomes **Hook installed**, **Plugin installed**, or **Skill installed**, and the button changes to **Remove**.
+
+<ProductScreenSteps steps={[
+  { label: "Scan and install", src: scanScreen, alt: "Memmy Cross-Agent access with First scan and the memory connector install button", caption: "Each Agent has two actions on the right: scan imports chats, and install connects that AI to memory. The sources and counts in the picture are samples." },
+  { label: "After connecting", src: connectedScreen, alt: "Full Memmy window showing an Agent source with Hook installed", caption: "Check the source status after install. An Agent that already has history shows Sync new, so you can keep importing later chats." }
+]} />
+
+After installing, keep the Memmy memory service available and start a new task in the target tool:
+
+<PromptExample composer={true} prompt="Summarize my work from the past week, list the unfinished to-dos, and name the source." />
+
+Once the background is right, continue with the next step. If the tool says it is not connected, check the install status on the source card and reopen the session as that tool asks.
+
+## Change automatic sync
+
+Scroll to **Auto sync**. Each switch is separate:
+
+- **Scan on startup**: after Memmy starts, scan connected Agents for new sessions.
+- **Scheduled scan**: while Memmy is running, scan for new sessions once an hour.
+- **Auto-connect newly found Agents**: install the connector for a newly detected tool. Turn this off if you want to connect tools yourself.
+
+<ProductScreenshot src={preferencesScreen} alt="Memmy Cross-Agent access showing the three automatic sync switches" caption="The three switches control startup scans, scheduled scans, and connecting new Agents. Change them separately." />
+
+<details>
+<summary>How does each connection use memory?</summary>
+
+- Connections such as Claude Code, Codex, OpenCode, OpenClaw, Hermes, and DeepSeek Harness can look up related memory before a request and collect the conversation after the turn.
+- The Cursor Hook mainly collects new chats and follow-up tasks. Memory can also be looked up on demand through the Skill.
+- WorkBuddy, Pi, and qwenwork read and write memory on demand through the Skill.
+
+</details>
+
+## Stop a connection
+
+Remove the Hook, plugin, or Skill on the source card. To stop history sync as well, turn off automatic sync. Removing the connector does not delete memory that was already imported.
+
+Shared memory does not move project files. To keep working on the original files, the other tool also needs access to that folder.
+
+## Related
+
+[View and manage memory](/docs/en/memory/overview) · [Data and privacy](/docs/en/security/security)

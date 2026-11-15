@@ -1,0 +1,118 @@
+appId: cn.memtensor.memmy
+productName: 半人马AI 私人记忆盒子
+executableName: CentaurAI
+artifactName: CentaurAI-${version}-${arch}-unsigned.${ext}
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - dist/**/*
+  - package.json
+  - "!dist/runtime/memory/**"
+  - "!dist/native/sqlcipher/**"
+  - "!dist/runtime/memmy-agent/dist/skills/docx{,/**}"
+  - "!dist/runtime/memmy-agent/dist/skills/pdf{,/**}"
+  - "!dist/runtime/memmy-agent/dist/skills/pptx{,/**}"
+  - "!dist/runtime/memmy-agent/dist/skills/xlsx{,/**}"
+  - "!dist/runtime/memmy-agent/dist/extra-dependencies/office-rendering{,/**}"
+  - "!dist/runtime/memmy-agent/dist/extra-dependencies/docx-rendering{,/**}"
+  - "!**/node_modules/open-computer-use/**"
+  - "!**/native-computer-use/windows/**"
+  - "!**/native-computer-history/windows/**"
+  - "!**/native-computer-use/linux/**"
+  - "!**/node_modules/*/{test,tests,__tests__,doc,docs,example,examples,coverage,.github}"
+  - "!**/node_modules/*/{test,tests,__tests__,doc,docs,example,examples,coverage,.github}/**/*"
+  - "!**/node_modules/@*/*/{test,tests,__tests__,doc,docs,example,examples,coverage,.github}"
+  - "!**/node_modules/@*/*/{test,tests,__tests__,doc,docs,example,examples,coverage,.github}/**/*"
+  - "!**/node_modules/**/*.{test,spec}.*"
+  - "!**/.env"
+  - "!**/.env.*"
+  - "!**/node_modules/**/{README,README*.md,README*.mdown,README*.markdown,README*.rst,README*.txt,CHANGELOG,CHANGELOG*.md,CHANGELOG*.mdown,CHANGELOG*.markdown,CHANGELOG*.rst,CHANGELOG*.txt,CONTRIBUTING,CONTRIBUTING*.md,CONTRIBUTING*.mdown,CONTRIBUTING*.markdown,CONTRIBUTING*.rst,CONTRIBUTING*.txt,CODE_OF_CONDUCT,CODE_OF_CONDUCT*.md,CODE_OF_CONDUCT*.mdown,CODE_OF_CONDUCT*.markdown,CODE_OF_CONDUCT*.rst,CODE_OF_CONDUCT*.txt,SECURITY,SECURITY*.md,SECURITY*.mdown,SECURITY*.markdown,SECURITY*.rst,SECURITY*.txt}"
+
+asar: true
+asarUnpack:
+  - "**/plugin-runtime/windows/**"
+  - "dist/native/memmy-pip.node"
+  - "dist/native/menu-bar-appearance.node"
+  - "dist/runtime/memmy-agent/dist/tools/computer-history/mac/native/**"
+  - "dist/runtime/memmy-agent/dist/tools/computer-history/mac/wechat/**"
+  - "dist/runtime/memmy-agent/dist/tools/computer-history/wechat_identity.py"
+  - "dist/runtime/memmy-agent/dist/tools/computer-use/mac/native/**"
+  - "**/native-computer-use/**"
+  - "**/*.node"
+  - "**/onnxruntime-node/bin/napi-v3/darwin/**/*.dylib"
+  - "**/@img/sharp-libvips-darwin-*/lib/libvips*.dylib"
+  - "**/@lydell/node-pty-darwin-*/prebuilds/darwin-*/spawn-helper"
+  - "**/node_modules/sqlite-vec-*/vec0.*"
+  - "dist/runtime/memmy-agent/node_modules/@memmy/migrations/**"
+  - "dist/renderer/**"
+
+extraResources:
+  - from: extensions/memmy-browser
+    to: browser-extension
+    filter:
+      - "**/*"
+  - from: dist/runtime/memory
+    to: memory-runtime
+    filter:
+      - "**/*"
+  # electron-builder excludes a matcher-root node_modules directory. Copy it
+  # through its own matcher so the standalone Memory runtime stays complete.
+  - from: dist/runtime/memory/node_modules
+    to: memory-runtime/node_modules
+    filter:
+      - "**/*"
+  - from: dist/runtime/bin
+    to: cli
+    filter:
+      - "**/*"
+  - from: build/MenuBarIconTemplate.png
+    to: MenuBarIconTemplate.png
+  - from: build/MenuBarIconTemplate@2x.png
+    to: MenuBarIconTemplate@2x.png
+  - from: dist/embedding-models
+    to: embedding-models
+    filter:
+      - "**/*"
+  - from: dist/bundled-plugins
+    to: bundled-plugins
+  - from: dist/native/sqlcipher
+    to: native/sqlcipher
+    filter:
+      - "**/*"
+mac:
+  # Preserve the source-built helper's permission identity.
+  signIgnore:
+    - "/dist/native-computer-use/Memmy Computer Use[.]app(/|$)"
+  icon: build/icon.icns
+  category: public.app-category.productivity
+  extendInfo:
+    NSMicrophoneUsageDescription: "半人马AI 私人记忆盒子 uses the microphone for voice input and for website tasks you request."
+    NSCameraUsageDescription: "半人马AI 私人记忆盒子 uses the camera for website tasks you request."
+    NSAppleEventsUsageDescription: "半人马AI 私人记忆盒子 controls Microsoft Excel when you enable its connection and checks whether browser windows are private before recording Computer History."
+  target:
+    - target: dmg
+  identity: null
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  forceCodeSigning: false
+  notarize: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.inherit.plist
+
+dmg:
+  title: 半人马AI 私人记忆盒子
+  icon: build/icon.icns
+  background: build/dmg-background.png
+  window:
+    width: 540
+    height: 380
+  contents:
+    - x: 130
+      y: 200
+    - x: 410
+      y: 200
+      type: link
+      path: /Applications

@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "receipt-rejected-demo",
+  "operationId": "operation-rejected-demo",
+  "operationRevision": 1,
+  "kind": "deploy",
+  "target": {
+    "organizationId": "org-demo",
+    "boxId": "box-demo",
+    "applicationId": "app-demo",
+    "environment": "dev"
+  },
+  "requestedReleaseRef": {
+    "releaseId": "release-spec-demo-v1",
+    "bundleDigest": "sha256:fe1f6fe97dbab33261b84c56146641619dff68234c4d985ae7ae1f5657a20c92"
+  },
+  "previousGeneration": 0,
+  "committedGeneration": null,
+  "environmentRevision": 0,
+  "commitStatus": "not_committed",
+  "outcome": "rejected",
+  "componentResults": [],
+  "observedAt": "2026-11-13T00:00:00.000Z",
+  "correlationId": "correlation-demo",
+  "error": {
+    "code": "UPSTREAM_DECISION_REQUIRED",
+    "owner": "policy-owner-demo",
+    "stage": "validating",
+    "retryable": false
+  }
+}

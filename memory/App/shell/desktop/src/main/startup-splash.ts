@@ -1,0 +1,86 @@
+import { existsSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
+
+export type StartupSplashLanguage = "zh-CN" | "en-US";
+
+/**
+ * Returns whether closing the last window should terminate the desktop app.
+ *
+ * During boot the splash can be the only visible window. Treating its native
+ * close as a normal post-boot window close would terminate a slow startup
+ * before the runtime has finished initializing. macOS keeps the app resident
+ * after its windows close, so it follows the platform convention there.
+ */
+export function shouldQuitWhenAllWindowsClosed(
+  platform: NodeJS.Platform,
+  isBootReady: boolean,
+): boolean {
+  return isBootReady && platform !== "darwin";
+}
+
+export function resolveStartupSplashLanguage(
+  databasePath: string,
+  fallback: StartupSplashLanguage
+): StartupSplashLanguage {
+  if (!existsSync(databasePath)) {
+    return fallback;
+  }
+
+  let database: DatabaseSync | null = null;
+  try {
+    database = new DatabaseSync(databasePath, { readOnly: true });
+    const row = database
+      .prepare("SELECT language FROM app_settings WHERE id = 'default'")
+      .get() as { language?: unknown } | undefined;
+    return row?.language === "zh-CN" || row?.language === "en-US" ? row.language : fallback;
+  } catch {
+    return fallback;
+  } finally {
+    database?.close();
+  }
+}
+
+export function resolveStartupSplashHtml(language: StartupSplashLanguage, slow = false): string {
+  const hint = slow
+    ? language === "en-US" ? "Taking longer than usual. Please wait…" : "启动时间较长，请稍候…"
+    : language === "en-US" ? "Starting…" : "正在启动…";
+  return `<!doctype html><html><head><meta charset="utf-8"><style>
+html,body{margin:0;height:100%;overflow:hidden;font-family:-apple-system,"Segoe UI",sans-serif;}
+body{display:flex;align-items:center;justify-content:center;background:#faf7f2;color:#302d29;-webkit-user-select:none;cursor:default;}
+.box{display:flex;flex-direction:column;align-items:center;gap:16px;}
+.title{font-size:22px;font-weight:600;letter-spacing:1px;}
+.hint{font-size:13px;color:#796b5d;text-align:center;padding:0 16px;}
+.spinner{width:28px;height:28px;border:3px solid rgba(91,70,54,.15);border-top-color:#8b5e3b;border-radius:50%;animation:spin .8s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg);}}
+</style></head><body><div class="box"><div class="spinner"></div><div class="title">半人马AI<br><small>私人记忆盒子</small></div><div class="hint">${hint}</div></div></body></html>`;
+}
+
+export function resolveUpdateSplashHtml(language: StartupSplashLanguage, version?: string): string {
+  const title = language === "en-US" ? "Completing the update" : "正在完成客户端更新";
+  const detail = language === "en-US"
+    ? "The app will reopen automatically when the update is ready."
+    : "安装完成后会自动打开新版。";
+  const versionText = version?.trim()
+    ? language === "en-US"
+      ? `Installing ${escapeSplashText(version)}`
+      : `正在安装 ${escapeSplashText(version)}`
+    : language === "en-US" ? "Installing update" : "正在安装更新";
+  return `<!doctype html><html><head><meta charset="utf-8"><style>
+html,body{margin:0;height:100%;overflow:hidden;font-family:-apple-system,"Segoe UI",sans-serif;}
+body{display:flex;align-items:center;justify-content:center;background:#faf7f2;color:#302d29;-webkit-user-select:none;cursor:default;}
+.box{display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center;padding:0 24px;}
+.title{font-size:20px;font-weight:600;letter-spacing:0;}
+.hint{font-size:13px;color:#796b5d;}
+.detail{font-size:12px;color:#8b5e3b;}
+.spinner{width:28px;height:28px;border:3px solid rgba(91,70,54,.15);border-top-color:#8b5e3b;border-radius:50%;animation:spin .8s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg);}}
+</style></head><body><div class="box"><div class="spinner"></div><div class="title">${title}</div><div class="hint">${versionText}</div><div class="detail">${detail}</div></div></body></html>`;
+}
+
+function escapeSplashText(value: string): string {
+  return value
+    .replace(/&/gu, "&amp;")
+    .replace(/</gu, "&lt;")
+    .replace(/>/gu, "&gt;")
+    .replace(/"/gu, "&quot;");
+}

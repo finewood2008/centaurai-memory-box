@@ -1,0 +1,65 @@
+---
+title: Install and get started
+description: Install Memmy, recover a piece of past work, and continue from it.
+icon: Rocket
+---
+
+import welcomeScreen from "../../assets/welcome-desktop-full-en.png";
+import permissionScreen from "../../assets/first-permission-full-en.jpg";
+
+## 1. Install and finish setup
+
+Download the installer and open Memmy. On the welcome screen, enter your phone number, choose **Get Code**, enter the SMS code, then choose **Log in / Sign up**.
+
+<MemmyDownload />
+
+<ProductScreenshot src={welcomeScreen} alt="Memmy welcome screen" caption="Sign in from the card in the middle. The custom API key entry is below it. Select the picture to enlarge it on this page." />
+
+<details>
+<summary>Use your own API key, without signing up</summary>
+
+On the welcome screen, choose **Use a custom LLM API Key (no sign-up needed)**:
+
+1. Choose the provider, then enter the model ID, API URL, and API key.
+2. Choose how embeddings are created for memory search, and choose models for memory summaries and skill evolution.
+3. Skip speech recognition and image generation if you do not need them yet.
+4. Choose **Test connection**, then save after it succeeds.
+
+</details>
+
+## 2. Bring in past conversation
+
+The first-run setup asks whether Memmy may read history from other AI tools. To try memory first, choose **Scan only**. To also install the memory connector for supported tools, choose **Allow all**. To skip import for now, choose **Deny**.
+
+<ProductScreenshot src={permissionScreen} alt="Memmy asking permission to import chat history" caption="The three choices are at the bottom of the dialog. You can change this later in Memory, then Cross-Agent access." />
+
+After you reach the workbench, open **Memory → Cross-Agent access** and find a tool you have used. The first time, choose **First scan**. If it has already synced, choose **Sync new**. Wait until summaries and indexing finish, then search **Memories** for a project name you recognize and open one record.
+
+<details>
+<summary>There is no history, or you do not want to import it yet</summary>
+
+Create a task in Memmy and send a message.
+
+After you find the related memory in **Memory → Memories**, start another task and continue the conversation.
+
+</details>
+
+## 3. Ask Memmy to recover the background
+
+Create a task, use the message below as a reference, and recover the memory:
+
+<PromptExample composer={true} prompt="Do you remember the user interviews we did earlier? Please help me plan a 30-minute team meeting about following up on user feedback." />
+
+Check whether the answer matches what you remember. If it does not, go back to **Memory → Memories**, confirm the record has finished processing, and ask again with the specific name in the record.
+
+When a new task can find something from the past and continue the work, you have finished the first memory try.
+
+## 4. Tools and connections
+
+Memmy can connect to the services and information you use for work through integrated tools, such as Notion and GitHub. You can also connect chat channels such as DingTalk, Feishu, and WeChat, and assign Memmy a task from there, or install a plugin and add that capability to the current task. Use them when a task depends on information outside the chat, actions in another system, or a repeatable workflow.
+
+Open **Connections & Tools** on the left. Continue with [Connect an external tool](/docs/en/tools/integrations), [Connect a chat channel](/docs/en/channels), or [Plugins](/docs/en/plugins/overview).
+
+## Related
+
+[Fix a problem](/docs/en/help/faq)

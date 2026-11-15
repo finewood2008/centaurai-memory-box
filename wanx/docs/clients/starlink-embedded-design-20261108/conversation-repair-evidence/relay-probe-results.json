@@ -1,0 +1,16 @@
+{
+  "passed": true,
+  "kind": "synthetic-relay-actual-http-contract-probe",
+  "checks": [
+    "gateway_token_and_origin_guard",
+    "conversation_list_scoped_signed_read",
+    "conversation_create_operation_bound_write",
+    "unregistered_path_and_scope_or_operation_tampering_rejected",
+    "existing_team_scope_remains_distinct",
+    "current_model_adapter_thinking_budget_and_double_job_authorization",
+    "model_purpose_and_signature_remain_finite",
+    "existing_local_usage_audit_shape_preserved"
+  ],
+  "real_provider_calls": 0,
+  "live_service_writes": 0
+}

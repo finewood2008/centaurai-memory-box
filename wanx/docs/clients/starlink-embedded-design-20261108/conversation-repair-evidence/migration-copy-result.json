@@ -1,0 +1,48 @@
+{
+  "documents": {
+    "rows": 99,
+    "unchanged": true
+  },
+  "document_versions": {
+    "rows": 108,
+    "unchanged": true
+  },
+  "content_segments": {
+    "rows": 7582,
+    "unchanged": true
+  },
+  "published_entities": {
+    "rows": 193,
+    "unchanged": true
+  },
+  "published_facts": {
+    "rows": 157,
+    "unchanged": true
+  },
+  "fact_evidence": {
+    "rows": 328,
+    "unchanged": true
+  },
+  "xingtu_access_keys": {
+    "rows": 17,
+    "unchanged": true
+  },
+  "xingtu_warehouses": {
+    "rows": 24,
+    "unchanged": true
+  },
+  "knowledge_governance_reviews": {
+    "rows": 0,
+    "unchanged": true
+  },
+  "knowledge_governance_proposals": {
+    "rows": 0,
+    "unchanged": true
+  },
+  "knowledge_governance_operations": {
+    "rows": 0,
+    "unchanged": true
+  },
+  "schema": 30,
+  "conversation_tables": 15
+}

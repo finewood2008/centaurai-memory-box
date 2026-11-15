@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wanx-dialogue-event/1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "type",
+    "session"
+  ],
+  "properties": {
+    "type": {
+      "const": "snapshot"
+    },
+    "session": {
+      "$ref": "dialogue-session.v1.schema.json"
+    }
+  }
+}

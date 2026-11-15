@@ -1,0 +1,10 @@
+.expert-contract-picker>label{display:block;margin:16px 0 7px;font-size:13px;font-weight:600}
+.expert-contract-picker>select,.expert-contract-picker>input,.expert-contract-picker>textarea{display:block;width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--line,#dce3e8);border-radius:8px;background:var(--panel,#fff);color:inherit;font:inherit;font-size:13px}
+.expert-contract-picker>textarea{resize:vertical;min-height:68px}
+.expert-contract-picker>small{display:block;margin-top:7px;color:var(--muted,#687683);font-size:12px;line-height:1.6}
+.expert-contract-picker>.preparation-actions{margin-top:15px}
+.expert-contract-picker [role=alert]{color:#a5463d}
+.expert-contract-picker>select:focus-visible,.expert-contract-picker>input:focus-visible,.expert-contract-picker>textarea:focus-visible{outline:3px solid #2da795;outline-offset:2px}
+.studio-expert-deployment{height:100%;min-height:0;overflow:auto;color:var(--ink,#263340);background:var(--surface,#f7f9fb)}
+.studio-expert-deployment>.deployment-panel{height:auto;overflow:visible}
+.studio-expert-deployment>.deployment-panel:first-child{padding-bottom:10px}

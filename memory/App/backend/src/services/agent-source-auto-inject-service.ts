@@ -1,0 +1,155 @@
+/** Agent source auto inject service module. */
+import type { AgentSourceAutoInjectResult, AgentSourceView, ScanPreferences } from "@memmy/local-api-contracts";
+import { MemoryLayerError } from "../adapters/outbound/memory-client/errors.js";
+import type { PermissionManager } from "../permission/index.js";
+import type { AgentSourceService } from "./agent-source-service.js";
+
+const AUTO_INJECT_AGENT_SOURCE_IDS = new Set([
+  "cursor",
+  "claude_code",
+  "codex",
+  "opencode",
+  "openclaw",
+  "hermes",
+  "deepseek_harness",
+  "workbuddy",
+  "pi",
+  "qwenwork"
+]);
+const HOOK_OR_PLUGIN_AGENT_SOURCE_IDS = new Set(["cursor", "claude_code", "codex", "opencode", "openclaw", "hermes", "deepseek_harness"]);
+const UPDATABLE_HOOK_AGENT_SOURCE_IDS = new Set(["cursor", "claude_code", "codex", "opencode"]);
+
+export interface AgentSourceAutoInjectService {
+  runOnce(): Promise<AgentSourceAutoInjectResult>;
+}
+
+export interface CreateAgentSourceAutoInjectServiceOptions {
+  agentSources: Pick<AgentSourceService, "list" | "installSkill" | "installPlugin" | "isInstalledHookCurrent">
+    & Partial<Pick<AgentSourceService, "getSyncAccess" | "uninstallSkill" | "uninstallPlugin">>;
+  permissionManager: Pick<PermissionManager, "canWriteAgentSkill">;
+  getScanPreferences: () => ScanPreferences;
+  isAutoInjectSuppressed?: (sourceId: string) => boolean;
+}
+
+/** Creates create agent source auto inject service. */
+export function createAgentSourceAutoInjectService(
+  options: CreateAgentSourceAutoInjectServiceOptions
+): AgentSourceAutoInjectService {
+  let running = false;
+
+  return {
+    async runOnce() {
+      if (running) {
+        return {
+          ok: true,
+          skipped: true,
+          reason: "already_running",
+          installed: [],
+          failed: []
+        };
+      }
+
+      running = true;
+      try {
+        const access = await options.agentSources.getSyncAccess?.().catch((error: unknown) => {
+          if (!(error instanceof MemoryLayerError && error.code === "memory_scan_upgrade_required")) throw error;
+          return undefined;
+        });
+        const disabledSources = new Set(access?.disabledSourceIds);
+        const sources = await options.agentSources.list();
+        const installed: string[] = [];
+        const failed: Array<{ sourceId: string; reason: string }> = [];
+
+        for (const source of sources) {
+          if (!isUpdatableInstalledHook(source)) continue;
+          if (disabledSources.has(source.sourceId) || options.isAutoInjectSuppressed?.(source.sourceId)) continue;
+          if (!(await options.permissionManager.canWriteAgentSkill({ agentSourceId: source.sourceId }))) {
+            continue;
+          }
+
+          try {
+            if (await options.agentSources.isInstalledHookCurrent(source.sourceId)) continue;
+            await options.agentSources.installPlugin(source.sourceId, { installType: "auto_inject" });
+            if (options.isAutoInjectSuppressed?.(source.sourceId)) {
+              if (!options.agentSources.uninstallPlugin) throw new Error("Cannot clean up an auto-updated source removed during installation");
+              await options.agentSources.uninstallPlugin(source.sourceId, { installType: "auto_inject" });
+              continue;
+            }
+            installed.push(source.sourceId);
+          } catch (error) {
+            failed.push({
+              sourceId: source.sourceId,
+              reason: error instanceof Error ? error.message : String(error)
+            });
+          }
+        }
+
+        const preferences = options.getScanPreferences();
+        if (!preferences.autoInjectSkill) {
+          return {
+            ok: true,
+            skipped: true,
+            reason: "auto_inject_disabled",
+            installed,
+            failed
+          };
+        }
+
+        for (const source of sources) {
+          const checkDshUpdate = source.sourceId === "deepseek_harness" && source.status === "plugin_installed";
+          if (!AUTO_INJECT_AGENT_SOURCE_IDS.has(source.sourceId) || !source.builtin || !source.available
+            || (source.status !== "not_connected" && !checkDshUpdate)) {
+            continue;
+          }
+          if (disabledSources.has(source.sourceId) || options.isAutoInjectSuppressed?.(source.sourceId)) continue;
+
+          if (!(await options.permissionManager.canWriteAgentSkill({ agentSourceId: source.sourceId }))) {
+            continue;
+          }
+
+          try {
+            if (checkDshUpdate && (await options.agentSources.isInstalledHookCurrent(source.sourceId)
+              || options.isAutoInjectSuppressed?.(source.sourceId))) continue;
+            if (HOOK_OR_PLUGIN_AGENT_SOURCE_IDS.has(source.sourceId)) {
+              await options.agentSources.installPlugin(source.sourceId, { installType: "auto_inject" });
+            } else {
+              await options.agentSources.installSkill(source.sourceId, { installType: "auto_inject" });
+            }
+            if (options.isAutoInjectSuppressed?.(source.sourceId)) {
+              if (HOOK_OR_PLUGIN_AGENT_SOURCE_IDS.has(source.sourceId)) {
+                if (!options.agentSources.uninstallPlugin) throw new Error("Cannot clean up an auto-injected source removed during installation");
+                await options.agentSources.uninstallPlugin(source.sourceId, { installType: "auto_inject" });
+              } else {
+                if (!options.agentSources.uninstallSkill) throw new Error("Cannot clean up an auto-injected source removed during installation");
+                await options.agentSources.uninstallSkill(source.sourceId);
+              }
+              continue;
+            }
+            installed.push(source.sourceId);
+          } catch (error) {
+            failed.push({
+              sourceId: source.sourceId,
+              reason: error instanceof Error ? error.message : String(error)
+            });
+          }
+        }
+
+        return {
+          ok: true,
+          skipped: false,
+          installed,
+          failed
+        };
+      } finally {
+        running = false;
+      }
+    }
+  };
+}
+
+function isUpdatableInstalledHook(source: AgentSourceView): boolean {
+  return UPDATABLE_HOOK_AGENT_SOURCE_IDS.has(source.sourceId)
+    && source.builtin
+    && source.available
+    && source.status === "plugin_installed";
+}

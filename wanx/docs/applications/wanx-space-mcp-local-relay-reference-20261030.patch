@@ -1,0 +1,963 @@
+diff --git a/apps/personal-client/client.mjs b/apps/personal-client/client.mjs
+index 97e8fdb..a77c54f 100644
+--- a/apps/personal-client/client.mjs
++++ b/apps/personal-client/client.mjs
+@@ -400,6 +400,16 @@ export function createClient({
+
+   return {
+     snapshot,
++    mcpConnection() {
++      if (closed || phase !== "ready" || !connection || !activeEndpoint)
++        throw new Error("SESSION_CLOSED");
++      const generation = epoch, endpoint = activeEndpoint;
++      const context = () => {
++        if (closed || phase !== "ready" || epoch !== generation || activeEndpoint !== endpoint)
++          throw new Error("SESSION_CLOSED");
++      };
++      return {url: endpoint.url, agent: endpoint.agent, context};
++    },
+     async request(input) {
+       if (closed || !gateway) throw new Error("SESSION_CLOSED");
+       return gateway.request(input);
+diff --git a/apps/personal-client/local-ui/renderer/space-agent-hub.js b/apps/personal-client/local-ui/renderer/space-agent-hub.js
+index a42f401..2741b9d 100644
+--- a/apps/personal-client/local-ui/renderer/space-agent-hub.js
++++ b/apps/personal-client/local-ui/renderer/space-agent-hub.js
+@@ -2,7 +2,7 @@
+ window.createSpaceAgentHub=function({request,changed=()=>{}}){
+  const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const labels={active:'Key 有效',paused:'已暂停',expired:'已过期',revoked:'已撤销'};
+- const errors={MCP_KEY_NOT_ON_THIS_CLIENT:'Key 未保存在本机。请在生成它的客户端复制，或更换 Key；原盘和文件会保留。',SPACE_CONTEXT_CHANGED:'账号或盒子已切换，请重新打开。',SPACE_LINK_UPGRADE_REQUIRED:'请更新盒子服务后重试。',BOX_CONNECTION_REQUIRED:'请先连接盒子。',MCP_ADDRESS_INVALID:'盒子地址不可用，请重新连接。',AGENT_GRANT_DENIED:'目录授权已失效，请重新选择。',NAME_REQUIRED:'请填写接入名称（最多 80 字）。',SPACE_NOT_FOUND:'目录暂不可用，请刷新后重试。'};
++ const errors={MCP_KEY_NOT_ON_THIS_CLIENT:'Key 未保存在本机。请在生成它的客户端复制，或更换 Key；原盘和文件会保留。',SPACE_CONTEXT_CHANGED:'账号或盒子已切换，请重新打开。',SPACE_LINK_UPGRADE_REQUIRED:'请更新盒子服务后重试。',BOX_CONNECTION_REQUIRED:'请先连接盒子。',MCP_ADDRESS_INVALID:'盒子地址不可用，请重新连接。',MCP_TRANSPORT_UNAVAILABLE:'本机 MCP 通道暂不可用，请保持万象连接盒子后重试。',MCP_PORT_IN_USE:'本机 MCP 端口被其他程序占用，请关闭占用程序后重试。',AGENT_GRANT_DENIED:'目录授权已失效，请重新选择。',NAME_REQUIRED:'请填写接入名称（最多 80 字）。',SPACE_NOT_FOUND:'目录暂不可用，请刷新后重试。'};
+  const explain=e=>errors[e.code||e.message]||'操作未完成，请检查连接后重试。当前填写内容会保留。';
+  let dialog,createDialog,data,selected='',scope=null,epoch=0,online=false,busy=false,error='',notice='',query='',detail=false,resource=null,picker=null,menu=false,confirmation=null,rename='',createName='',createAttempt='',createError='',highlight='',stoppedOpen=false,composing=false,readSerial=0,timer;
+  const connection=()=>data?.connections?.find(c=>c.id===selected);
+@@ -27,7 +27,7 @@ window.createSpaceAgentHub=function({request,changed=()=>{}}){
+  function details(){const c=connection();if(!c)return `<div class="mcp-welcome"><span aria-hidden="true">◇</span><h3>${data?'创建第一个 Agent 接入':'正在读取接入'}</h3><p>标准 MCP · 每个接入拥有独立专属盘</p>${data?button('＋ 创建接入','create','',true):''}</div>`;const disk=c.drive,manageable=!!disk?.manageable,copy=active()&&c.localKey;return `<div class="mcp-detail-title"><div>${button('‹ 返回接入列表','back')}<h3>${esc(c.name)}</h3><small>${data.destination==='company'?`所属成员 · ${esc(disk?.member||'未知成员')}`:disk?.domain==='company'?`公司接入 · ${esc(disk.member||'未知成员')}`:'个人专属接入'}</small></div>${manageable?`<div class="mcp-more">${button('更多 ⋯','more',`aria-expanded="${menu}"`)}${menu?`<div class="mcp-more-menu">${button('重命名','confirm-rename')}${['active','paused'].includes(c.status)?button(c.status==='paused'?'恢复接入':'暂停接入',c.status==='paused'?'resume':'pause'):''}${button('更换 Key','confirm-rotate')}${c.status!=='revoked'?button('撤销接入','confirm-revoke'):''}</div>`:''}</div>`:''}</div>${confirmation?confirmView():''}${picker?pickerView():''}<section class="mcp-detail-section"><h4>接入配置 <span class="mcp-status ${active()?'active':''}">${esc(labels[c.status]||'状态未知')}</span></h4><div class="mcp-key"><code>${esc(c.prefix)}••••••••</code><span>${c.last_used?'最近调用 · '+time(c.last_used):'等待首次调用'}</span></div><div class="mcp-row">${button('复制 MCP 配置','copy-config',`${copy?'':'disabled'} ${highlight===c.id?'data-highlight="true"':''}`,true)}${button('复制 Key','copy-key',copy?'':'disabled')}</div>${!c.localKey?'<p class="mcp-muted">Key 未保存在本机。请在原客户端复制，或更换 Key；原盘和文件会保留。</p>':''}${!active()?'<p class="mcp-muted">接入当前不可用；盘内已保存的文件保留。</p>':''}</section><section class="mcp-detail-section"><h4>专属盘</h4><div class="mcp-disk"><span aria-hidden="true">▱</span><div><strong>${esc(disk?.name||'目录暂不可用')}</strong><small>${disk?.domain==='company'?'公司成员可查看':'仅当前账号可见'} · 记忆 / 对话 / 文件 / 构建物</small></div>${button('打开专属盘','open-drive',disk?'':'disabled')}</div><div class="mcp-row">${button('复制导入记忆提示词','copy-prompt',manageable&&active()?'':'disabled')}${button('查看记忆文件','open-memory',disk?.directories?.memory?'':'disabled')}</div><p class="mcp-muted">保存到此专属盘 / 记忆与上下文 · 仅导入 Agent 可访问的内容</p></section><section class="mcp-detail-section"><h4>额外资料授权</h4>${grants()}</section>`;}
+  function confirmView(){return `<section class="mcp-selection" role="group" aria-label="确认操作"><strong>${confirmation==='rename'?'重命名接入与专属盘':confirmation==='rotate'?'更换 Key？':'撤销接入？'}</strong>${confirmation==='rename'?`<label>名称<input name="mcp-rename" maxlength="80" value="${esc(rename)}"></label>`:'<p>旧 Key 立即失效，原专属盘和文件保留。</p>'}<div class="mcp-row">${button('确认',confirmation==='rename'?'rename':confirmation,'',true)}${button('取消','cancel-confirm')}</div></section>`;}
+  function pickerView(){return `<section class="mcp-selection"><strong>选择${picker.domain==='company'?'公司':'个人'}目录</strong><div class="mcp-row">${picker.breadcrumbs.map(c=>button(esc(c.name),'pick',`data-domain="${picker.domain}" data-parent="${esc(c.id)}"`)).join('')}</div><div class="mcp-items">${picker.items.filter(i=>i.kind==='folder').map(i=>`<article><strong>${esc(i.name)}</strong>${button('打开','pick',`data-domain="${picker.domain}" data-parent="${esc(i.id)}"`)}</article>`).join('')||'<p class="mcp-muted">没有子文件夹</p>'}</div><div class="mcp-row">${button('选择当前目录','pick-current','',true)}${button('取消','pick-cancel')}</div></section>`;}
+- function draw(searchFocus=false){if(!dialog?.open)return;if(searchFocus){const list=dialog.querySelector('.mcp-agent-list');if(list){list.innerHTML=agentRows();return;}}const scroll=dialog.querySelector('.space-mcp-body')?.scrollTop||0,listScroll=searchFocus?0:dialog.querySelector('.mcp-agent-list')?.scrollTop||0;dialog.innerHTML=`<header class="space-mcp-header"><div><h2>空间 MCP</h2><span>连接 Agent，资料留在自己的盒子里</span></div>${button('刷新','refresh')}${button('完成','close')}</header>${error?`<div class="space-mcp-error" role="alert">${esc(error)}</div>`:''}${notice?`<div class="space-mcp-notice" role="status">${esc(notice)}</div>`:''}<div class="space-mcp-layout ${detail?'show-detail':''}"><aside>${list()}</aside><main class="space-mcp-body" aria-label="接入详情" aria-busy="${busy}">${details()}</main></div><footer class="mcp-server"><span>盒子端 MCP</span><code title="${esc(data?.url||'')}">${esc(data?.url||'正在读取…')}</code>${button('复制地址','copy-url',data?.url?'':'disabled')}</footer>`;const pane=dialog.querySelector('.space-mcp-body');if(pane)pane.scrollTop=scroll;const items=dialog.querySelector('.mcp-agent-list');if(items)items.scrollTop=listScroll;if(searchFocus){const input=dialog.querySelector('[name=mcp-search]');input?.focus();input?.setSelectionRange?.(query.length,query.length);}}
++ function draw(searchFocus=false){if(!dialog?.open)return;if(searchFocus){const list=dialog.querySelector('.mcp-agent-list');if(list){list.innerHTML=agentRows();return;}}const scroll=dialog.querySelector('.space-mcp-body')?.scrollTop||0,listScroll=searchFocus?0:dialog.querySelector('.mcp-agent-list')?.scrollTop||0;dialog.innerHTML=`<header class="space-mcp-header"><div><h2>空间 MCP</h2><span>连接 Agent，资料留在自己的盒子里</span></div>${button('刷新','refresh')}${button('完成','close')}</header>${error?`<div class="space-mcp-error" role="alert">${esc(error)}</div>`:''}${notice?`<div class="space-mcp-notice" role="status">${esc(notice)}</div>`:''}<div class="space-mcp-layout ${detail?'show-detail':''}"><aside>${list()}</aside><main class="space-mcp-body" aria-label="接入详情" aria-busy="${busy}">${details()}</main></div><footer class="mcp-server"><span title="${data?.localRelay?'经万象网络连接盒子，调用时保持本机万象连接。':'MCP 由盒子独立运行。'}">${data?.localRelay?'本机 MCP 入口 · 保持万象连接':'盒子端 MCP'}</span><code title="${esc(data?.url||'')}">${esc(data?.url||'正在读取…')}</code>${button('复制地址','copy-url',data?.url?'':'disabled')}</footer>`;const pane=dialog.querySelector('.space-mcp-body');if(pane)pane.scrollTop=scroll;const items=dialog.querySelector('.mcp-agent-list');if(items)items.scrollTop=listScroll;if(searchFocus){const input=dialog.querySelector('[name=mcp-search]');input?.focus();input?.setSelectionRange?.(query.length,query.length);}}
+  function drawCreate(){if(!createDialog.open)return;createDialog.innerHTML=`<form><header><h3>创建 Agent 接入</h3><p>${data?.destination==='company'?'专属盘归公司，成员可查看。':'专属盘归当前个人账号。'}</p></header><label>接入名称<input name="mcp-create-name" maxlength="80" required value="${esc(createName)}" placeholder="例如：我的工作助手" ${busy||createAttempt?'readonly':''}></label>${createError?`<p class="space-mcp-error" role="alert">${esc(createError)}</p>`:''}${createAttempt&&!busy?'<p class="mcp-muted">重试将沿用本次创建，避免重复建盘。</p>':''}<footer>${button('取消','create-cancel')}${button(busy?'正在创建…':createAttempt?'重试创建':'创建接入','issue','',true)}</footer></form>`;}
+  async function act(action,d={}){if(action==='close'){if(!busy)close();return;}if(busy)return;const c=connection(),id=selected,e=epoch;
+   if(action==='create'){createName='';createAttempt='';createError='';createDialog.showModal();drawCreate();createDialog.querySelector('input')?.focus();return;}
+diff --git a/apps/personal-client/platform.mjs b/apps/personal-client/platform.mjs
+index 6ad0828..36d45db 100644
+--- a/apps/personal-client/platform.mjs
++++ b/apps/personal-client/platform.mjs
+@@ -1058,6 +1058,16 @@ export function createPlatformClient({
+       if (!activeLink?.client) throw fail("NETWORK_NOT_READY");
+       return activeLink.client.openWebSocket(input);
+     },
++    mcpConnection() {
++      const link = activeLink, generation = connectionEpoch;
++      const assertLive = () => {
++        if (closed || !link || activeLink !== link || generation !== connectionEpoch || snapshot().phase !== "ready")
++          throw fail("NETWORK_NOT_READY");
++      };
++      assertLive();
++      const endpoint = link.client.mcpConnection();
++      return {url: endpoint.url, agent: endpoint.agent, context() { assertLive(); endpoint.context(); }};
++    },
+     async applicationConnection(applicationId, options) {
+       const connectionOptions = validateApplicationConnectionOptions(options);
+       const link = activeLink, generation = connectionEpoch;
+diff --git a/apps/personal-client/shell/space-links.mjs b/apps/personal-client/shell/space-links.mjs
+index 2520a1e..4240f30 100644
+--- a/apps/personal-client/shell/space-links.mjs
++++ b/apps/personal-client/shell/space-links.mjs
+@@ -1,7 +1,8 @@
+-// Space management adapter. MCP itself runs on the box; no desktop HTTP service.
++// Space management and an optional transport to the box through app-owned NetBird.
+ import path from 'node:path';
+ import {createSpaceShares} from './space-shares.mjs';
+ import {createSpaceMcp} from './space-mcp.mjs';
++import {createSpaceMcpRelay} from './space-mcp-relay.mjs';
+ import {dataInteractionKey,dataOwnerKey} from '../device-trust/data-context.mjs';
+ const fail=(code,status=409)=>Object.assign(Error(code),{code,status});
+ const id=value=>{if(!/^[a-f0-9]{32}$/.test(value||''))throw fail('SPACE_INVALID_ID',400);return value;};
+@@ -15,13 +16,16 @@ export async function createSpaceLinkBridge({client,store,serviceURL,onChanged=(
+  const scope=()=>{const key=interaction();return !closed&&key?JSON.stringify([key,generation]):null;};
+  const assertScope=bound=>{if(closed||!scope())throw fail('BOX_CONNECTION_REQUIRED',503);if(bound!==scope())throw fail('SPACE_CONTEXT_CHANGED');};
+  const persist=()=>{const copy=structuredClone(state);writes=writes.catch(()=>{}).then(()=>store.save(copy));return writes;};
+- let previous=interaction();const unsubscribe=client.subscribe(()=>{const next=interaction();if(next===previous)return;previous=next;generation++;for(const c of controllers)c.abort();});
++ const relay=createSpaceMcpRelay({state,persist,scope,storageScope,assertScope,client});
++ const mcpEndpoint=async()=>{if(client.snapshot().connection.mode==='netbird')return relay.url();const u=new URL(client.snapshot().connection.url);if(!['http:','https:'].includes(u.protocol)||u.username||u.password||u.search||u.hash)throw fail('MCP_ADDRESS_INVALID');u.pathname='/mcp/space';return u.href;};
++ let previous=interaction();const unsubscribe=client.subscribe(()=>{const next=interaction();if(next===previous)return;previous=next;generation++;for(const c of controllers)c.abort();relay.contextChanged();});
+  async function remote(bound,route,{method='GET',body,prefix='/api/personal-space'}={}){
+   assertScope(bound);const epoch=generation,connection=await client.applicationConnection();const controller=new AbortController();controllers.add(controller);
+   try{assertScope(bound);const response=await connection.request({path:prefix+route,method,headers:{'content-type':'application/json'},body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.any([controller.signal,AbortSignal.timeout(120000)])});assertScope(bound);if(epoch!==generation)throw fail('SPACE_CONTEXT_CHANGED');let value;try{value=JSON.parse(Buffer.from(response.body||'').toString());}catch{}if(response.status<200||response.status>=300)throw fail(value?.detail?.code||(typeof value?.detail==='string'?value.detail:null)||value?.code||(response.status===404?'SPACE_LINK_UPGRADE_REQUIRED':'SPACE_REQUEST_FAILED'),response.status);return {value};}finally{controllers.delete(controller);connection.close?.();}
+  }
+  const shares=createSpaceShares({remote,scope,assertScope,client,copyText,onChanged});
+- const mcp=createSpaceMcp({state,persist,scope,storageScope,assertScope,remote,client,copyText,team:agentHubOptions.team===true});
++ const mcp=createSpaceMcp({state,persist,scope,storageScope,assertScope,remote,client,copyText,resolveEndpoint:mcpEndpoint,team:agentHubOptions.team===true});
++ relay.contextChanged();
+  return {
+   async manage(action,input={}){
+    const bound=scope();assertScope(bound);
+@@ -40,9 +44,9 @@ export async function createSpaceLinkBridge({client,store,serviceURL,onChanged=(
+    throw fail('SPACE_ACTION_INVALID',400);
+   },
+   async mcpDetails(kind='space'){
+-   if(!['space','starlink'].includes(kind))throw fail('MCP_SURFACE_INVALID');const bound=scope();assertScope(bound);const u=new URL(client.snapshot().connection.url);u.pathname='/mcp/'+kind;u.search='';u.hash='';
+-   return {url:u.href,transport:'Streamable HTTP',authentication:'Authorization: Bearer <访问 Key>',configuration:{mcpServers:{[kind==='space'?'wanx-space':'wanx-starlink']:{url:u.href,headers:{Authorization:'Bearer <访问 Key>'}}}},serverHosted:true,localOnly:false};
++   if(!['space','starlink'].includes(kind))throw fail('MCP_SURFACE_INVALID');const bound=scope();assertScope(bound);const local=kind==='space'&&client.snapshot().connection.mode==='netbird';const u=new URL(local?await mcpEndpoint():client.snapshot().connection.url);u.pathname='/mcp/'+kind;u.search='';u.hash='';
++   return {url:u.href,transport:'Streamable HTTP',authentication:'Authorization: Bearer <访问 Key>',configuration:{mcpServers:{[kind==='space'?'wanx-space':'wanx-starlink']:{url:u.href,headers:{Authorization:'Bearer <访问 Key>'}}}},serverHosted:true,localOnly:local};
+   },
+-  async close(){closed=true;unsubscribe();for(const c of controllers)c.abort();await writes.catch(()=>{});}
++  async close(){closed=true;unsubscribe();for(const c of controllers)c.abort();await relay.close();await writes.catch(()=>{});}
+  };
+ }
+diff --git a/apps/personal-client/shell/space-mcp.mjs b/apps/personal-client/shell/space-mcp.mjs
+index 326d371..9c5e39a 100644
+--- a/apps/personal-client/shell/space-mcp.mjs
++++ b/apps/personal-client/shell/space-mcp.mjs
+@@ -1,11 +1,11 @@
+-// Server-hosted, vendor-independent MCP. This module only manages scoped keys;
+-// it never reads Agent logs or puts the desktop on the MCP data path.
++// Server-hosted MCP with a loopback transport for the app-owned NetBird network.
++// Keys and authorization remain on the box; the relay never adds desktop authority.
+ import {randomBytes} from 'node:crypto';
+ const PREFIX='/api/_client/space-mcp';
+ const fail=code=>Object.assign(Error(code),{code});
+-export function createSpaceMcp({state,persist,scope,storageScope=scope,assertScope,remote,client,copyText,team=false}) {
++export function createSpaceMcp({state,persist,scope,storageScope=scope,assertScope,remote,client,copyText,resolveEndpoint,team=false}) {
+  state.spaceMcp ||= [];
+- const endpoint=()=>{const u=new URL(client.snapshot().connection.url);if(!['http:','https:'].includes(u.protocol)||u.username||u.password||u.search||u.hash)throw fail('MCP_ADDRESS_INVALID');u.pathname='/mcp/space';return u.href;};
++ const endpoint=async()=>{if(resolveEndpoint)return resolveEndpoint();const u=new URL(client.snapshot().connection.url);if(!['http:','https:'].includes(u.protocol)||u.username||u.password||u.search||u.hash)throw fail('MCP_ADDRESS_INVALID');u.pathname='/mcp/space';return u.href;};
+  const call=async(bound,path='',options={})=>(await remote(bound,path,{prefix:PREFIX,...options})).value;
+  return {
+   contextChanged(){},close(){},
+@@ -23,7 +23,7 @@ export function createSpaceMcp({state,persist,scope,storageScope=scope,assertSco
+     r.rotation ||= {operation_id:randomBytes(16).toString('hex'),credential:randomBytes(32).toString('base64url')};await persist();
+     const value=await call(bound,`/connections/${input.id}/rotate`,{method:'POST',body:r.rotation});assertScope(bound);r.credential=r.rotation.credential;delete r.rotation;await persist();assertScope(bound);return value;
+    }
+-   if(action==='mcp-state') {const value=await call(bound,'?destination='+destination);assertScope(bound);return {...value,url:endpoint(),connections:value.connections.map(c=>({...c,localKey:!!record(c.id)?.credential}))};}
++   if(action==='mcp-state') {const value=await call(bound,'?destination='+destination);assertScope(bound);return {...value,url:await endpoint(),localRelay:client.snapshot().connection.mode==='netbird',connections:value.connections.map(c=>({...c,localKey:!!record(c.id)?.credential}))};}
+    if(action==='mcp-issue') {
+     let pending=state.spaceMcp.find(r=>r.scope===owner&&!r.id&&r.name===input.name);
+     if(!pending){pending={scope:owner,name:String(input.name||'我的 MCP 接入').slice(0,80),operation_id:randomBytes(16).toString('hex'),credential:randomBytes(32).toString('base64url'),destination};state.spaceMcp.push(pending);await persist();}
+@@ -37,12 +37,12 @@ export function createSpaceMcp({state,persist,scope,storageScope=scope,assertSco
+    if(action==='mcp-prompt')return call(bound,`/connections/${input.id}/prompt`);
+    if(action==='mcp-copy') {
+     let text;
+-    if(input.kind==='url') text=endpoint();
++    if(input.kind==='url') text=await endpoint();
+     else if(input.kind==='prompt')text=(await call(bound,`/connections/${input.id}/prompt`)).prompt;
+     else {
+      const overview=await call(bound,'?destination='+destination),connection=overview.connections.find(c=>c.id===input.id&&c.status==='active');
+      const r=record(input.id);if(!connection||!r?.credential)throw fail('MCP_KEY_NOT_ON_THIS_CLIENT');
+-     text=input.kind==='key'?r.credential:JSON.stringify({mcpServers:{'wanx-space':{url:endpoint(),headers:{Authorization:'Bearer '+r.credential}}}},null,2);
++     text=input.kind==='key'?r.credential:JSON.stringify({mcpServers:{'wanx-space':{url:await endpoint(),headers:{Authorization:'Bearer '+r.credential}}}},null,2);
+     }
+     assertScope(bound);if(!copyText)throw fail('MCP_CLIPBOARD_UNAVAILABLE');await copyText(text);return {copied:true};
+    }
+diff --git a/apps/personal-client/tests/client.test.mjs b/apps/personal-client/tests/client.test.mjs
+index a4eee82..3a2bef6 100644
+--- a/apps/personal-client/tests/client.test.mjs
++++ b/apps/personal-client/tests/client.test.mjs
+@@ -574,3 +574,17 @@ for (const code of ["netbird_peer_unknown", "netbird_peer_disconnected"]) {
+     assert.equal(f.client.snapshot().phase, "ready"); assert.equal(restarts, 0);
+   });
+ }
++
++
++test("MCP transport stays bound to the selected endpoint and expires on reconnect", async t => {
++  const agent = {}, f = fixture({resolveEndpoint: input => ({url: input.url, agent})});
++  t.after(() => f.client.close());
++  assert.throws(() => f.client.mcpConnection(), /SESSION_CLOSED/);
++  await f.client.setNetworkEnabled(true); await f.client.connect(overlay);
++  const endpoint = f.client.mcpConnection();
++  assert.equal(endpoint.url, overlay.url); assert.equal(endpoint.agent, agent); endpoint.context();
++  assert.deepEqual(Object.keys(endpoint).sort(), ["agent", "context", "url"]);
++  await f.client.connect({...overlay, deviceId: "box-b", url: "http://100.90.1.3:8088/"});
++  assert.throws(() => endpoint.context(), /SESSION_CLOSED/);
++  await f.client.close(); assert.throws(() => f.client.mcpConnection(), /SESSION_CLOSED/);
++});
+diff --git a/apps/personal-client/tests/platform-client.test.mjs b/apps/personal-client/tests/platform-client.test.mjs
+index 9714b75..b7d3689 100644
+--- a/apps/personal-client/tests/platform-client.test.mjs
++++ b/apps/personal-client/tests/platform-client.test.mjs
+@@ -2682,3 +2682,17 @@ for (const stop of ['disconnect', 'logout', 'disable']) test(`natural expiry rec
+   t.mock.timers.tick(600000); await tick();
+   assert.equal(h.sessions.length, 1); assert.equal(h.client.snapshot().connection, null);
+ });
++
++
++test("platform exposes only the selected MCP transport and invalidates it at logout", async t => {
++  const h = harness(t);
++  assert.throws(() => h.client.mcpConnection(), {code: "NETWORK_NOT_READY"});
++  await h.client.loginPassword({phone: "owner"}); await h.client.connectBox("box-1");
++  const endpoint = h.client.mcpConnection(); endpoint.context();
++  assert.equal(endpoint.url, device.serviceUrl);
++  assert.deepEqual(Object.keys(endpoint).sort(), ["agent", "context", "url"]);
++  assert.ok(endpoint.agent);
++  await h.client.logout();
++  assert.throws(() => endpoint.context(), {code: "NETWORK_NOT_READY"});
++  assert.throws(() => h.client.mcpConnection(), {code: "NETWORK_NOT_READY"});
++});
+diff --git a/apps/personal-client/tests/space-mcp-ui.test.mjs b/apps/personal-client/tests/space-mcp-ui.test.mjs
+index 8277751..9796c48 100644
+--- a/apps/personal-client/tests/space-mcp-ui.test.mjs
++++ b/apps/personal-client/tests/space-mcp-ui.test.mjs
+@@ -87,3 +87,9 @@ test('rejected revocation keeps the active connection and shows no success messa
+  const h=setup();await h.hub.open();h.respond(action=>{if(action==='mcp-revoke')throw Error('MCP_DRIVE_READ_ONLY');});await h.click('confirm-revoke');await h.click('revoke');
+  assert.match(h.html(),/role="alert"/);assert.match(h.html(),/接入配置 <span[^>]*>Key 有效/);assert.doesNotMatch(h.html(),/接入已撤销，/);
+ });
++
++
++test('NetBird relay explicitly tells the user to keep WANX connected',async()=>{
++ const h=setup();h.data.localRelay=true;h.data.url='http://127.0.0.1:45123/mcp/space';await h.hub.open();
++ assert.match(h.html(),/本机 MCP 入口 · 保持万象连接/);assert.match(h.html(),/经万象网络连接盒子/);
++});
+diff --git a/apps/personal-client/tests/space-mcp.test.mjs b/apps/personal-client/tests/space-mcp.test.mjs
+index 8d21c07..6445578 100644
+--- a/apps/personal-client/tests/space-mcp.test.mjs
++++ b/apps/personal-client/tests/space-mcp.test.mjs
+@@ -3,3 +3,12 @@ const id='a'.repeat(32),gid='b'.repeat(32);
+ function fixture(){let bound='account-A:box-A',calls=[],copies=[],saved,lose=true;const state={};const connection={id,name:'工作助手',prefix:'prefix',status:'active',grants:[]};const bridge=createSpaceMcp({state,team:true,persist:async()=>saved=structuredClone(state),scope:()=>bound,assertScope:b=>{if(b!==bound)throw Error('SPACE_CONTEXT_CHANGED');},client:{snapshot:()=>({connection:{url:'http://100.98.0.5:8088/'}})},copyText:async s=>copies.push(s),remote:async(b,path,opt)=>{calls.push({b,path,opt});if(path==='/connections'&&lose){lose=false;throw Error('ACK_LOST');}return {value:path==='/connections'?connection:path.includes('/prompt')?{prompt:'仅导出可访问记忆'}:path.startsWith('?')?{connections:[connection],archives:[]}:{} };}});return {bridge,state,calls,copies,get saved(){return saved;},change:()=>bound='account-B:box-B'};}
+ test('server address, encrypted main-process key custody and same-request retry',async()=>{const f=fixture();await assert.rejects(f.bridge.manage('mcp-issue',{name:'工作助手'}),/ACK_LOST/);const secret=f.saved.spaceMcp[0].credential,op=f.saved.spaceMcp[0].operation_id;await f.bridge.manage('mcp-issue',{name:'工作助手'});const attempts=f.calls.filter(c=>c.path==='/connections');assert.equal(attempts[1].opt.body.credential,secret);assert.equal(attempts[1].opt.body.operation_id,op);const overview=await f.bridge.manage('mcp-state');assert.equal(overview.url,'http://100.98.0.5:8088/mcp/space');assert.ok(!JSON.stringify(overview).includes(secret));await f.bridge.manage('mcp-copy',{id,kind:'config'});const config=JSON.parse(f.copies[0]);assert.equal(config.mcpServers['wanx-space'].headers.Authorization,'Bearer '+secret);assert.equal(config.mcpServers['wanx-space'].url,overview.url);assert.ok(f.calls.every(c=>c.opt.prefix==='/api/_client/space-mcp'));});
+ test('generic grants, prompt copies, invalid paths, no cross-account key reuse',async()=>{const f=fixture();await assert.rejects(f.bridge.manage('mcp-issue',{name:'工作助手'}));await f.bridge.manage('mcp-issue',{name:'工作助手'});await f.bridge.manage('mcp-grant',{id,root:gid,domain:'personal'});assert.equal(f.calls.at(-1).opt.body.purpose,'reference');await f.bridge.manage('mcp-copy',{id,grant:gid,kind:'prompt'});assert.equal(f.copies[0],'仅导出可访问记忆');await assert.rejects(f.bridge.manage('mcp-archive',{id:'../outside'}));f.change();await assert.rejects(f.bridge.manage('mcp-copy',{id,kind:'key'}),/MCP_KEY_NOT_ON_THIS_CLIENT/);});
++
++
++test('NetBird configuration copies a reachable loopback endpoint with the original scoped key',async()=>{
++ const state={spaceMcp:[{scope:'owner',id,credential:'k'.repeat(43)}]},copies=[];
++ const bridge=createSpaceMcp({state,persist:async()=>{},scope:()=> 'interaction',storageScope:()=> 'owner',assertScope:()=>{},client:{snapshot:()=>({connection:{mode:'netbird',url:'http://100.98.0.5:8088/'}})},resolveEndpoint:async()=> 'http://127.0.0.1:45123/mcp/space',copyText:async text=>copies.push(text),remote:async()=>({value:{connections:[{id,status:'active'}]}})});
++ const overview=await bridge.manage('mcp-state');assert.equal(overview.localRelay,true);assert.equal(overview.url,'http://127.0.0.1:45123/mcp/space');
++ await bridge.manage('mcp-copy',{id,kind:'config'});const config=JSON.parse(copies[0]).mcpServers['wanx-space'];
++ assert.equal(config.url,overview.url);assert.equal(config.headers.Authorization,'Bearer '+'k'.repeat(43));
++});
+diff --git a/apps/builder/integration/team-client/space-agent-hub.js b/apps/builder/integration/team-client/space-agent-hub.js
+index a42f401..2741b9d 100644
+--- a/apps/builder/integration/team-client/space-agent-hub.js
++++ b/apps/builder/integration/team-client/space-agent-hub.js
+@@ -2,7 +2,7 @@
+ window.createSpaceAgentHub=function({request,changed=()=>{}}){
+  const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const labels={active:'Key 有效',paused:'已暂停',expired:'已过期',revoked:'已撤销'};
+- const errors={MCP_KEY_NOT_ON_THIS_CLIENT:'Key 未保存在本机。请在生成它的客户端复制，或更换 Key；原盘和文件会保留。',SPACE_CONTEXT_CHANGED:'账号或盒子已切换，请重新打开。',SPACE_LINK_UPGRADE_REQUIRED:'请更新盒子服务后重试。',BOX_CONNECTION_REQUIRED:'请先连接盒子。',MCP_ADDRESS_INVALID:'盒子地址不可用，请重新连接。',AGENT_GRANT_DENIED:'目录授权已失效，请重新选择。',NAME_REQUIRED:'请填写接入名称（最多 80 字）。',SPACE_NOT_FOUND:'目录暂不可用，请刷新后重试。'};
++ const errors={MCP_KEY_NOT_ON_THIS_CLIENT:'Key 未保存在本机。请在生成它的客户端复制，或更换 Key；原盘和文件会保留。',SPACE_CONTEXT_CHANGED:'账号或盒子已切换，请重新打开。',SPACE_LINK_UPGRADE_REQUIRED:'请更新盒子服务后重试。',BOX_CONNECTION_REQUIRED:'请先连接盒子。',MCP_ADDRESS_INVALID:'盒子地址不可用，请重新连接。',MCP_TRANSPORT_UNAVAILABLE:'本机 MCP 通道暂不可用，请保持万象连接盒子后重试。',MCP_PORT_IN_USE:'本机 MCP 端口被其他程序占用，请关闭占用程序后重试。',AGENT_GRANT_DENIED:'目录授权已失效，请重新选择。',NAME_REQUIRED:'请填写接入名称（最多 80 字）。',SPACE_NOT_FOUND:'目录暂不可用，请刷新后重试。'};
+  const explain=e=>errors[e.code||e.message]||'操作未完成，请检查连接后重试。当前填写内容会保留。';
+  let dialog,createDialog,data,selected='',scope=null,epoch=0,online=false,busy=false,error='',notice='',query='',detail=false,resource=null,picker=null,menu=false,confirmation=null,rename='',createName='',createAttempt='',createError='',highlight='',stoppedOpen=false,composing=false,readSerial=0,timer;
+  const connection=()=>data?.connections?.find(c=>c.id===selected);
+@@ -27,7 +27,7 @@ window.createSpaceAgentHub=function({request,changed=()=>{}}){
+  function details(){const c=connection();if(!c)return `<div class="mcp-welcome"><span aria-hidden="true">◇</span><h3>${data?'创建第一个 Agent 接入':'正在读取接入'}</h3><p>标准 MCP · 每个接入拥有独立专属盘</p>${data?button('＋ 创建接入','create','',true):''}</div>`;const disk=c.drive,manageable=!!disk?.manageable,copy=active()&&c.localKey;return `<div class="mcp-detail-title"><div>${button('‹ 返回接入列表','back')}<h3>${esc(c.name)}</h3><small>${data.destination==='company'?`所属成员 · ${esc(disk?.member||'未知成员')}`:disk?.domain==='company'?`公司接入 · ${esc(disk.member||'未知成员')}`:'个人专属接入'}</small></div>${manageable?`<div class="mcp-more">${button('更多 ⋯','more',`aria-expanded="${menu}"`)}${menu?`<div class="mcp-more-menu">${button('重命名','confirm-rename')}${['active','paused'].includes(c.status)?button(c.status==='paused'?'恢复接入':'暂停接入',c.status==='paused'?'resume':'pause'):''}${button('更换 Key','confirm-rotate')}${c.status!=='revoked'?button('撤销接入','confirm-revoke'):''}</div>`:''}</div>`:''}</div>${confirmation?confirmView():''}${picker?pickerView():''}<section class="mcp-detail-section"><h4>接入配置 <span class="mcp-status ${active()?'active':''}">${esc(labels[c.status]||'状态未知')}</span></h4><div class="mcp-key"><code>${esc(c.prefix)}••••••••</code><span>${c.last_used?'最近调用 · '+time(c.last_used):'等待首次调用'}</span></div><div class="mcp-row">${button('复制 MCP 配置','copy-config',`${copy?'':'disabled'} ${highlight===c.id?'data-highlight="true"':''}`,true)}${button('复制 Key','copy-key',copy?'':'disabled')}</div>${!c.localKey?'<p class="mcp-muted">Key 未保存在本机。请在原客户端复制，或更换 Key；原盘和文件会保留。</p>':''}${!active()?'<p class="mcp-muted">接入当前不可用；盘内已保存的文件保留。</p>':''}</section><section class="mcp-detail-section"><h4>专属盘</h4><div class="mcp-disk"><span aria-hidden="true">▱</span><div><strong>${esc(disk?.name||'目录暂不可用')}</strong><small>${disk?.domain==='company'?'公司成员可查看':'仅当前账号可见'} · 记忆 / 对话 / 文件 / 构建物</small></div>${button('打开专属盘','open-drive',disk?'':'disabled')}</div><div class="mcp-row">${button('复制导入记忆提示词','copy-prompt',manageable&&active()?'':'disabled')}${button('查看记忆文件','open-memory',disk?.directories?.memory?'':'disabled')}</div><p class="mcp-muted">保存到此专属盘 / 记忆与上下文 · 仅导入 Agent 可访问的内容</p></section><section class="mcp-detail-section"><h4>额外资料授权</h4>${grants()}</section>`;}
+  function confirmView(){return `<section class="mcp-selection" role="group" aria-label="确认操作"><strong>${confirmation==='rename'?'重命名接入与专属盘':confirmation==='rotate'?'更换 Key？':'撤销接入？'}</strong>${confirmation==='rename'?`<label>名称<input name="mcp-rename" maxlength="80" value="${esc(rename)}"></label>`:'<p>旧 Key 立即失效，原专属盘和文件保留。</p>'}<div class="mcp-row">${button('确认',confirmation==='rename'?'rename':confirmation,'',true)}${button('取消','cancel-confirm')}</div></section>`;}
+  function pickerView(){return `<section class="mcp-selection"><strong>选择${picker.domain==='company'?'公司':'个人'}目录</strong><div class="mcp-row">${picker.breadcrumbs.map(c=>button(esc(c.name),'pick',`data-domain="${picker.domain}" data-parent="${esc(c.id)}"`)).join('')}</div><div class="mcp-items">${picker.items.filter(i=>i.kind==='folder').map(i=>`<article><strong>${esc(i.name)}</strong>${button('打开','pick',`data-domain="${picker.domain}" data-parent="${esc(i.id)}"`)}</article>`).join('')||'<p class="mcp-muted">没有子文件夹</p>'}</div><div class="mcp-row">${button('选择当前目录','pick-current','',true)}${button('取消','pick-cancel')}</div></section>`;}
+- function draw(searchFocus=false){if(!dialog?.open)return;if(searchFocus){const list=dialog.querySelector('.mcp-agent-list');if(list){list.innerHTML=agentRows();return;}}const scroll=dialog.querySelector('.space-mcp-body')?.scrollTop||0,listScroll=searchFocus?0:dialog.querySelector('.mcp-agent-list')?.scrollTop||0;dialog.innerHTML=`<header class="space-mcp-header"><div><h2>空间 MCP</h2><span>连接 Agent，资料留在自己的盒子里</span></div>${button('刷新','refresh')}${button('完成','close')}</header>${error?`<div class="space-mcp-error" role="alert">${esc(error)}</div>`:''}${notice?`<div class="space-mcp-notice" role="status">${esc(notice)}</div>`:''}<div class="space-mcp-layout ${detail?'show-detail':''}"><aside>${list()}</aside><main class="space-mcp-body" aria-label="接入详情" aria-busy="${busy}">${details()}</main></div><footer class="mcp-server"><span>盒子端 MCP</span><code title="${esc(data?.url||'')}">${esc(data?.url||'正在读取…')}</code>${button('复制地址','copy-url',data?.url?'':'disabled')}</footer>`;const pane=dialog.querySelector('.space-mcp-body');if(pane)pane.scrollTop=scroll;const items=dialog.querySelector('.mcp-agent-list');if(items)items.scrollTop=listScroll;if(searchFocus){const input=dialog.querySelector('[name=mcp-search]');input?.focus();input?.setSelectionRange?.(query.length,query.length);}}
++ function draw(searchFocus=false){if(!dialog?.open)return;if(searchFocus){const list=dialog.querySelector('.mcp-agent-list');if(list){list.innerHTML=agentRows();return;}}const scroll=dialog.querySelector('.space-mcp-body')?.scrollTop||0,listScroll=searchFocus?0:dialog.querySelector('.mcp-agent-list')?.scrollTop||0;dialog.innerHTML=`<header class="space-mcp-header"><div><h2>空间 MCP</h2><span>连接 Agent，资料留在自己的盒子里</span></div>${button('刷新','refresh')}${button('完成','close')}</header>${error?`<div class="space-mcp-error" role="alert">${esc(error)}</div>`:''}${notice?`<div class="space-mcp-notice" role="status">${esc(notice)}</div>`:''}<div class="space-mcp-layout ${detail?'show-detail':''}"><aside>${list()}</aside><main class="space-mcp-body" aria-label="接入详情" aria-busy="${busy}">${details()}</main></div><footer class="mcp-server"><span title="${data?.localRelay?'经万象网络连接盒子，调用时保持本机万象连接。':'MCP 由盒子独立运行。'}">${data?.localRelay?'本机 MCP 入口 · 保持万象连接':'盒子端 MCP'}</span><code title="${esc(data?.url||'')}">${esc(data?.url||'正在读取…')}</code>${button('复制地址','copy-url',data?.url?'':'disabled')}</footer>`;const pane=dialog.querySelector('.space-mcp-body');if(pane)pane.scrollTop=scroll;const items=dialog.querySelector('.mcp-agent-list');if(items)items.scrollTop=listScroll;if(searchFocus){const input=dialog.querySelector('[name=mcp-search]');input?.focus();input?.setSelectionRange?.(query.length,query.length);}}
+  function drawCreate(){if(!createDialog.open)return;createDialog.innerHTML=`<form><header><h3>创建 Agent 接入</h3><p>${data?.destination==='company'?'专属盘归公司，成员可查看。':'专属盘归当前个人账号。'}</p></header><label>接入名称<input name="mcp-create-name" maxlength="80" required value="${esc(createName)}" placeholder="例如：我的工作助手" ${busy||createAttempt?'readonly':''}></label>${createError?`<p class="space-mcp-error" role="alert">${esc(createError)}</p>`:''}${createAttempt&&!busy?'<p class="mcp-muted">重试将沿用本次创建，避免重复建盘。</p>':''}<footer>${button('取消','create-cancel')}${button(busy?'正在创建…':createAttempt?'重试创建':'创建接入','issue','',true)}</footer></form>`;}
+  async function act(action,d={}){if(action==='close'){if(!busy)close();return;}if(busy)return;const c=connection(),id=selected,e=epoch;
+   if(action==='create'){createName='';createAttempt='';createError='';createDialog.showModal();drawCreate();createDialog.querySelector('input')?.focus();return;}
+diff --git a/apps/team-client/client.mjs b/apps/team-client/client.mjs
+index b7dbedd..a28c3df 100644
+--- a/apps/team-client/client.mjs
++++ b/apps/team-client/client.mjs
+@@ -387,6 +387,16 @@ export function createClient({
+
+   return {
+     snapshot,
++    mcpConnection() {
++      if (closed || phase !== "ready" || !connection || !activeEndpoint)
++        throw new Error("SESSION_CLOSED");
++      const generation = epoch, endpoint = activeEndpoint;
++      const context = () => {
++        if (closed || phase !== "ready" || epoch !== generation || activeEndpoint !== endpoint)
++          throw new Error("SESSION_CLOSED");
++      };
++      return {url: endpoint.url, agent: endpoint.agent, context};
++    },
+     async request(input) {
+       if (closed || !gateway) throw new Error("SESSION_CLOSED");
+       return recoverOnFailure(() => gateway.request(input));
+diff --git a/apps/team-client/local-ui/renderer/space-agent-hub.js b/apps/team-client/local-ui/renderer/space-agent-hub.js
+index a42f401..2741b9d 100644
+--- a/apps/team-client/local-ui/renderer/space-agent-hub.js
++++ b/apps/team-client/local-ui/renderer/space-agent-hub.js
+@@ -2,7 +2,7 @@
+ window.createSpaceAgentHub=function({request,changed=()=>{}}){
+  const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const labels={active:'Key 有效',paused:'已暂停',expired:'已过期',revoked:'已撤销'};
+- const errors={MCP_KEY_NOT_ON_THIS_CLIENT:'Key 未保存在本机。请在生成它的客户端复制，或更换 Key；原盘和文件会保留。',SPACE_CONTEXT_CHANGED:'账号或盒子已切换，请重新打开。',SPACE_LINK_UPGRADE_REQUIRED:'请更新盒子服务后重试。',BOX_CONNECTION_REQUIRED:'请先连接盒子。',MCP_ADDRESS_INVALID:'盒子地址不可用，请重新连接。',AGENT_GRANT_DENIED:'目录授权已失效，请重新选择。',NAME_REQUIRED:'请填写接入名称（最多 80 字）。',SPACE_NOT_FOUND:'目录暂不可用，请刷新后重试。'};
++ const errors={MCP_KEY_NOT_ON_THIS_CLIENT:'Key 未保存在本机。请在生成它的客户端复制，或更换 Key；原盘和文件会保留。',SPACE_CONTEXT_CHANGED:'账号或盒子已切换，请重新打开。',SPACE_LINK_UPGRADE_REQUIRED:'请更新盒子服务后重试。',BOX_CONNECTION_REQUIRED:'请先连接盒子。',MCP_ADDRESS_INVALID:'盒子地址不可用，请重新连接。',MCP_TRANSPORT_UNAVAILABLE:'本机 MCP 通道暂不可用，请保持万象连接盒子后重试。',MCP_PORT_IN_USE:'本机 MCP 端口被其他程序占用，请关闭占用程序后重试。',AGENT_GRANT_DENIED:'目录授权已失效，请重新选择。',NAME_REQUIRED:'请填写接入名称（最多 80 字）。',SPACE_NOT_FOUND:'目录暂不可用，请刷新后重试。'};
+  const explain=e=>errors[e.code||e.message]||'操作未完成，请检查连接后重试。当前填写内容会保留。';
+  let dialog,createDialog,data,selected='',scope=null,epoch=0,online=false,busy=false,error='',notice='',query='',detail=false,resource=null,picker=null,menu=false,confirmation=null,rename='',createName='',createAttempt='',createError='',highlight='',stoppedOpen=false,composing=false,readSerial=0,timer;
+  const connection=()=>data?.connections?.find(c=>c.id===selected);
+@@ -27,7 +27,7 @@ window.createSpaceAgentHub=function({request,changed=()=>{}}){
+  function details(){const c=connection();if(!c)return `<div class="mcp-welcome"><span aria-hidden="true">◇</span><h3>${data?'创建第一个 Agent 接入':'正在读取接入'}</h3><p>标准 MCP · 每个接入拥有独立专属盘</p>${data?button('＋ 创建接入','create','',true):''}</div>`;const disk=c.drive,manageable=!!disk?.manageable,copy=active()&&c.localKey;return `<div class="mcp-detail-title"><div>${button('‹ 返回接入列表','back')}<h3>${esc(c.name)}</h3><small>${data.destination==='company'?`所属成员 · ${esc(disk?.member||'未知成员')}`:disk?.domain==='company'?`公司接入 · ${esc(disk.member||'未知成员')}`:'个人专属接入'}</small></div>${manageable?`<div class="mcp-more">${button('更多 ⋯','more',`aria-expanded="${menu}"`)}${menu?`<div class="mcp-more-menu">${button('重命名','confirm-rename')}${['active','paused'].includes(c.status)?button(c.status==='paused'?'恢复接入':'暂停接入',c.status==='paused'?'resume':'pause'):''}${button('更换 Key','confirm-rotate')}${c.status!=='revoked'?button('撤销接入','confirm-revoke'):''}</div>`:''}</div>`:''}</div>${confirmation?confirmView():''}${picker?pickerView():''}<section class="mcp-detail-section"><h4>接入配置 <span class="mcp-status ${active()?'active':''}">${esc(labels[c.status]||'状态未知')}</span></h4><div class="mcp-key"><code>${esc(c.prefix)}••••••••</code><span>${c.last_used?'最近调用 · '+time(c.last_used):'等待首次调用'}</span></div><div class="mcp-row">${button('复制 MCP 配置','copy-config',`${copy?'':'disabled'} ${highlight===c.id?'data-highlight="true"':''}`,true)}${button('复制 Key','copy-key',copy?'':'disabled')}</div>${!c.localKey?'<p class="mcp-muted">Key 未保存在本机。请在原客户端复制，或更换 Key；原盘和文件会保留。</p>':''}${!active()?'<p class="mcp-muted">接入当前不可用；盘内已保存的文件保留。</p>':''}</section><section class="mcp-detail-section"><h4>专属盘</h4><div class="mcp-disk"><span aria-hidden="true">▱</span><div><strong>${esc(disk?.name||'目录暂不可用')}</strong><small>${disk?.domain==='company'?'公司成员可查看':'仅当前账号可见'} · 记忆 / 对话 / 文件 / 构建物</small></div>${button('打开专属盘','open-drive',disk?'':'disabled')}</div><div class="mcp-row">${button('复制导入记忆提示词','copy-prompt',manageable&&active()?'':'disabled')}${button('查看记忆文件','open-memory',disk?.directories?.memory?'':'disabled')}</div><p class="mcp-muted">保存到此专属盘 / 记忆与上下文 · 仅导入 Agent 可访问的内容</p></section><section class="mcp-detail-section"><h4>额外资料授权</h4>${grants()}</section>`;}
+  function confirmView(){return `<section class="mcp-selection" role="group" aria-label="确认操作"><strong>${confirmation==='rename'?'重命名接入与专属盘':confirmation==='rotate'?'更换 Key？':'撤销接入？'}</strong>${confirmation==='rename'?`<label>名称<input name="mcp-rename" maxlength="80" value="${esc(rename)}"></label>`:'<p>旧 Key 立即失效，原专属盘和文件保留。</p>'}<div class="mcp-row">${button('确认',confirmation==='rename'?'rename':confirmation,'',true)}${button('取消','cancel-confirm')}</div></section>`;}
+  function pickerView(){return `<section class="mcp-selection"><strong>选择${picker.domain==='company'?'公司':'个人'}目录</strong><div class="mcp-row">${picker.breadcrumbs.map(c=>button(esc(c.name),'pick',`data-domain="${picker.domain}" data-parent="${esc(c.id)}"`)).join('')}</div><div class="mcp-items">${picker.items.filter(i=>i.kind==='folder').map(i=>`<article><strong>${esc(i.name)}</strong>${button('打开','pick',`data-domain="${picker.domain}" data-parent="${esc(i.id)}"`)}</article>`).join('')||'<p class="mcp-muted">没有子文件夹</p>'}</div><div class="mcp-row">${button('选择当前目录','pick-current','',true)}${button('取消','pick-cancel')}</div></section>`;}
+- function draw(searchFocus=false){if(!dialog?.open)return;if(searchFocus){const list=dialog.querySelector('.mcp-agent-list');if(list){list.innerHTML=agentRows();return;}}const scroll=dialog.querySelector('.space-mcp-body')?.scrollTop||0,listScroll=searchFocus?0:dialog.querySelector('.mcp-agent-list')?.scrollTop||0;dialog.innerHTML=`<header class="space-mcp-header"><div><h2>空间 MCP</h2><span>连接 Agent，资料留在自己的盒子里</span></div>${button('刷新','refresh')}${button('完成','close')}</header>${error?`<div class="space-mcp-error" role="alert">${esc(error)}</div>`:''}${notice?`<div class="space-mcp-notice" role="status">${esc(notice)}</div>`:''}<div class="space-mcp-layout ${detail?'show-detail':''}"><aside>${list()}</aside><main class="space-mcp-body" aria-label="接入详情" aria-busy="${busy}">${details()}</main></div><footer class="mcp-server"><span>盒子端 MCP</span><code title="${esc(data?.url||'')}">${esc(data?.url||'正在读取…')}</code>${button('复制地址','copy-url',data?.url?'':'disabled')}</footer>`;const pane=dialog.querySelector('.space-mcp-body');if(pane)pane.scrollTop=scroll;const items=dialog.querySelector('.mcp-agent-list');if(items)items.scrollTop=listScroll;if(searchFocus){const input=dialog.querySelector('[name=mcp-search]');input?.focus();input?.setSelectionRange?.(query.length,query.length);}}
++ function draw(searchFocus=false){if(!dialog?.open)return;if(searchFocus){const list=dialog.querySelector('.mcp-agent-list');if(list){list.innerHTML=agentRows();return;}}const scroll=dialog.querySelector('.space-mcp-body')?.scrollTop||0,listScroll=searchFocus?0:dialog.querySelector('.mcp-agent-list')?.scrollTop||0;dialog.innerHTML=`<header class="space-mcp-header"><div><h2>空间 MCP</h2><span>连接 Agent，资料留在自己的盒子里</span></div>${button('刷新','refresh')}${button('完成','close')}</header>${error?`<div class="space-mcp-error" role="alert">${esc(error)}</div>`:''}${notice?`<div class="space-mcp-notice" role="status">${esc(notice)}</div>`:''}<div class="space-mcp-layout ${detail?'show-detail':''}"><aside>${list()}</aside><main class="space-mcp-body" aria-label="接入详情" aria-busy="${busy}">${details()}</main></div><footer class="mcp-server"><span title="${data?.localRelay?'经万象网络连接盒子，调用时保持本机万象连接。':'MCP 由盒子独立运行。'}">${data?.localRelay?'本机 MCP 入口 · 保持万象连接':'盒子端 MCP'}</span><code title="${esc(data?.url||'')}">${esc(data?.url||'正在读取…')}</code>${button('复制地址','copy-url',data?.url?'':'disabled')}</footer>`;const pane=dialog.querySelector('.space-mcp-body');if(pane)pane.scrollTop=scroll;const items=dialog.querySelector('.mcp-agent-list');if(items)items.scrollTop=listScroll;if(searchFocus){const input=dialog.querySelector('[name=mcp-search]');input?.focus();input?.setSelectionRange?.(query.length,query.length);}}
+  function drawCreate(){if(!createDialog.open)return;createDialog.innerHTML=`<form><header><h3>创建 Agent 接入</h3><p>${data?.destination==='company'?'专属盘归公司，成员可查看。':'专属盘归当前个人账号。'}</p></header><label>接入名称<input name="mcp-create-name" maxlength="80" required value="${esc(createName)}" placeholder="例如：我的工作助手" ${busy||createAttempt?'readonly':''}></label>${createError?`<p class="space-mcp-error" role="alert">${esc(createError)}</p>`:''}${createAttempt&&!busy?'<p class="mcp-muted">重试将沿用本次创建，避免重复建盘。</p>':''}<footer>${button('取消','create-cancel')}${button(busy?'正在创建…':createAttempt?'重试创建':'创建接入','issue','',true)}</footer></form>`;}
+  async function act(action,d={}){if(action==='close'){if(!busy)close();return;}if(busy)return;const c=connection(),id=selected,e=epoch;
+   if(action==='create'){createName='';createAttempt='';createError='';createDialog.showModal();drawCreate();createDialog.querySelector('input')?.focus();return;}
+diff --git a/apps/team-client/platform.mjs b/apps/team-client/platform.mjs
+index 06f8edf..a577826 100644
+--- a/apps/team-client/platform.mjs
++++ b/apps/team-client/platform.mjs
+@@ -996,6 +996,16 @@ export function createPlatformClient({
+       if (!activeLink?.client) throw fail("NETWORK_NOT_READY");
+       return activeLink.client.openWebSocket(input);
+     },
++    mcpConnection() {
++      const link = activeLink, generation = connectionEpoch;
++      const assertLive = () => {
++        if (closed || !link || activeLink !== link || generation !== connectionEpoch || snapshot().phase !== "ready")
++          throw fail("NETWORK_NOT_READY");
++      };
++      assertLive();
++      const endpoint = link.client.mcpConnection();
++      return {url: endpoint.url, agent: endpoint.agent, context() { assertLive(); endpoint.context(); }};
++    },
+     async applicationConnection(applicationId, options) {
+       const connectionOptions = validateApplicationConnectionOptions(options);
+       const link = activeLink, generation = connectionEpoch;
+diff --git a/apps/team-client/shell/space-links.mjs b/apps/team-client/shell/space-links.mjs
+index 244dfbb..70040a6 100644
+--- a/apps/team-client/shell/space-links.mjs
++++ b/apps/team-client/shell/space-links.mjs
+@@ -2,6 +2,7 @@
+ import path from 'node:path';
+ import {createSpaceShares} from './space-shares.mjs';
+ import {createSpaceMcp} from './space-mcp.mjs';
++import {createSpaceMcpRelay} from './space-mcp-relay.mjs';
+ import {createLocalKnowledgeMcp} from './local-knowledge-mcp.mjs';
+ import {dataInteractionKey,dataOwnerKey} from './cloud-context.mjs';
+ const fail=(code,status=409)=>Object.assign(Error(code),{code,status});
+@@ -16,14 +17,17 @@ export async function createSpaceLinkBridge({client,store,serviceURL,onChanged=(
+  const scope=()=>{const key=interaction();return !closed&&key?JSON.stringify([key,generation]):null;};
+  const assertScope=bound=>{if(closed||!scope())throw fail('BOX_CONNECTION_REQUIRED',503);if(bound!==scope())throw fail('SPACE_CONTEXT_CHANGED');};
+  const persist=()=>{const copy=structuredClone(state);writes=writes.catch(()=>{}).then(()=>store.save(copy));return writes;};
+- let previous=interaction();const unsubscribe=client.subscribe(()=>{const next=interaction();if(next===previous)return;previous=next;generation++;for(const c of controllers)c.abort();});
++ const relay=createSpaceMcpRelay({state,persist,scope,storageScope,assertScope,client});
++ const mcpEndpoint=async()=>{if(client.snapshot().connection.mode==='netbird')return relay.url();const u=new URL(client.snapshot().connection.url);if(!['http:','https:'].includes(u.protocol)||u.username||u.password||u.search||u.hash)throw fail('MCP_ADDRESS_INVALID');u.pathname='/mcp/space';return u.href;};
++ let previous=interaction();const unsubscribe=client.subscribe(()=>{const next=interaction();if(next===previous)return;previous=next;generation++;for(const c of controllers)c.abort();relay.contextChanged();});
+  async function remote(bound,route,{method='GET',body,prefix='/api/personal-space'}={}){
+   assertScope(bound);const epoch=generation,connection=await client.applicationConnection();const controller=new AbortController();controllers.add(controller);
+   try{assertScope(bound);const response=await connection.request({path:prefix+route,method,headers:{'content-type':'application/json'},body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.any([controller.signal,AbortSignal.timeout(120000)])});assertScope(bound);if(epoch!==generation)throw fail('SPACE_CONTEXT_CHANGED');let value;try{value=JSON.parse(Buffer.from(response.body||'').toString());}catch{}if(response.status<200||response.status>=300)throw fail(value?.detail?.code||(typeof value?.detail==='string'?value.detail:null)||value?.code||(response.status===404?'SPACE_LINK_UPGRADE_REQUIRED':'SPACE_REQUEST_FAILED'),response.status);return {value};}finally{controllers.delete(controller);connection.close?.();}
+  }
+  const shares=createSpaceShares({remote,scope,assertScope,client,copyText,onChanged});
+- const mcp=createSpaceMcp({state,persist,scope,storageScope,assertScope,remote,client,copyText,team:agentHubOptions.team===true});
++ const mcp=createSpaceMcp({state,persist,scope,storageScope,assertScope,remote,client,copyText,resolveEndpoint:mcpEndpoint,team:agentHubOptions.team===true});
+  const localKnowledge=createLocalKnowledgeMcp({client,scope,assertScope});
++ relay.contextChanged();
+  return {
+   async manage(action,input={}){
+    const bound=scope();assertScope(bound);
+@@ -44,9 +48,9 @@ export async function createSpaceLinkBridge({client,store,serviceURL,onChanged=(
+   async mcpDetails(kind='space'){
+    if(!['space','starlink'].includes(kind))throw fail('MCP_SURFACE_INVALID');const bound=scope();assertScope(bound);
+    if(kind==='starlink')return localKnowledge.details();
+-   const u=new URL(client.snapshot().connection.url);u.pathname='/mcp/'+kind;u.search='';u.hash='';
+-   return {url:u.href,transport:'Streamable HTTP',authentication:'Authorization: Bearer <访问 Key>',configuration:{mcpServers:{[kind==='space'?'wanx-space':'wanx-starlink']:{url:u.href,headers:{Authorization:'Bearer <访问 Key>'}}}},serverHosted:true,localOnly:false};
++   const local=kind==='space'&&client.snapshot().connection.mode==='netbird';const u=new URL(local?await mcpEndpoint():client.snapshot().connection.url);u.pathname='/mcp/'+kind;u.search='';u.hash='';
++   return {url:u.href,transport:'Streamable HTTP',authentication:'Authorization: Bearer <访问 Key>',configuration:{mcpServers:{[kind==='space'?'wanx-space':'wanx-starlink']:{url:u.href,headers:{Authorization:'Bearer <访问 Key>'}}}},serverHosted:true,localOnly:local};
+   },
+-  async close(){closed=true;unsubscribe();for(const c of controllers)c.abort();await localKnowledge?.close();await writes.catch(()=>{});}
++  async close(){closed=true;unsubscribe();for(const c of controllers)c.abort();await relay.close();await localKnowledge?.close();await writes.catch(()=>{});}
+  };
+ }
+diff --git a/apps/team-client/shell/space-mcp.mjs b/apps/team-client/shell/space-mcp.mjs
+index 326d371..9c5e39a 100644
+--- a/apps/team-client/shell/space-mcp.mjs
++++ b/apps/team-client/shell/space-mcp.mjs
+@@ -1,11 +1,11 @@
+-// Server-hosted, vendor-independent MCP. This module only manages scoped keys;
+-// it never reads Agent logs or puts the desktop on the MCP data path.
++// Server-hosted MCP with a loopback transport for the app-owned NetBird network.
++// Keys and authorization remain on the box; the relay never adds desktop authority.
+ import {randomBytes} from 'node:crypto';
+ const PREFIX='/api/_client/space-mcp';
+ const fail=code=>Object.assign(Error(code),{code});
+-export function createSpaceMcp({state,persist,scope,storageScope=scope,assertScope,remote,client,copyText,team=false}) {
++export function createSpaceMcp({state,persist,scope,storageScope=scope,assertScope,remote,client,copyText,resolveEndpoint,team=false}) {
+  state.spaceMcp ||= [];
+- const endpoint=()=>{const u=new URL(client.snapshot().connection.url);if(!['http:','https:'].includes(u.protocol)||u.username||u.password||u.search||u.hash)throw fail('MCP_ADDRESS_INVALID');u.pathname='/mcp/space';return u.href;};
++ const endpoint=async()=>{if(resolveEndpoint)return resolveEndpoint();const u=new URL(client.snapshot().connection.url);if(!['http:','https:'].includes(u.protocol)||u.username||u.password||u.search||u.hash)throw fail('MCP_ADDRESS_INVALID');u.pathname='/mcp/space';return u.href;};
+  const call=async(bound,path='',options={})=>(await remote(bound,path,{prefix:PREFIX,...options})).value;
+  return {
+   contextChanged(){},close(){},
+@@ -23,7 +23,7 @@ export function createSpaceMcp({state,persist,scope,storageScope=scope,assertSco
+     r.rotation ||= {operation_id:randomBytes(16).toString('hex'),credential:randomBytes(32).toString('base64url')};await persist();
+     const value=await call(bound,`/connections/${input.id}/rotate`,{method:'POST',body:r.rotation});assertScope(bound);r.credential=r.rotation.credential;delete r.rotation;await persist();assertScope(bound);return value;
+    }
+-   if(action==='mcp-state') {const value=await call(bound,'?destination='+destination);assertScope(bound);return {...value,url:endpoint(),connections:value.connections.map(c=>({...c,localKey:!!record(c.id)?.credential}))};}
++   if(action==='mcp-state') {const value=await call(bound,'?destination='+destination);assertScope(bound);return {...value,url:await endpoint(),localRelay:client.snapshot().connection.mode==='netbird',connections:value.connections.map(c=>({...c,localKey:!!record(c.id)?.credential}))};}
+    if(action==='mcp-issue') {
+     let pending=state.spaceMcp.find(r=>r.scope===owner&&!r.id&&r.name===input.name);
+     if(!pending){pending={scope:owner,name:String(input.name||'我的 MCP 接入').slice(0,80),operation_id:randomBytes(16).toString('hex'),credential:randomBytes(32).toString('base64url'),destination};state.spaceMcp.push(pending);await persist();}
+@@ -37,12 +37,12 @@ export function createSpaceMcp({state,persist,scope,storageScope=scope,assertSco
+    if(action==='mcp-prompt')return call(bound,`/connections/${input.id}/prompt`);
+    if(action==='mcp-copy') {
+     let text;
+-    if(input.kind==='url') text=endpoint();
++    if(input.kind==='url') text=await endpoint();
+     else if(input.kind==='prompt')text=(await call(bound,`/connections/${input.id}/prompt`)).prompt;
+     else {
+      const overview=await call(bound,'?destination='+destination),connection=overview.connections.find(c=>c.id===input.id&&c.status==='active');
+      const r=record(input.id);if(!connection||!r?.credential)throw fail('MCP_KEY_NOT_ON_THIS_CLIENT');
+-     text=input.kind==='key'?r.credential:JSON.stringify({mcpServers:{'wanx-space':{url:endpoint(),headers:{Authorization:'Bearer '+r.credential}}}},null,2);
++     text=input.kind==='key'?r.credential:JSON.stringify({mcpServers:{'wanx-space':{url:await endpoint(),headers:{Authorization:'Bearer '+r.credential}}}},null,2);
+     }
+     assertScope(bound);if(!copyText)throw fail('MCP_CLIPBOARD_UNAVAILABLE');await copyText(text);return {copied:true};
+    }
+diff --git a/apps/team-client/tests/client.test.mjs b/apps/team-client/tests/client.test.mjs
+index b6d497c..9a1752b 100644
+--- a/apps/team-client/tests/client.test.mjs
++++ b/apps/team-client/tests/client.test.mjs
+@@ -786,3 +786,17 @@ test('peer-map synchronization retries without repeatedly restarting the engine'
+   ready=true;f.emit({phase:'ready',peers:[{ip:'100.90.1.2',connected:true}]});
+   await f.client.retryConnection();assert.equal(f.client.snapshot().phase,'ready');assert.equal(restarts,0);
+ });
++
++
++test("MCP transport stays bound to the selected endpoint and expires on reconnect", async t => {
++  const agent = {}, f = fixture({resolveEndpoint: input => ({url: input.url, agent})});
++  t.after(() => f.client.close());
++  assert.throws(() => f.client.mcpConnection(), /SESSION_CLOSED/);
++  await f.client.setNetworkEnabled(true); await f.client.connect(overlay);
++  const endpoint = f.client.mcpConnection();
++  assert.equal(endpoint.url, overlay.url); assert.equal(endpoint.agent, agent); endpoint.context();
++  assert.deepEqual(Object.keys(endpoint).sort(), ["agent", "context", "url"]);
++  await f.client.connect({...overlay, deviceId: "box-b", url: "http://100.90.1.3:8088/"});
++  assert.throws(() => endpoint.context(), /SESSION_CLOSED/);
++  await f.client.close(); assert.throws(() => f.client.mcpConnection(), /SESSION_CLOSED/);
++});
+diff --git a/apps/team-client/tests/platform-client.test.mjs b/apps/team-client/tests/platform-client.test.mjs
+index 63cd867..9378883 100644
+--- a/apps/team-client/tests/platform-client.test.mjs
++++ b/apps/team-client/tests/platform-client.test.mjs
+@@ -2810,3 +2810,17 @@ for (const failure of ["revoked", "endpoint_changed"]) {
+     assert.equal(h.client.snapshot().platform.reason, failure === "revoked" ? "NETWORK_SESSION_REVOKED" : "NETWORK_INVALID_RESPONSE");
+   });
+ }
++
++
++test("platform exposes only the selected MCP transport and invalidates it at logout", async t => {
++  const h = harness(t);
++  assert.throws(() => h.client.mcpConnection(), {code: "NETWORK_NOT_READY"});
++  await h.client.loginPassword({phone: "owner"}); await h.client.connectBox("box-1");
++  const endpoint = h.client.mcpConnection(); endpoint.context();
++  assert.equal(endpoint.url, device.serviceUrl);
++  assert.deepEqual(Object.keys(endpoint).sort(), ["agent", "context", "url"]);
++  assert.ok(endpoint.agent);
++  await h.client.logout();
++  assert.throws(() => endpoint.context(), {code: "NETWORK_NOT_READY"});
++  assert.throws(() => h.client.mcpConnection(), {code: "NETWORK_NOT_READY"});
++});
+diff --git a/apps/team-client/tests/space-mcp-ui.test.mjs b/apps/team-client/tests/space-mcp-ui.test.mjs
+index 8277751..9796c48 100644
+--- a/apps/team-client/tests/space-mcp-ui.test.mjs
++++ b/apps/team-client/tests/space-mcp-ui.test.mjs
+@@ -87,3 +87,9 @@ test('rejected revocation keeps the active connection and shows no success messa
+  const h=setup();await h.hub.open();h.respond(action=>{if(action==='mcp-revoke')throw Error('MCP_DRIVE_READ_ONLY');});await h.click('confirm-revoke');await h.click('revoke');
+  assert.match(h.html(),/role="alert"/);assert.match(h.html(),/接入配置 <span[^>]*>Key 有效/);assert.doesNotMatch(h.html(),/接入已撤销，/);
+ });
++
++
++test('NetBird relay explicitly tells the user to keep WANX connected',async()=>{
++ const h=setup();h.data.localRelay=true;h.data.url='http://127.0.0.1:45123/mcp/space';await h.hub.open();
++ assert.match(h.html(),/本机 MCP 入口 · 保持万象连接/);assert.match(h.html(),/经万象网络连接盒子/);
++});
+diff --git a/apps/team-client/tests/space-mcp.test.mjs b/apps/team-client/tests/space-mcp.test.mjs
+index 8d21c07..6445578 100644
+--- a/apps/team-client/tests/space-mcp.test.mjs
++++ b/apps/team-client/tests/space-mcp.test.mjs
+@@ -3,3 +3,12 @@ const id='a'.repeat(32),gid='b'.repeat(32);
+ function fixture(){let bound='account-A:box-A',calls=[],copies=[],saved,lose=true;const state={};const connection={id,name:'工作助手',prefix:'prefix',status:'active',grants:[]};const bridge=createSpaceMcp({state,team:true,persist:async()=>saved=structuredClone(state),scope:()=>bound,assertScope:b=>{if(b!==bound)throw Error('SPACE_CONTEXT_CHANGED');},client:{snapshot:()=>({connection:{url:'http://100.98.0.5:8088/'}})},copyText:async s=>copies.push(s),remote:async(b,path,opt)=>{calls.push({b,path,opt});if(path==='/connections'&&lose){lose=false;throw Error('ACK_LOST');}return {value:path==='/connections'?connection:path.includes('/prompt')?{prompt:'仅导出可访问记忆'}:path.startsWith('?')?{connections:[connection],archives:[]}:{} };}});return {bridge,state,calls,copies,get saved(){return saved;},change:()=>bound='account-B:box-B'};}
+ test('server address, encrypted main-process key custody and same-request retry',async()=>{const f=fixture();await assert.rejects(f.bridge.manage('mcp-issue',{name:'工作助手'}),/ACK_LOST/);const secret=f.saved.spaceMcp[0].credential,op=f.saved.spaceMcp[0].operation_id;await f.bridge.manage('mcp-issue',{name:'工作助手'});const attempts=f.calls.filter(c=>c.path==='/connections');assert.equal(attempts[1].opt.body.credential,secret);assert.equal(attempts[1].opt.body.operation_id,op);const overview=await f.bridge.manage('mcp-state');assert.equal(overview.url,'http://100.98.0.5:8088/mcp/space');assert.ok(!JSON.stringify(overview).includes(secret));await f.bridge.manage('mcp-copy',{id,kind:'config'});const config=JSON.parse(f.copies[0]);assert.equal(config.mcpServers['wanx-space'].headers.Authorization,'Bearer '+secret);assert.equal(config.mcpServers['wanx-space'].url,overview.url);assert.ok(f.calls.every(c=>c.opt.prefix==='/api/_client/space-mcp'));});
+ test('generic grants, prompt copies, invalid paths, no cross-account key reuse',async()=>{const f=fixture();await assert.rejects(f.bridge.manage('mcp-issue',{name:'工作助手'}));await f.bridge.manage('mcp-issue',{name:'工作助手'});await f.bridge.manage('mcp-grant',{id,root:gid,domain:'personal'});assert.equal(f.calls.at(-1).opt.body.purpose,'reference');await f.bridge.manage('mcp-copy',{id,grant:gid,kind:'prompt'});assert.equal(f.copies[0],'仅导出可访问记忆');await assert.rejects(f.bridge.manage('mcp-archive',{id:'../outside'}));f.change();await assert.rejects(f.bridge.manage('mcp-copy',{id,kind:'key'}),/MCP_KEY_NOT_ON_THIS_CLIENT/);});
++
++
++test('NetBird configuration copies a reachable loopback endpoint with the original scoped key',async()=>{
++ const state={spaceMcp:[{scope:'owner',id,credential:'k'.repeat(43)}]},copies=[];
++ const bridge=createSpaceMcp({state,persist:async()=>{},scope:()=> 'interaction',storageScope:()=> 'owner',assertScope:()=>{},client:{snapshot:()=>({connection:{mode:'netbird',url:'http://100.98.0.5:8088/'}})},resolveEndpoint:async()=> 'http://127.0.0.1:45123/mcp/space',copyText:async text=>copies.push(text),remote:async()=>({value:{connections:[{id,status:'active'}]}})});
++ const overview=await bridge.manage('mcp-state');assert.equal(overview.localRelay,true);assert.equal(overview.url,'http://127.0.0.1:45123/mcp/space');
++ await bridge.manage('mcp-copy',{id,kind:'config'});const config=JSON.parse(copies[0]).mcpServers['wanx-space'];
++ assert.equal(config.url,overview.url);assert.equal(config.headers.Authorization,'Bearer '+'k'.repeat(43));
++});
+diff --git a/apps/personal-client/shell/space-mcp-relay.mjs b/apps/personal-client/shell/space-mcp-relay.mjs
+new file mode 100644
+index 0000000..227732b
+--- /dev/null
++++ b/apps/personal-client/shell/space-mcp-relay.mjs
+@@ -0,0 +1,118 @@
++import http from "node:http";
++import https from "node:https";
++
++const requestHeaders = ["authorization", "accept", "content-type", "mcp-protocol-version", "mcp-session-id", "last-event-id"];
++const responseHeaders = ["content-type", "mcp-protocol-version", "mcp-session-id", "www-authenticate", "allow", "retry-after"];
++const select = (headers, names) => Object.fromEntries(names.filter(name => headers[name] !== undefined).map(name => [name, headers[name]]));
++const failure = code => Object.assign(new Error(code), {code});
++
++// Transport only: the selected box authenticates the caller's original MCP Key.
++// Never attach the desktop's account/session token or accept a caller's target.
++export function createSpaceMcpRelay({state, persist, scope, storageScope, assertScope, client}) {
++  const servers = new Map(), requests = new Set();
++  let closed = false;
++  const reject = (res, status, code) => {
++    if (res.destroyed) return;
++    if (res.headersSent) return res.destroy();
++    res.writeHead(status, {"content-type": "application/json", "cache-control": "no-store"});
++    res.end(JSON.stringify({error: code}));
++  };
++
++  async function open(owner) {
++    let origin;
++    const server = http.createServer(async (req, res) => {
++      if (req.headers.host !== new URL(origin).host || req.headers.origin ||
++          ["cross-site", "same-site"].includes(req.headers["sec-fetch-site"]))
++        return reject(res, 403, "MCP_ORIGIN_DENIED");
++      if (req.url !== "/mcp/space") return reject(res, 404, "MCP_NOT_FOUND");
++      if (!["GET", "POST", "DELETE"].includes(req.method)) return reject(res, 405, "MCP_METHOD_NOT_ALLOWED");
++      if (!/^Bearer [A-Za-z0-9_-]{20,100}$/.test(req.headers.authorization || ""))
++        return reject(res, 401, "MCP_KEY_REQUIRED");
++      const controller = new AbortController();
++      requests.add(controller);
++      const finish = () => { requests.delete(controller); controller.abort(); };
++      res.once("close", finish);
++      req.once("aborted", finish);
++      try {
++        const bound = scope();
++        assertScope(bound);
++        if (closed || storageScope() !== owner) throw failure("SPACE_CONTEXT_CHANGED");
++        const endpoint = await client.mcpConnection();
++        assertScope(bound);
++        endpoint.context();
++        if (controller.signal.aborted || storageScope() !== owner) throw failure("SPACE_CONTEXT_CHANGED");
++        const target = new URL("/mcp/space", endpoint.url);
++        const transport = target.protocol === "https:" ? https : http;
++        const upstream = transport.request(target, {
++          method: req.method, agent: endpoint.agent ?? false,
++          signal: controller.signal, headers: select(req.headers, requestHeaders),
++        });
++        upstream.once("error", () => { reject(res, 503, "MCP_TRANSPORT_UNAVAILABLE"); finish(); });
++        upstream.once("response", incoming => {
++          try {
++            assertScope(bound); endpoint.context();
++            if (storageScope() !== owner) throw failure("SPACE_CONTEXT_CHANGED");
++          } catch {
++            incoming.destroy(); reject(res, 503, "SPACE_CONTEXT_CHANGED"); finish(); return;
++          }
++          res.writeHead(incoming.statusCode, {...select(incoming.headers, responseHeaders), "cache-control": "no-store"});
++          incoming.once("error", () => { res.destroy(); finish(); });
++          incoming.pipe(res);
++        });
++        req.pipe(upstream);
++      } catch {
++        reject(res, 503, "MCP_TRANSPORT_UNAVAILABLE"); finish();
++      }
++    });
++    const saved = state.mcpRelays?.find(record => record.scope === owner);
++    try {
++      await new Promise((resolve, reject) => {
++        server.once("error", reject);
++        server.listen(saved?.port || 0, "127.0.0.1", resolve);
++      });
++      origin = `http://127.0.0.1:${server.address().port}`;
++      if (!saved) {
++        state.mcpRelays ||= [];
++        state.mcpRelays.push({scope: owner, port: server.address().port});
++        await persist();
++      }
++      if (closed) throw failure("MCP_TRANSPORT_UNAVAILABLE");
++      return {server, url: origin + "/mcp/space"};
++    } catch (error) {
++      server.close();
++      throw failure(error.code === "EADDRINUSE" ? "MCP_PORT_IN_USE" : "MCP_TRANSPORT_UNAVAILABLE");
++    }
++  }
++
++  async function url() {
++    const bound = scope(), owner = storageScope();
++    assertScope(bound);
++    if (closed || !owner) throw failure("MCP_TRANSPORT_UNAVAILABLE");
++    if (!servers.has(owner)) {
++      const pending = open(owner);
++      servers.set(owner, pending);
++      pending.catch(() => { if (servers.get(owner) === pending) servers.delete(owner); });
++    }
++    const result = await servers.get(owner);
++    assertScope(bound);
++    return result.url;
++  }
++  function contextChanged() {
++    for (const controller of requests) controller.abort();
++    requests.clear();
++    // Reopen an already copied endpoint after restart/reconnect, on its saved port.
++    if (!closed && client.snapshot().connection?.mode === "netbird" &&
++        state.mcpRelays?.some(record => record.scope === storageScope())) void url().catch(() => {});
++  }
++  return {
++    url, contextChanged,
++    async close() {
++      closed = true; contextChanged();
++      await Promise.all([...servers.values()].map(async pending => {
++        const entry = await pending.catch(() => null);
++        if (entry) { entry.server.closeAllConnections(); await new Promise(resolve => entry.server.close(resolve)); }
++      }));
++      servers.clear();
++    },
++  };
++}
+diff --git a/apps/personal-client/tests/space-mcp-relay.test.mjs b/apps/personal-client/tests/space-mcp-relay.test.mjs
+new file mode 100644
+index 0000000..cdc2d98
+--- /dev/null
++++ b/apps/personal-client/tests/space-mcp-relay.test.mjs
+@@ -0,0 +1,112 @@
++import test from "node:test";
++import assert from "node:assert/strict";
++import http from "node:http";
++import net from "node:net";
++import {createSpaceMcpRelay} from "../shell/space-mcp-relay.mjs";
++
++const key = "k".repeat(43);
++const headers = {authorization: "Bearer " + key, accept: "application/json, text/event-stream", "content-type": "application/json"};
++async function fixture(t, handler) {
++  const calls = [], state = {}, target = "http://100.98.0.5:8088";
++  let owner = "account-A:box-A", generation = 1, saved;
++  const upstream = http.createServer(async (req, res) => {
++    const chunks = [];
++    for await (const chunk of req) chunks.push(chunk);
++    calls.push({method: req.method, path: req.url, headers: req.headers, body: Buffer.concat(chunks).toString()});
++    if (req.headers.authorization !== headers.authorization) { res.writeHead(401); res.end("invalid key"); return; }
++    if (handler) return handler(req, res);
++    res.writeHead(200, {"content-type": "application/json", "mcp-session-id": "box-session"});
++    res.end(JSON.stringify({jsonrpc: "2.0", id: 1, result: {ok: true}}));
++  });
++  await new Promise(resolve => upstream.listen(0, "127.0.0.1", resolve));
++  const agent = new http.Agent();
++  // The overlay address is deliberately unreachable through the system network.
++  // Only the app-owned transport knows how to dial this fixture.
++  agent.createConnection = options => {
++    assert.equal(options.host, "100.98.0.5");
++    assert.equal(Number(options.port), 8088);
++    return net.connect(upstream.address().port, "127.0.0.1");
++  };
++  const scope = () => owner ? owner + ":" + generation : null;
++  const make = () => createSpaceMcpRelay({state, persist: async () => {saved = structuredClone(state);},
++    scope, storageScope: () => owner,
++    assertScope: bound => { if (!bound || bound !== scope()) throw Error("SPACE_CONTEXT_CHANGED"); },
++    client: {snapshot: () => ({connection: {mode: "netbird"}}), mcpConnection: () => {
++      const bound = scope();
++      return {url: target, agent, context() { if (bound !== scope()) throw Error("SESSION_CLOSED"); }};
++    }},
++  });
++  const relay = make();
++  t.after(async () => { await relay.close(); agent.destroy(); upstream.closeAllConnections(); await new Promise(resolve => upstream.close(resolve)); });
++  return {relay, calls, state, make, get saved() {return saved;},
++    change(value) {owner = value; generation++; relay.contextChanged();},
++  };
++}
++
++test("MCP uses the app transport and original key, protocol headers and body without desktop authority", async t => {
++  const f = await fixture(t), url = await f.relay.url();
++  const body = JSON.stringify({jsonrpc: "2.0", id: 1, method: "initialize", params: {protocolVersion: "2025-03-26"}});
++  const response = await fetch(url, {method: "POST", headers: {...headers,
++    "mcp-protocol-version": "2025-03-26", "mcp-session-id": "client-session", cookie: "account=private",
++    "x-forwarded-host": "evil.invalid"}, body});
++  assert.equal(response.status, 200); assert.equal((await response.json()).result.ok, true);
++  assert.equal(response.headers.get("mcp-session-id"), "box-session");
++  assert.equal(f.calls[0].body, body); assert.equal(f.calls[0].headers.authorization, headers.authorization);
++  assert.equal(f.calls[0].headers["mcp-protocol-version"], "2025-03-26");
++  assert.equal(f.calls[0].headers["mcp-session-id"], "client-session");
++  assert.equal(f.calls[0].headers.cookie, undefined); assert.equal(f.calls[0].headers["x-forwarded-host"], undefined);
++  assert.equal(f.calls[0].headers.host, "100.98.0.5:8088");
++  assert.ok(!JSON.stringify(f.saved).includes(key));
++  const invalid = await fetch(url, {method: "POST", headers: {...headers, authorization: "Bearer " + "z".repeat(43)}, body});
++  assert.equal(invalid.status, 401); assert.equal(await invalid.text(), "invalid key");
++});
++
++test("rejects browser origins, unrelated paths, missing keys and alternate Host values before forwarding", async t => {
++  const f = await fixture(t), url = await f.relay.url();
++  for (const [suffix, options, status] of [
++    ["", {method: "POST", headers: {...headers, origin: "https://evil.invalid"}, body: "{}"}, 403],
++    ["", {headers: {...headers, "sec-fetch-site": "cross-site"}}, 403],
++    ["", {headers: {...headers, host: "evil.invalid"}}, 403],
++    ["", {method: "POST", body: "{}"}, 401],
++    ["", {method: "PUT", headers}, 405],
++    ["?target=http://evil.invalid", {headers}, 404],
++    ["/other", {headers}, 404],
++  ]) {
++    const actual = await new Promise((resolve, reject) => {
++      const req = http.request(url + suffix, options, res => {res.resume(); res.once("end", () => resolve(res.statusCode));});
++      req.once("error", reject); req.end(options.body);
++    });
++    assert.equal(actual, status, JSON.stringify([suffix, options]));
++  }
++  assert.equal(f.calls.length, 0);
++});
++
++test("keeps copied ports across restart and renewal, and never sends an old endpoint to another owner/box", async t => {
++  const f = await fixture(t), first = await f.relay.url();
++  await f.relay.close();
++  const restarted = f.make(); t.after(() => restarted.close());
++  assert.equal(await restarted.url(), first);
++  f.change("account-B:box-B");
++  let response = await fetch(first, {headers}); assert.equal(response.status, 503); await response.text();
++  assert.equal(f.calls.length, 0);
++  const second = await restarted.url(); assert.notEqual(first, second);
++  response = await fetch(second, {headers}); assert.equal(response.status, 200); await response.text();
++  f.change("account-A:box-A");
++  assert.equal(await restarted.url(), first);
++  response = await fetch(first, {headers}); assert.equal(response.status, 200); await response.text();
++});
++
++test("streams SSE immediately and cancels it when the data interaction changes", async t => {
++  let upstreamClosed;
++  const closed = new Promise(resolve => {upstreamClosed = resolve;});
++  const f = await fixture(t, (req, res) => {
++    res.writeHead(200, {"content-type": "text/event-stream"});
++    res.write('event: message\ndata: {"jsonrpc":"2.0"}\n\n');
++    res.once("close", upstreamClosed);
++  });
++  const response = await fetch(await f.relay.url(), {headers}), reader = response.body.getReader();
++  assert.match(new TextDecoder().decode((await reader.read()).value), /event: message/);
++  f.change("account-B:box-B");
++  await assert.rejects(reader.read());
++  await closed;
++});
+diff --git a/apps/team-client/shell/space-mcp-relay.mjs b/apps/team-client/shell/space-mcp-relay.mjs
+new file mode 100644
+index 0000000..227732b
+--- /dev/null
++++ b/apps/team-client/shell/space-mcp-relay.mjs
+@@ -0,0 +1,118 @@
++import http from "node:http";
++import https from "node:https";
++
++const requestHeaders = ["authorization", "accept", "content-type", "mcp-protocol-version", "mcp-session-id", "last-event-id"];
++const responseHeaders = ["content-type", "mcp-protocol-version", "mcp-session-id", "www-authenticate", "allow", "retry-after"];
++const select = (headers, names) => Object.fromEntries(names.filter(name => headers[name] !== undefined).map(name => [name, headers[name]]));
++const failure = code => Object.assign(new Error(code), {code});
++
++// Transport only: the selected box authenticates the caller's original MCP Key.
++// Never attach the desktop's account/session token or accept a caller's target.
++export function createSpaceMcpRelay({state, persist, scope, storageScope, assertScope, client}) {
++  const servers = new Map(), requests = new Set();
++  let closed = false;
++  const reject = (res, status, code) => {
++    if (res.destroyed) return;
++    if (res.headersSent) return res.destroy();
++    res.writeHead(status, {"content-type": "application/json", "cache-control": "no-store"});
++    res.end(JSON.stringify({error: code}));
++  };
++
++  async function open(owner) {
++    let origin;
++    const server = http.createServer(async (req, res) => {
++      if (req.headers.host !== new URL(origin).host || req.headers.origin ||
++          ["cross-site", "same-site"].includes(req.headers["sec-fetch-site"]))
++        return reject(res, 403, "MCP_ORIGIN_DENIED");
++      if (req.url !== "/mcp/space") return reject(res, 404, "MCP_NOT_FOUND");
++      if (!["GET", "POST", "DELETE"].includes(req.method)) return reject(res, 405, "MCP_METHOD_NOT_ALLOWED");
++      if (!/^Bearer [A-Za-z0-9_-]{20,100}$/.test(req.headers.authorization || ""))
++        return reject(res, 401, "MCP_KEY_REQUIRED");
++      const controller = new AbortController();
++      requests.add(controller);
++      const finish = () => { requests.delete(controller); controller.abort(); };
++      res.once("close", finish);
++      req.once("aborted", finish);
++      try {
++        const bound = scope();
++        assertScope(bound);
++        if (closed || storageScope() !== owner) throw failure("SPACE_CONTEXT_CHANGED");
++        const endpoint = await client.mcpConnection();
++        assertScope(bound);
++        endpoint.context();
++        if (controller.signal.aborted || storageScope() !== owner) throw failure("SPACE_CONTEXT_CHANGED");
++        const target = new URL("/mcp/space", endpoint.url);
++        const transport = target.protocol === "https:" ? https : http;
++        const upstream = transport.request(target, {
++          method: req.method, agent: endpoint.agent ?? false,
++          signal: controller.signal, headers: select(req.headers, requestHeaders),
++        });
++        upstream.once("error", () => { reject(res, 503, "MCP_TRANSPORT_UNAVAILABLE"); finish(); });
++        upstream.once("response", incoming => {
++          try {
++            assertScope(bound); endpoint.context();
++            if (storageScope() !== owner) throw failure("SPACE_CONTEXT_CHANGED");
++          } catch {
++            incoming.destroy(); reject(res, 503, "SPACE_CONTEXT_CHANGED"); finish(); return;
++          }
++          res.writeHead(incoming.statusCode, {...select(incoming.headers, responseHeaders), "cache-control": "no-store"});
++          incoming.once("error", () => { res.destroy(); finish(); });
++          incoming.pipe(res);
++        });
++        req.pipe(upstream);
++      } catch {
++        reject(res, 503, "MCP_TRANSPORT_UNAVAILABLE"); finish();
++      }
++    });
++    const saved = state.mcpRelays?.find(record => record.scope === owner);
++    try {
++      await new Promise((resolve, reject) => {
++        server.once("error", reject);
++        server.listen(saved?.port || 0, "127.0.0.1", resolve);
++      });
++      origin = `http://127.0.0.1:${server.address().port}`;
++      if (!saved) {
++        state.mcpRelays ||= [];
++        state.mcpRelays.push({scope: owner, port: server.address().port});
++        await persist();
++      }
++      if (closed) throw failure("MCP_TRANSPORT_UNAVAILABLE");
++      return {server, url: origin + "/mcp/space"};
++    } catch (error) {
++      server.close();
++      throw failure(error.code === "EADDRINUSE" ? "MCP_PORT_IN_USE" : "MCP_TRANSPORT_UNAVAILABLE");
++    }
++  }
++
++  async function url() {
++    const bound = scope(), owner = storageScope();
++    assertScope(bound);
++    if (closed || !owner) throw failure("MCP_TRANSPORT_UNAVAILABLE");
++    if (!servers.has(owner)) {
++      const pending = open(owner);
++      servers.set(owner, pending);
++      pending.catch(() => { if (servers.get(owner) === pending) servers.delete(owner); });
++    }
++    const result = await servers.get(owner);
++    assertScope(bound);
++    return result.url;
++  }
++  function contextChanged() {
++    for (const controller of requests) controller.abort();
++    requests.clear();
++    // Reopen an already copied endpoint after restart/reconnect, on its saved port.
++    if (!closed && client.snapshot().connection?.mode === "netbird" &&
++        state.mcpRelays?.some(record => record.scope === storageScope())) void url().catch(() => {});
++  }
++  return {
++    url, contextChanged,
++    async close() {
++      closed = true; contextChanged();
++      await Promise.all([...servers.values()].map(async pending => {
++        const entry = await pending.catch(() => null);
++        if (entry) { entry.server.closeAllConnections(); await new Promise(resolve => entry.server.close(resolve)); }
++      }));
++      servers.clear();
++    },
++  };
++}
+diff --git a/apps/team-client/tests/space-mcp-relay.test.mjs b/apps/team-client/tests/space-mcp-relay.test.mjs
+new file mode 100644
+index 0000000..cdc2d98
+--- /dev/null
++++ b/apps/team-client/tests/space-mcp-relay.test.mjs
+@@ -0,0 +1,112 @@
++import test from "node:test";
++import assert from "node:assert/strict";
++import http from "node:http";
++import net from "node:net";
++import {createSpaceMcpRelay} from "../shell/space-mcp-relay.mjs";
++
++const key = "k".repeat(43);
++const headers = {authorization: "Bearer " + key, accept: "application/json, text/event-stream", "content-type": "application/json"};
++async function fixture(t, handler) {
++  const calls = [], state = {}, target = "http://100.98.0.5:8088";
++  let owner = "account-A:box-A", generation = 1, saved;
++  const upstream = http.createServer(async (req, res) => {
++    const chunks = [];
++    for await (const chunk of req) chunks.push(chunk);
++    calls.push({method: req.method, path: req.url, headers: req.headers, body: Buffer.concat(chunks).toString()});
++    if (req.headers.authorization !== headers.authorization) { res.writeHead(401); res.end("invalid key"); return; }
++    if (handler) return handler(req, res);
++    res.writeHead(200, {"content-type": "application/json", "mcp-session-id": "box-session"});
++    res.end(JSON.stringify({jsonrpc: "2.0", id: 1, result: {ok: true}}));
++  });
++  await new Promise(resolve => upstream.listen(0, "127.0.0.1", resolve));
++  const agent = new http.Agent();
++  // The overlay address is deliberately unreachable through the system network.
++  // Only the app-owned transport knows how to dial this fixture.
++  agent.createConnection = options => {
++    assert.equal(options.host, "100.98.0.5");
++    assert.equal(Number(options.port), 8088);
++    return net.connect(upstream.address().port, "127.0.0.1");
++  };
++  const scope = () => owner ? owner + ":" + generation : null;
++  const make = () => createSpaceMcpRelay({state, persist: async () => {saved = structuredClone(state);},
++    scope, storageScope: () => owner,
++    assertScope: bound => { if (!bound || bound !== scope()) throw Error("SPACE_CONTEXT_CHANGED"); },
++    client: {snapshot: () => ({connection: {mode: "netbird"}}), mcpConnection: () => {
++      const bound = scope();
++      return {url: target, agent, context() { if (bound !== scope()) throw Error("SESSION_CLOSED"); }};
++    }},
++  });
++  const relay = make();
++  t.after(async () => { await relay.close(); agent.destroy(); upstream.closeAllConnections(); await new Promise(resolve => upstream.close(resolve)); });
++  return {relay, calls, state, make, get saved() {return saved;},
++    change(value) {owner = value; generation++; relay.contextChanged();},
++  };
++}
++
++test("MCP uses the app transport and original key, protocol headers and body without desktop authority", async t => {
++  const f = await fixture(t), url = await f.relay.url();
++  const body = JSON.stringify({jsonrpc: "2.0", id: 1, method: "initialize", params: {protocolVersion: "2025-03-26"}});
++  const response = await fetch(url, {method: "POST", headers: {...headers,
++    "mcp-protocol-version": "2025-03-26", "mcp-session-id": "client-session", cookie: "account=private",
++    "x-forwarded-host": "evil.invalid"}, body});
++  assert.equal(response.status, 200); assert.equal((await response.json()).result.ok, true);
++  assert.equal(response.headers.get("mcp-session-id"), "box-session");
++  assert.equal(f.calls[0].body, body); assert.equal(f.calls[0].headers.authorization, headers.authorization);
++  assert.equal(f.calls[0].headers["mcp-protocol-version"], "2025-03-26");
++  assert.equal(f.calls[0].headers["mcp-session-id"], "client-session");
++  assert.equal(f.calls[0].headers.cookie, undefined); assert.equal(f.calls[0].headers["x-forwarded-host"], undefined);
++  assert.equal(f.calls[0].headers.host, "100.98.0.5:8088");
++  assert.ok(!JSON.stringify(f.saved).includes(key));
++  const invalid = await fetch(url, {method: "POST", headers: {...headers, authorization: "Bearer " + "z".repeat(43)}, body});
++  assert.equal(invalid.status, 401); assert.equal(await invalid.text(), "invalid key");
++});
++
++test("rejects browser origins, unrelated paths, missing keys and alternate Host values before forwarding", async t => {
++  const f = await fixture(t), url = await f.relay.url();
++  for (const [suffix, options, status] of [
++    ["", {method: "POST", headers: {...headers, origin: "https://evil.invalid"}, body: "{}"}, 403],
++    ["", {headers: {...headers, "sec-fetch-site": "cross-site"}}, 403],
++    ["", {headers: {...headers, host: "evil.invalid"}}, 403],
++    ["", {method: "POST", body: "{}"}, 401],
++    ["", {method: "PUT", headers}, 405],
++    ["?target=http://evil.invalid", {headers}, 404],
++    ["/other", {headers}, 404],
++  ]) {
++    const actual = await new Promise((resolve, reject) => {
++      const req = http.request(url + suffix, options, res => {res.resume(); res.once("end", () => resolve(res.statusCode));});
++      req.once("error", reject); req.end(options.body);
++    });
++    assert.equal(actual, status, JSON.stringify([suffix, options]));
++  }
++  assert.equal(f.calls.length, 0);
++});
++
++test("keeps copied ports across restart and renewal, and never sends an old endpoint to another owner/box", async t => {
++  const f = await fixture(t), first = await f.relay.url();
++  await f.relay.close();
++  const restarted = f.make(); t.after(() => restarted.close());
++  assert.equal(await restarted.url(), first);
++  f.change("account-B:box-B");
++  let response = await fetch(first, {headers}); assert.equal(response.status, 503); await response.text();
++  assert.equal(f.calls.length, 0);
++  const second = await restarted.url(); assert.notEqual(first, second);
++  response = await fetch(second, {headers}); assert.equal(response.status, 200); await response.text();
++  f.change("account-A:box-A");
++  assert.equal(await restarted.url(), first);
++  response = await fetch(first, {headers}); assert.equal(response.status, 200); await response.text();
++});
++
++test("streams SSE immediately and cancels it when the data interaction changes", async t => {
++  let upstreamClosed;
++  const closed = new Promise(resolve => {upstreamClosed = resolve;});
++  const f = await fixture(t, (req, res) => {
++    res.writeHead(200, {"content-type": "text/event-stream"});
++    res.write('event: message\ndata: {"jsonrpc":"2.0"}\n\n');
++    res.once("close", upstreamClosed);
++  });
++  const response = await fetch(await f.relay.url(), {headers}), reader = response.body.getReader();
++  assert.match(new TextDecoder().decode((await reader.read()).value), /event: message/);
++  f.change("account-B:box-B");
++  await assert.rejects(reader.read());
++  await closed;
++});

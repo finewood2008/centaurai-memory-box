@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "kind": "uninstall",
+  "target": {
+    "organizationId": "org-demo",
+    "boxId": "box-demo",
+    "applicationId": "app-demo",
+    "environment": "prod"
+  },
+  "expectedGeneration": 1,
+  "idempotencyKey": "request-uninstall-demo",
+  "decisionRef": {
+    "id": "decision-uninstall-demo",
+    "revision": 1
+  }
+}

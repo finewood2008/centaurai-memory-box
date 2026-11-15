@@ -1,0 +1,213 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://schemas.wanx.example/deployment/v1/common.schema.json",
+  "title": "Deployment common types v1 draft",
+  "definitions": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "https://schemas.wanx.example/deployment/v1/common.schema.json#/definitions/id"
+        },
+        "digest": {
+          "$ref": "https://schemas.wanx.example/deployment/v1/common.schema.json#/definitions/digest"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "anyOf": [
+        {
+          "required": [
+            "digest"
+          ],
+          "properties": {
+            "digest": {}
+          },
+          "type": "object"
+        },
+        {
+          "required": [
+            "revision"
+          ],
+          "properties": {
+            "revision": {}
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "releaseRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "releaseId": {
+          "$ref": "https://schemas.wanx.example/deployment/v1/common.schema.json#/definitions/id"
+        },
+        "bundleDigest": {
+          "$ref": "https://schemas.wanx.example/deployment/v1/common.schema.json#/definitions/digest"
+        }
+      },
+      "required": [
+        "releaseId",
+        "bundleDigest"
+      ]
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "organizationId": {
+          "$ref": "https://schemas.wanx.example/deployment/v1/common.schema.json#/definitions/id"
+        },
+        "boxId": {
+          "$ref": "https://schemas.wanx.example/deployment/v1/common.schema.json#/definitions/id"
+        },
+        "applicationId": {
+          "$ref": "https://schemas.wanx.example/deployment/v1/common.schema.json#/definitions/id"
+        },
+        "environment": {
+          "enum": [
+            "dev",
+            "prod"
+          ]
+        }
+      },
+      "required": [
+        "organizationId",
+        "boxId",
+        "applicationId",
+        "environment"
+      ]
+    },
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "os": {
+          "enum": [
+            "linux",
+            "darwin",
+            "win32"
+          ]
+        },
+        "arch": {
+          "enum": [
+            "arm64",
+            "x64"
+          ]
+        }
+      },
+      "required": [
+        "os",
+        "arch"
+      ]
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string",
+          "maxLength": 80,
+          "pattern": "^[A-Z][A-Z0-9_]*$"
+        },
+        "owner": {
+          "$ref": "https://schemas.wanx.example/deployment/v1/common.schema.json#/definitions/id"
+        },
+        "stage": {
+          "$ref": "https://schemas.wanx.example/deployment/v1/common.schema.json#/definitions/id"
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "actionRef": {
+          "$ref": "https://schemas.wanx.example/deployment/v1/common.schema.json#/definitions/reference"
+        }
+      },
+      "required": [
+        "code",
+        "owner",
+        "stage",
+        "retryable"
+      ]
+    },
+    "componentResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "componentId": {
+          "$ref": "https://schemas.wanx.example/deployment/v1/common.schema.json#/definitions/id"
+        },
+        "role": {
+          "enum": [
+            "backend",
+            "client",
+            "channel"
+          ]
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "status": {
+          "enum": [
+            "ready",
+            "stopped",
+            "uninstalled",
+            "purged",
+            "failed",
+            "waiting",
+            "unknown"
+          ]
+        },
+        "actualReleaseRef": {
+          "anyOf": [
+            {
+              "$ref": "https://schemas.wanx.example/deployment/v1/common.schema.json#/definitions/releaseRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "actualVersion": {
+          "anyOf": [
+            {
+              "$ref": "https://schemas.wanx.example/deployment/v1/common.schema.json#/definitions/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "$ref": "https://schemas.wanx.example/deployment/v1/common.schema.json#/definitions/error"
+        }
+      },
+      "required": [
+        "componentId",
+        "role",
+        "required",
+        "status",
+        "actualReleaseRef",
+        "actualVersion"
+      ]
+    }
+  }
+}

@@ -1,0 +1,1395 @@
+{
+  "sourceCommit": "5022e6a90c265f198c5dea794fcf16b00f7af430",
+  "cases": [
+    {
+      "name": "missing-spec",
+      "kind": "bundle",
+      "base": "managed-spec.bundle",
+      "edits": [
+        {
+          "path": [
+            "specRef"
+          ],
+          "remove": true
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "BUNDLE_SCHEMA_INVALID"
+      ]
+    },
+    {
+      "name": "packaged-field",
+      "kind": "bundle",
+      "base": "managed-spec.bundle",
+      "edits": [
+        {
+          "path": [
+            "payloadKind"
+          ],
+          "value": "packaged-app"
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "BUNDLE_SCHEMA_INVALID"
+      ]
+    },
+    {
+      "name": "bad-digest",
+      "kind": "bundle",
+      "base": "managed-spec.bundle",
+      "edits": [
+        {
+          "path": [
+            "dependencyLockDigest"
+          ],
+          "value": "sha256:short"
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "BUNDLE_SCHEMA_INVALID"
+      ]
+    },
+    {
+      "name": "false-version",
+      "kind": "bundle",
+      "base": "managed-spec.bundle",
+      "edits": [
+        {
+          "path": [
+            "schemaVersion"
+          ],
+          "value": true
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "BUNDLE_SCHEMA_INVALID"
+      ]
+    },
+    {
+      "name": "candidate-required",
+      "kind": "bundle",
+      "base": "managed-spec.bundle",
+      "edits": [
+        {
+          "path": [
+            "runtimeRequirements",
+            "candidateMode"
+          ],
+          "value": false
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "BUNDLE_SCHEMA_INVALID"
+      ]
+    },
+    {
+      "name": "hidden-secret",
+      "kind": "bundle",
+      "base": "managed-spec.bundle",
+      "edits": [
+        {
+          "path": [
+            "runtimeRequirements",
+            "runtimeRef",
+            "SECRET_TOKEN"
+          ],
+          "value": "SECRET_TOKEN"
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "BUNDLE_SCHEMA_INVALID"
+      ]
+    },
+    {
+      "name": "digest-changed",
+      "kind": "bundle",
+      "base": "managed-spec.bundle",
+      "edits": [
+        {
+          "path": [
+            "specVersionId"
+          ],
+          "value": "other"
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "BUNDLE_DIGEST_MISMATCH"
+      ]
+    },
+    {
+      "name": "spec-digest",
+      "kind": "bundle",
+      "base": "managed-spec.bundle",
+      "edits": [
+        {
+          "path": [
+            "specRef",
+            "digest"
+          ],
+          "value": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      ],
+      "redigest": true,
+      "errors": [
+        "SPEC_DIGEST_MISMATCH"
+      ]
+    },
+    {
+      "name": "missing-resource",
+      "kind": "bundle",
+      "base": "managed-spec.bundle",
+      "edits": [
+        {
+          "path": [
+            "clientDelivery",
+            "resourceArtifactIds"
+          ],
+          "value": [
+            "missing"
+          ]
+        }
+      ],
+      "redigest": true,
+      "errors": [
+        "CLIENT_RESOURCE_ARTIFACT_INVALID"
+      ]
+    },
+    {
+      "name": "source-digest",
+      "kind": "bundle",
+      "base": "packaged-app.bundle",
+      "edits": [
+        {
+          "path": [
+            "artifactDescriptors",
+            0,
+            "sourceRef",
+            "digest"
+          ],
+          "value": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      ],
+      "redigest": true,
+      "errors": [
+        "ARTIFACT_SOURCE_DIGEST_MISMATCH"
+      ]
+    },
+    {
+      "name": "missing-client",
+      "kind": "bundle",
+      "base": "packaged-app.bundle",
+      "edits": [
+        {
+          "path": [
+            "clientDelivery",
+            "artifactId"
+          ],
+          "value": "missing"
+        }
+      ],
+      "redigest": true,
+      "errors": [
+        "CLIENT_ARTIFACT_REQUIRED"
+      ]
+    },
+    {
+      "name": "backend-client",
+      "kind": "bundle",
+      "base": "packaged-app.bundle",
+      "edits": [
+        {
+          "path": [
+            "clientDelivery",
+            "artifactId"
+          ],
+          "value": "backend-demo"
+        }
+      ],
+      "redigest": true,
+      "errors": [
+        "CLIENT_ARTIFACT_REQUIRED"
+      ]
+    },
+    {
+      "name": "duplicate-artifact",
+      "kind": "bundle",
+      "base": "packaged-app.bundle",
+      "edits": [
+        {
+          "path": [
+            "artifactDescriptors"
+          ],
+          "value": [
+            {
+              "artifactId": "backend-demo",
+              "role": "backend",
+              "mediaType": "application/json",
+              "digest": "sha256:14fd08906f189a0a41b3903285e3c2a4ddb6049c4709a2c54a346af9c76b1dee",
+              "sizeBytes": 20,
+              "sourceRef": {
+                "id": "artifact-backend-demo",
+                "digest": "sha256:14fd08906f189a0a41b3903285e3c2a4ddb6049c4709a2c54a346af9c76b1dee"
+              },
+              "platforms": [
+                {
+                  "os": "linux",
+                  "arch": "arm64"
+                }
+              ]
+            },
+            {
+              "artifactId": "backend-demo",
+              "role": "backend",
+              "mediaType": "application/json",
+              "digest": "sha256:14fd08906f189a0a41b3903285e3c2a4ddb6049c4709a2c54a346af9c76b1dee",
+              "sizeBytes": 20,
+              "sourceRef": {
+                "id": "artifact-backend-demo",
+                "digest": "sha256:14fd08906f189a0a41b3903285e3c2a4ddb6049c4709a2c54a346af9c76b1dee"
+              },
+              "platforms": [
+                {
+                  "os": "linux",
+                  "arch": "arm64"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "redigest": true,
+      "errors": [
+        "DUPLICATE_ARTIFACT_ID",
+        "CLIENT_ARTIFACT_REQUIRED"
+      ]
+    },
+    {
+      "name": "prod-regression",
+      "kind": "request",
+      "base": "dev.request",
+      "edits": [
+        {
+          "path": [
+            "target",
+            "environment"
+          ],
+          "value": "prod"
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "REQUEST_SCHEMA_INVALID"
+      ]
+    },
+    {
+      "name": "no-release",
+      "kind": "request",
+      "base": "dev.request",
+      "edits": [
+        {
+          "path": [
+            "releaseRef"
+          ],
+          "remove": true
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "REQUEST_SCHEMA_INVALID"
+      ]
+    },
+    {
+      "name": "no-reference-version",
+      "kind": "request",
+      "base": "dev.request",
+      "edits": [
+        {
+          "path": [
+            "decisionRef"
+          ],
+          "value": {
+            "id": "decision"
+          }
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "REQUEST_SCHEMA_INVALID"
+      ]
+    },
+    {
+      "name": "url-reference",
+      "kind": "request",
+      "base": "dev.request",
+      "edits": [
+        {
+          "path": [
+            "decisionRef"
+          ],
+          "value": "https://example.test/?token=SECRET"
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "REQUEST_SCHEMA_INVALID"
+      ]
+    },
+    {
+      "name": "negative-generation",
+      "kind": "request",
+      "base": "dev.request",
+      "edits": [
+        {
+          "path": [
+            "expectedGeneration"
+          ],
+          "value": -1
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "REQUEST_SCHEMA_INVALID"
+      ]
+    },
+    {
+      "name": "bool-generation",
+      "kind": "request",
+      "base": "dev.request",
+      "edits": [
+        {
+          "path": [
+            "expectedGeneration"
+          ],
+          "value": true
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "REQUEST_SCHEMA_INVALID"
+      ]
+    },
+    {
+      "name": "public-recover",
+      "kind": "request",
+      "base": "dev.request",
+      "edits": [
+        {
+          "path": [
+            "kind"
+          ],
+          "value": "recover"
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "REQUEST_SCHEMA_INVALID"
+      ]
+    },
+    {
+      "name": "caller-injection",
+      "kind": "request",
+      "base": "dev.request",
+      "edits": [
+        {
+          "path": [
+            "callerIdentity"
+          ],
+          "value": "admin"
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "REQUEST_SCHEMA_INVALID"
+      ]
+    },
+    {
+      "name": "callback-injection",
+      "kind": "request",
+      "base": "dev.request",
+      "edits": [
+        {
+          "path": [
+            "callbackUrl"
+          ],
+          "value": "https://example.test/"
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "REQUEST_SCHEMA_INVALID"
+      ]
+    },
+    {
+      "name": "checkpoint-injection",
+      "kind": "request",
+      "base": "dev.request",
+      "edits": [
+        {
+          "path": [
+            "checkpointRef"
+          ],
+          "value": {
+            "id": "x",
+            "revision": 1
+          }
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "REQUEST_SCHEMA_INVALID"
+      ]
+    },
+    {
+      "name": "unsafe-number",
+      "kind": "request",
+      "base": "dev.request",
+      "edits": [
+        {
+          "path": [
+            "expectedGeneration"
+          ],
+          "value": 9007199254740992
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "JSON_PROFILE_INVALID"
+      ]
+    },
+    {
+      "name": "no-validation",
+      "kind": "request",
+      "base": "dev.request",
+      "edits": [
+        {
+          "path": [
+            "validationRef"
+          ],
+          "remove": true
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "REQUEST_SCHEMA_INVALID"
+      ]
+    },
+    {
+      "name": "no-binding",
+      "kind": "request",
+      "base": "dev.request",
+      "edits": [
+        {
+          "path": [
+            "bindingSetRef"
+          ],
+          "remove": true
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "REQUEST_SCHEMA_INVALID"
+      ]
+    },
+    {
+      "name": "no-channel-binding",
+      "kind": "request",
+      "base": "dev.request",
+      "edits": [
+        {
+          "path": [
+            "channelBindingsRef"
+          ],
+          "remove": true
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "REQUEST_SCHEMA_INVALID"
+      ]
+    },
+    {
+      "name": "no-data-plan",
+      "kind": "request",
+      "base": "dev.request",
+      "edits": [
+        {
+          "path": [
+            "dataPlanRef"
+          ],
+          "remove": true
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "REQUEST_SCHEMA_INVALID"
+      ]
+    },
+    {
+      "name": "bool-revision",
+      "kind": "request",
+      "base": "dev.request",
+      "edits": [
+        {
+          "path": [
+            "decisionRef",
+            "revision"
+          ],
+          "value": true
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "REQUEST_SCHEMA_INVALID"
+      ]
+    },
+    {
+      "name": "unknown-secret",
+      "kind": "request",
+      "base": "dev.request",
+      "edits": [
+        {
+          "path": [
+            "bindingSetRef",
+            "SECRET_TOKEN"
+          ],
+          "value": "SECRET_TOKEN"
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "REQUEST_SCHEMA_INVALID"
+      ]
+    },
+    {
+      "name": "purge-no-confirmation",
+      "kind": "request",
+      "base": "purge.request",
+      "edits": [
+        {
+          "path": [
+            "purgeConfirmationRef"
+          ],
+          "remove": true
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "REQUEST_SCHEMA_INVALID"
+      ]
+    },
+    {
+      "name": "promote-dev",
+      "kind": "request",
+      "base": "prod.request",
+      "edits": [
+        {
+          "path": [
+            "target",
+            "environment"
+          ],
+          "value": "dev"
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "REQUEST_SCHEMA_INVALID"
+      ]
+    },
+    {
+      "name": "promote-no-regression",
+      "kind": "request",
+      "base": "prod.request",
+      "edits": [
+        {
+          "path": [
+            "regressionRef"
+          ],
+          "remove": true
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "REQUEST_SCHEMA_INVALID"
+      ]
+    },
+    {
+      "name": "unexpected-purge-confirmation",
+      "kind": "request",
+      "base": "dev.request",
+      "edits": [
+        {
+          "path": [
+            "purgeConfirmationRef"
+          ],
+          "value": {
+            "id": "purge-confirmation-demo",
+            "revision": 1
+          }
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "REQUEST_SCHEMA_INVALID"
+      ]
+    },
+    {
+      "name": "no-components",
+      "kind": "receipt",
+      "base": "success.receipt",
+      "edits": [
+        {
+          "path": [
+            "componentResults"
+          ],
+          "value": []
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "REQUIRED_ROLE_MISSING_OR_DUPLICATE",
+        "REQUIRED_ROLE_MISSING_OR_DUPLICATE",
+        "REQUIRED_COMPONENT_NOT_SUCCESSFUL"
+      ]
+    },
+    {
+      "name": "waiting-client",
+      "kind": "receipt",
+      "base": "success.receipt",
+      "edits": [
+        {
+          "path": [
+            "componentResults",
+            1,
+            "status"
+          ],
+          "value": "waiting"
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "REQUIRED_COMPONENT_NOT_SUCCESSFUL"
+      ]
+    },
+    {
+      "name": "optional-client",
+      "kind": "receipt",
+      "base": "success.receipt",
+      "edits": [
+        {
+          "path": [
+            "componentResults",
+            1,
+            "required"
+          ],
+          "value": false
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "REQUIRED_ROLE_MISSING_OR_DUPLICATE"
+      ]
+    },
+    {
+      "name": "null-release",
+      "kind": "receipt",
+      "base": "success.receipt",
+      "edits": [
+        {
+          "path": [
+            "componentResults",
+            1,
+            "actualReleaseRef"
+          ],
+          "value": null
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "COMPONENT_RELEASE_MISMATCH"
+      ]
+    },
+    {
+      "name": "null-version",
+      "kind": "receipt",
+      "base": "success.receipt",
+      "edits": [
+        {
+          "path": [
+            "componentResults",
+            1,
+            "actualVersion"
+          ],
+          "value": null
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "COMPONENT_RELEASE_MISMATCH"
+      ]
+    },
+    {
+      "name": "wrong-release",
+      "kind": "receipt",
+      "base": "success.receipt",
+      "edits": [
+        {
+          "path": [
+            "componentResults",
+            1,
+            "actualReleaseRef",
+            "releaseId"
+          ],
+          "value": "other"
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "COMPONENT_RELEASE_MISMATCH"
+      ]
+    },
+    {
+      "name": "duplicate-component",
+      "kind": "receipt",
+      "base": "success.receipt",
+      "edits": [
+        {
+          "path": [
+            "componentResults"
+          ],
+          "value": [
+            {
+              "componentId": "backend",
+              "role": "backend",
+              "required": true,
+              "status": "ready",
+              "actualReleaseRef": {
+                "releaseId": "release-spec-demo-v1",
+                "bundleDigest": "sha256:fe1f6fe97dbab33261b84c56146641619dff68234c4d985ae7ae1f5657a20c92"
+              },
+              "actualVersion": "demo-v1"
+            },
+            {
+              "componentId": "client",
+              "role": "client",
+              "required": true,
+              "status": "ready",
+              "actualReleaseRef": {
+                "releaseId": "release-spec-demo-v1",
+                "bundleDigest": "sha256:fe1f6fe97dbab33261b84c56146641619dff68234c4d985ae7ae1f5657a20c92"
+              },
+              "actualVersion": "demo-v1"
+            },
+            {
+              "componentId": "channel-demo",
+              "role": "channel",
+              "required": true,
+              "status": "ready",
+              "actualReleaseRef": {
+                "releaseId": "release-spec-demo-v1",
+                "bundleDigest": "sha256:fe1f6fe97dbab33261b84c56146641619dff68234c4d985ae7ae1f5657a20c92"
+              },
+              "actualVersion": "demo-v1"
+            },
+            {
+              "componentId": "backend",
+              "role": "backend",
+              "required": true,
+              "status": "ready",
+              "actualReleaseRef": {
+                "releaseId": "release-spec-demo-v1",
+                "bundleDigest": "sha256:fe1f6fe97dbab33261b84c56146641619dff68234c4d985ae7ae1f5657a20c92"
+              },
+              "actualVersion": "demo-v1"
+            }
+          ]
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "DUPLICATE_COMPONENT_ID",
+        "REQUIRED_ROLE_MISSING_OR_DUPLICATE"
+      ]
+    },
+    {
+      "name": "unknown-commit",
+      "kind": "receipt",
+      "base": "success.receipt",
+      "edits": [
+        {
+          "path": [
+            "commitStatus"
+          ],
+          "value": "unknown"
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "UNCONFIRMED_GENERATION",
+        "UNKNOWN_REQUIRES_RECOVERY",
+        "SUCCESS_COMMIT_REQUIRED"
+      ]
+    },
+    {
+      "name": "bad-generation",
+      "kind": "receipt",
+      "base": "success.receipt",
+      "edits": [
+        {
+          "path": [
+            "committedGeneration"
+          ],
+          "value": 0
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "ACTIVATION_GENERATION_INVALID"
+      ]
+    },
+    {
+      "name": "bad-time",
+      "kind": "receipt",
+      "base": "success.receipt",
+      "edits": [
+        {
+          "path": [
+            "observedAt"
+          ],
+          "value": "2026-02-30T00:00:00.000Z"
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "OBSERVED_AT_INVALID"
+      ]
+    },
+    {
+      "name": "unknown-outcome",
+      "kind": "receipt",
+      "base": "success.receipt",
+      "edits": [
+        {
+          "path": [
+            "outcome"
+          ],
+          "value": "running"
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "RECEIPT_SCHEMA_INVALID"
+      ]
+    },
+    {
+      "name": "success-error",
+      "kind": "receipt",
+      "base": "success.receipt",
+      "edits": [
+        {
+          "path": [
+            "error"
+          ],
+          "value": {
+            "code": "FAIL",
+            "owner": "owner",
+            "stage": "stage",
+            "retryable": false
+          }
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "RECEIPT_SCHEMA_INVALID"
+      ]
+    },
+    {
+      "name": "component-error",
+      "kind": "receipt",
+      "base": "success.receipt",
+      "edits": [
+        {
+          "path": [
+            "componentResults",
+            0,
+            "error"
+          ],
+          "value": {
+            "code": "FAIL",
+            "owner": "owner",
+            "stage": "stage",
+            "retryable": false
+          }
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "SUCCESS_COMPONENT_HAS_ERROR"
+      ]
+    },
+    {
+      "name": "zero-environment-revision",
+      "kind": "receipt",
+      "base": "success.receipt",
+      "edits": [
+        {
+          "path": [
+            "environmentRevision"
+          ],
+          "value": 0
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "COMMITTED_ENVIRONMENT_REVISION_INVALID",
+        "SUCCESS_COMMIT_REQUIRED"
+      ]
+    },
+    {
+      "name": "receipt-secret",
+      "kind": "receipt",
+      "base": "success.receipt",
+      "edits": [
+        {
+          "path": [
+            "componentResults",
+            0,
+            "SECRET_TOKEN"
+          ],
+          "value": "SECRET_TOKEN"
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "RECEIPT_SCHEMA_INVALID"
+      ]
+    },
+    {
+      "name": "no-requested-release",
+      "kind": "receipt",
+      "base": "success.receipt",
+      "edits": [
+        {
+          "path": [
+            "requestedReleaseRef"
+          ],
+          "value": null
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "REQUESTED_RELEASE_REQUIRED",
+        "COMPONENT_RELEASE_MISMATCH",
+        "COMPONENT_RELEASE_MISMATCH",
+        "COMPONENT_RELEASE_MISMATCH"
+      ]
+    },
+    {
+      "name": "degraded-generation",
+      "kind": "receipt",
+      "base": "failed-degraded.receipt",
+      "edits": [
+        {
+          "path": [
+            "committedGeneration"
+          ],
+          "value": 2
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "ACTIVATION_GENERATION_INVALID"
+      ]
+    },
+    {
+      "name": "degraded-not-committed",
+      "kind": "receipt",
+      "base": "failed-degraded.receipt",
+      "edits": [
+        {
+          "path": [
+            "commitStatus"
+          ],
+          "value": "not_committed"
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "UNCONFIRMED_GENERATION",
+        "DEGRADED_COMMIT_REQUIRED"
+      ]
+    },
+    {
+      "name": "degraded-no-recovery",
+      "kind": "receipt",
+      "base": "failed-degraded.receipt",
+      "edits": [
+        {
+          "path": [
+            "recoveryRef"
+          ],
+          "remove": true
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "RECEIPT_SCHEMA_INVALID"
+      ]
+    },
+    {
+      "name": "degraded-no-error",
+      "kind": "receipt",
+      "base": "failed-degraded.receipt",
+      "edits": [
+        {
+          "path": [
+            "error"
+          ],
+          "remove": true
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "RECEIPT_SCHEMA_INVALID"
+      ]
+    },
+    {
+      "name": "degraded-no-components",
+      "kind": "receipt",
+      "base": "failed-degraded.receipt",
+      "edits": [
+        {
+          "path": [
+            "componentResults"
+          ],
+          "value": []
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "REQUIRED_ROLE_MISSING_OR_DUPLICATE",
+        "REQUIRED_ROLE_MISSING_OR_DUPLICATE"
+      ]
+    },
+    {
+      "name": "degraded-zero-revision",
+      "kind": "receipt",
+      "base": "failed-degraded.receipt",
+      "edits": [
+        {
+          "path": [
+            "environmentRevision"
+          ],
+          "value": 0
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "COMMITTED_ENVIRONMENT_REVISION_INVALID"
+      ]
+    },
+    {
+      "name": "unknown-confirmed-generation",
+      "kind": "receipt",
+      "base": "recovery-required.receipt",
+      "edits": [
+        {
+          "path": [
+            "committedGeneration"
+          ],
+          "value": 1
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "UNCONFIRMED_GENERATION"
+      ]
+    },
+    {
+      "name": "management-changed-generation",
+      "kind": "receipt",
+      "base": "stop.receipt",
+      "edits": [
+        {
+          "path": [
+            "committedGeneration"
+          ],
+          "value": 2
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "MANAGEMENT_GENERATION_CHANGED"
+      ]
+    },
+    {
+      "name": "stop-ready",
+      "kind": "receipt",
+      "base": "stop.receipt",
+      "edits": [
+        {
+          "path": [
+            "componentResults",
+            0,
+            "status"
+          ],
+          "value": "ready"
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "REQUIRED_COMPONENT_NOT_SUCCESSFUL"
+      ]
+    },
+    {
+      "name": "recover-self",
+      "kind": "receipt",
+      "base": "recover.receipt",
+      "edits": [
+        {
+          "path": [
+            "recoveryOf"
+          ],
+          "value": "operation-recover-demo"
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "RECOVERY_SELF_REFERENCE"
+      ]
+    },
+    {
+      "name": "recover-no-parent",
+      "kind": "receipt",
+      "base": "recover.receipt",
+      "edits": [
+        {
+          "path": [
+            "recoveryOf"
+          ],
+          "remove": true
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "RECEIPT_SCHEMA_INVALID"
+      ]
+    },
+    {
+      "name": "application-mismatch",
+      "kind": "linked",
+      "base": null,
+      "edits": [
+        {
+          "path": [
+            "request",
+            "target",
+            "applicationId"
+          ],
+          "value": "other"
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "APPLICATION_MISMATCH",
+        "TARGET_MISMATCH"
+      ]
+    },
+    {
+      "name": "target-mismatch",
+      "kind": "linked",
+      "base": null,
+      "edits": [
+        {
+          "path": [
+            "receipt",
+            "target",
+            "boxId"
+          ],
+          "value": "other"
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "TARGET_MISMATCH"
+      ]
+    },
+    {
+      "name": "request-release-mismatch",
+      "kind": "linked",
+      "base": null,
+      "edits": [
+        {
+          "path": [
+            "request",
+            "releaseRef",
+            "bundleDigest"
+          ],
+          "value": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "REQUEST_RELEASE_MISMATCH"
+      ]
+    },
+    {
+      "name": "expected-generation",
+      "kind": "linked",
+      "base": null,
+      "edits": [
+        {
+          "path": [
+            "request",
+            "expectedGeneration"
+          ],
+          "value": 5
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "EXPECTED_GENERATION_MISMATCH"
+      ]
+    },
+    {
+      "name": "kind-mismatch",
+      "kind": "linked",
+      "base": null,
+      "edits": [
+        {
+          "path": [
+            "request",
+            "kind"
+          ],
+          "value": "rollback"
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "KIND_MISMATCH"
+      ]
+    },
+    {
+      "name": "channel-missing",
+      "kind": "linked",
+      "base": null,
+      "edits": [
+        {
+          "path": [
+            "receipt",
+            "componentResults"
+          ],
+          "value": [
+            {
+              "componentId": "backend",
+              "role": "backend",
+              "required": true,
+              "status": "ready",
+              "actualReleaseRef": {
+                "releaseId": "release-spec-demo-v1",
+                "bundleDigest": "sha256:fe1f6fe97dbab33261b84c56146641619dff68234c4d985ae7ae1f5657a20c92"
+              },
+              "actualVersion": "demo-v1"
+            },
+            {
+              "componentId": "client",
+              "role": "client",
+              "required": true,
+              "status": "ready",
+              "actualReleaseRef": {
+                "releaseId": "release-spec-demo-v1",
+                "bundleDigest": "sha256:fe1f6fe97dbab33261b84c56146641619dff68234c4d985ae7ae1f5657a20c92"
+              },
+              "actualVersion": "demo-v1"
+            }
+          ]
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "REQUIRED_CHANNEL_MISSING"
+      ]
+    },
+    {
+      "name": "undeclared-channel",
+      "kind": "linked",
+      "base": null,
+      "edits": [
+        {
+          "path": [
+            "context",
+            "requiredChannelIds"
+          ],
+          "value": []
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "CHANNEL_CONTEXT_MISMATCH"
+      ]
+    },
+    {
+      "name": "duplicate-context",
+      "kind": "linked",
+      "base": null,
+      "edits": [
+        {
+          "path": [
+            "context",
+            "requiredChannelIds"
+          ],
+          "value": [
+            "channel-demo",
+            "channel-demo"
+          ]
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "RESOLVED_CHANNEL_CONTEXT_REQUIRED"
+      ]
+    },
+    {
+      "name": "invalid-context",
+      "kind": "linked",
+      "base": null,
+      "edits": [
+        {
+          "path": [
+            "context",
+            "requiredChannelIds"
+          ],
+          "value": null
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "RESOLVED_CHANNEL_CONTEXT_REQUIRED"
+      ]
+    },
+    {
+      "name": "context-object",
+      "kind": "linked",
+      "base": null,
+      "edits": [
+        {
+          "path": [
+            "context",
+            "requiredChannelIds"
+          ],
+          "value": {}
+        }
+      ],
+      "redigest": false,
+      "errors": [
+        "RESOLVED_CHANNEL_CONTEXT_REQUIRED"
+      ]
+    }
+  ]
+}

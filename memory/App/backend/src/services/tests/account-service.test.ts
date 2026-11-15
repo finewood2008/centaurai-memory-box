@@ -1,0 +1,1270 @@
+/** Account service tests. */
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { LOCAL_BYOK_ACCOUNT_UUID } from "../../infrastructure/app-state-store/account-context.js";
+import { createAppStateStore } from "../../infrastructure/app-state-store/index.js";
+import { INSTALLATION_SCAN_SCOPE_UUID } from "../../infrastructure/installation-scan-scope.js";
+import {
+  createAccountService as createAccountServiceImplementation,
+  type CreateAccountServiceOptions
+} from "../account-service.js";
+
+type TestAccountServiceOptions = Omit<CreateAccountServiceOptions, "bootstrapRepository"> & {
+  bootstrapRepository?: CreateAccountServiceOptions["bootstrapRepository"];
+};
+
+function createAccountService(options: TestAccountServiceOptions) {
+  const { bootstrapRepository, ...rest } = options;
+  return createAccountServiceImplementation({
+    ...rest,
+    bootstrapRepository: bootstrapRepository ?? {
+      preserveCompletedOnboardingForLocalByok() {
+        return false;
+      }
+    }
+  });
+}
+
+describe("AccountService", () => {
+  it("keeps cloud grants across nickname edits but removes them on authoritative cloud refresh", async () => {
+    const root = mkdtempSync(join(tmpdir(), "memmy-account-grants-"));
+    const store = createAppStateStore({ databasePath: join(root, "app.sqlite") });
+    let grants = ["plugin:legal-labor"];
+    const profile = cloudProfile();
+    store.repositories.accountSession.upsert({
+      uuid: "test-account", cloudUuid: "test-credential", profile
+    });
+    const service = createAccountService({
+      accountSessionRepository: store.repositories.accountSession,
+      cloudClient: {
+        ...createCloudClientStub(),
+        async getAccountInfo() {
+          return { ...profile, rawProfile: { ...profile.rawProfile, entitlements: grants } };
+        }
+      }
+    });
+    try {
+      await service.getSession();
+      expect(store.repositories.accountSession.getEntitlements()).toEqual(["plugin:legal-labor", "plugin:literature-review"]);
+      await service.updateProfile({ nickname: "Legal Test" });
+      expect(store.repositories.accountSession.getEntitlements()).toEqual(["plugin:legal-labor", "plugin:literature-review"]);
+      expect(store.repositories.accountSession.get()).toMatchObject({ profile: { nickname: "Legal Test" } });
+      grants = [];
+      await service.getSession();
+      expect(store.repositories.accountSession.getEntitlements()).toEqual(["plugin:literature-review"]);
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+  it("treats a logged-out lottery reward lookup as no reward", async () => {
+    let cloudCalls = 0;
+    const service = createAccountService({
+      cloudClient: {
+        ...createCloudClientStub(),
+        async getLotteryReward() {
+          cloudCalls += 1;
+          return { hasReward: true as const, drawId: "1", tokenAmount: 500_000 };
+        }
+      },
+      accountSessionRepository: createAccountSessionRepositoryStub()
+    });
+
+    await expect(service.getLotteryReward()).resolves.toEqual({ hasReward: false });
+    expect(cloudCalls).toBe(0);
+  });
+
+  it("reads and acknowledges lottery rewards with the current cloud credential", async () => {
+    const calls: unknown[] = [];
+    const service = createAccountService({
+      cloudClient: {
+        ...createCloudClientStub(),
+        async getLotteryReward(input) {
+          calls.push({ get: input });
+          return { hasReward: true as const, drawId: "1", tokenAmount: 500_000 };
+        },
+        async ackLotteryReward(input) {
+          calls.push({ ack: input });
+        }
+      },
+      accountSessionRepository: {
+        ...createAccountSessionRepositoryStub(),
+        getCloudUuid() {
+          return "cloud.login.uuid";
+        }
+      }
+    });
+
+    await expect(service.getLotteryReward()).resolves.toEqual({
+      hasReward: true,
+      drawId: "1",
+      tokenAmount: 500_000
+    });
+    await expect(service.ackLotteryReward({ drawId: "1" })).resolves.toEqual({ ok: true });
+    expect(calls).toEqual([
+      { get: { uuid: "cloud.login.uuid" } },
+      { ack: { uuid: "cloud.login.uuid", drawId: "1" } }
+    ]);
+  });
+
+  it("ensures and acknowledges the automatic one-time task Token gift with the current cloud account", async () => {
+    const calls: unknown[] = [];
+    const service = createAccountService({
+      cloudClient: {
+        ...createCloudClientStub(),
+        async ensureTaskTokenGift(input) {
+          calls.push({ ensure: input });
+          return { hasGift: true as const, grantId: "launch-gift-20m", audience: "existing" as const,
+            tokenAmount: 20_000_000, totalTokens: 22_000_000 };
+        },
+        async ackTaskTokenGift(input) { calls.push({ ack: input }); }
+      },
+      accountSessionRepository: {
+        ...createAccountSessionRepositoryStub(),
+        getCloudUuid() { return "cloud.login.uuid"; }
+      }
+    });
+
+    await expect(service.ensureTaskTokenGift()).resolves.toMatchObject({
+      hasGift: true, audience: "existing", tokenAmount: 20_000_000
+    });
+    await expect(service.ackTaskTokenGift({ grantId: "launch-gift-20m" })).resolves.toEqual({ ok: true });
+    expect(calls).toEqual([
+      { ensure: { uuid: "cloud.login.uuid" } },
+      { ack: { uuid: "cloud.login.uuid", grantId: "launch-gift-20m" } }
+    ]);
+  });
+
+  it("fails closed when the cloud lottery reward lookup is unavailable", async () => {
+    const service = createAccountService({
+      cloudClient: {
+        ...createCloudClientStub(),
+        async getLotteryReward() {
+          throw Object.assign(new Error("unauthorized"), { code: "unauthorized" as const });
+        }
+      },
+      accountSessionRepository: {
+        ...createAccountSessionRepositoryStub(),
+        getCloudUuid() {
+          return "stale.cloud.uuid";
+        }
+      }
+    });
+
+    await expect(service.getLotteryReward()).resolves.toEqual({ hasReward: false });
+  });
+
+  it("rejects verification channels that are not supported by the desktop package", async () => {
+    let cloudCalls = 0;
+    const service = createAccountService({
+      accountChannel: "phone",
+      cloudClient: {
+        ...createCloudClientStub(),
+        async sendEmailCode() {
+          cloudCalls += 1;
+        },
+        async login() {
+          cloudCalls += 1;
+          throw new Error("unexpected cloud login");
+        }
+      },
+      accountSessionRepository: createAccountSessionRepositoryStub()
+    });
+
+    await expect(service.sendCode({
+      channel: "email",
+      email: "hello@example.com",
+      locale: "zh"
+    })).rejects.toMatchObject({ code: "invalid_argument" });
+    await expect(service.verifyCode({
+      channel: "email",
+      email: "hello@example.com",
+      verificationCode: "123456",
+      loginSource: "Memmy"
+    })).rejects.toMatchObject({ code: "invalid_argument" });
+    expect(cloudCalls).toBe(0);
+  });
+
+  it("keeps social login unavailable in the phone-only China package", async () => {
+    let cloudCalls = 0;
+    const service = createAccountService({
+      accountChannel: "phone",
+      cloudClient: {
+        ...createCloudClientStub(),
+        async startSocialLogin() {
+          cloudCalls += 1;
+          throw new Error("unexpected social-login start");
+        },
+        async getSocialLoginStatus() {
+          cloudCalls += 1;
+          throw new Error("unexpected social-login poll");
+        }
+      },
+      accountSessionRepository: createAccountSessionRepositoryStub()
+    });
+
+    await expect(service.startSocialLogin({
+      provider: "google",
+      locale: "zh",
+      loginSource: "Memmy"
+    })).rejects.toMatchObject({ code: "invalid_argument" });
+    await expect(service.getSocialLoginStatus({
+      flowId: "social-flow-id-0001",
+      pollToken: "social-poll-token-0000000000000001"
+    })).rejects.toMatchObject({ code: "invalid_argument" });
+    expect(cloudCalls).toBe(0);
+  });
+
+  it("stores a completed international social login as an email-channel session", async () => {
+    const calls: unknown[] = [];
+    const service = createAccountService({
+      accountChannel: "email",
+      cloudClient: {
+        ...createCloudClientStub(),
+        async getSocialLoginStatus(input) {
+          calls.push({ status: input });
+          return {
+            status: "completed" as const,
+            result: {
+              uuid: "cloud.social.uuid",
+              accountUuid: "cloud-account-user-1",
+              isNewUser: false,
+              profile: cloudProfile(),
+              invitationResult: { status: "not_provided" as const }
+            }
+          };
+        }
+      },
+      accountSessionRepository: {
+        ...createAccountSessionRepositoryStub(),
+        upsert(input) {
+          calls.push({ upsert: input });
+          return {
+            authenticated: true,
+            isNewUser: input.isNewUser ?? false,
+            profile: input.profile
+          };
+        }
+      }
+    });
+
+    await expect(service.getSocialLoginStatus({
+      flowId: "social-flow-id-0001",
+      pollToken: "social-poll-token-0000000000000001"
+    })).resolves.toMatchObject({
+      status: "completed",
+      result: { session: { authenticated: true, profile: { email: "hello@example.com" } } }
+    });
+    expect(calls).toContainEqual({
+      upsert: expect.objectContaining({
+        cloudUuid: "cloud.social.uuid",
+        authChannel: "email"
+      })
+    });
+  });
+
+  it("sends verification codes through cloud-client and rate-limits by channel address", async () => {
+    const calls: string[] = [];
+    let lastCodeSentAt: string | null = null;
+    const service = createAccountService({
+      now: () => new Date("2026-06-02T10:00:00.000Z"),
+      cloudClient: {
+        ...createCloudClientStub(),
+        async sendEmailCode(input) {
+          calls.push(`email:${input.email}:${input.zhEnv}`);
+        }
+      },
+      accountSessionRepository: {
+        ...createAccountSessionRepositoryStub(),
+        getLastCodeSentAt() {
+          return lastCodeSentAt;
+        },
+        markCodeSent(_key, at) {
+          lastCodeSentAt = at;
+          calls.push(`mark:${at}`);
+        }
+      }
+    });
+
+    await expect(service.sendCode({ channel: "email", email: "hello@example.com", locale: "zh" })).resolves.toEqual({
+      ok: true,
+      resendAfterSec: 60
+    });
+
+    lastCodeSentAt = "2026-06-02T09:59:45.000Z";
+    await expect(service.sendCode({ channel: "email", email: "hello@example.com", locale: "zh" })).resolves.toEqual({
+      ok: true,
+      resendAfterSec: 45
+    });
+
+    expect(calls).toEqual(["email:hello@example.com:true", "mark:2026-06-02T10:00:00.000Z"]);
+  });
+
+  it("passes locale as zhEnv for email and phone verification templates", async () => {
+    const calls: string[] = [];
+    const service = createAccountService({
+      now: () => new Date("2026-06-02T10:00:00.000Z"),
+      cloudClient: {
+        ...createCloudClientStub(),
+        async sendEmailCode(input) {
+          calls.push(`email:${input.email}:${input.zhEnv}`);
+        },
+        async sendPhoneCode(input) {
+          calls.push(`phone:${input.phoneNumber}:${input.zhEnv}`);
+        }
+      },
+      accountSessionRepository: {
+        ...createAccountSessionRepositoryStub(),
+        getLastCodeSentAt() {
+          return null;
+        },
+        markCodeSent(_key, at) {
+          calls.push(`mark:${at}`);
+        }
+      }
+    });
+
+    await expect(service.sendCode({ channel: "email", email: "hello@example.com", locale: "en" })).resolves.toEqual({
+      ok: true,
+      resendAfterSec: 60
+    });
+    await expect(service.sendCode({ channel: "phone", phoneNumber: "13800138000", locale: "zh" })).resolves.toEqual({
+      ok: true,
+      resendAfterSec: 60
+    });
+
+    expect(calls).toEqual([
+      "email:hello@example.com:false",
+      "mark:2026-06-02T10:00:00.000Z",
+      "phone:13800138000:true",
+      "mark:2026-06-02T10:00:00.000Z"
+    ]);
+  });
+
+  it("logs in through cloud-client and stores uuid through account session repository", async () => {
+    const calls: unknown[] = [];
+    const service = createAccountService({
+      now: () => new Date("2026-06-02T10:00:00.000Z"),
+      cloudClient: {
+        ...createCloudClientStub(),
+        async login(input) {
+          calls.push({ login: input });
+          return {
+            uuid: "cloud.login.uuid",
+            accountUuid: "cloud-account-user-1",
+            isNewUser: true,
+            profile: cloudProfile(),
+            invitationResult: {
+              status: "success" as const,
+              inviteeRewardTokens: 500_000
+            }
+          };
+        }
+      },
+      accountSessionRepository: {
+        ...createAccountSessionRepositoryStub(),
+        upsert(input) {
+          calls.push({ upsert: input });
+          return {
+            authenticated: true,
+            isNewUser: true,
+            profile: {
+              userId: input.profile.userId,
+              email: input.profile.email,
+              phoneNumber: input.profile.phoneNumber,
+              nickname: input.profile.nickname,
+              avatarUrl: input.profile.avatarUrl,
+              planType: input.profile.planType,
+              hasFinishedGuide: input.profile.hasFinishedGuide,
+              region: input.profile.region,
+              registeredAt: input.profile.registeredAt
+            }
+          };
+        }
+      }
+    });
+
+    const result = await service.verifyCode({
+      channel: "email",
+      email: "hello@example.com",
+      verificationCode: "123456",
+      loginSource: "Memmy",
+      invitationCode: "MEMMY-A1B2C3"
+    });
+
+    expect(result).toMatchObject({
+      session: {
+        authenticated: true,
+        isNewUser: true,
+        profile: {
+          email: "hello@example.com",
+          nickname: "hello"
+        }
+      },
+      invitationResult: {
+        status: "success",
+        inviteeRewardTokens: 500_000
+      }
+    });
+    expect(JSON.stringify(result)).not.toContain("cloud.login.uuid");
+    expect(calls).toEqual([
+      {
+        login: {
+          email: "hello@example.com",
+          verificationCode: "123456",
+          loginSource: "Memmy",
+          invitationCode: "MEMMY-A1B2C3"
+        }
+      },
+      {
+        upsert: {
+          profile: cloudProfile(),
+          isNewUser: true,
+          uuid: "cloud-account-user-1",
+          cloudUuid: "cloud.login.uuid",
+          authChannel: "email"
+        }
+      },
+      {
+        upsert: {
+          profile: cloudProfile(),
+          isNewUser: true
+        }
+      }
+    ]);
+  });
+
+  it("persists cloud login uuid into Memmy config before storing the local account session", async () => {
+    const calls: string[] = [];
+    const service = createAccountService({
+      cloudClient: {
+        ...createCloudClientStub(),
+        async login() {
+          calls.push("login");
+          return {
+            uuid: "cloud.login.uuid",
+            accountUuid: "cloud-account-user-1",
+            isNewUser: true,
+            profile: cloudProfile()
+          };
+        }
+      },
+      accountSessionRepository: {
+        ...createAccountSessionRepositoryStub(),
+        upsert(input) {
+          calls.push(`upsert:${input.uuid ?? "no-uuid"}:${input.cloudUuid ?? "no-cloud-uuid"}`);
+          return {
+            authenticated: true,
+            isNewUser: input.isNewUser ?? null,
+            profile: input.profile
+          };
+        }
+      },
+      memmyConfigWriter: {
+        async writeAccountModelProjection(input) {
+          calls.push(`write:${input.cloudUuid ?? "no-cloud"}:${input.userId ?? "no-user"}`);
+        },
+        async writeByokModelProjection() {
+          calls.push("write-byok");
+        }
+      }
+    });
+
+    await expect(
+      service.verifyCode({
+        channel: "email",
+        email: "hello@example.com",
+        verificationCode: "123456",
+        loginSource: "Memmy"
+      })
+    ).resolves.toMatchObject({
+      session: {
+        authenticated: true,
+        profile: {
+          email: "hello@example.com"
+        }
+      },
+      invitationResult: { status: "not_provided" }
+    });
+    expect(calls).toEqual([
+      "login",
+      "write:cloud.login.uuid:user-1",
+      "upsert:cloud-account-user-1:cloud.login.uuid",
+      "upsert:no-uuid:no-cloud-uuid"
+    ]);
+  });
+
+  it("keeps cloud new-user judgment when the same registered account is first seen locally", async () => {
+    const service = createAccountService({
+      cloudClient: {
+        ...createCloudClientStub(),
+        async login() {
+          return {
+            uuid: "cloud.login.uuid",
+            accountUuid: "cloud-account-user-1",
+            isNewUser: false,
+            profile: cloudProfile()
+          };
+        }
+      },
+      accountSessionRepository: {
+        ...createAccountSessionRepositoryStub(),
+        upsert(input) {
+          return {
+            authenticated: true,
+            isNewUser: input.isNewUser ?? true,
+            profile: input.profile
+          };
+        }
+      }
+    });
+
+    await expect(
+      service.verifyCode({
+        channel: "email",
+        email: "hello@example.com",
+        verificationCode: "123456",
+        loginSource: "Memmy"
+      })
+    ).resolves.toMatchObject({
+      session: {
+        authenticated: true,
+        isNewUser: false,
+        profile: {
+          email: "hello@example.com"
+        }
+      },
+      invitationResult: { status: "not_provided" }
+    });
+  });
+
+  it("uses agentUser info after login to decide whether the current machine should show guide", async () => {
+    const calls: string[] = [];
+    const service = createAccountService({
+      cloudClient: {
+        ...createCloudClientStub(),
+        async login() {
+          calls.push("cloud-login");
+          return {
+            uuid: "cloud.login.uuid",
+            accountUuid: "cloud-account-user-1",
+            isNewUser: false,
+            profile: { ...cloudProfile(), hasFinishedGuide: true }
+          };
+        },
+        async getAccountInfo(input) {
+          calls.push(`cloud-info:${input.uuid}`);
+          return { ...cloudProfile(), hasFinishedGuide: false };
+        },
+        async updateAccountGuide(input) {
+          calls.push(`cloud-update:${input.uuid}:${input.hasFinishedGuide}`);
+        }
+      },
+      accountSessionRepository: {
+        ...createAccountSessionRepositoryStub(),
+        upsert(input) {
+          calls.push(`local-upsert:${input.profile.hasFinishedGuide}:${input.cloudUuid ?? "no-cloud-uuid"}`);
+          return {
+            authenticated: true,
+            isNewUser: input.isNewUser ?? false,
+            profile: input.profile
+          };
+        }
+      }
+    });
+
+    await expect(
+      service.verifyCode({
+        channel: "email",
+        email: "hello@example.com",
+        verificationCode: "123456",
+        loginSource: "Memmy"
+      })
+    ).resolves.toMatchObject({
+      session: {
+        authenticated: true,
+        profile: {
+          hasFinishedGuide: false
+        }
+      },
+      invitationResult: { status: "not_provided" }
+    });
+    expect(calls).toEqual([
+      "cloud-login",
+      "local-upsert:true:cloud.login.uuid",
+      "cloud-info:cloud.login.uuid",
+      "local-upsert:false:no-cloud-uuid"
+    ]);
+  });
+
+  it("updates local profile, reads session, and logs out locally", async () => {
+    const calls: string[] = [];
+    const service = createAccountService({
+      now: () => new Date("2026-06-02T10:00:00.000Z"),
+      cloudClient: createCloudClientStub(),
+      accountSessionRepository: {
+        ...createAccountSessionRepositoryStub(),
+        get() {
+          return {
+            authenticated: true,
+            isNewUser: false,
+            profile: {
+              userId: "user-1",
+              email: "hello@example.com",
+              phoneNumber: null,
+              nickname: "hello",
+              avatarUrl: null,
+              planType: "free",
+              hasFinishedGuide: false,
+              region: null,
+              registeredAt: "2026-06-02T10:00:00.000Z"
+            }
+          };
+        },
+        upsert(input) {
+          calls.push(`upsert:${input.profile.nickname}:${input.uuid ?? "no-uuid"}`);
+          return {
+            authenticated: true,
+            isNewUser: false,
+            profile: {
+              userId: input.profile.userId,
+              email: input.profile.email,
+              phoneNumber: input.profile.phoneNumber,
+              nickname: input.profile.nickname,
+              avatarUrl: input.profile.avatarUrl,
+              planType: input.profile.planType,
+              hasFinishedGuide: input.profile.hasFinishedGuide,
+              region: input.profile.region,
+              registeredAt: input.profile.registeredAt
+            }
+          };
+        },
+        clear() {
+          calls.push("clear");
+        }
+      }
+    });
+
+    await expect(service.getSession()).resolves.toMatchObject({ authenticated: true });
+    await expect(service.updateProfile({ nickname: "Memmy User" })).resolves.toMatchObject({
+      nickname: "Memmy User"
+    });
+    await expect(service.logout()).resolves.toEqual({ ok: true });
+    expect(calls).toEqual(["upsert:Memmy User:no-uuid", "clear"]);
+  });
+
+  it("updates cloud profile before storing the nickname locally", async () => {
+    const calls: string[] = [];
+    const service = createAccountService({
+      cloudClient: {
+        ...createCloudClientStub(),
+        async updateAccountProfile(input) {
+          calls.push(`cloud-profile:${input.uuid}:${input.userName ?? "no-user-name"}`);
+        }
+      },
+      accountSessionRepository: {
+        ...createAccountSessionRepositoryStub(),
+        get() {
+          return {
+            authenticated: true,
+            isNewUser: false,
+            profile: {
+              userId: "user-1",
+              email: "hello@example.com",
+              phoneNumber: null,
+              nickname: "hello",
+              avatarUrl: null,
+              planType: "free",
+              hasFinishedGuide: false,
+              region: null,
+              registeredAt: "2026-06-02T10:00:00.000Z"
+            }
+          };
+        },
+        getCloudUuid() {
+          return "cloud.login.uuid";
+        },
+        upsert(input) {
+          calls.push(`local-upsert:${input.profile.nickname}`);
+          return {
+            authenticated: true,
+            isNewUser: false,
+            profile: input.profile
+          };
+        }
+      }
+    });
+
+    await expect(service.updateProfile({ nickname: "Memmy User" })).resolves.toMatchObject({
+      nickname: "Memmy User"
+    });
+    expect(calls).toEqual(["cloud-profile:cloud.login.uuid:Memmy User", "local-upsert:Memmy User"]);
+  });
+
+  it("refreshes guide completion from cloud info without marking it finished before entering guide", async () => {
+    const calls: string[] = [];
+    const localSession = {
+      authenticated: true as const,
+      isNewUser: false,
+      profile: {
+        userId: "user-1",
+        email: "hello@example.com",
+        phoneNumber: null,
+        nickname: "hello",
+        avatarUrl: null,
+        planType: "free",
+        hasFinishedGuide: true,
+        region: null,
+        registeredAt: "2026-06-02T10:00:00.000Z"
+      }
+    };
+    const service = createAccountService({
+      cloudClient: {
+        ...createCloudClientStub(),
+        async getAccountInfo(input) {
+          calls.push(`cloud-info:${input.uuid}`);
+          return { ...cloudProfile(), hasFinishedGuide: false };
+        },
+        async updateAccountGuide(input) {
+          calls.push(`cloud-update:${input.uuid}:${input.hasFinishedGuide}`);
+        }
+      },
+      accountSessionRepository: {
+        ...createAccountSessionRepositoryStub(),
+        get() {
+          calls.push("local-get");
+          return localSession;
+        },
+        getCloudUuid() {
+          calls.push("local-cloud-uuid");
+          return "cloud.login.uuid";
+        },
+        upsert(input) {
+          calls.push(`local-upsert:${input.profile.hasFinishedGuide}`);
+          return {
+            authenticated: true,
+            isNewUser: false,
+            profile: input.profile
+          };
+        }
+      }
+    });
+
+    await expect(service.getSession()).resolves.toMatchObject({
+      authenticated: true,
+      profile: {
+        hasFinishedGuide: false
+      }
+    });
+    expect(calls).toEqual([
+      "local-get",
+      "local-cloud-uuid",
+      "cloud-info:cloud.login.uuid",
+      "local-upsert:false"
+    ]);
+  });
+
+  it("marks cloud guide finished only when the guide is actually entered", async () => {
+    const calls: string[] = [];
+    const service = createAccountService({
+      cloudClient: {
+        ...createCloudClientStub(),
+        async updateAccountGuide(input) {
+          calls.push(`cloud-update:${input.uuid}:${input.hasFinishedGuide}`);
+        }
+      },
+      accountSessionRepository: {
+        ...createAccountSessionRepositoryStub(),
+        getCloudUuid() {
+          calls.push("local-cloud-uuid");
+          return "cloud.login.uuid";
+        }
+      }
+    });
+
+    await expect(service.markGuideFinished()).resolves.toEqual({ ok: true });
+    expect(calls).toEqual(["local-cloud-uuid", "cloud-update:cloud.login.uuid:true"]);
+  });
+
+  it("notifies cloud logout with stored uuid, then clears local session", async () => {
+    const calls: string[] = [];
+    const service = createAccountService({
+      cloudClient: {
+        ...createCloudClientStub(),
+        async logout(input) {
+          calls.push(`cloud-logout:${input.uuid}`);
+        }
+      },
+      accountSessionRepository: {
+        ...createAccountSessionRepositoryStub(),
+        getCloudUuid() {
+          return "cloud.login.uuid";
+        },
+        clear() {
+          calls.push("clear");
+        },
+        clearIfCloudUuid(cloudUuid) {
+          calls.push(`clear-if:${cloudUuid}`);
+          return true;
+        }
+      },
+      bootstrapRepository: {
+        preserveCompletedOnboardingForLocalByok() {
+          calls.push("preserve-onboarding");
+          return true;
+        }
+      },
+      memmyConfigWriter: {
+        async writeAccountModelProjection() {
+          calls.push("write-account");
+          return projectionResult();
+        },
+        async clearAccountModelProjection(input) {
+          calls.push(
+            `clear-account-config:${input.syncSelectedByokToLocal ?? false}:${input.expectedCloudUuid ?? "none"}`
+          );
+          return projectionResult();
+        },
+        async writeByokModelProjection() {
+          calls.push("write-byok");
+          return projectionResult();
+        },
+        async writeActiveMemoryProfile() {
+          calls.push("write-active-profile");
+          return projectionResult();
+        },
+        async patchChannelConfig() {
+          calls.push("patch-channel");
+        }
+      }
+    });
+
+    await expect(service.logout()).resolves.toEqual({ ok: true });
+    expect(calls).toEqual([
+      "preserve-onboarding",
+      "cloud-logout:cloud.login.uuid",
+      "clear-account-config:true:cloud.login.uuid",
+      "clear-if:cloud.login.uuid"
+    ]);
+  });
+
+  it("preserves local onboarding before a failed cloud logout and still clears the local session", async () => {
+    const calls: string[] = [];
+    const service = createAccountService({
+      cloudClient: {
+        ...createCloudClientStub(),
+        async logout() {
+          calls.push("cloud-logout");
+          throw new Error("cloud unavailable");
+        }
+      },
+      accountSessionRepository: {
+        ...createAccountSessionRepositoryStub(),
+        getCloudUuid() {
+          return "cloud.login.uuid";
+        },
+        clearIfCloudUuid(cloudUuid) {
+          calls.push(`clear-if:${cloudUuid}`);
+          return true;
+        }
+      },
+      bootstrapRepository: {
+        preserveCompletedOnboardingForLocalByok() {
+          calls.push("preserve-onboarding");
+          return true;
+        }
+      }
+    });
+
+    await expect(service.logout()).resolves.toEqual({ ok: true });
+    expect(calls).toEqual([
+      "preserve-onboarding",
+      "cloud-logout",
+      "clear-if:cloud.login.uuid"
+    ]);
+  });
+
+  it("preserves completed onboarding in the local BYOK scope when logout clears the active account", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "memmy-account-logout-onboarding-"));
+    const databasePath = join(tempDir, "app.sqlite");
+    let store: ReturnType<typeof createAppStateStore> | null = createAppStateStore({ databasePath });
+
+    try {
+      store.repositories.accountSession.upsert({
+        profile: cloudProfile(),
+        uuid: "cloud-account-user-1",
+        cloudUuid: "cloud.login.uuid",
+        isNewUser: false,
+        authChannel: "email"
+      });
+      store.repositories.bootstrap.updateOnboarding({
+        completed: true,
+        currentStep: "completed",
+        hasAcceptedTerms: true,
+        acceptedTermsVersion: "2026-06-01",
+        scanPermission: "scan_only",
+        firstEncounterReportStatus: "shown",
+        improvementProgram: "accepted",
+        completedAt: "2026-06-20T12:00:00.000Z"
+      });
+      const readInstallationOnboarding = () => store!.db.prepare(
+        `SELECT scan_permission, first_encounter_report_status, updated_at
+        FROM account_onboarding_state
+        WHERE uuid = ?`
+      ).get(INSTALLATION_SCAN_SCOPE_UUID);
+      const installationBeforeLogout = readInstallationOnboarding();
+
+      const service = createAccountService({
+        cloudClient: createCloudClientStub(),
+        accountSessionRepository: store.repositories.accountSession,
+        bootstrapRepository: store.repositories.bootstrap
+      });
+
+      await expect(service.logout()).resolves.toEqual({ ok: true });
+      expect(readInstallationOnboarding()).toEqual(installationBeforeLogout);
+      expect(store.repositories.accountSession.get()).toEqual({ authenticated: false });
+      expect(store.repositories.bootstrap.getOnboardingState()).toMatchObject({
+        completed: true,
+        currentStep: "completed",
+        hasAcceptedTerms: true,
+        acceptedTermsVersion: "2026-06-01",
+        scanPermission: "scan_only",
+        firstEncounterReportStatus: "shown",
+        improvementProgram: "not_applicable",
+        completedAt: "2026-06-20T12:00:00.000Z"
+      });
+
+      expect(store.repositories.accountSession.activateByCloudUuid("cloud.login.uuid", "email")).toBe(true);
+      expect(store.repositories.bootstrap.getOnboardingState()).toMatchObject({
+        completed: true,
+        currentStep: "completed",
+        improvementProgram: "accepted",
+        completedAt: "2026-06-20T12:00:00.000Z"
+      });
+      expect(store.repositories.bootstrap.preserveCompletedOnboardingForLocalByok()).toBe(false);
+      store.repositories.accountSession.clear();
+
+      store.repositories.bootstrap.updateAppSettings({ userMode: "byok" });
+      store.close();
+      store = null;
+      store = createAppStateStore({ databasePath });
+
+      expect(store.repositories.bootstrap.getAppSettings().userMode).toBe("byok");
+      expect(store.repositories.bootstrap.getOnboardingState()).toMatchObject({
+        completed: true,
+        currentStep: "completed",
+        hasAcceptedTerms: true,
+        acceptedTermsVersion: "2026-06-01",
+        scanPermission: "scan_only",
+        firstEncounterReportStatus: "shown",
+        improvementProgram: "not_applicable",
+        completedAt: "2026-06-20T12:00:00.000Z"
+      });
+    } finally {
+      store?.close();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not promote incomplete account onboarding into the local BYOK scope", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "memmy-account-logout-onboarding-"));
+    const databasePath = join(tempDir, "app.sqlite");
+    const store = createAppStateStore({ databasePath });
+
+    try {
+      store.repositories.accountSession.upsert({
+        profile: cloudProfile(),
+        uuid: "cloud-account-user-1",
+        cloudUuid: "cloud.login.uuid",
+        isNewUser: false,
+        authChannel: "email"
+      });
+      store.repositories.bootstrap.updateOnboarding({
+        completed: false,
+        currentStep: "product_tour_required",
+        improvementProgram: "accepted"
+      });
+      const readLocalByok = () => store.db.prepare(
+        `SELECT has_finished_guide, current_step, has_accepted_terms,
+          accepted_terms_version, improvement_program, completed_at, updated_at
+        FROM account_onboarding_state
+        WHERE uuid = ?`
+      ).get(LOCAL_BYOK_ACCOUNT_UUID);
+      const before = readLocalByok();
+      const service = createAccountService({
+        cloudClient: createCloudClientStub(),
+        accountSessionRepository: store.repositories.accountSession,
+        bootstrapRepository: store.repositories.bootstrap
+      });
+
+      await expect(service.logout()).resolves.toEqual({ ok: true });
+      expect(readLocalByok()).toEqual(before);
+    } finally {
+      store.close();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not clear a newer account session when an older manual logout finishes late", async () => {
+    const calls: string[] = [];
+    let activeCloudUuid: string | null = "cloud.login.uuid";
+    let releaseLogout: () => void = () => undefined;
+    const logoutGate = new Promise<void>((resolve) => {
+      releaseLogout = resolve;
+    });
+    const service = createAccountService({
+      cloudClient: {
+        ...createCloudClientStub(),
+        async logout() {
+          calls.push("cloud-logout");
+          await logoutGate;
+        }
+      },
+      accountSessionRepository: {
+        ...createAccountSessionRepositoryStub(),
+        getCloudUuid() {
+          return activeCloudUuid;
+        },
+        clearIfCloudUuid(cloudUuid) {
+          calls.push(`clear-if:${cloudUuid}`);
+          if (activeCloudUuid !== cloudUuid) return false;
+          activeCloudUuid = null;
+          return true;
+        }
+      },
+      bootstrapRepository: {
+        preserveCompletedOnboardingForLocalByok() {
+          calls.push("preserve-onboarding");
+          return true;
+        }
+      },
+      memmyConfigWriter: {
+        async writeAccountModelProjection() {
+          return projectionResult();
+        },
+        async clearAccountModelProjection(input) {
+          calls.push(`clear-account-config:${input.expectedCloudUuid ?? "none"}`);
+          return projectionResult();
+        },
+        async writeByokModelProjection() {
+          return projectionResult();
+        },
+        async writeActiveMemoryProfile() {
+          return projectionResult();
+        },
+        async patchChannelConfig() {
+          return undefined;
+        }
+      }
+    });
+
+    const logout = service.logout();
+    await new Promise((resolve) => setImmediate(resolve));
+    activeCloudUuid = "cloud.new.uuid";
+    releaseLogout();
+    await expect(logout).resolves.toEqual({ ok: true });
+
+    expect(activeCloudUuid).toBe("cloud.new.uuid");
+    expect(calls).toEqual([
+      "preserve-onboarding",
+      "cloud-logout",
+      "clear-account-config:cloud.login.uuid",
+      "clear-if:cloud.login.uuid"
+    ]);
+  });
+
+  it("clears the owner-scoped account projection when cloud authentication expires", async () => {
+    const calls: string[] = [];
+    const service = createAccountService({
+      cloudClient: {
+        ...createCloudClientStub(),
+        async getAccountInfo() {
+          throw Object.assign(new Error("session expired"), { code: "unauthorized" as const });
+        }
+      },
+      accountSessionRepository: {
+        ...createAccountSessionRepositoryStub(),
+        get() {
+          return {
+            authenticated: true,
+            isNewUser: false,
+            profile: {
+              userId: "user-1",
+              email: "hello@example.com",
+              phoneNumber: null,
+              nickname: "hello",
+              avatarUrl: null,
+              planType: "free",
+              hasFinishedGuide: true,
+              region: null,
+              registeredAt: "2026-06-02T10:00:00.000Z"
+            }
+          };
+        },
+        getCloudUuid() {
+          return "cloud.login.uuid";
+        },
+        clear() {
+          calls.push("clear-session");
+        },
+        clearIfCloudUuid(cloudUuid) {
+          calls.push(`clear-session-if:${cloudUuid}`);
+          return true;
+        }
+      },
+      memmyConfigWriter: {
+        async writeAccountModelProjection() {
+          return projectionResult();
+        },
+        async clearAccountModelProjection(input) {
+          calls.push(
+            `clear-account-config:${input.ownerAccountId ?? "none"}:${input.syncSelectedByokToLocal ?? false}`
+            + `:${input.expectedCloudUuid ?? "none"}`
+          );
+          return projectionResult();
+        },
+        async writeByokModelProjection() {
+          return projectionResult();
+        },
+        async writeActiveMemoryProfile() {
+          return projectionResult();
+        },
+        async patchChannelConfig() {
+          return undefined;
+        }
+      }
+    });
+
+    await expect(service.getSession()).rejects.toMatchObject({
+      message: "session expired",
+      code: "unauthorized"
+    });
+    expect(calls).toEqual([
+      "clear-account-config:user-1:false:cloud.login.uuid",
+      "clear-session-if:cloud.login.uuid"
+    ]);
+  });
+});
+
+function createCloudClientStub() {
+  return {
+    async health() {
+      return { status: "mock" as const, checkedAt: "2026-06-02T10:00:00.000Z" };
+    },
+    async sendEmailCode() {
+      return undefined;
+    },
+    async sendPhoneCode() {
+      return undefined;
+    },
+    async login() {
+      return { uuid: "cloud.login.uuid", accountUuid: "cloud-account-user-1", isNewUser: true, profile: cloudProfile() };
+    },
+    async startSocialLogin() {
+      return {
+        flowId: "social-flow-id-0001",
+        pollToken: "social-poll-token-0000000000000001",
+        authorizationUrl: "https://accounts.google.com/o/oauth2/v2/auth",
+        expiresInSec: 600,
+        pollIntervalSec: 2
+      };
+    },
+    async getSocialLoginStatus() {
+      return { status: "pending" as const };
+    },
+    async logout() {
+      return undefined;
+    },
+    async getAccountInfo() {
+      return cloudProfile();
+    },
+    async updateAccountGuide() {
+      return undefined;
+    },
+    async updateAccountProfile() {
+      return undefined;
+    },
+    async getTokenUsage() {
+      return {
+        planName: "mock",
+        totalTokens: 1,
+        usedTokens: 0,
+        remainingTokens: 1,
+        expiresAt: null,
+        lastSyncedAt: null
+      };
+    },
+    async grantImprovementProgramTokens() {
+      return this.getTokenUsage({});
+    },
+    async getLotteryReward() {
+      return { hasReward: false as const };
+    },
+    async ackLotteryReward() {
+      return undefined;
+    },
+    async sendTelemetry() {
+      return undefined;
+    },
+    async checkRelease() {
+      return { updateAvailable: false };
+    }
+  };
+}
+
+function createAccountSessionRepositoryStub() {
+  return {
+    get() {
+      return { authenticated: false as const };
+    },
+    getCloudUuid() {
+      return null;
+    },
+    upsert() {
+      return { authenticated: false as const };
+    },
+    clear() {
+      return undefined;
+    },
+    clearIfCloudUuid() {
+      return true;
+    },
+    getLastCodeSentAt() {
+      return null;
+    },
+    markCodeSent() {
+      return undefined;
+    }
+  };
+}
+
+function projectionResult() {
+  return {
+    changed: true,
+    activeProfile: "account" as const,
+    activeProfileChanged: false,
+    activeProfileAffected: true
+  };
+}
+
+function cloudProfile() {
+  return {
+    userId: "user-1",
+    email: "hello@example.com",
+    phoneNumber: null,
+    nickname: "hello",
+    avatarUrl: null,
+    planType: "free",
+    hasFinishedGuide: false,
+    region: null,
+    registeredAt: "2026-06-02T10:00:00.000Z",
+    rawProfile: {
+      id: "user-1",
+      email: "hello@example.com",
+      userName: "hello",
+      createdAt: "2026-06-02T10:00:00.000Z"
+    }
+  };
+}

@@ -1,0 +1,87 @@
+---
+title: View and manage memory
+description: Find past work, check where a memory came from, and delete what you no longer need.
+icon: Brain
+---
+
+import searchScreen from "../../assets/memory-search-full-en.jpg";
+import filterScreen from "../../assets/memory-filter-full-en.jpg";
+import detailScreen from "../../assets/memory-detail-full-en.jpg";
+import deleteScreen from "../../assets/memory-delete-full-en.jpg";
+import dataScreen from "../../assets/memory-data-full-en.jpg";
+import overviewScreen from "../../assets/memory-overview-full-en.jpg";
+
+Memmy organizes authorized chats and task content into memory. You can ask for past background inside a task, or open **Memory** and read the records.
+
+## View all memories
+
+Memmy organizes the AI conversations on your computer into several different kinds of memory, and keeps updating and evolving them in later tasks:
+
+- **Memories**: the record of one execution or one conversation.
+- **Experiences**: practices learned by repeating the same kind of task.
+- **World models**: what has been learned about your projects, usual tools, and working environment.
+- **Skills**: steps that can be used again. Skill evolution keeps organizing and improving them from later tasks.
+
+Open **Memory → Overview** to see the counts, daily activity, and sources.
+
+<ProductScreenshot src={overviewScreen} alt="Full Memmy window showing memory counts, daily activity, and source distribution" caption="Counts are split by memory type. Below that are new items from the past year, and the share of each source." />
+
+On **Memory → Analytics**, “skill uses in the last 7 days” is the total number of recalls and invocations of skills that are currently enabled. The same skill counts once in one recall; another recall or an invocation counts again. It is not a count of distinct skills. Editing a skill does not increase the number.
+
+## Recover background inside a task
+
+Create a task and give a topic, a time, or another clue you remember. If the wrong memory comes back, add a more specific name or time. If the requirement has changed, say the new requirement in the current task.
+
+## Search and check the source
+
+1. In the workbench sidebar, open **Memory**, then **Memories**.
+2. Type a keyword at the top and press Enter. **All agents**, to the right of the search box, switches the source.
+3. Open a result to see its source, time, and summary. A record that still has the original turn also shows **Turn steps**, so you can compare the question and reply.
+
+<ProductScreenSteps steps={[
+  { label: "Search", src: searchScreen, alt: "Full Memmy window showing two memories after searching for a customer", caption: "Type a word that identifies the topic. The interview and draft records in the picture are fictional." },
+  { label: "Filter by source", src: filterScreen, alt: "Full Memmy window with the All agents menu beside memory search", caption: "If you know which AI the chat was in, narrow the source. Choose All agents again to see every source." },
+  { label: "Open the record", src: detailScreen, alt: "Full Memmy window showing a memory’s source, time, summary, and original question and reply", caption: "Check the source and time first, then the summary and turn steps, before you continue that work." }
+]} />
+
+Memory can come from Memmy tasks, other AI chats you allowed Memmy to sync, and Computer History after you turn it on. A task that just finished may still be processing. **Refresh page** at the top right reloads the list.
+
+## Delete one memory
+
+Open an item in the memory list, then choose **Delete** at the bottom of the details. The button changes to **Confirm delete**. It is removed only after you choose that again. Choose **Cancel** to keep it.
+
+<ProductScreenshot src={deleteScreen} alt="Full Memmy window showing Delete at the bottom of one user memory" caption="This applies only to the item that is open. Check the title and content before you confirm." />
+
+<details>
+<summary>Stop later syncs, or export and clear local memory</summary>
+
+To stop history sync from another AI, turn off automatic sync in **Cross-Agent access**. To stop the connector from reading and writing, remove its Hook, plugin, or Skill. Memory that was already imported stays.
+
+Export and clear are at the bottom of **Memory → Cross-Agent access**, under **Data management**:
+
+- **Export local data**: choose where to save the data you want to keep.
+- **Clear all local data**: review what will be cleared, then choose **Clear memory database**. This clears the local memory database, the import deduplication cache, and sync progress. Your account and model configuration stay.
+
+<ProductScreenshot src={dataScreen} alt="Memmy Cross-Agent access showing Data management at the bottom" caption="This is the bulk management area. The automatic sync switches above control whether syncing continues." />
+
+</details>
+
+<details>
+<summary>A chat that just synced does not appear</summary>
+
+Switch the source back to **All agents** and search for a specific phrase from the original chat. In **Cross-Agent access**, confirm the scan has finished, then refresh the memory list. If a summary or index is still processing, wait for it to finish.
+
+If an item says processing failed, open it, read the reason, and use the retry or settings action on the page.
+
+</details>
+
+<details>
+<summary>How memory and files work together</summary>
+
+Memory recovers past conversations, requirements, and decisions. To keep working on the original files, add them with **+** beside the input, or choose the project folder. Documents you need to look up over time can go in a knowledge base with **Recall** turned on.
+
+</details>
+
+## Related
+
+[Other AI memory](/docs/en/memory/sources) · [Data and privacy](/docs/en/security/security)

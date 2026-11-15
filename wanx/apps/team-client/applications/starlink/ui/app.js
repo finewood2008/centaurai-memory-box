@@ -1,0 +1,2887 @@
+import { createWorkbenchHost, readWorkbenchReply } from "./native-workbench.js";
+import { createOnboardingUI } from './onboarding.js';
+import { enterOnboardingWarehouse } from './onboarding-navigation.mjs';
+import { conversationHTML } from './conversation.js';
+import {materialReplySuggestions} from './conversation-view.mjs';
+import {ConversationFlow} from './conversation-state.mjs';
+import {mountMaterialWorkspace,openMaterialUpload} from './material-workspace.mjs';
+import {readWarehouseMaterials,selectWarehouseMaterial,openWarehouseMaterial,startWarehouseMaterialDialogue} from './material-library.mjs';
+import {openMaterialDelete} from './material-deletion.mjs';
+import {continueMaterial,canContinueMaterial} from './material-continuation.mjs';
+import {nextConversationStep} from './conversation-next.mjs';
+import {currentCandidateGraph} from './conversation-candidate-graph.mjs';
+import {MCP_KEY_PREFIX,isMcpKey,mcpConnectionConfig,mcpKeyName,mcpKeyStatus,normalizeMcpEndpoint} from './mcp-connections.mjs';
+let conversationFlow=null,conversationTimer=null,conversationReady=null;
+function stopConversation(){clearTimeout(conversationTimer);document.getElementById('mw-upload-dialog')?.remove();document.getElementById('mw-delete-dialog')?.remove();conversationFlow?.dispose();conversationFlow=null;}
+import { createSkillsUI } from "./native-skills.js";
+import { icon, icons } from "./icons.js";
+import { selectGraph, layoutGraph, edgeGeometry } from "./graph.js";
+import {createGraphPresentation, presentGraph} from './graph-presentation.mjs';
+const $ = (selector) => document.querySelector(selector);
+const esc = (value) =>
+  String(value ?? "").replace(
+    /[&<>"']/g,
+    (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
+        c
+      ],
+  );
+const bridge = window.semantica;
+const onboarding = createOnboardingUI({bridge,
+  enter: async (warehouse,{isCurrent,publication}) => {
+    if (!workbench.canLeave()) throw new Error('UNSAVED_CHANGES');
+    await enterOnboardingWarehouse({warehouseId:warehouse.id,isCurrent,readWarehouses:()=>call('warehouses'),
+      snapshot:()=>({...state}),select:selectWarehouse,commit:items=>{state.warehouses=items;}});
+    state.conversationPublication=publication || null;
+    renderConversation();
+  },
+  leave: () => setView('warehouses'),
+});
+const typeDisplay = code => state.graphPresentation.entity(code);
+const messages = {
+  SKILL_ID_CONFLICT:"当前数据仓已存在同名 Skill，不会覆盖；请修改 ZIP 名称标识或先下载后删除旧版本。",
+  SKILL_TOO_LARGE:"Skill ZIP 不能超过 4 MiB，解压文本最多 8 MiB。",
+  SKILL_INVALID_REQUEST:"文件或请求格式不正确，请检查 SKILL.md 和确认名称。",
+  SKILL_PACKAGE_PATH:"ZIP 含不安全路径或重复文件，请检查后重试。",
+  SKILL_NOT_FOUND:"方法已删除或不属于当前数据仓，请刷新。",
+  SKILL_REVISION_CONFLICT:"方法版本已变化，请重新读取后操作。",
+  SKILL_REFERENCED:"还有方法依赖此 Skill，请先处理依赖或明确允许它们失效。",
+  REASONING_DELIVERY_STALE:"方法、材料或检测规则已变化，请重新准备后试读。",
+  REASONING_SCOPE_REQUIRED:"请勾选当前仓的资料后重新准备。",
+  REASONING_SCOPE_CHANGED:"方法或材料版本已变化，请重新准备。",
+  REASONING_PREPARATION_NOT_FOUND:"准备记录已失效或不属于当前账号、数据仓，请重新准备。",
+  MODEL_SHARED_REQUIRED: "知识抽取与脱敏检测共用同一个模型，请刷新后统一设置。",
+  MODEL_CLOUD_CONFIRMATION_REQUIRED: "请先确认所选在线服务将接收未经脱敏的正文片段。",
+  MODEL_CONFIG_CONFLICT: "模型设置已更新，请刷新后重新确认。",
+  MODEL_CHECK_REQUIRED: "模型检查已过期，请重新检查后保存。",
+  MODEL_RELAY_UNAVAILABLE: "万象模型服务暂时无法连接，请检查连接后重试。",
+  MODEL_AUTH_REQUIRED: "模型授权已失效，请重新连接万象。",
+  MODEL_UNAVAILABLE: "模型已停用或删除，请在万象检查模型配置。",
+  MODEL_DEFAULT_UNAVAILABLE: "WANX 默认模型暂不可用，请在万象模型设置中检查默认模型。",
+  MODEL_DEFAULT_NOT_CONFIGURED: "WANX 默认模型暂不可用，请在万象模型设置中检查默认模型。",
+  MODEL_CONFIG_CHANGED: "模型服务配置已变化，请重新检查并确认。",
+  MODEL_OPTIONS_INVALID: "思考模式参数无效，请重新选择。",
+  MODEL_THINKING_UNSUPPORTED: "当前模型或万象版本不支持此思考模式，请刷新模型目录后选择。",
+  MODEL_OPTIONS_UNCONFIRMED: "万象未确认思考模式，请更新万象后重新检查。",
+  MODEL_INVALID_OUTPUT: "模型未返回符合要求的 JSON，请换模型或重试。",
+  MODEL_CALL_FAILED: "模型检查或调用失败，请检查万象模型连接与输出能力。",
+  MODEL_CANCELLED: "模型调用已取消。",
+  MODEL_INPUT_TOO_LARGE: "本次模型输入超限，请缩小材料片段后重试。",
+  SPACE_UPGRADE_REQUIRED: "当前设备尚不支持万象空间，请更新万象服务，或从电脑选择文件。",
+  SPACE_REQUEST_FAILED: "万象空间暂时无法读取，请检查连接并刷新，或从电脑选择文件。",
+  SPACE_REMOTE_FILE_CHANGED: "万象空间文件已变化，请移除后重新选择。",
+  SPACE_NOT_FOUND: "万象空间文件已删除或移入回收站，请刷新后重新选择。",
+  SPACE_ENTRY_NOT_FOUND: "万象空间文件已删除或移入回收站，请刷新后重新选择。",
+  SPACE_NOT_FILE: "此项目不是可导入的文件，请进入文件夹选择具体文件。",
+  SPACE_EMPTY_FILE: "空文件不能导入。",
+  SPACE_CHUNK_INVALID: "万象空间文件校验未通过，请刷新后重试。",
+  SPACE_CONNECTION_TIMEOUT: "读取万象空间超时，请检查连接后重试。",
+  WANX_HOST_REQUIRED: "请从万象的应用商店打开星图，复用当前账号和盒子连接。",
+  HOST_SESSION_EXPIRED: "万象连接已失效。请回到万象连接盒子后重新打开本应用。",
+  SEMANTICA_UPGRADE_REQUIRED: "当前盒子尚未接入星图，请更新盒端服务。",
+  MCP_PUBLIC_URL_UNAVAILABLE: "万象 Bridge 尚未提供可从外部访问的 HTTPS MCP 地址，请检查 Bridge 的对外地址与 TLS 配置。",
+  SEMANTICA_NOT_CONFIGURED: "盒端尚未配置星图服务。",
+  SEMANTICA_CONNECTION_FAILED: "当前连接不可用，请检查万象与盒子的连接后重试。",
+  WAREHOUSE_BUSY: "当前数据仓正在处理或清理，可切换其他仓，或稍后重试。",
+  NETWORK_NOT_READY:
+    "万象正在恢复网络连接。已提交的任务仍由盒端处理，请稍后刷新。",
+  SEMANTICA_SERVICE_UNAVAILABLE: "知识服务暂时不可用，请稍后刷新。",
+  SEMANTICA_SERVICE_AUTH_FAILED: "盒端知识服务的授权配置需要检查。",
+  SEMANTICA_VERSION_CONFLICT: "材料或设置已更新，请重新读取当前版本后再提交。",
+  SEMANTICA_FILE_TOO_LARGE: "文件超过当前服务允许的大小。",
+  SEMANTICA_FORMAT_NOT_SUPPORTED: "当前服务不支持该文件格式。",
+  SEMANTICA_LOCAL_FILE_CHANGED: "文件在导入期间发生了变化，请重新选择文件。",
+  SEMANTICA_RESOURCE_NOT_FOUND: "材料或来源已失效，请刷新当前页面。",
+  SEMANTICA_RESOURCE_FORBIDDEN: "当前账号无权访问该材料或来源。",
+  SEMANTICA_FILE_SELECTION_EXPIRED: "文件选择已失效，请重新选择。",
+  SEMANTICA_DOWNLOAD_HASH_MISMATCH: "下载校验未通过，未保存该文件。",
+};
+const state = {
+  ready: false,
+  warehouses: [],
+  warehouseId: null,
+  generation: 0,
+  runtime: null,
+  keys: [],
+  mcpEndpoint: "",
+  mcpEndpointStatus: "idle",
+  mcpEndpointError: "",
+  mcpFreshConfig: null,
+  mcpRotationOldId: null,
+  mcpCloseId: null,
+  mcpCreating: false,
+  mcpClosing: false,
+  mcpCreateOperation: null,
+  managementStats: null,
+  importFailure: null,
+  clearIntent: null,
+  invalid: false,
+  view: "graph",
+  documents: [],
+  jobs: [],
+  jobTotal: 0,
+  jobOffset: 0,
+  graph: { nodes: [], edges: [] },
+  retrieval: null,
+  policy: null,
+  selectedNode: null,
+  selectedEdge: null,
+  type: "all",
+  mode: "graph",
+  graphOverview: true,
+  showIsolated: false,
+  zoom: 1,
+  pan: { x: 0, y: 0 },
+  files: [],
+  uploading: false,
+  importSource: "space",
+  importContext: "standard",
+  space: { parent: "", breadcrumbs: [], items: [] },
+  spaceLoading: false,
+  spaceSelecting: false,
+  spaceError: null,
+  spaceRequest: 0,
+  refreshing: false,
+  source: null,
+  sourceEvidence: null,
+  editing: false,
+  saving: false,
+  graphError: null,
+  graphPresentation: createGraphPresentation(),
+};
+let managementStatsRequest = 0;
+let mcpKeysRequest = 0;
+let mcpEndpointRequest = 0;
+let toastTimer,
+  refreshAt = 0;
+function errorText(error) {
+  return (
+    messages[error.code || error.message] ||
+    error.publicMessage ||
+    "操作未完成，请检查任务状态或稍后重试。"
+  );
+}
+function toast(message) {
+  $("#toast").textContent = message;
+  $("#toast").hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => ($("#toast").hidden = true), 4500);
+}
+function banner(message) {
+  $("#connection-notice").innerHTML = message
+    ? `<span>${esc(message)}</span>${
+        !state.invalid
+          ? '<button class="text-link" data-action="reconnect">重新读取</button>'
+          : ""
+      }`
+    : "";
+  $("#connection-notice").hidden = !message;
+}
+async function call(action, input) {
+  if (
+    state.preview &&
+    [
+      "import-skill", "delete-skill", "download-skill",
+      "check-models", "save-models", "reprocess-models",
+      "select-files",
+      "select-space-files",
+      "upload",
+      "download",
+      "save-sensitive",
+      "correct",
+      "retry-job",
+      "build-index",
+      "create-warehouse",
+      "create-key",
+      "revoke-key",
+      "prepare-clear",
+      "clear-warehouse",
+      "prepare-delete",
+      "delete-warehouse",
+    ].includes(action)
+  )
+    throw Object.assign(new Error("READ_ONLY_PREVIEW"), {
+      publicMessage: "这是实际数据的只读效果预览，请从万象打开星图进行操作。",
+    });
+  if (state.invalid)
+    throw Object.assign(new Error("HOST_SESSION_EXPIRED"), {
+      code: "HOST_SESSION_EXPIRED",
+    });
+  if (!bridge)
+    throw Object.assign(new Error("WANX_HOST_REQUIRED"), {
+      code: "WANX_HOST_REQUIRED",
+    });
+  const generation = state.generation;
+  const reply = await bridge.call(action, {
+    ...input,
+    warehouseId: state.warehouseId,
+  });
+  const envelope = ['create-warehouse','reprocess-models'].includes(action);
+  if (envelope && !reply?.ok) throw Object.assign(new Error(reply?.message || '请求结果尚未确认'), {
+    code: reply?.code, status: reply?.status, publicMessage: reply?.message,
+  });
+  const result = envelope ? reply.value : reply;
+  if (state.invalid)
+    throw Object.assign(new Error("HOST_SESSION_EXPIRED"), {
+      code: "HOST_SESSION_EXPIRED",
+    });
+  if (generation !== state.generation)
+    throw Object.assign(new Error("WAREHOUSE_CHANGED"), {
+      code: "WAREHOUSE_CHANGED",
+    });
+  return result;
+}
+function syncControls() {
+  document
+    .querySelectorAll('[data-action="import"]')
+    .forEach(
+      (b) =>
+        (b.disabled =
+          !state.ready ||
+          !state.warehouseId ||
+          currentWarehouse()?.state !== "active"),
+    );
+  $("#confirm-import").disabled =
+    !state.ready || state.uploading || state.spaceSelecting ||
+    (state.importContext === "conversation" ? state.files.length !== 1 || state.files[0].done : !state.files.some((f) => !f.done));
+  $("#choose-files").disabled = !state.ready || state.uploading || state.spaceSelecting ||
+    (state.importContext === "conversation" && state.files.length > 0);
+  $("#import-link-existing").disabled = !state.ready || state.uploading || state.spaceSelecting || state.files.length > 0;
+  document.querySelectorAll("#source-space,#source-computer,#space-refresh,#space-query,#space-entries input,#space-entries button,#space-breadcrumbs button,[data-remove-file]").forEach(el => {
+    el.disabled = !state.ready || state.uploading || state.spaceSelecting || el.dataset.unsupported === "true" ||
+      (state.importContext === "conversation" && el.matches('[data-space-file]') && state.files.length > 0 && !el.checked);
+  });
+  document
+    .querySelectorAll("#import-dialog [data-close]")
+    .forEach((b) => (b.disabled = state.uploading || state.spaceSelecting));
+  $("#search-form button[type=submit]").disabled = !state.ready;
+  document
+    .querySelectorAll("[data-setting]")
+    .forEach(
+      (b) => (b.disabled = !state.ready || !state.policy || state.saving),
+    );
+}
+function connection(ready) {
+  state.ready = ready;
+  $("#connection-label").textContent = ready
+    ? "已连接盒子"
+    : state.invalid
+    ? "连接已失效"
+    : "等待连接";
+  $("#connection-title").textContent = ready
+    ? "万象连接已就绪"
+    : state.invalid
+    ? "请从万象重新打开"
+    : "等待万象连接";
+  $("#connection-dot").style.background = ready
+    ? "var(--sage)"
+    : "var(--ochre)";
+  $("#connection-description").textContent = ready
+    ? "当前知识空间属于此万象账号，材料与任务保存在盒端。"
+    : "复用万象账号与盒子连接，无需在应用内再次登录。";
+  if (state.preview) {
+    $("#connection-label").textContent = "只读效果预览";
+    $("#connection-title").textContent = "真实数据快照";
+    $("#connection-description").textContent =
+      "使用已验证的合成资料查看新版 UI；实际操作请从万象打开。";
+  }
+  syncControls();
+}
+function invalidate() {
+  if (state.invalid) return;
+  state.invalid = true;
+  stopConversation();
+  onboarding.reset();
+  state.generation++;
+  skillsUi.reset();
+  if (bridge) void bridge.call("select-warehouse", {}).catch(()=>{});
+  state.warehouses = [];
+  $("#warehouse-query").value = "";
+  $("#warehouse-picker-query").value = "";
+  state.warehouseId = null;
+  state.importFailure = null;
+  state.conversationPublication=null;
+  state.conversationOnboarding=null;
+  renderConversation();
+  state.runtime = null;
+  state.processing = null; state.modelConfig = null; state.modelCatalog = []; state.modelRequest = (state.modelRequest || 0) + 1;
+  state.keys = [];
+  state.mcpFreshConfig = null;
+  state.mcpRotationOldId = null;
+  state.mcpCloseId = null;
+  state.mcpCreating = false;
+  state.mcpClosing = false;
+  state.mcpCreateOperation = null;
+  $("#new-key-secret").replaceChildren();
+  $("#access-keys").replaceChildren();
+  $("#key-count").textContent = "0 条有效连接";
+  state.documents = [];
+  state.jobs = [];
+  state.graph = { nodes: [], edges: [] };
+  state.graphPresentation = createGraphPresentation();
+  state.jobTotal = 0;
+  state.jobOffset = 0;
+  state.files = [];
+  state.spaceRequest++;
+  state.space = { parent: "", breadcrumbs: [], items: [] };
+  state.spaceLoading = false;
+  state.spaceError = null;
+  state.source = null;
+  state.selectedNode = state.selectedEdge = null;
+  state.policy = null;
+  state.retrieval = null;
+  state.identity = null;
+  state.mcpEndpoint = "";
+  state.mcpEndpointStatus = "idle";
+  state.mcpEndpointError = "";
+  renderMcpEndpoint();
+  document.querySelectorAll("dialog[open]").forEach((d) => d.close());
+  $("#source-body").replaceChildren();
+  $("#source-actions").replaceChildren();
+  $("#search-query").value = "";
+  $("#search-results").replaceChildren();
+  $("#user-avatar").textContent = "我";
+  connection(false);
+  renderTasks();
+  renderGraph();
+  renderPending();
+  renderWarehouses();
+  banner(messages.HOST_SESSION_EXPIRED);
+}
+function bytes(value) {
+  const n = Number(value);
+  if (n < 1024) return n + " B";
+  if (n < 1048576) return (n / 1024).toFixed(1) + " KiB";
+  if (n < 1073741824) return (n / 1048576).toFixed(1) + " MiB";
+  return (n / 1073741824).toFixed(1) + " GiB";
+}
+const date = (value) => {
+  if (!value) return "—";
+  const d = new Date(value);
+  return Number.isFinite(d.getTime())
+    ? new Intl.DateTimeFormat("zh-CN", {
+        timeZone: "Asia/Shanghai",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      }).format(d)
+    : "—";
+};
+function locator(value) {
+  let v = value || {};
+  if (typeof v === "string") {
+    try {
+      v = JSON.parse(v);
+    } catch {
+      return "来源片段";
+    }
+  }
+  if (v.page != null)
+    return (
+      "第 " +
+      v.page +
+      " 页" +
+      (v.paragraph ? " · 第 " + v.paragraph + " 段" : "")
+    );
+  if (v.start_seconds != null || v.start != null) {
+    const fmt = (n) =>
+      Math.floor(Number(n) / 60)
+        .toString()
+        .padStart(2, "0") +
+      ":" +
+      Math.floor(Number(n) % 60)
+        .toString()
+        .padStart(2, "0");
+    return (
+      fmt(v.start_seconds ?? v.start) +
+      " – " +
+      fmt(v.end_seconds ?? v.end ?? v.start_seconds ?? v.start)
+    );
+  }
+  if (v.line_start)
+    return (
+      "第 " +
+      v.line_start +
+      " 行" +
+      (v.line_end && v.line_end !== v.line_start
+        ? " – " + v.line_end + " 行"
+        : "")
+    );
+  if (v.paragraph || v.paragraph_index != null)
+    return "第 " + (v.paragraph || Number(v.paragraph_index) + 1) + " 段";
+  return "来源片段";
+}
+function highlight(value, names) {
+  let text = String(value || ""),
+    parts = [{ text, hit: false }];
+  for (const name of [...new Set(names.filter(Boolean))].sort(
+    (a, b) => b.length - a.length,
+  )) {
+    const next = [];
+    for (const p of parts) {
+      if (p.hit) {
+        next.push(p);
+        continue;
+      }
+      const chunks = p.text.split(name);
+      chunks.forEach((chunk, i) => {
+        if (i) next.push({ text: name, hit: true });
+        if (chunk) next.push({ text: chunk, hit: false });
+      });
+    }
+    parts = next;
+  }
+  return parts
+    .map((p) => (p.hit ? "<mark>" + esc(p.text) + "</mark>" : esc(p.text)))
+    .join("");
+}
+const node = (id) => state.graph.nodes.find((n) => n.id === id),
+  edge = (id) => state.graph.edges.find((e) => e.id === id),
+  doc = (id) => state.documents.find((d) => d.id === id);
+function graphLayout(raw) {
+  return presentGraph(raw, state.graphPresentation);
+}
+let graphViewCache;
+function visibleGraph() {
+  const options = {query: $("#graph-query").value, type: state.type, overview: state.graphOverview, focus: state.selectedNode, showIsolated: state.showIsolated};
+  const key = JSON.stringify(options);
+  if (graphViewCache?.graph !== state.graph || graphViewCache?.key !== key)
+    graphViewCache = {graph:state.graph, key, value:layoutGraph(selectGraph(state.graph, options))};
+  return graphViewCache.value;
+}
+function renderFilters() {
+  const ts = [...new Set(state.graph.nodes.map((n) => n.type))];
+  $("#graph-filters").innerHTML =
+    `<button class="filter-chip ${
+      state.type === "all" ? "active" : ""
+    }" data-type="all">全部</button>` +
+    ts
+      .map(
+        (t) =>
+          `<button class="filter-chip ${
+            state.type === t ? "active" : ""
+          }" data-type="${esc(t)}" title="${esc(t)}"><span class="type-dot" style="--type-color:${
+            typeDisplay(t).color
+          }"></span>${esc(typeDisplay(t).label)}</button>`,
+      )
+      .join("");
+}
+function transformScene() {
+  $("#graph-scene").setAttribute(
+    "transform",
+    `translate(${400 + state.pan.x} ${270 + state.pan.y}) scale(${
+      state.zoom
+    }) translate(-400 -270)`,
+  );
+  $("#zoom-label").textContent = Math.round(state.zoom * 100) + "%";
+}
+function fact(e) {
+  return `${esc(node(e.s)?.name)}<span class="fact-relation">→ ${esc(
+    e.label,
+  )} →</span>${esc(node(e.t)?.name)}`;
+}
+function renderGraph() {
+  let g = visibleGraph();
+  if (state.selectedNode && !g.nodes.some((n) => n.id === state.selectedNode)) {
+    state.selectedNode = null;
+    state.selectedEdge = null;
+    g = visibleGraph();
+  }
+  if (state.selectedEdge && !g.edges.some((e) => e.id === state.selectedEdge))
+    state.selectedEdge = null;
+  $("#graph-empty").hidden = g.nodes.length > 0;
+  $("#graph-empty").textContent = state.graphError
+    ? errorText(state.graphError)
+    : state.graph.nodes.length
+    ? state.showIsolated ? "没有找到匹配的实体" : "当前范围没有匹配的相连实体，可开启“显示孤立节点”查看未连线的实体。"
+    : state.ready
+    ? state.warehouseId
+      ? "这个仓的知识图谱，从第一份资料开始。导入后，处理模型会提取实体与关系。"
+      : "建立你的第一个数据仓，让资料开始相连。点击“数据仓”开始。"
+    : "连接后显示当前账号的知识图谱。";
+  $("#nodes-total").textContent = g.nodes.length;
+  $("#graph-show-isolated").checked = state.showIsolated;
+  $("#edges-total").textContent = g.edges.length;
+  $("#network-count").textContent = state.graph.nodes.length;
+  $("#source-count").textContent = new Set(
+    g.edges.flatMap((e) => e.evidence.map((v) => v.document_id)),
+  ).size;
+  $("#view-graph").classList.toggle("has-knowledge", state.graph.nodes.length > 0);
+  $("#graph-scope-summary").textContent = state.selectedNode
+    ? `${node(state.selectedNode)?.name} · 直接关联`
+    : $("#graph-query").value.trim() ? "搜索结果与直接关联" : state.graphOverview ? "知识概览" : "全部实体";
+  $("#graph-focus-back").hidden = !state.selectedNode;
+  $("#graph-reference-note").hidden = !g.referenceCount || !state.graphOverview || Boolean($("#graph-query").value.trim());
+  $("#graph-reference-count").textContent = g.referenceCount;
+  document.querySelectorAll("[data-graph-density]").forEach(b => {
+    const active = (b.dataset.graphDensity === "overview") === state.graphOverview;
+    b.classList.toggle("active", active);
+    b.setAttribute("aria-pressed", String(active));
+  });
+  const positions = new Map(g.nodes.map(n => [n.id,n]));
+  const groups = new Map();
+  for (const e of g.edges) {
+    const key = JSON.stringify([e.s,e.t].sort());
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(e.id);
+  }
+  $("#graph-scene").innerHTML = g.edges.map(e => {
+    const a = positions.get(e.s), b = positions.get(e.t);
+    const group = groups.get(JSON.stringify([e.s,e.t].sort()));
+    const path = edgeGeometry(a,b,group.indexOf(e.id),group.length);
+    const chosen = e.id === state.selectedEdge;
+    const connected = state.selectedNode && (e.s === state.selectedNode || e.t === state.selectedNode);
+    const labeled = chosen || connected || g.edges.length <= 12;
+    return `<g class="graph-link ${connected ? "connected" : ""} ${chosen ? "chosen" : ""}"><title>${esc(node(e.s)?.name)} → ${esc(e.label)} → ${esc(node(e.t)?.name)}</title><path class="graph-edge-hit" d="${path.d}" data-edge="${esc(e.id)}"/><path class="graph-edge ${chosen ? "selected" : ""}" d="${path.d}" data-edge="${esc(e.id)}" marker-end="url(#${chosen ? "arrow-selected" : "arrow"})"/>${labeled ? `<text class="graph-edge-label" transform="translate(${path.x} ${path.y}) rotate(${path.angle})" text-anchor="middle" y="-7">${esc(e.label)}</text>` : ""}</g>`;
+  }).join("") + g.nodes.map(n => {
+    const selected = n.id === state.selectedNode;
+    const match = $("#graph-query").value.trim() && n.name.toLocaleLowerCase().includes($("#graph-query").value.trim().toLocaleLowerCase());
+    const display = typeDisplay(n.type);
+    return `<g class="graph-node ${selected ? "selected" : ""} ${match ? "search-match" : ""}" data-node="${esc(n.id)}" transform="translate(${n.x} ${n.y})" style="--type-color:${display.color}" role="button" tabindex="0" aria-label="${esc(n.name)}，${esc(display.label)}，点击聚焦关联"><title>${esc(n.name)} · ${esc(display.label)} (${esc(n.type)})</title><circle class="halo" r="${n.r+8}"/><circle class="core" r="${n.r}"/><text class="node-symbol" dy="5">${esc(display.symbol)}</text><text class="node-name" y="${n.r+20}">${n.lines.map((line,i) => `<tspan x="0" dy="${i ? 15 : 0}">${esc(line)}</tspan>`).join("")}</text></g>`;
+  }).join("");
+  transformScene();
+  $(
+    "#relation-list",
+  ).innerHTML = `<table class="relation-table"><thead><tr><th>主体</th><th>关系</th><th>客体</th><th>来源</th></tr></thead><tbody>${g.edges
+    .map(
+      (e) =>
+        `<tr data-edge="${esc(
+          e.id,
+        )}" tabindex="0" role="button" aria-label="${esc(
+          node(e.s)?.name + e.label + node(e.t)?.name,
+        )}" class="${e.id === state.selectedEdge ? "selected" : ""}"><td>${esc(
+          node(e.s)?.name,
+        )}</td><td>${esc(e.label)} →</td><td>${esc(node(e.t)?.name)}</td><td>${
+          e.evidence.length
+        } 个片段</td></tr>`,
+    )
+    .join("")}</tbody></table>${
+    !g.edges.length ? '<div class="empty">当前没有可显示的关系</div>' : ""
+  }`;
+  renderDetails(g);
+}
+function renderDetails(g) {
+  const n = node(state.selectedNode),
+    e = edge(state.selectedEdge),
+    related = g.edges.filter((v) => !n || v.s === n.id || v.t === n.id);
+  if (!n && !e) {
+    const starts = g.nodes.filter(v => v.degree > 0).slice(0, 5);
+    $("#graph-details").innerHTML = `<div class="detail-top"><div class="type-line"><span>探索知识</span><span>从关系出发</span></div><h2>从一个实体开始</h2><p>点击实体，只展开它的直接关联；再点一条关系，核对原始材料。</p></div><div class="detail-section"><div class="section-caption"><span>探索起点</span><span class="muted">按关联数量</span></div>${starts.map(v => `<button class="fact-btn" data-node="${esc(v.id)}"><span class="fact-text">${esc(v.name)}<small>${esc(typeDisplay(v.type).label)} · ${v.degree} 条直接关联</small></span>${icon("chevron")}</button>`).join("") || '<p class="detail-empty">导入材料后，在这里探索实体之间的联系。</p>'}</div><div class="detail-section"><p class="detail-empty">全图先看结构，局部再看关系。随时使用“返回全图”继续探索。</p></div>`;
+    return;
+  }
+  $(
+    "#graph-details",
+  ).innerHTML = `<div class="detail-top"><div class="type-line"><span>${
+    n ? esc(typeDisplay(n.type).label) : "知识图谱"
+  }</span><span>${n ? "实体详情" : "选择实体或关系"}</span></div><h2>${
+    n ? esc(n.name) : "从一个节点开始"
+  }</h2><p>${
+    n
+      ? "正在聚焦这个实体的直接关联。点击关系核对来源，或返回全图继续探索。"
+      : "材料中的明确陈述形成知识关系，点击图中节点进行探索。"
+  }</p></div><div class="detail-section"><div class="section-caption"><span>相关关系</span><span class="muted mono">${
+    related.length
+  } 条</span></div>${
+    related
+      .map(
+        (r) =>
+          `<button class="fact-btn ${
+            r.id === state.selectedEdge ? "selected" : ""
+          }" data-edge="${esc(r.id)}"><span class="fact-text">${fact(
+            r,
+          )}<small>${r.evidence.length} 个来源片段</small></span>${icon(
+            "chevron",
+          )}</button>`,
+      )
+      .join("") ||
+    '<p class="detail-empty">导入材料并完成知识处理后，显示相关关系。</p>'
+  }</div><div class="detail-section"><div class="section-caption"><span>关系来源</span><span class="muted">${
+    e ? e.evidence.length + " 个片段" : "尚未选择"
+  }</span></div>${
+    e
+      ? e.evidence
+          .map(
+            (v, i) =>
+              `<div class="source-card"><div class="source-title">${icon(
+                "file",
+              )}<span>${esc(
+                doc(v.document_id)?.original_name || "来源材料",
+              )}</span></div><p>${
+                v.excerpt
+                  ? highlight(v.excerpt, [node(e.s)?.name, node(e.t)?.name])
+                  : "来源正在完成保护检测，请稍后刷新。"
+              }</p><div class="source-bottom"><span>${esc(
+                locator(v.locator_json),
+              )}</span><button class="text-link" data-source="${esc(
+                v.document_id,
+              )}" data-edge-source="${esc(
+                e.id,
+              )}" data-evidence-index="${i}">查看来源 ${icon(
+                "external",
+              )}</button></div></div>`,
+          )
+          .join("") +
+        '<p class="detail-note">来源片段用于核对关系，片段数量不代表独立证明次数。</p>'
+      : '<p class="detail-empty">点击关系或图中连线，查看来源位置与摘录。</p>'
+  }</div>`;
+}
+function selectNode(id) {
+  state.selectedNode = id;
+  state.selectedEdge = null;
+  $("#graph-query").value = "";
+  renderGraph();
+  fitGraph();
+  transformScene();
+  [...document.querySelectorAll("#graph-scene [data-node]")].find(el => el.dataset.node === id)?.focus({preventScroll:true});
+}
+function selectEdge(id) {
+  const e = edge(id);
+  if (!e) return;
+  state.selectedEdge = id;
+  const changed = ![e.s, e.t].includes(state.selectedNode);
+  if (changed) state.selectedNode = e.s;
+  renderGraph();
+  if (changed) { fitGraph(); transformScene(); }
+}
+const skillsUi = createSkillsUI({call,state,esc,toast,errorText});
+const workbench = createWorkbenchHost({ call, warehouse: () => state.invalid ? null : state.warehouseId,
+  container: () => $("#mw-editor-content")||$("#view-workbench"),
+  onView: view => { if (!$('#mw-editor-dialog')&&workbench.has(state.view) && pages[view]) setView(view, true); },
+  onImport: () => { if (!$('#mw-editor-dialog')&&workbench.canLeave()) setView("conversation"); },
+});
+const pages = {
+  ontology: ["本体 · 类型与关系", "DEFINE YOUR KNOWLEDGE", "定义实体、关系和属性，让材料按统一规则形成知识。"],
+  review: ["知识核对", "REVIEW WITH EVIDENCE", "对照原始材料核对实体与关系，保留修改和发布依据。"],
+  releases: ["版本历史", "KNOWLEDGE THROUGH TIME", "查看知识发布记录，对比变化，追溯每个版本的来源。"],
+  skills: ["Skill 管理", "METHODS FOR YOUR KNOWLEDGE", "按数据仓保管推理方法，给其他 AI 应用可靠的分析路径。"],
+  models: ["模型与处理", "KNOW HOW YOUR KNOWLEDGE IS BUILT", "模型看得见，处理有记录。为每个数据仓选择合适的能力。"],
+  warehouses: ["数据仓", "YOUR KNOWLEDGE SPACES", "按项目或主题安放资料，从这里进入每一座知识图谱。"],
+  api: [
+    "MCP 管理",
+    "CONNECT YOUR KNOWLEDGE",
+    "为外部 Agent 创建和管理当前仓的知识连接。",
+  ],
+  data: [
+    "数据管理",
+    "YOUR KNOWLEDGE, YOUR CONTROL",
+    "保管资料、管理知识，决定它们如何被使用。",
+  ],
+  graph: [
+    "知识图谱",
+    "A MAP OF WHAT YOU KNOW",
+    "把你的资料，连成可追溯、可调用的知识。",
+  ],
+  conversation: ['资料管理','IMPORT MATERIALS','导入并核对正文，索引就绪后选择自动抽取或对话调整。'],
+  search: [
+    "知识检索",
+    "EVERY FINDING HAS A SOURCE",
+    "带着问题查找材料，让每一条信息都有出处。",
+  ],
+  tasks: [
+    "任务中心",
+    "FROM MATERIALS TO KNOWLEDGE",
+    "逐步查看解析、检索索引与知识入图的处理结果。",
+  ],
+  sensitive: [
+    "脱敏设置",
+    "SHARE KNOWLEDGE WITH CARE",
+    "为知识的使用与交付，设置清晰的边界。",
+  ],
+};
+function setView(view, fromWorkbench = false) {
+  if(view==='review'&&!fromWorkbench){if(!state.ready||state.invalid)return;view='conversation';}
+  // Skill management is temporarily hidden; keep its implementation for later.
+  if (view === "skills") view = "warehouses";
+  if (!pages[view]) return;
+  const integrated = workbench.has(view);
+  if ((integrated || view==='conversation') && !fromWorkbench && !state.warehouseId && state.ready && !state.invalid) {
+    setView("warehouses");
+    toast("请先选择或创建一座数据仓，再使用知识管理。");
+    return;
+  }
+  if (integrated && !fromWorkbench && !workbench.show(view)) return;
+  const previousView = state.view;
+  if(view!=='conversation')stopConversation();
+  state.view = view;
+  document.getElementById('conversation-return')?.remove();
+  if(integrated&&state.conversationReturn?.warehouseId===state.warehouseId){
+    const bar=document.createElement('div');bar.id='conversation-return';bar.className='cv-editor-return';
+    const button=document.createElement('button');button.className='btn btn-secondary';button.textContent='返回材料流程，读取最新进度';
+    button.addEventListener('click',()=>{if(workbench.canLeave())setView('conversation');});
+    const hint=document.createElement('span');hint.textContent=view==='ontology'?'核对本体：发布后返回重新确认目标与计划；历史材料不会自动重抽。':'核对材料知识：保存草稿不等于发布，发布后返回读取当前生效结果。';
+    bar.append(button,hint);$('#view-workbench').prepend(bar);
+  }
+  document
+    .querySelectorAll(".view")
+    .forEach((el) => (el.hidden = el.id !== (integrated ? "view-workbench" : "view-" + view)));
+  document
+    .querySelectorAll("[data-view]")
+    .forEach((el) =>
+      el.dataset.view === view
+        ? el.setAttribute("aria-current", "page")
+        : el.removeAttribute("aria-current"),
+    );
+  const [title, kicker, description] = pages[view];
+  $("#page-title").textContent = title;
+  $("#crumb-current").textContent = title;
+  $("#page-kicker").textContent = kicker;
+  $("#page-description").textContent = description;
+  $("#page-secondary").hidden = view !== "graph";
+  $("#page-primary").hidden = integrated || view==='conversation' || view==='data' || view==='api';
+  $(".page-scroll").classList.toggle("workbench-page", integrated);
+  const directory = view === "warehouses";
+  $("#page-primary").dataset.action = directory ? "new-warehouse" : "import";
+  $("#page-primary").innerHTML = icon("plus") + (directory ? "新建数据仓" : view === "skills" ? "导入 Skill ZIP" : "导入材料");
+  $("#crumb-current").hidden = directory;
+  $("#crumb-separator").hidden = directory;
+  renderWarehouses();
+  renderProcessingSummary();
+  syncControls();
+  $(".page-scroll").scrollTop = 0;
+  $("#app").classList.remove("nav-open");
+  if (view === "sensitive" && state.ready && state.warehouseId)
+    void loadPolicy();
+  if (view === "api" && state.warehouseId) { renderMcpEndpoint(); void loadMcpEndpoint(); void loadKeys(); }
+  if (view === "data") {
+    renderManagement();
+    if (previousView !== "data") void refreshManagementStats();
+    if (currentWarehouse()?.state === "import_failed") void loadImportFailure(true);
+  }
+  if (view === "conversation") void loadConversation();
+  if (view === "models") void loadModels();
+  if (view === "skills") void skillsUi.load();
+  if (view === "warehouses" || previousView === "warehouses") void refresh();
+}
+function focusConversationCard(selector) {
+  const item=$('#view-conversation '+selector),panel=item?.closest('.mw-review-content,.conversation-messages');
+  if(!panel||!item||!panel.contains(item))return;
+  for(let el=item;el&&el!==panel;el=el.parentElement)if(el.tagName==='DETAILS')el.open=true;
+  panel.scrollTop+=item.getBoundingClientRect().top-panel.getBoundingClientRect().top-12;
+}
+function renderConversation() {
+  const conversationRoot=$('#view-conversation');
+  const disclosureScope=JSON.stringify([state.generation,state.warehouseId,conversationFlow?.saved.conversationId,conversationFlow?.state.selectedIntent]);
+  const disclosureState=new Map(conversationRoot.dataset.disclosureScope===disclosureScope
+    ? [...conversationRoot.querySelectorAll('[data-cv-disclosure]')].map(el=>[el.dataset.cvDisclosure,el.open]):[]);
+  const focus=document.activeElement,focusId=focus?.id?.startsWith('cv-')?focus.id:null;
+  const selection=focusId&&typeof focus.selectionStart==='number'?[focus.selectionStart,focus.selectionEnd]:null;
+  const scroll=$('#view-conversation .conversation-messages')?.scrollTop;
+  const contextScroll=$('#view-conversation .conversation-context')?.scrollTop;
+  const reviewScroll=$('#view-conversation .mw-review-content')?.scrollTop;
+  const listScroll=$('#view-conversation .mw-material-list')?.scrollTop;
+  const sourceScroll=$('#view-conversation .cv-source-review')?.scrollTop;
+  const proposalStamp=JSON.stringify(conversationFlow?.changes.state.proposals.map(p=>[p.id,p.status])||[]);
+  const newProposal=conversationRoot.dataset.proposalStamp!==proposalStamp;
+  const materialStamp=JSON.stringify([conversationFlow?.state.librarySelection?.document.id,conversationFlow?.state.selectedIntent,nextConversationStep(conversationFlow)]);
+  const newMaterialState=conversationRoot.dataset.materialStamp!==materialStamp;
+  const markup=conversationHTML(currentWarehouse(),state.conversationPublication,state.conversationOnboarding,
+    !state.preview && state.identity?.dataScope==='personal' && state.initialization?.status?.local_data_gate_mode!=='required',conversationFlow);
+  if(conversationRoot._renderedMarkup===markup&&conversationRoot.dataset.disclosureScope===disclosureScope)return;
+  conversationRoot.innerHTML=markup;conversationRoot._renderedMarkup=markup;
+  mountMaterialWorkspace(conversationRoot);
+  conversationRoot.querySelectorAll('[data-intake-segment]').forEach(el=>{el.style.height='auto';el.style.height=el.scrollHeight+'px';});
+  if(sourceScroll!==undefined&&$('#view-conversation .cv-source-review'))$('#view-conversation .cv-source-review').scrollTop=sourceScroll;
+  conversationRoot.dataset.disclosureScope=disclosureScope;
+  conversationRoot.querySelectorAll('[data-cv-disclosure]').forEach(el=>{if(disclosureState.has(el.dataset.cvDisclosure))el.open=disclosureState.get(el.dataset.cvDisclosure);});
+  if(focusId){const next=document.getElementById(focusId);next?.focus({preventScroll:true});if(selection&&next?.setSelectionRange)next.setSelectionRange(...selection);}
+  if(scroll!==undefined&&$('#view-conversation .conversation-messages'))$('#view-conversation .conversation-messages').scrollTop=scroll;
+  if(contextScroll!==undefined&&$('#view-conversation .conversation-context'))$('#view-conversation .conversation-context').scrollTop=contextScroll;
+  if(reviewScroll!==undefined&&$('#view-conversation .mw-review-content'))$('#view-conversation .mw-review-content').scrollTop=newMaterialState?0:reviewScroll;
+  if(listScroll!==undefined&&$('#view-conversation .mw-material-list'))$('#view-conversation .mw-material-list').scrollTop=listScroll;
+  if(!['cv-goal','cv-instructions','cv-message'].includes(focusId)&&!focusId?.startsWith('cv-source-')){
+    if(newProposal&&conversationFlow?.changes.state.proposals.length)focusConversationCard('.cv-proposal-current');
+    else if(newMaterialState&&conversationFlow?.state.detail){
+      focusConversationCard('.cv-conversation-actions');
+      focusConversationCard('.mw-confirm-card');
+    }
+  }
+  conversationRoot.dataset.proposalStamp=proposalStamp;
+  conversationRoot.dataset.materialStamp=materialStamp;
+}
+async function loadConversation() {
+  stopConversation();
+  const request=state.conversationRequest=(state.conversationRequest||0)+1;
+  const {identity,generation,warehouseId}=state;
+  const isCurrent=()=>state.ready && !state.invalid && state.identity===identity && state.generation===generation &&
+    state.warehouseId===warehouseId && state.conversationRequest===request && state.view==='conversation';
+  state.conversationOnboarding=null;
+  if(!isCurrent() || !warehouseId || currentWarehouse()?.state !== 'active' || state.preview || identity?.dataScope!=='personal' ||
+    state.initialization?.status?.local_data_gate_mode==='required'){renderConversation();return;}
+  const flow=conversationFlow=new ConversationFlow({warehouseId,identity,storage:window.localStorage,isCurrent,
+    call:async(action,input)=>{const reply=await call(action,input);return action.startsWith('conversation-')||action==='workbench-request'?readWorkbenchReply(reply):reply;},onChange:()=>renderConversation()});
+  flow.state.materialPage='import';
+  conversationReady=flow.load().then(async()=>{
+    if(flow!==conversationFlow||!isCurrent()||!flow.state.loaded)return;
+    await flow.materials();
+    if(flow.saved.roundOpening&&!flow.saved.pending)await flow.rounds.finish();
+    else if(!flow.saved.pending&&!flow.saved.upload&&!flow.saved.intakeSubmission)await flow.importer.first();
+    else if(flow.saved.pending?.input.documentId)await flow.run(()=>flow.importer.read(flow.saved.pending.input.documentId));
+  });
+  const poll=async()=>{
+    if(flow!==conversationFlow||!isCurrent())return;
+    try{if($('#onboarding-shell').hidden&&!$('#mw-editor-dialog')){if(flow.state.materialPage==='import')await flow.importer.tick();else{await flow.tick();await flow.changes.tick();}}}
+    catch{if(flow===conversationFlow&&isCurrent()){flow.state.progressRetryable=true;flow.state.error='暂时未能读取最新进度，正在自动重连；不会重复提交任务。';flow.emit();}}
+    finally{if(flow===conversationFlow&&isCurrent())conversationTimer=setTimeout(poll,2000);}
+  };
+  conversationTimer=setTimeout(poll,2000);
+  renderConversation();
+}
+async function openConversationReview(documentId){
+  if(!documentId||!state.ready||$('#mw-editor-dialog')||!workbench.canLeave())return;
+  const flow=conversationFlow,warehouseId=state.warehouseId;
+  if(!flow||flow.state.busy||flow.saved.pending||flow.saved.roundOpening||flow.changes.record.pending||flow.reviewPending||flow.claimPending||flow.releasePending)return;
+  // Keep the workspace and material selection in place. The existing editor
+  // remains responsible for validation, leases and unsaved-change protection.
+  workbench.reset();
+  const dialog=document.createElement('dialog');dialog.id='mw-editor-dialog';dialog.className='mw-editor-dialog';
+  dialog.setAttribute('aria-labelledby','mw-editor-title');
+  dialog.innerHTML='<header><div><h2 id="mw-editor-title">修改当前材料与本体</h2><p>保存后返回本材料继续对话；确认发布后才更新知识。修改本体规则不会自动重抽其他材料。</p></div><button class="btn btn-secondary" type="button">返回材料对话</button></header><div id="mw-editor-content"></div>';
+  let closing=false;
+  async function close(){
+    if(closing||!workbench.canLeave())return;closing=true;
+    workbench.reset();dialog.close();dialog.remove();
+    if(flow!==conversationFlow||warehouseId!==state.warehouseId)return;
+    flow.changes.clear();flow.state.inspectCard=null;
+    await flow.refresh();
+    if(!flow.state.error&&flow.state.materialPage==='import'&&flow.state.importDocumentId===documentId)await flow.importer.refresh();
+    if(!flow.state.error&&flow.state.detail?.document_id===documentId&&flow.saved.materialContinuations?.[flow.state.selectedIntent]?.editExisting&&!flow.state.detail.review?.draft_id)await flow.changes.openDraft();
+  }
+  dialog.addEventListener('cancel',event=>{event.preventDefault();void close();});
+  dialog.querySelector('button').addEventListener('click',()=>void close());
+  document.body.append(dialog);dialog.showModal();
+  if(!workbench.openMaterial(documentId)){dialog.close();dialog.remove();}
+}
+function bindConversationEvents(){
+$('#view-conversation').addEventListener('input',event=>{
+  if(!conversationFlow)return;const s=conversationFlow.state;
+  if(event.target.id==='cv-message')s.input=event.target.value;
+  if(event.target.dataset.intakeSegment){
+    conversationFlow.intake.edit(event.target.dataset.intakeSegment,event.target.value);
+    // Preserve the textarea and IME composition while typing.
+    $('#view-conversation [data-intake-confirmed]')?.remove();
+    const status=$('#view-conversation .cv-material-status strong');if(status)status.textContent='解析完成，待核对正文';
+    event.target.style.height='auto';event.target.style.height=event.target.scrollHeight+'px';
+    const changed=conversationFlow.intake.hasEdits;
+    for(const confirm of document.querySelectorAll('#view-conversation [data-cv="intake-confirm"]'))confirm.textContent=changed?'保存并进入下一步':'确认正文，进入下一步';
+    const save=$('#view-conversation [data-cv="intake-save"]');if(save)save.disabled=!changed||conversationFlow.intake.editLocked;
+    const automatic=$('#view-conversation [data-cv="material-auto-from-source"]');if(automatic)automatic.textContent=changed?'保存正文并准备自动抽取':'使用当前正文，自动抽取';
+    for(const el of document.querySelectorAll('#view-conversation [data-intake-edits],#view-conversation [data-cv="intake-original-goal"]'))el.hidden=!changed;
+  }
+  if(event.target.id==='cv-message')conversationFlow.saveMaterialComposer();
+  if(event.target.id==='cv-keep-existing'&&s.merge)s.merge.keepExisting=event.target.checked;
+  if(event.target.id==='cv-rule-confirmed')conversationFlow.changes.state.ruleConfirmed=event.target.checked;
+  if(event.target.id==='cv-publish-confirmed')conversationFlow.changes.state.publishConfirmed=event.target.checked;
+  if(['cv-rule-confirmed','cv-publish-confirmed'].includes(event.target.id))conversationFlow.emit();
+});
+$('#view-conversation').addEventListener('keydown',event=>{
+  if(event.target.id==='cv-message'&&event.key==='Enter'&&!event.shiftKey&&!event.isComposing&&event.keyCode!==229){
+    event.preventDefault();if(!event.target.value.trim())return;const form=event.target.form;if(form&&!form.querySelector('button[type="submit"]')?.disabled)form.requestSubmit();return;
+  }
+  const item=event.target.closest('.cv-candidate-network [data-cv="candidate-inspect"]');
+  if(item&&['Enter',' '].includes(event.key)){event.preventDefault();item.dispatchEvent(new MouseEvent('click',{bubbles:true}));}
+});
+$('#view-conversation').addEventListener('change',event=>{
+  if(event.target.id==='cv-candidate-focus'&&conversationFlow){const g=currentCandidateGraph(conversationFlow);if(g){g.focus=event.target.value;g.selected=null;g.zoom=1;conversationFlow.emit();}}
+  if(event.target.id==='cv-session'&&event.target.value)void conversationFlow?.select(event.target.value);
+  if(event.target.id==='cv-message-mode'&&conversationFlow)conversationFlow.state.messageMode=event.target.value;
+  if(event.target.id==='cv-source-page-size'&&conversationFlow)conversationFlow.intake.changePageSize(Number(event.target.value));
+  if(event.target.dataset.cvItem)conversationFlow?.changes.select(event.target.dataset.cvItem,event.target.checked);
+  if(event.target.dataset.cvIssue)conversationFlow?.changes.selectIssue(event.target.dataset.cvIssue,event.target.checked);
+});
+$('#view-conversation').addEventListener('submit',event=>{
+  if(!conversationFlow)return;event.preventDefault();
+  if(event.target.id==='cv-message-form'){conversationFlow.state.input=$('#cv-message').value;void conversationFlow.submitInput();}
+  if(event.target.id==='cv-goal-form'){
+    const f=conversationFlow;
+    void f.goal().then(()=>{if(f===conversationFlow&&!f.state.error&&f.state.detail?.status==='ready_for_confirmation')focusConversationCard('#cv-inline-rules');});
+  }
+});
+$('#view-conversation').addEventListener('click',event=>{
+  const el=event.target.closest('[data-cv]'),f=conversationFlow;if(!el||!f||el.disabled)return;
+  const commandName=el.dataset.cv,offset=f.state.candidates?.offset||0,mergeOffset=f.state.merge?.plan.offset||0;
+  if(['candidate-inspect','candidate-zoom-in','candidate-zoom-out','candidate-zoom-reset'].includes(commandName)){
+    const g=currentCandidateGraph(f);if(!g)return;
+    if(commandName==='candidate-inspect'){
+      if(!/^\d+$/.test(el.dataset.id||'')||!g.items[Number(el.dataset.id)])return;
+      g.selected=el.dataset.id;
+    }else g.zoom=commandName==='candidate-zoom-reset'?1:Math.max(1,Math.min(3,g.zoom+(commandName==='candidate-zoom-in' ? .25 : -.25)));
+    f.emit();if(commandName==='candidate-inspect')focusConversationCard('.cv-network-detail');return;
+  }
+  const commands={new:()=>f.create(),refresh:()=>f.refresh(),more:()=>f.more(),send:()=>f.submitInput(),upload:()=>openMaterialUpload(f),
+    'reply-suggestion':()=>{const text=materialReplySuggestions(f)[Number(el.dataset.id)];if(!text)return;f.state.input=f.state.input.trim()?f.state.input+'\n'+text:text;f.saveMaterialComposer();f.emit();$('#cv-message')?.focus();},
+    'material-source':()=>f.agent.reviewSource(),'material-auto':()=>f.agent.prepareAutomatic(),'material-auto-confirm':()=>f.agent.confirmAutomatic({previewId:el.dataset.previewId,replacementAcknowledgement:el.dataset.replacementAcknowledgement}),'material-dialogue':()=>f.state.materialPage==='import'?f.importer.dialogue():f.agent.dialogue(),
+    'material-auto-cancel':()=>f.agent.cancelPreview(),
+    'auto-results-prev':()=>{f.state.automaticResultPage=Math.max(0,(f.state.automaticResultPage||0)-1);f.emit();},'auto-results-next':()=>{f.state.automaticResultPage=(f.state.automaticResultPage||0)+1;f.emit();},
+    'intake-save':()=>f.intake.confirm(false),
+    'library-review':()=>f.state.librarySelection?.document.workflow?.draft&&openConversationReview(f.state.librarySelection.document.id),
+    'library-start':()=>startWarehouseMaterialDialogue(f),'library-select':()=>f.state.materialPage?f.importer.select(el.dataset.id):selectWarehouseMaterial(f,el.dataset.id),'library-more':()=>f.run(()=>readWarehouseMaterials(f,true)),
+    'import-refresh':()=>f.importer.refresh(),
+    'import-confirm':()=>f.importer.confirm(),'import-auto':()=>f.importer.automatic(),'import-dialogue':()=>f.importer.dialogue(),'import-review':()=>f.importer.review(id=>f===conversationFlow&&openConversationReview(id)),
+    'import-index-retry':()=>f.importer.retryIndex(),
+    'import-close-dialogue':()=>f.importer.exitDialogue(),'import-prev':()=>f.importer.page(-1),'import-next':()=>f.importer.page(1),
+    'import-auto-switch':()=>f.importer.switchAutomatic(),
+    'round-start':()=>f.rounds.start(),'round-resume':()=>f.rounds.resume(),
+    'round-finish':()=>f.saved.intakeSubmission?.newRound?f.intake.submit():f.rounds.finish(),
+    'round-abandon':()=>f.rounds.abandonOpening(),
+    'round-cancel':()=>{f.rounds.choice=null;f.emit();},
+    'round-history':()=>f.rounds.openHistory(),
+    'round-history-close':()=>{f.rounds.history=null;f.emit();},
+    'round-history-view':()=>f.rounds.viewHistory(el.dataset.id),
+    'material-retry-job':()=>f.agent.retryAutomatic(),
+    'material-history':()=>{const pending=f.history.open();focusConversationCard('.mw-material-history');return pending;},
+    'history-close':()=>{f.history.clear();f.emit();},
+    'history-more':()=>f.history.more(),
+    'history-runs-more':()=>{if(f.history.view)f.history.view.runLimit+=20;f.emit();},
+    'history-draft':()=>f.history.draft(el.dataset.id),
+    'history-run':()=>f.history.run(el.dataset.id),
+    'history-entities':()=>f.history.draft(el.dataset.id,0,'entity'),
+    'history-relations':()=>f.history.draft(el.dataset.id,0,'relation'),
+    'history-prev':()=>f.history.page(-1),'history-next':()=>f.history.page(1),
+    'auto-switch-cancel':()=>{f.state.autoSwitch=false;f.changes.state.discardPrompt=null;f.emit();},
+    'change-discard-prepare':()=>f.changes.prepareDiscard(),
+    'change-discard-cancel':()=>{f.changes.state.discardPrompt=null;f.emit();},
+    'change-discard-confirm':()=>f.changes.discardForAutomatic(),
+    'material-edit-existing':()=>f.changes.editMaterial(),
+    'baseline-prev':()=>{f.state.baselinePage=Math.max(0,(f.state.baselinePage||0)-1);f.emit();},
+    'baseline-next':()=>{f.state.baselinePage=(f.state.baselinePage||0)+1;f.emit();},
+    'import-text':()=>f.importer.text(),'import-text-prev':()=>f.importer.text(Math.max(0,(f.importer.view?.textWindow?.start||0)-65536)),
+    'import-text-next':()=>f.importer.text(f.importer.view?.textWindow?.end||0),
+    'import-resume':()=>f.intake.submit(),
+    'material-add':()=>action('import'),'material-select':()=>f.selectMaterial(el.dataset.session,el.dataset.id),'material-more':()=>f.materials(true),'material-refresh':()=>f.materials(),
+    'material-delete':()=>openMaterialDelete(f,()=>{workbench.invalidateGraph();void refresh().catch(()=>{});}),
+    'material-resume-draft':()=>continueMaterial(f,'draft'),'material-restart':()=>continueMaterial(f,'restart'),
+    'intake-remove':()=>f.intake.remove(),'intake-submit':()=>f.intake.submit(),'intake-more':()=>f.intake.more(),'intake-confirm':()=>f.intake.confirm(true),
+    'intake-start-goal':()=>f.intake.startGoal(),'intake-original-goal':()=>f.intake.startGoal(true),
+    'intake-prev':()=>f.intake.changePage(-1),'intake-next':()=>f.intake.changePage(1),
+    'intake-edit-goal':()=>{f.state.inspectCard='goal';f.emit();$('#cv-message')?.focus();},
+    'next-action':()=>{f.state.inspectCard=null;f.emit();},
+    'goal-edit':()=>$('#cv-message')?.focus(),
+    adjust:()=>{f.changes.setTarget(el.dataset.id);f.state.composerContext=el.dataset.id;f.state.messageMode='auto';f.state.inputRouting=null;f.state.inputNotice='已选择修改范围，请补充具体要求后发送，生成差异预览。';f.emit();$('#cv-message')?.focus();},
+    'adjust-cancel':()=>{f.state.inputRouting=null;f.state.composerContext=null;f.state.messageMode='auto';f.emit();},
+    'change-defer':()=>f.changes.defer(el.dataset.id),
+    'change-answer':()=>{f.state.composerContext='proposal';f.state.messageMode='auto';f.state.inputNotice=f.changes.record.changeTarget==='rules'?'请用业务语言说明含义，例如“专利包括申请中和已授权的成果，不加属性”。发送后生成待确认建议。':'请直接回答本轮待确认问题，发送后会生成新的修改预览。';f.emit();$('#cv-message')?.focus();},
+    'change-suggest-labels':()=>f.changes.suggestRules(el.dataset.id),'change-continue-extraction':()=>f.changes.continueExtraction(),
+    'change-edit-draft':()=>{f.changes.state.preview=null;f.changes.state.publishConfirmed=false;f.state.inspectCard=null;f.emit();},
+    'retry-pending':()=>f.retryPending(),'resume-upload':()=>f.resumeUpload(),'abandon-upload':()=>f.abandonUpload(),
+    documents:()=>openMaterialUpload(f),'documents-more':()=>f.listDocuments(f.state.documentOffset),
+    'documents-close':()=>{f.state.documents=[];f.emit();},link:()=>f.intake.stageDocument(el.dataset.id),intent:()=>f.chooseIntent(el.dataset.id),
+    analyze:()=>f.analyze(),'turn-cancel':()=>f.turnAction('cancel'),'turn-retry':()=>f.turnAction('retry'),
+    'use-goal':()=>f.useSuggestedGoal(),plan:()=>f.preview(),'confirm-plan':()=>f.confirmPlan(),
+    'stage-1':()=>f.goStage(1),'stage-2':()=>f.goStage(2),'stage-3':()=>f.goStage(3),
+    'intent-retry':()=>f.intentAction('retry'),'intent-cancel':()=>f.intentAction('cancel'),
+    candidates:async()=>{await f.candidates();f.state.stage=3;f.emit();},'candidates-prev':()=>f.candidates(Math.max(0,offset-20)),'candidates-next':()=>f.candidates(offset+20),
+    'candidate-graph':async()=>{await f.showCandidateGraph();if(f===conversationFlow&&currentCandidateGraph(f))focusConversationCard('.cv-candidate-tabs');},'candidate-list':()=>{f.state.candidateView='list';f.emit();},
+    'begin-edit':()=>f.beginEdit(),review:()=>f.review(),'claim-review':()=>f.claimReview(el.dataset.id),'merge-prev':()=>f.reviewPage(Math.max(0,mergeOffset-20)),'merge-next':()=>f.reviewPage(mergeOffset+20),
+    merge:()=>f.merge(!!$('#cv-keep-existing')?.checked),'merge-close':()=>{if(!f.reviewPending){f.state.merge=null;f.emit();}},
+    release:()=>f.release(),ontology:()=>{f.changes.setTarget('rules');f.state.composerContext='rules';f.state.messageMode='auto';f.emit();$('#cv-message')?.focus();},'open-review':()=>canContinueMaterial(f)?continueMaterial(f,'draft'):f.changes.openDraft(),
+    'change-refresh':()=>f.changes.refresh(),'change-more':()=>f.changes.more(),'change-apply':()=>f.changes.apply(el.dataset.id),
+    'change-recover':()=>f.changes.recover(),'change-suggest':()=>{f.changes.setTarget('rules');return f.changes.generate('仅调整本体规则：依据当前材料和目标，提出少量必要的类型、关系或属性；优先复用已有结构，不修改目标或材料事实。');},
+    'change-open-draft':()=>f.changes.openDraft(),'change-claim':()=>f.changes.claim(el.dataset.id),
+    'advanced-review':()=>openConversationReview(f.state.detail?.document_id),
+    'material-current':()=>selectWarehouseMaterial(f,f.state.detail?.document_id,true),
+    'material-auto-from-source':()=>f.agent.automaticFromSource(),
+    'change-revise':()=>{const p=f.changes.state.proposals.find(p=>p.id===el.dataset.id);if(!p)return;f.changes.setTarget(f.changes.record.proposalTargets?.[p.id]||'facts');f.state.composerContext=f.changes.record.changeTarget;f.state.messageMode='change';f.state.inputNotice='';f.state.input=p.instruction||'';f.emit();$('#cv-message')?.focus();},
+    'change-entities':()=>f.changes.page(0,'entity'),'change-relations':()=>f.changes.page(0,'relation'),
+    'change-select-page':()=>f.changes.selectPage(),'change-clear-selection':()=>f.changes.clearSelection(),
+    'change-items-prev':()=>f.changes.page(Math.max(0,(f.changes.state.items?.offset||0)-20)),
+    'change-items-next':()=>f.changes.page((f.changes.state.items?.offset||0)+20),
+    'change-issues-adjust':()=>f.changes.adjustIssues(),'change-issues-exclude':()=>f.changes.adjustIssues({exclude:true}),
+    'change-source':()=>f.changes.source(el.dataset.id),'change-preview':()=>f.changes.preview(),'change-publish':()=>f.changes.publish(),
+    'change-publish-rules':()=>f.changes.publishRules(),'change-retry-publication':()=>f.changes.retryPublication(),'change-new-draft':()=>f.changes.newDraft()};
+  void Promise.resolve().then(()=>commands[commandName]?.()).then(async()=>{
+    if(f!==conversationFlow)return;
+    if(f.state.openDraft){f.state.openDraft=null;await f.changes.openDraft();}
+    if(f.state.openMaterialEditor===f.state.selectedIntent&&!f.state.error&&!f.saved.pending)await f.changes.editMaterial();
+    if(f.state.openDetailedEditor&&f.state.openDetailedEditor===f.state.detail?.document_id&&!f.state.error&&!f.saved.pending){f.state.openDetailedEditor=false;await openConversationReview(f.state.detail?.document_id);}
+    if(f!==conversationFlow)return;
+    const target={'stage-1':'.cv-goal-card','stage-2':'#cv-inline-rules','stage-3':'#cv-inline-knowledge',
+      'round-history':'.mw-round-history','round-history-view':'.mw-round-transcript','import-dialogue':'.mw-round-choice',
+      'material-history':'.mw-material-history','history-draft':'.mw-history-detail','history-run':'.mw-history-detail',
+      'history-entities':'.mw-history-detail','history-relations':'.mw-history-detail','history-prev':'.mw-history-detail','history-next':'.mw-history-detail',
+      'import-refresh':'.mw-refresh-feedback',
+      'use-goal':'.cv-goal-card',plan:'.cv-plan','confirm-plan':'#cv-inline-knowledge',
+      candidates:'.cv-candidates',review:'.cv-merge','begin-edit':'.cv-conversation-actions',merge:'.cv-change-facts',
+      'open-review':'.cv-change-panel','change-open-draft':'.cv-change-panel',
+      'change-apply':'.cv-change-panel','change-recover':'.cv-change-panel',
+      'change-claim':'.cv-change-facts','change-preview':'.cv-publication-preview','change-new-draft':'.cv-change-facts',
+      'change-publish':'.cv-publication-preview','change-publish-rules':'#cv-inline-rules'}[commandName];
+    if(target)focusConversationCard(target);
+    if(['change-defer','next-action','change-edit-draft'].includes(commandName))focusConversationCard('.cv-conversation-actions');
+  }).catch(()=>toast('页面操作未完成，请重新读取进度。'));
+});
+}
+const jobNames = {
+  document_parse: "正文解析",
+  knowledge_extract: "知识抽取",
+  ontology_suggest: "本体建议",
+  knowledge_publish: "知识入图",
+  search_index: "检索索引",
+  sensitive_scan: "交付检测",
+  reasoning_detect: "推理内容检测",
+  knowledge_retract: "撤回旧关系",
+  document_delete: "材料清理",
+};
+const jobStates = {
+  queued: "排队中",
+  running: "处理中",
+  succeeded: "已完成",
+  failed: "失败",
+  cancelled: "已取消",
+};
+function renderTasks() {
+  $("#tasks-body").innerHTML =
+    state.jobs
+      .map(
+        (j) =>
+          `<article class="task-row"><div class="task-mark" style="${
+            j.status === "failed" ? "color:var(--accent)" : ""
+          }">${icon(
+            j.status === "succeeded"
+              ? "check"
+              : j.status === "failed"
+              ? "info"
+              : "activity",
+          )}</div><div class="task-content"><strong>${esc(
+            jobNames[j.kind] || "处理任务",
+          )} · ${esc(
+            j.document_name ||
+              doc(j.document_id)?.original_name ||
+              "当前知识空间",
+          )}</strong><p>${esc(j.stage || "等待处理")}${
+            j.total_units ? " · " + j.completed_units + "/" + j.total_units : ""
+          }</p><p class="model-actual">${esc(actualModel(j.metrics?.processing, j.kind === "sensitive_scan" ? "sensitive" : "extraction"))}${j.metrics?.model_calls?.length ? " · 用量：" + esc(modelUsage(j.metrics.model_calls)) : ""}</p>${j.error_message ? `<p>${esc(j.error_message)}</p>` : ""}${
+            j.knowledge_summary
+              ? `<p>候选 ${
+                  j.knowledge_summary.candidate_relations ??
+                  j.knowledge_summary.total_candidates ??
+                  0
+                } · 入图 ${
+                  j.knowledge_summary.published_relations ?? 0
+                } 条关系</p>`
+              : ""
+          }</div><div class="task-end"><span class="pill ${
+            j.status === "succeeded"
+              ? "green"
+              : j.status === "failed"
+              ? "error"
+              : "amber"
+          }">${
+            jobStates[j.status] || esc(j.status)
+          }</span><span class="mono">${date(j.updated_at)}</span>${
+            j.status === "failed"
+              ? `<button class="text-link" data-retry="${esc(
+                  j.id,
+                )}">重试</button>`
+              : ""
+          }</div></article>`,
+      )
+      .join("") || '<div class="empty">当前没有处理任务。</div>';
+  $("#jobs-label").textContent = state.jobTotal;
+  renderPager("jobs", state.jobOffset, state.jobTotal);
+  $("#task-count").textContent =
+    state.jobs.filter((j) => ["running", "queued"].includes(j.status)).length ||
+    state.jobTotal;
+}
+
+function renderPager(kind, offset, total) {
+  const container = $("#" + kind + "-pager");
+  container.hidden = total <= 100;
+  container.innerHTML = `<button class="text-link" data-action="${kind}-previous" ${
+    !state.ready || offset === 0 ? "disabled" : ""
+  }>上一页</button><span class="muted mono">${
+    Math.floor(offset / 100) + 1
+  } / ${Math.max(
+    1,
+    Math.ceil(total / 100),
+  )}</span><button class="text-link" data-action="${kind}-next" ${
+    !state.ready || offset + 100 >= total ? "disabled" : ""
+  }>下一页</button>`;
+}
+async function loadPolicy() {
+  try {
+    const p = await call("sensitive");
+    if (state.invalid) return;
+    state.policy = p;
+    renderPolicy();
+  } catch (e) {
+    banner(errorText(e));
+  }
+}
+function renderPolicy() {
+  const p = state.policy;
+  document
+    .querySelectorAll("[data-setting]")
+    .forEach((b) =>
+      b.setAttribute(
+        "aria-checked",
+        String(
+          Boolean(
+            p?.[
+              b.dataset.setting === "protection"
+                ? "enabled"
+                : "semantic_enabled"
+            ],
+          ),
+        ),
+      ),
+    );
+  $("#sensitive-rules").innerHTML = p
+    ? `<div class="section-caption" style="margin-top:25px"><span>当前工作空间规则</span><span class="muted">${p.rules.length} 条</span></div>` +
+      p.rules
+        .map(
+          (r) =>
+            `<div class="rule-row"><span>${esc(
+              r.name,
+            )}</span><span class="pill">${
+              r.enabled === false
+                ? "已停用"
+                : { mask: "自动脱敏", block: "阻止交付", confirm: "需要确认" }[
+                    r.mode
+                  ] || "按规则处理"
+            }</span></div>`,
+        )
+        .join("") +
+      `<p class="modal-warning">检测状态：${esc(
+        {
+          completed: "已完成",
+          running: "检测中",
+          queued: "排队中",
+          pending: "待检测",
+          failed: "失败",
+          disabled: "未启用",
+          index_required: "等待索引",
+        }[p.scan?.status] ||
+          p.scan?.status ||
+          "等待处理",
+      )}</p>`
+    : '<p class="detail-empty">连接后读取当前工作空间的保护规则。</p>';
+  syncControls();
+}
+async function saveSetting(button) {
+  if (!state.policy || state.saving) return;
+  state.saving = true;
+  syncControls();
+  const field =
+      button.dataset.setting === "protection" ? "enabled" : "semantic_enabled",
+    p = state.policy;
+  try {
+    state.policy = await call("save-sensitive", {
+      operationId: crypto.randomUUID(),
+      payload: {
+        expected_revision: p.revision,
+        enabled: p.enabled,
+        semantic_enabled: p.semantic_enabled,
+        rules: p.rules,
+        [field]: !p[field],
+      },
+    });
+    toast("保护设置已保存，检测状态以任务结果为准。");
+  } catch (e) {
+    banner(errorText(e));
+    await loadPolicy();
+  } finally {
+    state.saving = false;
+    renderPolicy();
+  }
+}
+async function refresh() {
+  if (!state.ready || state.refreshing) return;
+  if (state.view === "warehouses" || !state.warehouseId) {
+    state.refreshing = true;
+    const generation = state.generation;
+    try {
+      const result = await call("warehouses");
+      if (state.invalid || generation !== state.generation) return;
+      state.warehouses = result.items;
+      renderWarehouses();
+      banner("");
+    } catch (e) {
+      if (!state.invalid && generation === state.generation) banner(errorText(e));
+    } finally {
+      if (generation === state.generation) {
+        state.refreshing = false;
+        refreshAt = Date.now();
+        if (state.view !== "warehouses" && state.warehouseId) void refresh();
+      }
+    }
+    return;
+  }
+  const generation = state.generation;
+  state.refreshing = true;
+  const scoped = currentWarehouse()?.state === "active";
+  let newlyActive = false;
+  try {
+    const [d, j, g, r, w, ontology] = await Promise.allSettled([
+      scoped ? call("documents", { limit: 100 }) : Promise.resolve({items:[]}),
+      scoped ? call("jobs", { offset: state.jobOffset }) : Promise.resolve({items:[],total:0}),
+      scoped ? call("graph") : Promise.resolve({nodes:[],edges:[]}),
+      scoped ? call("retrieval") : Promise.resolve(null),
+      call("warehouses"),
+      scoped ? call('conversation-ontologies').then(readWorkbenchReply).then(result => {
+        if (!Array.isArray(result?.items)) throw Object.assign(new Error('SEMANTICA_INVALID_RESPONSE'), {code:'SEMANTICA_INVALID_RESPONSE'});
+        return result.items.find(item => item.status === 'published')?.schema || null;
+      }) : Promise.resolve(null),
+    ]);
+    if (state.invalid || generation !== state.generation) return;
+    if (d.status === "fulfilled") {
+      state.documents = d.value.items;
+    }
+    if (j.status === "fulfilled") {
+      state.jobs = j.value.items;
+      state.jobTotal = j.value.total;
+    }
+    // Never retain another warehouse's labels or substitute a generic ontology.
+    const schema = ontology.status === 'fulfilled' ? ontology.value : null;
+    state.graphPresentation = createGraphPresentation(schema);
+    if (g.status === "fulfilled") {
+      const fingerprint = JSON.stringify([g.value, schema]);
+      if (fingerprint !== state.graphFingerprint) {
+        const first = !state.graphFingerprint;
+        state.graph = graphLayout(g.value);
+        state.graphFingerprint = fingerprint;
+        if (first) fitGraph();
+      }
+      state.graphError = null;
+    } else {
+      state.graphError = g.reason;
+      state.graph = graphLayout(state.graph);
+      state.graphFingerprint = null;
+    }
+    if (r.status === "fulfilled") {
+      state.retrieval = r.value;
+      renderRetrieval();
+    }
+    if (w.status === "fulfilled") {
+      const previousState = currentWarehouse()?.state;
+      state.warehouses = w.value.items;
+      if (previousState !== currentWarehouse()?.state) state.importFailure = null;
+      newlyActive = !scoped && currentWarehouse()?.state === "active";
+      renderWarehouses();
+      if (state.view === "conversation" && previousState !== currentWarehouse()?.state) void loadConversation();
+      if (currentWarehouse()?.state === "import_failed") void loadImportFailure();
+    }
+    const failed = [d, j, r, w].find((v) => v.status === "rejected");
+    const directory = state.view === "warehouses";
+    if (failed && !directory) banner(errorText(failed.reason));
+    else if (ontology.status === 'rejected' && !directory) banner('当前仓库本体名称读取失败，图谱暂按原始类型编码显示；请重新读取。');
+    else if (!state.graphError) banner("");
+    if (currentWarehouse()?.state !== "active") {
+      state.documents = [];
+      state.jobs = [];
+      state.graph = { nodes: [], edges: [] };
+      state.graphPresentation = createGraphPresentation();
+      state.jobTotal = 0;
+      state.graphFingerprint = null;
+      state.source = null;
+      state.policy = null;
+      state.retrieval = null;
+      state.graphError = {
+        publicMessage: currentWarehouse()?.state === "import_failed"
+          ? "迁入未完成，图谱暂不可读取。请到数据管理查看失败原因。"
+          : "数据仓正在处理或清理，完成后可继续查看图谱。",
+      };
+      $("#source-dialog").close();
+      $("#source-body").replaceChildren();
+      $("#source-actions").replaceChildren();
+      $("#search-results").replaceChildren();
+      if (!directory) banner(currentWarehouse()?.state === "clear_failed"
+        ? "当前数据仓清理未完成，请到数据管理查看；其他数据仓仍可正常使用。"
+        : currentWarehouse()?.state === "import_failed"
+          ? "当前数据仓迁入未完成，材料和图谱暂不可读取。请到数据管理查看失败原因。"
+          : "数据仓正在处理或清理，请稍后重试。");
+    }
+    renderTasks();
+    renderFilters();
+    renderGraph();
+    renderManagement();
+    syncControls();
+    if (state.view === "data") void refreshManagementStats();
+  } finally {
+    if (generation === state.generation) {
+      state.refreshing = false;
+      refreshAt = Date.now();
+      if (newlyActive) void refresh();
+    }
+  }
+}
+function renderRetrieval() {
+  const r = state.retrieval;
+  $("#search-index-state").innerHTML =
+    r?.compatible && r?.fresh
+      ? `${icon("check")} 检索索引已就绪 · 向量、关键词与有限知识邻域`
+      : `${
+          r?.active
+            ? "材料或配置已更新，等待当前索引就绪。"
+            : "材料解析完成后自动建立索引。"
+        } <button class="text-link" data-action="build-index">更新索引</button>`;
+}
+async function initialize() {
+  if (state.invalid) return;
+  state.hostNavigationReady = false;
+  banner("正在读取万象连接与知识空间…");
+  try {
+    const v = await call("initialize");
+    if (state.invalid) return;
+    state.identity = v.identity;
+    state.preview = v.identity.connection === "preview";
+    clearLegacyMcpAddressCache();
+    state.mcpEndpoint = "";
+    state.mcpEndpointStatus = "idle";
+    state.mcpEndpointError = "";
+    state.retrieval = v.retrieval;
+    state.warehouses = v.warehouses.items;
+    state.runtime = v.runtime;
+    void loadProcessingSummary();
+    $("#user-avatar").textContent = v.identity.user.name.slice(0, 1);
+    $("#user-avatar").title = v.identity.user.name;
+    renderWarehouses();
+    $("#import-formats").textContent =
+      (v.capabilities.accepted_suffixes || [])
+        .map((v) => v.toUpperCase())
+        .join(" · ") +
+      " / 单文件最大 " +
+      bytes(v.capabilities.document_max_bytes);
+    connection(true);
+    banner("");
+    renderRetrieval();
+    await selectWarehouse(
+      state.warehouseId || rememberedWarehouse() ||
+        state.warehouses.find((w) => w.state === "active")?.id ||
+        state.warehouses[0]?.id || null,
+    );
+    if (!state.warehouses.length) setView("warehouses");
+    state.hostNavigationReady = true;
+    const target = bridge ? await call("launch-target") : null;
+    state.initialization = v;
+    if (target) await applyLaunchTarget(target);
+    else if (!state.preview) await onboarding.open(v,{startup:true,preferredWarehouseId:state.warehouseId});
+  } catch (e) {
+    connection(false);
+    banner(errorText(e));
+  }
+}
+let lastLaunchRequest = null;
+async function applyLaunchTarget(value) {
+  if (!value || !state.hostNavigationReady || value.requestId === lastLaunchRequest) return;
+  onboarding.reset();
+  lastLaunchRequest = value.requestId;
+  let ok = false;
+  try {
+    if (!state.ready || state.invalid || state.uploading) throw new Error("WAREHOUSE_BUSY");
+    const { target } = value;
+    const warehouses = await call("warehouses");
+    if (lastLaunchRequest !== value.requestId) return;
+    if (!state.ready || state.invalid || state.uploading) throw new Error("WAREHOUSE_BUSY");
+    state.warehouses = warehouses.items;
+    const active = id => state.warehouses.some(w => w.id === id && w.state === "active");
+    const unavailable = target.warehouseId && !active(target.warehouseId);
+    const warehouseId = target.warehouseId
+      ? unavailable ? null : target.warehouseId
+      : active(state.warehouseId) ? state.warehouseId : state.warehouses.find(w => w.state === "active")?.id || null;
+    // Opening an unavailable warehouse is still a successful application open.
+    // Issue no new clear/delete request; let the user choose from their directory.
+    const view = unavailable || target.view === "skills" || (!warehouseId && target.view === "graph") ? "warehouses" : target.view;
+    const selected = view === "warehouses" && (!target.warehouseId || unavailable) ? null : warehouseId;
+    await selectWarehouse(selected, view);
+    if(target.documentId&&!unavailable){
+      const flow=conversationFlow;await conversationReady;
+      if(lastLaunchRequest!==value.requestId||!flow||flow!==conversationFlow||!flow.state.loaded||state.warehouseId!==selected)throw new Error('WAREHOUSE_CHANGED');
+      if(!await openWarehouseMaterial(flow,target))throw new Error('MATERIAL_TARGET_UNAVAILABLE');
+    }
+    ok = !state.invalid && state.ready && !state.uploading &&
+      state.view === view && state.warehouseId === selected;
+    if (ok && unavailable) toast("指定数据仓当前不可用，已打开数据仓列表。清理或删除状态可在管理中查看。");
+  } catch (error) { toast("无法打开指定数据仓：" + errorText(error)); }
+  finally {
+    if (lastLaunchRequest === value.requestId)
+      await call("launch-target-applied", { requestId: value.requestId, ok }).catch(() => {});
+  }
+}
+async function runSearch() {
+  const generation = state.generation;
+  const query = $("#search-query").value.trim();
+  if (!query) return;
+  const button = $("#search-form button[type=submit]");
+  button.disabled = true;
+  $("#search-results").innerHTML =
+    '<div class="empty">正在检索当前版本的材料…</div>';
+  try {
+    const r = await call("search", { query });
+    if (
+      state.invalid ||
+      generation !== state.generation ||
+      currentWarehouse()?.state !== "active"
+    )
+      return;
+    const items = r.items || [],
+      channels = { vector: "向量", keyword: "关键词", graph: "知识关系" };
+    $("#search-results").innerHTML =
+      `<div class="results-summary"><span>找到 <b class="mono">${
+        items.length
+      }</b> 个相关片段</span><span class="muted small">当前材料版本</span></div>${
+        r.sensitive?.withheld
+          ? `<div class="inline-error">${r.sensitive.withheld} 条内容尚未完成保护检测，暂不交付。</div>`
+          : ""
+      }${r.message ? `<p class="modal-warning">${esc(r.message)}</p>` : ""}${
+        r.graph_warning
+          ? `<p class="modal-warning">${esc(r.graph_warning)}</p>`
+          : ""
+      }` +
+      items
+        .map(
+          (v, i) =>
+            `<article class="result-card"><div class="result-meta"><span>${String(
+              i + 1,
+            ).padStart(2, "0")} &nbsp; ${esc(
+              v.original_name ||
+                doc(v.document_id)?.original_name ||
+                "来源材料",
+            )}</span><span>${esc(locator(v.locator))}</span></div><h3>${esc(
+              (v.matched_entities || []).join(" · ") || "来源摘录",
+            )}</h3><p>${highlight(v.text, [
+              query,
+              ...(v.matched_entities || []),
+            ])}</p><div class="result-footer"><div class="result-channels">${(
+              v.channels || []
+            )
+              .map((c) => `<span class="pill">${esc(channels[c] || c)}</span>`)
+              .join("")}</div><button class="text-link" data-source="${esc(
+              v.document_id,
+            )}">查看来源 ${icon("external")}</button></div></article>`,
+        )
+        .join("") +
+      (!items.length
+        ? '<div class="empty">没有找到符合当前版本与交付规则的证据。</div>'
+        : "");
+  } catch (e) {
+    if (generation !== state.generation || state.invalid) return;
+    $("#search-results").innerHTML =
+      '<div class="empty">' + esc(errorText(e)) + "</div>";
+  } finally {
+    button.disabled = !state.ready;
+  }
+}
+async function showSource(id, evidence = null) {
+  const generation = state.generation;
+  $("#source-title").textContent = doc(id)?.original_name || "材料来源";
+  $("#source-body").innerHTML = '<div class="empty">正在读取来源…</div>';
+  $("#source-actions").replaceChildren();
+  $("#source-dialog").showModal();
+  try {
+    const d = await call("document", { id });
+    if (
+      state.invalid ||
+      generation !== state.generation ||
+      !$("#source-dialog").open
+    )
+      return;
+    state.source = d;
+    state.sourceEvidence = evidence;
+    state.sourceTotal =
+      d.document.segment_count ?? doc(id)?.segment_count ?? d.segments.length;
+    state.editing = false;
+    renderSource();
+  } catch (e) {
+    if (generation !== state.generation || state.invalid) return;
+    $("#source-body").innerHTML =
+      '<div class="empty">' + esc(errorText(e)) + "</div>";
+  }
+}
+function renderSource() {
+  const s = state.source;
+  if (!s) return;
+  const d = s.document,
+    p = s.processing || {},
+    total = state.sourceTotal,
+    complete =
+      s.segments.length >= total && !s.segments.some((x) => x.text_truncated);
+  $("#source-title").textContent = d.original_name;
+  const stats = `<div class="source-meta-line"><span class="pill ${
+    p.text_ready ? "green" : ""
+  }">${p.text_ready ? "正文就绪" : "正文处理中"}</span><span class="pill ${
+    p.index_ready ? "green" : ""
+  }">${p.index_ready ? "可检索" : "索引待就绪"}</span><span class="pill">${esc(
+    {
+      published: "知识图谱就绪",
+      empty: "无有效关系",
+      failed: "知识处理失败",
+      pending: "知识处理中",
+    }[p.graph_status] || "知识处理中",
+  )}</span></div>`;
+  $("#source-body").innerHTML =
+    stats +
+    `<p class="modal-intro">${esc(
+      String(d.document_format).toUpperCase(),
+    )} · ${bytes(d.size_bytes)} · ${
+      s.version ? "正文版本 v" + s.version.version_number : "尚无正文版本"
+    }</p>${
+      state.sourceEvidence
+        ? `<div class="source-card"><span class="small muted">${esc(
+            locator(state.sourceEvidence.locator_json),
+          )}</span><p>${esc(state.sourceEvidence.excerpt)}</p></div>`
+        : ""
+    }<p class="model-actual">实际知识处理：${esc(actualModel(d.processing))}</p><article class="source-page">${
+      s.segments
+        .map(
+          (v) =>
+            `<div class="source-segment"><label for="segment-${esc(
+              v.id,
+            )}">${esc(locator(v.source_locator))}</label>${
+              state.editing
+                ? `<textarea id="segment-${esc(v.id)}" data-segment="${esc(
+                    v.id,
+                  )}" aria-label="校对 ${esc(locator(v.source_locator))}">${esc(
+                    v.text,
+                  )}</textarea>`
+                : `<p>${esc(v.text)}</p>`
+            }</div>`,
+        )
+        .join("") || "<p>材料仍在处理中，正文将在解析后显示。</p>"
+    }${
+      s.segments.length < total
+        ? '<button class="load-more-button" data-action="source-more">加载更多片段</button>'
+        : ""
+    }</article><p class="modal-warning">${
+      state.editing
+        ? "保存后生成新的校对版本，并重新处理索引和知识关系。"
+        : "来源对应保留的材料版本，可保存原件进行核对。"
+    }</p>`;
+  $(
+    "#source-actions",
+  ).innerHTML = `<button class="btn btn-secondary" data-close="source-dialog">关闭</button><button class="btn btn-secondary" data-action="download-source">保存原件</button>${
+    s.version && complete
+      ? `<button class="btn btn-primary" data-action="${
+          state.editing ? "save-correction" : "edit-source"
+        }" ${state.saving ? "disabled" : ""}>${
+          state.saving ? "正在保存…" : state.editing ? "保存校对" : "校对正文"
+        }</button>`
+      : ""
+  }`;
+}
+async function sourceMore() {
+  const s = state.source,
+    version = s.version?.id;
+  const page = await call("document", {
+    id: s.document.id,
+    offset: s.segments.length,
+  });
+  if (page.version?.id !== version) {
+    toast("材料版本已变化，请重新打开来源。");
+    return;
+  }
+  s.segments.push(...page.segments);
+  if (!page.segments.length) state.sourceTotal = s.segments.length;
+  renderSource();
+}
+async function saveCorrection() {
+  if (state.saving) return;
+  state.saving = true;
+  const s = state.source;
+  const segments = [...document.querySelectorAll("[data-segment]")].map(
+    (el) => ({ id: el.dataset.segment, text: el.value }),
+  );
+  try {
+    await call("correct", {
+      id: s.document.id,
+      versionId: s.version.id,
+      operationId: crypto.randomUUID(),
+      segments,
+    });
+    state.source = await call("document", { id: s.document.id });
+    state.editing = false;
+    state.sourceEvidence = null;
+    toast("校对版本已保存，索引与知识关系正在更新。");
+    await refresh();
+  } catch (e) {
+    toast(errorText(e));
+  } finally {
+    state.saving = false;
+    renderSource();
+  }
+}
+function renderImportSource() {
+  const space = state.importSource === "space";
+  $("#space-browser").hidden = !space;
+  $("#computer-browser").hidden = space;
+  for (const [id, selected] of [["#source-space", space], ["#source-computer", !space]]) {
+    $(id).classList.toggle("active", selected);
+    $(id).setAttribute("aria-pressed", String(selected));
+  }
+}
+function renderSpace() {
+  const query = $("#space-query").value.trim().toLocaleLowerCase();
+  $("#space-breadcrumbs").innerHTML = [{ id: "", name: "万象空间" }, ...state.space.breadcrumbs.filter(b => b.id)]
+    .map(b => `<button class="text-link" data-space-folder="${esc(b.id)}">${esc(b.name)}</button>`).join('<span aria-hidden="true">/</span>');
+  const items = state.space.items.filter(e => e.name.toLocaleLowerCase().includes(query))
+    .sort((a, b) => (a.kind === "folder" ? 0 : 1) - (b.kind === "folder" ? 0 : 1) || a.name.localeCompare(b.name, "zh-CN"));
+  $("#space-status").textContent = state.spaceLoading ? "正在读取万象空间…" : state.spaceError ? errorText(state.spaceError) : !items.length ? (query ? "当前文件夹没有匹配的文件。" : "此文件夹还没有文件，可先在万象空间上传，或从电脑选择。") : "";
+  $("#space-entries").innerHTML = state.spaceLoading || state.spaceError ? "" : items.map(e => {
+    if (e.kind === "folder") return `<button class="space-row space-folder" data-space-folder="${esc(e.id)}">${icon("folder")}<span>${esc(e.name)}</span><small>文件夹</small>${icon("chevron")}</button>`;
+    const selected = state.files.some(f => f.spaceId === e.id);
+    return `<label class="space-row ${e.problem ? "unsupported" : ""}"><input type="checkbox" data-space-file="${esc(e.id)}" data-unsupported="${Boolean(e.problem)}" ${selected ? "checked" : ""} ${e.problem ? "disabled" : ""} aria-label="选择 ${esc(e.name)}" /><span class="space-file-name">${esc(e.name)}${e.problem ? `<small>${esc(errorText({code:e.problem}))}</small>` : ""}</span><small>${esc(e.format.toUpperCase())} · ${bytes(e.size)}</small></label>`;
+  }).join("");
+  syncControls();
+}
+async function loadSpace(parent) {
+  const request = ++state.spaceRequest;
+  state.spaceLoading = true;
+  state.spaceError = null;
+  $("#space-query").value = "";
+  renderSpace();
+  try {
+    const listing = await call("space-list", { parent });
+    if (request !== state.spaceRequest) return;
+    state.space = listing;
+  } catch (error) {
+    if (request !== state.spaceRequest || state.invalid) return;
+    state.spaceError = error;
+  } finally {
+    if (request === state.spaceRequest) {
+      state.spaceLoading = false;
+      renderSpace();
+    }
+  }
+}
+async function removePending(handle) {
+  if (state.uploading || state.spaceSelecting) return;
+  await call("release-files", { handles: [handle] });
+  state.files = state.files.filter(f => f.handle !== handle);
+  renderPending();
+  renderSpace();
+}
+$("#source-space").addEventListener("click", () => {
+  state.importSource = "space";
+  renderImportSource();
+});
+$("#source-computer").addEventListener("click", () => {
+  state.importSource = "computer";
+  renderImportSource();
+});
+$("#space-query").addEventListener("input", renderSpace);
+$("#space-refresh").addEventListener("click", () => void loadSpace(state.space.parent));
+$("#space-browser").addEventListener("click", event => {
+  const button = event.target.closest("[data-space-folder]");
+  if (button && !state.uploading && !state.spaceSelecting) void loadSpace(button.dataset.spaceFolder);
+});
+$("#space-entries").addEventListener("change", event => {
+  const input = event.target.closest("[data-space-file]");
+  if (!input || state.uploading || state.spaceSelecting) return;
+  void (async () => {
+    const entry = state.space.items.find(e => e.id === input.dataset.spaceFile);
+    if (!entry || entry.problem) return;
+    if (!input.checked) {
+      const file = state.files.find(f => f.spaceId === entry.id);
+      if (file) await removePending(file.handle);
+      return;
+    }
+    state.spaceSelecting = true;
+    syncControls();
+    try {
+      const files = await call("select-space-files", { entries: [{ id: entry.id, digest: entry.digest }] });
+      for (const file of files) if (!state.files.some(f => f.handle === file.handle)) state.files.push(file);
+    } finally {
+      state.spaceSelecting = false;
+      renderPending();
+      renderSpace();
+    }
+  })().catch(error => toast(errorText(error)));
+});
+$("#file-list").addEventListener("click", event => {
+  const button = event.target.closest("[data-remove-file]");
+  if (button) void removePending(button.dataset.removeFile).catch(error => toast(errorText(error)));
+});
+function renderPending() {
+  $("#file-list").innerHTML = state.files
+    .map(
+      (f) =>
+        `<div class="file-preview">${icon("file")}<span class="pending-name">${esc(
+          f.name,
+        )}<small>${f.source === "space" ? "万象空间" : "电脑文件"}</small></span><span class="file-meta mono">${bytes(
+          f.size,
+        )}</span><button class="text-link" data-remove-file="${esc(f.handle)}" aria-label="移除 ${esc(f.name)}">移除</button><span class="file-state">${
+          f.done
+            ? "已交给盒端处理"
+            : f.error
+            ? esc(errorText(f.error))
+            : f.progress != null
+            ? "正在导入 " + Math.floor(f.progress * 100) + "%"
+            : "等待导入"
+        }</span></div>`,
+    )
+    .join("");
+  $("#confirm-import").textContent = state.uploading
+    ? "正在导入…"
+    : state.files.some((f) => f.error)
+    ? "重试未完成的导入"
+    : state.importContext === "conversation" ? "导入并核对" : "导入并处理";
+  $("#import-selection-count").textContent = `已选 ${state.files.length} 份材料`;
+  syncControls();
+}
+async function uploadFiles() {
+  if (state.importContext === "conversation") return uploadConversationFile();
+  if (state.uploading || state.spaceSelecting) return;
+  state.uploading = true;
+  renderPending();
+  for (const f of state.files.filter((f) => !f.done)) {
+    f.error = null;
+    try {
+      const r = await call("upload", { handle: f.handle });
+      f.done = true;
+      f.documentId = r.document?.id;
+    } catch (e) {
+      f.error = e;
+      if (state.invalid) break;
+    }
+    renderPending();
+  }
+  state.uploading = false;
+  if (state.invalid) return;
+  renderPending();
+  state.jobOffset = 0;
+  await refresh();
+  if (state.files.every((f) => f.done)) {
+    $("#import-dialog").close();
+    setView("graph");
+    toast("材料已导入，正在按当前模型配置整理。可在任务中心查看进度。");
+  }
+}
+async function uploadConversationFile() {
+  const flow = conversationFlow, file = state.files[0];
+  if (state.uploading || state.spaceSelecting || !flow || flow.warehouseId !== state.warehouseId || state.files.length !== 1 || file.done) return;
+  state.uploading = true;
+  $("#import-error").hidden = true;
+  renderPending();
+  try {
+    await flow.intake.stageSelectedFile(file);
+    const submitted = flow.intake.staged?.handle === file.handle;
+    if (submitted) await flow.intake.submit({isolated:true,note:$("#import-note").value});
+    if (submitted && !flow.intake.staged) {
+      state.files = [];
+      $("#import-dialog").close();
+      toast(flow.state.error ? "材料提交结果待确认，请在材料页恢复原请求。" : "材料已导入，请先核对正文及索引状态。");
+    } else if (flow.state.error) {
+      $("#import-error").textContent = flow.state.error;
+      $("#import-error").hidden = false;
+    }
+  } finally {
+    state.uploading = false;
+    renderPending();
+  }
+}
+function resetGraph() {
+  state.type = "all";
+  state.selectedNode = state.selectedEdge = null;
+  $("#graph-query").value = "";
+  fitGraph();
+  renderFilters();
+  renderGraph();
+}
+function fitGraph() {
+  const ns = visibleGraph().nodes;
+  if (!ns.length) {
+    state.zoom = 1;
+    state.pan = { x: 0, y: 0 };
+    return;
+  }
+  const left = Math.min(...ns.map(n => n.x - Math.max(n.r+12,n.labelWidth/2) - 18)),
+    right = Math.max(...ns.map(n => n.x + Math.max(n.r+12,n.labelWidth/2) + 18));
+  const top = Math.min(...ns.map((n) => n.y - n.r - 24)),
+    bottom = Math.max(...ns.map(n => n.y + n.r + 24 + n.lines.length*15));
+  state.zoom = Math.max(
+    0.1,
+    Math.min(
+      1.4,
+      740 / Math.max(1, right - left),
+      450 / Math.max(1, bottom - top),
+    ),
+  );
+  state.pan = {
+    x: -state.zoom * ((left + right) / 2 - 400),
+    y: -state.zoom * ((top + bottom) / 2 - 270),
+  };
+}
+async function action(name) {
+  if (await warehouseAction(name)) return;
+  if (name === "nav") $("#app").classList.toggle("nav-open");
+  else if (name === "help") $("#help-dialog").showModal();
+  else if (name === "import") {
+    if (state.view === "skills") { $("#skill-import").click(); return; }
+    if (state.files.every((f) => f.done)) {
+      await call("release-files", { handles: state.files.map(f => f.handle) });
+      state.files = [];
+    }
+    state.importSource = "space";
+    state.importContext = state.view === "conversation" ? "conversation" : "standard";
+    $("#import-intro").textContent = state.importContext === "conversation"
+      ? "选择一份材料导入当前数据仓；导入后先核对正文，再确认后续整理。"
+      : "材料将导入当前数据仓，按所选模型配置整理为可追溯的知识。";
+    $("#import-warning").textContent = state.importContext === "conversation"
+      ? "确认后读取文件副本并准备正文。万象空间原文件保持不变；后续抽取与发布仍需单独确认。"
+      : "点击“导入并处理”后读取文件副本，由模型整理。万象空间原文件保持不变；后续修改不会自动同步。";
+    $("#import-note-field").hidden = state.importContext !== "conversation";
+    $("#import-link-existing").hidden = state.importContext !== "conversation";
+    $("#import-note").value = "";
+    $("#import-selection-hint").textContent = state.importContext === "conversation" ? "每次选择一份材料" : "可跨文件夹选择";
+    $("#import-error").hidden = true;
+    $("#import-context").textContent = `万象空间 · ${state.identity?.boxName || state.identity?.boxId || "当前设备"} → ${currentWarehouse()?.name || "当前数据仓"}`;
+    renderImportSource();
+    renderPending();
+    $("#import-dialog").showModal();
+    void loadSpace("");
+  } else if (name === "reconnect") await initialize();
+  else if (name === "refresh") await refresh();
+  else if (/^jobs-(previous|next)$/.test(name)) {
+    if (state.refreshing) return;
+    const [, direction] = name.split("-");
+    const field = "jobOffset";
+    state[field] = Math.max(
+      0,
+      state[field] + (direction === "next" ? 100 : -100),
+    );
+    await refresh();
+  } else if (name === "reset-graph") resetGraph();
+  else if (name === "fit") {
+    fitGraph();
+    transformScene();
+  } else if (name === "zoom-in" || name === "zoom-out") {
+    state.zoom = Math.max(
+      0.1,
+      Math.min(2.5, state.zoom + (name === "zoom-in" ? 0.15 : -0.15)),
+    );
+    transformScene();
+  } else if (name === "edit-source") {
+    state.editing = true;
+    renderSource();
+  } else if (name === "save-correction") await saveCorrection();
+  else if (name === "source-more") await sourceMore();
+  else if (name === "download-source") {
+    const r = await call("download", { id: state.source.document.id });
+    if (r.saved) toast("材料原件已保存。");
+  } else if (name === "build-index") {
+    await call("build-index", { operationId: crypto.randomUUID() });
+    toast("索引任务已提交。");
+    await refresh();
+  }
+}
+document.addEventListener("click", (event) => {
+  const el = event.target.closest("button,[data-node],[data-edge]");
+  if (!el) return;
+  void (async () => {
+    if (el.dataset.warehouseId) {
+      if (state.uploading) return;
+      const nextView = el.dataset.warehouseView || state.view;
+      if (nextView === 'onboarding') {
+        if (!state.ready || state.preview || !state.initialization || !workbench.canLeave()) return;
+        if (!state.warehouses.some(w=>w.id===el.dataset.warehouseId && w.state==='active')) return;
+        $("#warehouse-picker").close();
+        stopConversation();
+        await onboarding.open(state.initialization,{warehouseId:el.dataset.warehouseId});
+        return;
+      }
+      if (el.dataset.warehouseId !== state.warehouseId) await selectWarehouse(el.dataset.warehouseId, nextView);
+      else {
+        $("#warehouse-picker").close();
+        setView(nextView);
+      }
+    } else if (el.dataset.view) setView(el.dataset.view);
+    else if (el.dataset.action) await action(el.dataset.action);
+    else if (el.dataset.close) {
+      if (el.dataset.close === "import-dialog" && (state.uploading || state.spaceSelecting)) return;
+      if (el.dataset.close === "key-dialog" && state.mcpCreating) return;
+      if (el.dataset.close === "mcp-close-dialog" && state.mcpClosing) return;
+      $("#" + el.dataset.close).close();
+    } else if (el.dataset.node) selectNode(el.dataset.node);
+    else if (el.dataset.edge) selectEdge(el.dataset.edge);
+    else if (el.dataset.source) {
+      const e = edge(el.dataset.edgeSource);
+      await showSource(
+        el.dataset.source,
+        e?.evidence[Number(el.dataset.evidenceIndex) || 0],
+      );
+    } else if (el.dataset.graphDensity) {
+      state.graphOverview = el.dataset.graphDensity === "overview";
+      resetGraph();
+    } else if (el.dataset.type) {
+      state.type = el.dataset.type;
+      state.selectedNode = state.selectedEdge = null;
+      renderFilters();
+      renderGraph();
+      fitGraph();
+      transformScene();
+    } else if (el.dataset.mode) {
+      state.mode = el.dataset.mode;
+      document.querySelectorAll("[data-mode]").forEach((b) => {
+        b.classList.toggle("active", b.dataset.mode === state.mode);
+        b.setAttribute("aria-pressed", String(b.dataset.mode === state.mode));
+      });
+      $("#graph-space").hidden = state.mode !== "graph";
+      $("#relation-list").hidden = state.mode !== "list";
+    } else if (el.dataset.setting) await saveSetting(el);
+    else if (el.dataset.retry) {
+      await call("retry-job", {
+        id: el.dataset.retry,
+        operationId: crypto.randomUUID(),
+      });
+      toast("任务已安排重试。");
+      await refresh();
+    }
+  })().catch((e) => toast(errorText(e)));
+});
+$("#choose-files").addEventListener(
+  "click",
+  () =>
+    void (async () => {
+      state.spaceSelecting = true;
+      syncControls();
+      try {
+        const files = await call("select-files", {multiple:state.importContext !== "conversation"});
+        for (const file of files) if (!state.files.some(f => f.handle === file.handle)) state.files.push(file);
+      } finally {
+        state.spaceSelecting = false;
+        renderPending();
+      }
+    })().catch((e) => toast(errorText(e))),
+);
+bindConversationEvents();
+$("#confirm-import").addEventListener("click", () => void uploadFiles());
+$("#import-dialog").addEventListener("cancel", (event) => {
+  if (state.uploading || state.spaceSelecting) event.preventDefault();
+});
+$("#import-link-existing").addEventListener("click", () => {
+  if (state.uploading || state.spaceSelecting || !conversationFlow || state.files.length) return;
+  $("#import-dialog").close();
+  openMaterialUpload(conversationFlow);
+});
+$("#graph-query").addEventListener("input", () => {
+  state.selectedNode = state.selectedEdge = null;
+  renderGraph();
+  fitGraph();
+  transformScene();
+});
+$("#graph-show-isolated").addEventListener("change", (event) => {
+  state.showIsolated = event.target.checked;
+  renderGraph();
+  fitGraph();
+  transformScene();
+});
+$("#search-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  void runSearch();
+});
+document.addEventListener("keydown", (event) => {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+    event.preventDefault();
+    setView("graph");
+    $("#graph-query").focus();
+  }
+  if (event.key === "Escape") $("#app").classList.remove("nav-open");
+  if (
+    (event.key === "Enter" || event.key === " ") &&
+    event.target.matches("[data-node],[data-edge]")
+  ) {
+    event.preventDefault();
+    event.target.dataset.node
+      ? selectNode(event.target.dataset.node)
+      : selectEdge(event.target.dataset.edge);
+  }
+});
+let drag;
+const svg = $("#graph-svg");
+svg.addEventListener("pointerdown", (event) => {
+  if (event.target.closest("[data-node],[data-edge]")) return;
+  drag = {
+    startX: event.clientX,
+    startY: event.clientY,
+    x: state.pan.x,
+    y: state.pan.y,
+  };
+  svg.setPointerCapture(event.pointerId);
+});
+svg.addEventListener("pointermove", (event) => {
+  if (!drag) return;
+  const rect = svg.getBoundingClientRect(),
+    factor = Math.max(800 / rect.width, 540 / rect.height);
+  state.pan = {
+    x: drag.x + (event.clientX - drag.startX) * factor,
+    y: drag.y + (event.clientY - drag.startY) * factor,
+  };
+  transformScene();
+});
+svg.addEventListener("pointerup", () => (drag = null));
+svg.addEventListener("pointercancel", () => (drag = null));
+bridge?.subscribe((event) => {
+  if (event.type === "invalidated") { workbench.reset(); invalidate(); }
+  else if (event.type === "launch-target") void applyLaunchTarget(event);
+  else if (event.type === "upload") {
+    const f = state.files.find((f) => f.handle === event.handle);
+    if (f) {
+      f.progress = event.size ? event.offset / event.size : 0;
+      renderPending();
+    }
+  }
+});
+icons();
+renderFilters();
+renderGraph();
+renderTasks();
+renderPolicy();
+connection(false);
+renderWarehouses();
+setView("graph");
+void initialize();
+setInterval(() => {
+  if (!state.ready || state.invalid) return;
+  const active =
+    (state.warehouseId && currentWarehouse()?.state !== "active") ||
+    state.warehouses.some((w) => ["clearing", "deleting", "importing"].includes(w.state)) ||
+    state.jobs.some((j) => ["queued", "running"].includes(j.status));
+  if (Date.now() - refreshAt > (active ? 3000 : 20000)) void refresh();
+}, 1500);
+
+function currentWarehouse() {
+  return state.warehouses.find((w) => w.id === state.warehouseId);
+}
+function warehouseStatus(w) {
+  const statuses = {clearing:"正在清理",clear_failed:"清理未完成",deleting:"正在删除",delete_failed:"删除未完成",importing:"正在迁入",import_failed:"迁入未完成"};
+  return statuses[w.state] || (w.active_jobs ? `${w.active_jobs} 项处理中` : w.document_count ? "可进入" : "待导入资料");
+}
+function warehouseSelectionKey() {
+  return state.identity && !state.preview ? "xingtu.warehouse." + JSON.stringify([state.identity.boxId, state.identity.user.id]) : null;
+}
+function clearLegacyMcpAddressCache() {
+  if (!state.identity || state.preview) return;
+  try {
+    const identity = JSON.stringify([state.identity.boxId, state.identity.user.id]);
+    localStorage.removeItem("xingtu.mcp.bridge." + identity);
+    localStorage.removeItem("xingtu.mcp.connections." + identity);
+  } catch { /* The server address is still read without local storage. */ }
+}
+function renderMcpEndpoint() {
+  const status = state.mcpEndpointStatus;
+  const endpoint = status === "ready" ? state.mcpEndpoint : "";
+  $("#mcp-endpoint-display").textContent = endpoint || (status === "loading" ? "正在从服务器读取…" : "暂未取得 MCP 地址");
+  $("#mcp-endpoint-note").textContent = status === "ready"
+    ? "地址由万象 Bridge 返回；创建和刷新时会再次确认。Token 不会保存在 Starlink。"
+    : status === "loading" ? "正在读取万象 Bridge 的对外 MCP 地址。"
+    : status === "error" ? state.mcpEndpointError
+    : "选择一座可用的数据仓后，将从万象 Bridge 自动读取地址。";
+  $("#mcp-endpoint-retry").hidden = status !== "error";
+  $("#mcp-control-note").hidden = status !== "error";
+  $("#mcp-dialog-url").textContent = endpoint || "正在从服务器读取…";
+  const available = state.ready && currentWarehouse()?.state === "active" && Boolean(endpoint);
+  document.querySelectorAll('[data-action="new-key"],[data-mcp-rotate]').forEach(button => { button.disabled = !available; });
+}
+async function loadMcpEndpoint() {
+  if (!state.ready || state.preview || !state.warehouseId) return null;
+  const generation = state.generation;
+  const request = ++mcpEndpointRequest;
+  state.mcpEndpoint = "";
+  state.mcpEndpointStatus = "loading";
+  state.mcpEndpointError = "";
+  renderMcpEndpoint();
+  try {
+    const result = await call("mcp-connection-info");
+    if (typeof result?.url !== "string") throw Object.assign(new Error("MCP 地址响应无效"), {code: "SEMANTICA_INVALID_RESPONSE"});
+    const endpoint = normalizeMcpEndpoint(result.url);
+    if (generation !== state.generation || state.invalid || request !== mcpEndpointRequest) return null;
+    state.mcpEndpoint = endpoint;
+    state.mcpEndpointStatus = "ready";
+    renderMcpEndpoint();
+    return endpoint;
+  } catch (error) {
+    if (generation !== state.generation || state.invalid || request !== mcpEndpointRequest) return null;
+    state.mcpEndpointStatus = "error";
+    state.mcpEndpointError = error.code === "SEMANTICA_INVALID_RESPONSE"
+      ? "万象 Bridge 返回的 MCP 地址无效，请检查服务端版本。"
+      : error.code === "SEMANTICA_UPGRADE_REQUIRED"
+      ? "当前万象 Bridge 版本未提供 MCP 地址发现接口，请升级 Bridge 服务。"
+      : errorText(error);
+    renderMcpEndpoint();
+    return null;
+  }
+}
+function rememberedWarehouse() {
+  try {
+    const key = warehouseSelectionKey();
+    const id = key && localStorage.getItem(key);
+    return state.warehouses.some(w => w.id === id) ? id : null;
+  } catch { return null; }
+}
+function rememberWarehouse(id) {
+  try {
+    const key = warehouseSelectionKey();
+    if (key && id) localStorage.setItem(key, id);
+  } catch { /* Browsing remains available when local preferences cannot be saved. */ }
+}
+function renderWarehouseCollection(container, query, compact) {
+  const needle = query.trim().toLocaleLowerCase();
+  const ordered = [...state.warehouses].sort((a,b) => Number(b.id === state.warehouseId) - Number(a.id === state.warehouseId) || b.created_at.localeCompare(a.created_at));
+  const existing = new Map([...container.children].map(el => [el.dataset.warehouseKey, el]));
+  let visible = 0;
+  const update = (card, field, value) => {
+    const el = card.querySelector(`[data-field="${field}"]`);
+    const text = String(value ?? "");
+    if (el.textContent !== text) el.textContent = text;
+  };
+  ordered.forEach((w, index) => {
+    let card = existing.get(w.id);
+    if (!card) {
+      card = document.createElement(compact ? "button" : "article");
+      card.className = compact ? "warehouse-choice" : "warehouse-directory-card";
+      card.dataset.warehouseKey = w.id;
+      card.innerHTML = compact
+        ? `<span class="warehouse-choice-icon">${icon("folder")}</span><span class="warehouse-choice-content"><span class="warehouse-choice-title"><strong data-field="name"></strong><span data-field="current" class="warehouse-current-indicator"></span></span><span data-field="description" class="warehouse-choice-description"></span><span class="warehouse-choice-meta"><span data-field="counts"></span><span data-field="status" class="warehouse-state"></span></span></span><span class="warehouse-choice-arrow">${icon("arrow")}</span>`
+        : `<div class="warehouse-card-top"><span class="warehouse-card-icon">${icon("folder")}</span><span data-field="current" class="warehouse-current-indicator"></span><span data-field="status" class="warehouse-state"></span></div><h2 data-field="name"></h2><p data-field="description" class="warehouse-card-description"></p><dl class="warehouse-card-statistics"><div><dt>材料</dt><dd data-field="documents"></dd></div><div><dt>实体</dt><dd data-field="entities"></dd></div><div><dt>关系</dt><dd data-field="relations"></dd></div></dl><footer><span data-field="created" class="warehouse-card-date"></span><div><button class="text-link" data-warehouse-view="data">管理</button><button class="warehouse-card-open" data-warehouse-view="graph"><span data-field="open"></span>${icon("arrow")}</button></div></footer>`;
+      if (compact) card.dataset.warehouseId = w.id;
+      else {
+        const reviewButton=document.createElement('button');
+        reviewButton.className='text-link';reviewButton.dataset.warehouseView='onboarding';
+        reviewButton.textContent='继续本体核对';card.querySelector('footer>div').prepend(reviewButton);
+        card.querySelectorAll("[data-warehouse-view]").forEach(b => b.dataset.warehouseId = w.id);
+      }
+    }
+    existing.delete(w.id);
+    const selected = w.id === state.warehouseId;
+    const matches = !needle || `${w.name} ${w.description || ""}`.toLocaleLowerCase().includes(needle);
+    card.hidden = !matches;
+    visible += Number(matches);
+    card.classList.toggle("is-current", selected);
+    card.classList.toggle("has-error", ["clear_failed", "delete_failed", "import_failed"].includes(w.state));
+    update(card, "name", w.name);
+    update(card, "current", selected ? "当前使用" : "");
+    update(card, "description", w.description || "按项目或主题收集资料，连接属于它的知识。 ");
+    update(card, "status", warehouseStatus(w));
+    const blocked = !state.ready || state.uploading;
+    if (compact) {
+      update(card, "counts", `${w.document_count} 份材料 · ${w.entity_count} 个实体`);
+      card.disabled = blocked;
+      card.setAttribute("aria-pressed", String(selected));
+      card.setAttribute("aria-label", `${selected ? "当前使用" : "切换至"}：${w.name}`);
+    } else {
+      update(card, "documents", w.document_count);
+      update(card, "entities", w.entity_count);
+      update(card, "relations", w.relation_count);
+      update(card, "created", "建立于 " + date(w.created_at));
+      update(card, "open", selected ? "继续探索" : "打开图谱");
+      card.querySelectorAll("[data-warehouse-id]").forEach(b => b.disabled = blocked);
+      const reviewButton=card.querySelector('[data-warehouse-view="onboarding"]');
+      reviewButton.hidden=state.preview || state.identity?.dataScope!=='personal';
+      reviewButton.disabled=blocked || w.state!=='active';
+      card.querySelector('[data-warehouse-view="graph"]').setAttribute("aria-label", `打开「${w.name}」的知识图谱`);
+      card.querySelector('[data-warehouse-view="data"]').setAttribute("aria-label", `管理「${w.name}」的数据`);
+    }
+    if (container.children[index] !== card) container.insertBefore(card, container.children[index] || null);
+  });
+  existing.forEach(el => el.remove());
+  if (compact) $("#warehouse-picker-empty").hidden = visible > 0;
+  return visible;
+}
+function renderWarehouseDirectory() {
+  const totals = state.warehouses.reduce((n,w) => [n[0] + w.document_count, n[1] + w.entity_count, n[2] + w.relation_count], [0,0,0]);
+  $("#warehouse-directory-summary").innerHTML = [[state.warehouses.length,"座数据仓"],[totals[0],"份材料"],[totals[1],"个实体"],[totals[2],"条知识关系"]].map(([n,label]) => `<div><b>${esc(n)}</b><span>${label}</span></div>`).join("");
+  $("#warehouse-directory-count").textContent = state.warehouses.length;
+  const visible = renderWarehouseCollection($("#warehouse-directory"), $("#warehouse-query").value, false);
+  const empty = $("#warehouse-directory-empty");
+  empty.hidden = visible > 0;
+  empty.innerHTML = state.warehouses.length
+    ? `<h2>没有找到匹配的数据仓</h2><p>换一个仓名或说明中的关键词试试。</p>`
+    : state.ready
+    ? `<span class="warehouse-empty-icon">${icon("folder")}</span><h2>让你的知识，有一个自己的位置。</h2><p>按项目、主题或研究方向建仓，再导入第一份资料。</p><button class="btn btn-primary" data-action="new-warehouse">${icon("plus")}新建第一座数据仓</button>`
+    : `<h2>连接万象，打开你的数据仓</h2><p>数据仓随当前万象账号和盒子连接读取。</p>`;
+}
+
+function renderWarehouses() {
+  const selected = currentWarehouse();
+  $("#workspace-name").textContent = selected?.name || (state.ready ? "选择一座数据仓" : "等待万象连接");
+  $("#workspace-summary").textContent = selected?.description || (state.identity?.dataScope === "team" ? "团队共享资料 · 按权限访问" : "当前账号专属 · 资料与授权独立");
+  $("#crumb-warehouse").textContent = state.view === "warehouses" ? "全部数据仓" : selected?.name || "尚未建仓";
+  $("#graph-warehouse").textContent = selected?.name || "你的第一座知识仓";
+  $("#warehouse-count").textContent = state.warehouses.length;
+  $("#current-warehouse-status").textContent = selected ? warehouseStatus(selected) : state.ready ? "尚未选择" : "等待连接";
+  $("#current-warehouse-stats").innerHTML = [[selected?.document_count || 0, "材料"], [selected?.entity_count || 0, "实体"], [selected?.relation_count || 0, "关系"]].map(([n,label])=>`<span><b>${esc(n)}</b><small>${label}</small></span>`).join("");
+  const switchingDisabled = !state.ready || state.uploading;
+  $("#warehouse-switch-trigger").disabled = switchingDisabled;
+  $("#crumb-warehouse").disabled = switchingDisabled;
+  renderWarehouseDirectory();
+  // Keep the picker's buttons and search focus stable during background updates.
+  renderWarehouseCollection($("#warehouse-picker-list"), $("#warehouse-picker-query").value, true);
+  $("#graph-model").textContent = state.processing ? "知识抽取：" + actualModel(state.processing) : state.runtime?.local_only
+    ? `处理模型 ${state.runtime.model} · 本人查看原始知识`
+    : "来源可查";
+  document
+    .querySelectorAll('[data-action="new-warehouse"]')
+    .forEach(
+      (b) => (b.disabled = !state.ready || state.uploading),
+    );
+  const available = state.ready && selected?.state === "active";
+  document
+    .querySelectorAll(
+      '[data-action="new-key"]',
+    )
+    .forEach((b) => (b.disabled = !available || state.mcpEndpointStatus !== "ready"));
+  document.querySelectorAll('[data-action="prepare-clear"]').forEach((b) => {
+    b.disabled =
+      !state.ready ||
+      !selected ||
+      !["active", "clear_failed", "import_failed"].includes(selected.state);
+    b.textContent =
+      selected?.state === "clear_failed"
+        ? "重新确认并继续清理"
+        : "清空当前数据仓";
+  });
+  document.querySelectorAll('[data-action="prepare-delete"]').forEach((b) => {
+    b.disabled = !state.ready || !selected || !["active", "clear_failed", "import_failed", "delete_failed"].includes(selected.state);
+    b.textContent = selected?.state === "delete_failed" ? "重新确认并继续删除" : "删除当前数据仓";
+  });
+  $("#search-form button[type=submit]").disabled = !available;
+}
+async function selectWarehouse(id, nextView) {
+  if (state.uploading || state.mcpCreating || state.mcpClosing) return;
+  if (id !== state.warehouseId) {
+    if (!workbench.canLeave()) return;
+    workbench.reset();
+  }
+  if (id && !state.warehouses.some((w) => w.id === id)) return;
+  state.generation++;
+  skillsUi.reset();
+  if (bridge) void bridge.call("select-warehouse", {}).catch(()=>{});
+  state.warehouseId = id;
+  state.managementStats = null;
+  state.importFailure = null;
+  state.mcpFreshConfig = null;
+  state.mcpRotationOldId = null;
+  state.mcpCloseId = null;
+  state.mcpCreateOperation = null;
+  state.mcpEndpoint = "";
+  state.mcpEndpointStatus = "idle";
+  state.mcpEndpointError = "";
+  renderMcpEndpoint();
+  stopConversation();
+  state.conversationPublication=null;
+  state.conversationOnboarding=null;
+  renderConversation();
+  state.processing = null; state.modelConfig = null; state.modelRequest = (state.modelRequest || 0) + 1;
+  void loadProcessingSummary();
+  rememberWarehouse(id);
+  state.refreshing = false;
+  state.documents = [];
+  state.jobs = [];
+  state.jobTotal = 0;
+  state.jobOffset = 0;
+  state.graph = { nodes: [], edges: [] };
+  state.graphFingerprint = null;
+  state.graphError = null;
+  state.graphPresentation = createGraphPresentation();
+  state.policy = null;
+  state.retrieval = null;
+  state.files = [];
+  state.spaceRequest++;
+  state.space = { parent: "", breadcrumbs: [], items: [] };
+  state.spaceLoading = false;
+  state.spaceError = null;
+  state.source = null;
+  state.keys = [];
+  state.selectedNode = state.selectedEdge = null;
+  state.type = "all";
+  state.pan = { x: 0, y: 0 };
+  state.zoom = 1;
+  document.querySelectorAll("dialog[open]").forEach((d) => d.close());
+  $("#search-query").value = "";
+  $("#graph-query").value = "";
+  $("#search-results").innerHTML =
+    '<div class="empty">从一个具体的问题开始，找到这个仓中的相关证据。</div>';
+  $("#source-body").replaceChildren();
+  $("#source-actions").replaceChildren();
+  $("#new-key-secret").replaceChildren();
+  $("#access-keys").replaceChildren();
+  $("#key-count").textContent = "0 条有效连接";
+  renderWarehouses();
+  renderFilters();
+  renderGraph();
+  renderTasks();
+  renderPolicy();
+  renderManagement();
+  syncControls();
+  if (nextView) setView(nextView);
+  if (id) {
+    await refresh();
+    if (state.view === "sensitive") await loadPolicy();
+    if (state.view === "api") { if (nextView !== "api") void loadMcpEndpoint(); await loadKeys(); }
+  }
+}
+function renderManagement() {
+  const w = currentWarehouse();
+  $("#manage-name").textContent = w?.name || "从一座数据仓开始";
+  const status = {
+    clearing: "正在清理原件、知识和索引，访问凭证已撤销。",
+    clear_failed: "清理未完成。请恢复本地数据库或磁盘后，重新确认并继续清理。",
+    deleting: "正在删除数据仓和全部资料。访问凭证已撤销，完成后会从列表移除。",
+    delete_failed: "删除未完成。请检查本地服务后，重新确认并继续删除。",
+    importing: "正在恢复迁移资料，请等待任务完成。",
+    import_failed: state.importFailure?.id === w?.id && state.importFailure.loading
+      ? "迁入未完成，正在读取失败原因。材料和图谱暂不可读取；已写入的计数不表示迁入成功。"
+      : state.importFailure?.id === w?.id && state.importFailure.error
+        ? `迁入未完成：${state.importFailure.error}。材料和图谱暂不可读取；已写入的计数不表示迁入成功。`
+        : "迁入未完成，材料和图谱暂不可读取；已写入的计数不表示迁入成功。迁移任务记录可能已过期，请检查盒端服务。",
+  }[w?.state];
+  $("#manage-status").hidden = !status;
+  $("#manage-status").textContent = status || "";
+  $("#manage-description").textContent =
+    w?.description ||
+    "你的原始资料、正文版本与知识来源，保存在同一座数据仓中。";
+  const currentStats = state.managementStats?.id === state.warehouseId ? state.managementStats : null;
+  const stats = currentStats?.value;
+  $("#warehouse-stats").innerHTML = !w ? "" : stats
+    ? [
+        [stats.document_count, "份材料"],
+        [stats.entity_count, w.state === "import_failed" ? "个已写入实体" : "个已发布实体"],
+        [stats.relation_count, w.state === "import_failed" ? "条已写入关系" : "条已发布关系"],
+        ...(Number.isSafeInteger(stats.storage_bytes) && stats.storage_bytes >= 0 ? [[bytes(stats.storage_bytes), "原件大小"]] : []),
+      ].map(([value, label]) => `<div><b>${esc(value)}</b><span>${label}</span></div>`).join("")
+    : currentStats ? '<span>统计暂不可用</span>' : '<span>正在读取统计…</span>';
+  $("#runtime-summary").innerHTML = state.runtime
+    ? `<span>${
+        state.runtime.local_only
+          ? "✓ 处理服务已启用"
+          : "当前服务未启用严格本地模式"
+      }</span><code>${esc(
+        state.runtime.model || "请在模型与处理页面查看配置",
+      )}</code><span>嵌入模型：${esc(state.runtime.embedding)}</span>`
+    : "等待连接本地知识服务";
+  renderProcessingSummary();
+}
+async function loadImportFailure(force = false) {
+  const id = state.warehouseId;
+  if (!state.ready || !id || currentWarehouse()?.state !== "import_failed") return;
+  if (state.importFailure?.id === id && (state.importFailure.loading || state.importFailure.error || !force)) return;
+  const generation = state.generation;
+  state.importFailure = { id, error: null, loading: true };
+  try {
+    const result = await call("warehouse-import-status", { warehouseId: id });
+    if (generation !== state.generation || state.warehouseId !== id) return;
+    state.importFailure = { id, error: typeof result?.error === "string" ? result.error : null };
+  } catch {
+    if (generation !== state.generation || state.warehouseId !== id) return;
+    state.importFailure = { id, error: null };
+  }
+  if (state.view === "data") renderManagement();
+}
+async function refreshManagementStats() {
+  const id = state.warehouseId;
+  if (state.view !== "data" || !state.ready || !id) return;
+  const request = ++managementStatsRequest;
+  try {
+    const result = await call("warehouse", { id });
+    if (request !== managementStatsRequest || state.view !== "data" || state.warehouseId !== id) return;
+    const value = result?.warehouse ?? result;
+    const counts = [value?.document_count, value?.entity_count, value?.relation_count];
+    state.managementStats = { id, value: counts.every(count => Number.isSafeInteger(count) && count >= 0) ? value : null };
+  } catch {
+    if (request !== managementStatsRequest || state.view !== "data" || state.warehouseId !== id) return;
+    state.managementStats = { id, value: null };
+  }
+  renderManagement();
+}
+async function loadKeys() {
+  const generation = state.generation;
+  const request = ++mcpKeysRequest;
+  try {
+    const result = await call("keys");
+    if (generation !== state.generation || state.invalid || request !== mcpKeysRequest) return;
+    state.keys = Array.isArray(result.items) ? result.items : [];
+    const active = key => mcpKeyStatus(key).active;
+    const connections = state.keys.filter(isMcpKey);
+    const legacy = state.keys.filter(key => !isMcpKey(key));
+    $("#key-count").textContent = `${connections.filter(active).length} 条有效连接`;
+    const card = (key, old = false) => {
+      const keyState = mcpKeyStatus(key);
+      const valid = keyState.active;
+      const expires = new Date(key.expires_at * 1000);
+      const used = key.last_used_at ? new Date(key.last_used_at) : null;
+      const label = old ? key.name : key.name.slice(MCP_KEY_PREFIX.length);
+      return `<article class="access-key"><div><strong>${esc(label)}</strong><span class="mcp-key-state ${valid ? "is-active" : ""}">${keyState.label}</span></div>
+        <small>${esc(key.prefix)}… · ${Number.isNaN(expires.getTime()) ? "到期时间未知" : expires.toLocaleDateString("zh-CN") + " 到期"}</small>
+        <small>最近使用：${used && !Number.isNaN(used.getTime()) ? used.toLocaleString("zh-CN") : "尚无记录"}</small>
+        ${valid ? `<div class="mcp-key-actions">${old ? "" : `<button class="btn btn-secondary" data-mcp-rotate="${esc(key.id)}">刷新 Token</button>`}<button class="btn btn-danger-outline" data-mcp-close="${esc(key.id)}">关闭</button></div>` : ""}</article>`;
+    };
+    $("#access-keys").innerHTML = connections.length
+      ? connections.map(key => card(key)).join("")
+      : '<p class="detail-empty">当前仓还没有 MCP 连接。创建后可将连接配置交给外部 Agent。</p>';
+    if (legacy.length) $("#access-keys").innerHTML += `<details class="mcp-legacy-keys"><summary>其他接口凭证（${legacy.length}）</summary><p>这些凭证保留创建时的权限，不会自动扩权；如已不再使用，可以单独关闭。</p>${legacy.map(key => card(key, true)).join("")}</details>`;
+    renderMcpEndpoint();
+  } catch (e) {
+    if (generation === state.generation && request === mcpKeysRequest) toast(errorText(e));
+  }
+}
+function openMcpKeyDialog(key = null) {
+  if (state.mcpEndpointStatus !== "ready" || !state.mcpEndpoint) { toast("请先读取万象 Bridge 的 MCP 地址。"); return; }
+  $("#key-form").reset();
+  state.mcpCreateOperation = null;
+  state.mcpRotationOldId = key?.id || null;
+  state.mcpFreshConfig = null;
+  $("#key-title").textContent = key ? "刷新 MCP Token" : "创建 MCP 连接";
+  $("#key-context").textContent = key
+    ? `为「${key.name.slice(MCP_KEY_PREFIX.length)}」生成新 Token。旧连接将在你确认停用前保持有效。`
+    : `授权数据仓：${currentWarehouse()?.name || "当前数据仓"}。Token 明文只显示一次。`;
+  $("#key-name").value = key ? key.name.slice(MCP_KEY_PREFIX.length) : "";
+  $("#mcp-dialog-url").textContent = state.mcpEndpoint;
+  $("#key-form").hidden = false;
+  $("#new-key-secret").replaceChildren();
+  $("#new-key-secret").hidden = true;
+  $("#key-dialog").showModal();
+}
+async function warehouseAction(name) {
+  if (name === "choose-warehouse") {
+    if (!state.ready || state.uploading) return true;
+    $("#warehouse-picker-query").value = "";
+    renderWarehouseCollection($("#warehouse-picker-list"), "", true);
+    $("#warehouse-picker").showModal();
+    $("#warehouse-picker-query").focus();
+    return true;
+  }
+  if (name === "all-warehouses") {
+    $("#warehouse-picker").close();
+    setView("warehouses");
+    return true;
+  }
+  if (name === "new-warehouse") {
+    if (state.initialization && !state.preview) {
+      if (!workbench.canLeave()) return true;
+      $("#warehouse-picker").close();
+      await onboarding.open(state.initialization, {fresh:true});
+      return true;
+    }
+    $("#warehouse-picker").close();
+    $("#warehouse-form").reset();
+    $("#warehouse-dialog").showModal();
+    return true;
+  }
+  if (name === "new-key") {
+    openMcpKeyDialog();
+    return true;
+  }
+  if (name === "reload-mcp-endpoint") {
+    void loadMcpEndpoint();
+    return true;
+  }
+  if (name === "prepare-clear" || name === "prepare-delete") {
+    const deleting = name === "prepare-delete";
+    const intent = await call(name, {
+      operationId: crypto.randomUUID(),
+    });
+    state.clearIntent = intent;
+    intent.action = deleting ? "delete" : "clear";
+    $("#clear-title").textContent = deleting ? "删除当前数据仓？" : "清空当前数据仓？";
+    $('#clear-dialog .icon-btn').setAttribute('aria-label', deleting ? '取消删除' : '取消清空');
+    $('#clear-dialog .btn-secondary').textContent = deleting ? '保留数据仓' : '保留数据';
+    $("#clear-scope").innerHTML = `<p class="modal-intro">将清空「${esc(
+      intent.warehouse.name,
+    )}」中的全部数据：</p><div class="clear-counts">${
+      intent.warehouse.document_count
+    } 份材料 · ${intent.warehouse.entity_count} 个实体 · ${
+      intent.warehouse.relation_count
+    } 条关系</div><p class="modal-warning">原件、全部正文版本、知识关系、检索索引、Skill 及推理准备记录将被移除，${
+      intent.warehouse.access_key_count
+    } 个有效凭证将同时撤销。其他数据仓不受影响。</p>`;
+    if (deleting) {
+      $("#clear-scope").innerHTML = `<p class="modal-intro">将永久删除数据仓「${esc(intent.warehouse.name)}」及其全部数据：</p><div class="clear-counts">${intent.warehouse.document_count} 份材料 · ${intent.warehouse.entity_count} 个实体 · ${intent.warehouse.relation_count} 条关系</div><p class="modal-warning">数据仓本身、原件、全部正文版本、知识关系、索引、Skill 及推理准备记录将被移除，${intent.warehouse.access_key_count} 个有效凭证将撤销。此操作无法撤销，其他数据仓不受影响。</p>`;
+    }
+    $("#clear-second").hidden = true;
+    $("#clear-name").value = "";
+    $("#clear-next").textContent = "继续确认";
+    $("#clear-next").disabled = false;
+    $("#clear-dialog").showModal();
+    return true;
+  }
+  return false;
+}
+$("#warehouse-query").addEventListener("input", renderWarehouseDirectory);
+$("#warehouse-picker-query").addEventListener("input", () => renderWarehouseCollection($("#warehouse-picker-list"), $("#warehouse-picker-query").value, true));
+$("#warehouse-picker-query").addEventListener("keydown", (event) => {
+  if (!["ArrowDown", "Enter"].includes(event.key)) return;
+  const first = $("#warehouse-picker-list").querySelector("button:not([hidden]):not(:disabled)");
+  if (!first) return;
+  event.preventDefault();
+  if (event.key === "Enter") first.click();
+  else first.focus();
+});
+let warehouseCreation = null;
+function definiteWriteRejection(error) {
+  return [400, 401, 403, 404, 409, 413, 422].includes(error?.status);
+}
+$("#warehouse-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const button = event.submitter;
+  button.disabled = true;
+  void (async () => {
+    const name = $("#warehouse-name").value, description = $("#warehouse-description").value;
+    if (warehouseCreation && (warehouseCreation.input.name !== name || warehouseCreation.input.description !== description)) {
+      toast('上次建仓结果尚未确认，请先恢复上次的名称和说明并重试。');return;
+    }
+    warehouseCreation ||= {input: {name, description, operationId: crypto.randomUUID()}, result: null};
+    const w = warehouseCreation.result ||= await call("create-warehouse", warehouseCreation.input);
+    state.warehouses = (await call("warehouses")).items;
+    await selectWarehouse(w.id);
+    warehouseCreation = null;
+    setView("graph");
+    toast("数据仓已建立，可以开始导入资料。");
+  })()
+    .catch((e) => {
+      if (warehouseCreation?.result) toast('数据仓已建立，但页面刷新失败。再次提交将重新打开已建立的数据仓。');
+      else {
+        if (definiteWriteRejection(e)) warehouseCreation = null;
+        toast(errorText(e));
+      }
+    })
+    .finally(() => (button.disabled = false));
+});
+$("#key-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const button = event.submitter;
+  button.disabled = true;
+  state.mcpCreating = true;
+  void (async () => {
+    const name = mcpKeyName($("#key-name").value);
+    const days = Number($("#key-days").value);
+    const endpoint = await loadMcpEndpoint();
+    if (!endpoint) {
+      const message = state.mcpEndpointError || "未能从万象 Bridge 取得 MCP 地址，请检查服务连接后重试。";
+      throw Object.assign(new Error(message), {publicMessage: message});
+    }
+    const oldId = state.mcpRotationOldId;
+    const pending = state.mcpCreateOperation;
+    if (pending && (pending.endpoint !== endpoint || pending.name !== name || pending.days !== days || pending.oldId !== oldId)) {
+      const message = "上次创建结果尚未确认。请恢复原表单重试，或关闭弹窗后检查连接列表。";
+      throw Object.assign(new Error(message), {publicMessage: message});
+    }
+    const operation = state.mcpCreateOperation ||= {endpoint, name, days, oldId, id: crypto.randomUUID()};
+    const result = await call("create-key", {
+      name,
+      days,
+      operationId: operation.id,
+    });
+    state.mcpFreshConfig = result.token ? mcpConnectionConfig(endpoint, result.token) : null;
+    $("#key-form").hidden = true;
+    $("#new-key-secret").hidden = false;
+    $("#new-key-secret").innerHTML = state.mcpFreshConfig
+      ? `<p class="modal-warning">请现在复制连接配置。关闭后无法再次查看 Token。</p><pre class="mcp-connection-string"><code class="secret-value" tabindex="0">${esc(state.mcpFreshConfig)}</code></pre><p class="modal-intro">地址由万象 Bridge 返回，Token 绑定当前仓。请在外部 Agent 的安全配置中保存；只复制 URL 无法通过鉴权。</p><p id="mcp-rotation-note" class="modal-intro">${oldId ? "旧 Token 仍有效。更新 Agent 并验证新连接后，再停用旧 Token。" : "此连接已创建，可直接配置外部 Agent。"}</p>${oldId ? '<label class="mcp-rotation-confirm"><input id="mcp-rotation-confirm" type="checkbox" />我已更新并验证外部 Agent 使用新 Token</label>' : ""}<div class="modal-actions"><button class="btn btn-secondary" data-mcp-copy>复制连接配置</button>${oldId ? '<button class="btn btn-danger-outline" data-mcp-finish-rotation disabled>停用旧 Token</button>' : ""}<button class="btn btn-primary" data-close="key-dialog">完成</button></div>`
+      : '<p class="modal-warning">连接已创建，但 Token 明文未返回。如需使用，请在列表中关闭这条连接后重新创建。</p>';
+    state.mcpCreating = false;
+    await loadKeys();
+  })()
+    .catch((e) => toast(state.mcpCreateOperation && !e.publicMessage ? `${errorText(e)}。重试会沿用同一操作标识，避免重复创建凭证。` : errorText(e)))
+    .finally(() => { state.mcpCreating = false; button.disabled = false; });
+});
+$("#key-dialog").addEventListener("cancel", event => { if (state.mcpCreating) event.preventDefault(); });
+$("#key-dialog").addEventListener("close", () => {
+  $("#new-key-secret").replaceChildren();
+  state.mcpFreshConfig = null;
+  state.mcpRotationOldId = null;
+  state.mcpCreateOperation = null;
+});
+async function copyMcpConfig(value) {
+  if (navigator.clipboard?.writeText) {
+    try { await navigator.clipboard.writeText(value); return; }
+    catch { /* Fall back to selection copy when clipboard permission is unavailable. */ }
+  }
+  const field = document.createElement("textarea");
+  field.value = value;
+  field.style.position = "fixed";
+  field.style.opacity = "0";
+  document.body.append(field);
+  field.select();
+  let copied;
+  try { copied = document.execCommand("copy"); }
+  finally { field.remove(); }
+  if (!copied) throw new Error("复制失败，请手动选择连接配置。");
+}
+$("#new-key-secret").addEventListener("click", event => {
+  const copy = event.target.closest("[data-mcp-copy]");
+  const finish = event.target.closest("[data-mcp-finish-rotation]");
+  if (copy && state.mcpFreshConfig) {
+    void copyMcpConfig(state.mcpFreshConfig).then(() => toast("连接配置已复制。请粘贴到外部 Agent 的安全配置中。"))
+      .catch(error => toast(error.message));
+  }
+  if (finish && $("#mcp-rotation-confirm")?.checked && state.mcpRotationOldId && state.mcpFreshConfig) {
+    const oldId = state.mcpRotationOldId;
+    finish.disabled = true;
+    state.mcpCreating = true;
+    void call("revoke-key", {id: oldId, operationId: crypto.randomUUID()})
+      .then(async () => {
+        state.mcpRotationOldId = null;
+        finish.remove();
+        $("#mcp-rotation-confirm")?.closest("label")?.remove();
+        const note = $("#mcp-rotation-note");
+        if (note) note.textContent = "旧 Token 已停用，新连接继续有效。";
+        await loadKeys();
+      })
+      .catch(error => toast(errorText(error)))
+      .finally(() => { state.mcpCreating = false; if (finish.isConnected) finish.disabled = !$("#mcp-rotation-confirm")?.checked; });
+  }
+});
+$("#new-key-secret").addEventListener("change", event => {
+  if (event.target.id === "mcp-rotation-confirm") {
+    const finish = $("#new-key-secret [data-mcp-finish-rotation]");
+    if (finish && !state.mcpCreating) finish.disabled = !event.target.checked;
+  }
+});
+$("#access-keys").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-mcp-close],[data-mcp-rotate]");
+  if (!button) return;
+  const id = button.dataset.mcpClose || button.dataset.mcpRotate;
+  const key = state.keys.find(item => item.id === id && mcpKeyStatus(item).active);
+  if (!key) return;
+  if (button.dataset.mcpRotate) { openMcpKeyDialog(key); return; }
+  state.mcpCloseId = id;
+  $("#mcp-close-description").textContent = `关闭「${key.name}」后，使用此前 Token 的 Agent 将无法继续读取当前仓。此操作不会删除材料。`;
+  $("#mcp-close-dialog").showModal();
+});
+$("#mcp-close-dialog").addEventListener("close", () => { state.mcpCloseId = null; });
+$("#mcp-close-dialog").addEventListener("cancel", event => { if (state.mcpClosing) event.preventDefault(); });
+$("#mcp-close-confirm").addEventListener("click", () => {
+  const id = state.mcpCloseId;
+  if (!id || !state.keys.some(key => key.id === id)) return;
+  const button = $("#mcp-close-confirm");
+  button.disabled = true;
+  state.mcpClosing = true;
+  void call("revoke-key", {id, operationId: crypto.randomUUID()})
+    .then(async () => { if ($("#mcp-close-dialog").open) $("#mcp-close-dialog").close(); await loadKeys(); toast("连接已关闭。"); })
+    .catch(error => toast(errorText(error)))
+    .finally(() => { state.mcpClosing = false; button.disabled = false; });
+});
+$("#clear-name").addEventListener(
+  "input",
+  () =>
+    ($("#clear-next").disabled =
+      $("#clear-name").value !== state.clearIntent?.warehouse.name),
+);
+$("#clear-dialog").addEventListener("close", () => {
+  state.clearIntent = null;
+  $("#clear-name").value = "";
+});
+$("#clear-next").addEventListener("click", () => {
+  if ($("#clear-second").hidden) {
+    $("#clear-second").hidden = false;
+    $("#clear-next").textContent = state.clearIntent?.action === "delete" ? "确认永久删除数据仓" : "确认永久清空";
+    $("#clear-next").disabled = true;
+    $("#clear-name").focus();
+    return;
+  }
+  const intent = state.clearIntent;
+  if (!intent || $("#clear-name").value !== intent.warehouse.name) return;
+  if (state.warehouseId !== intent.warehouse.id) return toast("数据仓已切换，请重新确认。");
+  $("#clear-next").disabled = true;
+  void (async () => {
+    const deleting = intent.action === "delete";
+    await call(deleting ? "delete-warehouse" : "clear-warehouse", {
+      token: intent.confirmation_token,
+      typedName: $("#clear-name").value,
+      operationId: (intent.operationId ||= crypto.randomUUID()),
+    });
+    $("#clear-dialog").close();
+    if (deleting) {
+      await selectWarehouse("", "warehouses");
+      await refresh();
+      toast("删除已提交，清理完成后会从数据仓列表移除；访问凭证已撤销。");
+    } else {
+      await selectWarehouse(state.warehouseId);
+      toast("清空已提交，正在移除资料与索引；访问凭证已撤销。");
+    }
+  })()
+    .catch((e) => toast(errorText(e)))
+    .finally(() => ($("#clear-next").disabled = false));
+});
+
+function actualModel(config, role = "extraction") {
+  const item = config?.[role];
+  if (config?.mode === "automatic" && item?.available === false) return "WANX 默认模型暂不可用，请检查万象模型设置";
+  const thinking = {auto: "思考：模型默认", on: "思考：开启", off: "思考：关闭"}[config?.inference_options?.thinking_mode || "auto"];
+  return item ? `${item.name || item.model} · ${item.location === "local" ? "本地" : "云端 / 外部服务"} · ${thinking} · 配置 v${config.revision || 0}` : "历史处理记录未提供模型配置";
+}
+function modelUsage(calls) {
+  const usages = calls.map(c => c.usage);
+  if (usages.some(u => !u)) return "未返回完整用量";
+  return usages.reduce((n,u) => n + (u.total_tokens || u.input_tokens + u.output_tokens || 0), 0) + " tokens";
+}
+async function loadProcessingSummary() {
+  if (!state.ready || !state.warehouseId || state.preview) return;
+  const generation = state.generation;
+  try {
+    const config = await call("processing");
+    if (generation !== state.generation) return;
+    state.processing = config.effective;
+    renderProcessingSummary();
+  } catch { /* Older services keep the existing local runtime summary. */ }
+}
+function renderProcessingSummary() {
+  if (!state.processing) return;
+  const text = actualModel(state.processing);
+  $("#graph-model").textContent = "知识抽取与脱敏：" + text;
+  $("#runtime-summary").textContent = "知识抽取与脱敏共用模型：" + text;
+  if ($("#import-model-summary")) $("#import-model-summary").textContent = "本次导入按入队时配置处理：" + text;
+}
+async function loadModels() {
+  if (!state.ready || state.preview) { $("#model-status").textContent = "请从万象打开星图后配置模型。"; return; }
+  const request = state.modelRequest = (state.modelRequest || 0) + 1;
+  const scope = $("#model-scope").value;
+  $("#model-status").textContent = "正在读取当前设备的模型与配置…";
+  const results = await Promise.allSettled([call("processing", {scope}),call("model-catalog")]);
+  if (request !== state.modelRequest) return;
+  if (results[0].status === "rejected") { $("#model-status").textContent = errorText(results[0].reason); return; }
+  state.modelConfig = results[0].value;
+  state.modelCatalog = results[1].status === "fulfilled" ? results[1].value.items : [];
+  state.modelDefault = results[1].status === "fulfilled" ? results[1].value.default : null;
+  renderModelEditor();
+  $("#model-status").textContent = results[1].status === "rejected" ? errorText(results[1].reason) + "。现有知识仍可查看。" : state.modelCatalog.length ? "模型目录已读取。保存前将检查实际调用能力。" : "万象尚未配置可用文本模型，请先在万象添加模型。";
+}
+function renderModelEditor() {
+  const config = state.modelConfig;
+  if (!config) return;
+  const current = config.effective;
+  const location = item => item?.location === "local" ? "本机 / 当前盒子" : "云端 / 外部服务";
+  const roles = [
+    ["ocr","文字识别","将图片或扫描件转成正文"], ["asr","语音转写","将录音转成可追溯文字"],
+    ["extraction","知识抽取","提取实体、关系和来源"], ["embedding","检索向量","为证据检索建立索引"], ["sensitive","敏感信息检测","检查知识交付中的敏感内容"]
+  ];
+  $("#model-context").textContent = `${state.identity?.boxName || "当前设备"} · ${currentWarehouse()?.name || "未选择数据仓"} · ${config.inherit ? "继承星图默认" : $("#model-scope").value === "default" ? "星图默认配置" : "本仓独立配置"}`;
+  $("#model-stages").innerHTML = roles.map(([role,title,purpose], i) => {
+    const item = current[role] || config.stages.find(s => s.role === role);
+    const available = item?.available;
+    const selected = state.modelCatalog.find(m => m.id === item?.id);
+    const status = item?.route === "legacy" ? "现有本地配置 · 待接入万象" : item?.route === "wanx" ? selected && selected.revision === item.revision ? current.mode === "automatic" ? "跟随 WANX 默认模型 · 调用时验证" : "已检查 · 调用时再次验证" : "不可用或配置已变化" : available ? "已安装 / 已配置" : "未就绪";
+    return `<article class="panel model-stage"><span class="eyebrow">0${i+1}</span><h3>${title}</h3><p>${purpose}</p><strong>${esc(item?.name || "未配置")}</strong><p>${location(item)}<br>${esc(status)}</p><small class="muted">${current[role] ? "最近检查：" + (current.checked_at ? date(current.checked_at) : "尚未检查") : "按当前设备安装状态读取 · 暂不开放切换"}</small></article>`;
+  }).join("");
+  for (const role of ["extraction"]) {
+    const options = [...state.modelCatalog];
+    if (!options.some(m => m.id === current[role]?.id)) options.unshift({...current[role], available:false});
+    $("#model-"+role).innerHTML = options.map(m => `<option value="${esc(m.id)}" ${m.available ? "" : "disabled"}>${esc(m.name || m.model)} · ${esc(m.provider)} · ${m.location === "local" ? "本地" : "云端 / 外部"}${m.available ? "" : "（当前配置，暂不可选择）"}</option>`).join("");
+    $("#model-"+role).value = current[role]?.id || "";
+  }
+  $("#model-inherit").checked = config.inherit;
+  $("#model-mode").value = current.mode === "automatic" ? "automatic" : "manual";
+  // The backend resolves the default for new tasks; always show its actual value.
+  renderThinkingOptions(current.inference_options?.thinking_mode || "auto");
+  $("#model-inherit-label").hidden = $("#model-scope").value === "default";
+  $("#model-impact").textContent = $("#model-scope").value === "default" ? "影响继承默认配置的数据仓及未来新仓：" + (config.affected_warehouses.join("、") || "目前没有继承仓") : "仅影响当前数据仓的新处理任务。";
+  updateModelControls();
+}
+function renderThinkingOptions(selected = $("#model-thinking").value || null) {
+  const item = $("#model-mode").value === "automatic" ? state.modelDefault
+    : state.modelCatalog.find(m => m.id === $("#model-extraction").value);
+  const modes = item?.inference_options?.thinking_modes || ["auto"];
+  if (selected === null) selected = modes.includes("off") ? "off" : "auto";
+  const labels = {auto: "沿用模型默认设置", on: "开启思考", off: "关闭思考"};
+  $("#model-thinking").innerHTML = Object.entries(labels).map(([mode,label]) =>
+    `<option value="${mode}" ${modes.includes(mode) ? "" : "disabled"}>${label}${modes.includes(mode) ? "" : "（当前模型不支持）"}</option>`).join("");
+  $("#model-thinking").value = selected;
+  $("#model-thinking-note").textContent = modes.length > 1
+    ? "知识抽取与脱敏共用此设置。保存前会验证模型调用，新任务生效，已有任务和重试保持原设置。"
+    : "当前模型尚未提供思考模式切换能力，仅可沿用原有默认行为。";
+}
+function updateModelControls() {
+  const inherited = $("#model-scope").value === "warehouse" && $("#model-inherit").checked;
+  const automatic = $("#model-mode").value === "automatic";
+  for (const id of ["model-scope", "model-inherit", "model-mode", "model-extraction", "model-thinking", "model-refresh"]) $("#"+id).disabled = !!state.modelSaving;
+  $("#model-mode-label").hidden = inherited;
+  $("#model-selectors").hidden = inherited || automatic;
+  $("#model-thinking-controls").hidden = false;
+  $("#model-thinking").disabled = inherited || !!state.modelSaving;
+  renderThinkingOptions();
+  if (inherited) $("#model-thinking-note").textContent = "当前实际模式继承星图默认配置。切换到“星图默认配置”统一修改，或取消继承后仅修改当前仓。";
+  $("#model-save").disabled = !!state.modelSaving || !state.modelConfig;
+  $("#model-save").textContent = state.modelSaving ? "正在检查并保存…" : inherited ? "恢复继承" : "检查并保存";
+}
+async function saveModels() {
+  if (!state.modelConfig || state.modelSaving) return;
+  const generation = state.generation, scope = $("#model-scope").value;
+  const inherit = scope === "warehouse" && $("#model-inherit").checked;
+  const mode = $("#model-mode").value;
+  const revision = state.modelConfig.revision;
+  const inference_options = {thinking_mode: $("#model-thinking").value || "auto"};
+  const request = state.modelRequest;
+  try {
+    state.modelSaving = true; updateModelControls();
+    let check = {};
+    if (!inherit) {
+      const extraction = mode === "automatic" ? state.modelDefault?.id : $("#model-extraction").value;
+      const items = [state.modelCatalog.find(m => m.id === extraction)];
+      if (items.some(m => !m?.available)) throw {publicMessage:"请先选择万象中的可用模型。"};
+      if (!items[0].inference_options?.thinking_modes?.includes(inference_options.thinking_mode) && inference_options.thinking_mode !== "auto") throw {publicMessage:"当前模型不支持所选思考模式，请重新选择。"};
+      const cloud = items.filter(m => m.location !== "local");
+      if (cloud.length && !confirm(`确认使用云端 / 外部模型？\n${cloud.map(m => `${m.provider} · ${m.name}`).join("\n")}\n\n知识抽取或敏感检测可能向这些服务发送未经脱敏的正文片段，并产生模型用量。\n${$("#model-impact").textContent}\n\n是否继续检查并保存？`)) return;
+      $("#model-status").textContent = "正在用合成文本检查连通性与 JSON 输出能力，不发送你的资料…";
+      check = await call("check-models",{scope,config:{extraction,mode,inference_options,cloud_confirmations:cloud.map(m => m.revision)}});
+      if (generation !== state.generation || request !== state.modelRequest) return;
+    }
+    await call("save-models",{scope,config:{expected_revision:revision,inherit,mode,check_id:check.check_id || null}});
+    if (generation !== state.generation) return;
+    await loadProcessingSummary(); await loadModels();
+    $("#model-status").textContent = "已保存。新任务使用此配置，已有任务和资料保留原处理记录。";
+  } catch (e) { if (generation === state.generation) $("#model-status").textContent = errorText(e); }
+  finally { state.modelSaving = false; updateModelControls(); }
+}
+const reprocessPlans = new Map();
+async function reprocessModels() {
+  if (!state.warehouseId) return;
+  const warehouseId = state.warehouseId;
+  if (reprocessPlans.get(warehouseId)?.running) return;
+  const generation = state.generation;
+  let plan = reprocessPlans.get(warehouseId);
+  // Lock selection, confirmation and submission, including the list read.
+  if (!plan) { plan = {running: true, batches: null, next: 0, accepted: 0}; reprocessPlans.set(warehouseId, plan); }
+  else plan.running = true;
+  try {
+  if (!plan.batches || plan.rejected) {
+  let documents = [];
+    for(let offset=0; ;offset+=100){
+      const result=await call("documents",{offset,limit:100});
+      documents.push(...result.items);
+      if (result.items.length<100 || documents.length>=result.total) break;
+    }
+  documents=documents.filter(d=>d.status==="ready" && d.active_version_id);
+  if (plan.rejected) {
+    const remaining = new Set(plan.batches.slice(plan.next).flatMap(b=>b.documents.map(d=>d.id)));
+    documents=documents.filter(d=>remaining.has(d.id));
+  }
+  if (!documents.length) {toast("没有待提交的已解析材料。");reprocessPlans.delete(warehouseId);return;}
+  if (generation !== state.generation) return;
+  if (!confirm(`重新处理「${currentWarehouse()?.name}」中的 ${documents.length} 份材料？\n${actualModel(state.processing)}\n\n每份成功后替换知识关系，失败或取消保留原结果。云端配置会发送正文并产生用量。`)) return;
+    plan.batches=[];plan.next=0;plan.rejected=false;
+    for(let offset=0;offset<documents.length;offset+=100) plan.batches.push({
+      documents:documents.slice(offset,offset+100).map(d=>({id:d.id,version_id:d.active_version_id})),
+      expectedSignature:state.processing?.signature,operationId:crypto.randomUUID(),
+    });
+  } else if (!confirm(`继续上次未确认的重处理批次？已受理 ${plan.accepted} 份材料，不会重复提交；剩余批次使用上次确认的材料版本和模型配置。`)) return;
+    while(plan.next<plan.batches.length){
+      if (generation!==state.generation) return;
+      const batch=plan.batches[plan.next];
+      await call("reprocess-models",batch);
+      plan.accepted+=batch.documents.length;plan.next++;
+    }
+    reprocessPlans.delete(warehouseId);
+    toast("已创建重处理任务，可在任务中心查看实际模型与进度。");setView("tasks");void refresh();
+  } catch(e){
+    plan.rejected=definiteWriteRejection(e);
+    toast(`已受理 ${plan.accepted} 份材料。${errorText(e)} 再次点击将继续剩余批次。`);
+  } finally {
+    plan.running=false;
+    if (!plan.batches) reprocessPlans.delete(warehouseId);
+  }
+}
+$("#model-scope").addEventListener("change",()=>void loadModels());
+$("#model-inherit").addEventListener("change",updateModelControls);
+$("#model-mode").addEventListener("change",updateModelControls);
+$("#model-extraction").addEventListener("change",updateModelControls);
+$("#model-thinking").addEventListener("change",()=>{
+  $("#model-status").textContent = "思考模式尚未保存。点击“检查并保存”后对新任务生效，已有任务和重试保留原设置。";
+});
+$("#model-refresh").addEventListener("click",()=>void loadModels());
+$("#model-save").addEventListener("click",()=>void saveModels());
+$("#model-reprocess-all").addEventListener("click",()=>void reprocessModels());
+$("#model-manage").addEventListener("click",async()=>{
+  try { const result=await call("open-model-management"); if(!result.opened) toast("当前万象版本暂不支持直接跳转。请在万象管理后台的「模型」中管理，再回到这里刷新。"); }
+  catch(e){toast(errorText(e));}
+});
+if ($("#import-model-config")) $("#import-model-config").addEventListener("click",()=>{$("#import-dialog").close();setView("models");});

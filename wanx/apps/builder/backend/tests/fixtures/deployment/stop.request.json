@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "kind": "stop",
+  "target": {
+    "organizationId": "org-demo",
+    "boxId": "box-demo",
+    "applicationId": "app-demo",
+    "environment": "prod"
+  },
+  "expectedGeneration": 1,
+  "idempotencyKey": "request-stop-demo",
+  "decisionRef": {
+    "id": "decision-stop-demo",
+    "revision": 1
+  }
+}

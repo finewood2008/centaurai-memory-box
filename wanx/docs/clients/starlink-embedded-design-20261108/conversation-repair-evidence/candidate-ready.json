@@ -1,0 +1,36 @@
+{
+  "passed": true,
+  "candidate": "/Users/finewood/.codex/worktrees/wanx-starlink-embedded/wanx-master-client-20261108/.runtime/starlink-conversation-repair-20261108/backend",
+  "schema": 30,
+  "sourceManifest": "candidate-source-manifest.json",
+  "patch": "candidate-composition.patch",
+  "migrationCopy": "migration-copy-result.json",
+  "tests": {
+    "candidate-tests.log": {
+      "passed": 78,
+      "subtests": 23
+    },
+    "candidate-conversation-tests.log": {
+      "passed": 48
+    },
+    "candidate-startup-regression.log": {
+      "passed": 60,
+      "subtests": 16
+    }
+  },
+  "managedConfigAndAuthByteIdenticalToLive": true,
+  "liveCodeChanged": false,
+  "liveDatabaseChanged": false,
+  "dependencies": "Existing centuarai-semantica .venv; no installation required",
+  "notes": [
+    "Newconversation/schema30 composed with existing governance; schema30 preserves all old rows and17Keys in SQLite copy",
+    "Production managed middleware and signed service callbacks retained",
+    "Testing fixtures retain original managed security tests; additive-governance starting schema24 expectation and unique migrated fixture name adjusted",
+    "Full startup on complete copied DATA now asserts whole warehouse rows24 and Key rows17 exactly unchanged after lifespan; no extra local default warehouse in managed mode."
+  ],
+  "runtimePreflight": "runtime-preflight-result.json",
+  "runtimePreflightPassed": true,
+  "deploymentRequirement": "Copy candidate app files into original LIVE/app; do not move PROJECT_ROOT or runtime data outside original project. No PROJECT_ROOT override is shipped.",
+  "managedStartupExactWarehouseSet": true,
+  "managedStartupGuard": "Only standalone+legacy can register local default warehouses, including direct register_legacy_local invocation."
+}

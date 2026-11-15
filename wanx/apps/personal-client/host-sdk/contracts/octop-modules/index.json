@@ -1,0 +1,334 @@
+{
+  "modules": [
+    {
+      "name": "Application studio",
+      "file": "application-studio.openapi.json",
+      "httpOperations": 54,
+      "supplementalRoutes": 99
+    },
+    {
+      "name": "admin",
+      "file": "admin.openapi.json",
+      "httpOperations": 40,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "agent_files",
+      "file": "agent-files.openapi.json",
+      "httpOperations": 5,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "agents",
+      "file": "agents.openapi.json",
+      "httpOperations": 49,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "applications",
+      "file": "applications.openapi.json",
+      "httpOperations": 20,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "auth",
+      "file": "auth.openapi.json",
+      "httpOperations": 30,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "browser",
+      "file": "browser.openapi.json",
+      "httpOperations": 19,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "channels",
+      "file": "channels.openapi.json",
+      "httpOperations": 21,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "chat",
+      "file": "chat.openapi.json",
+      "httpOperations": 40,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "connectors",
+      "file": "connectors.openapi.json",
+      "httpOperations": 27,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "credits",
+      "file": "credits.openapi.json",
+      "httpOperations": 19,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "cron",
+      "file": "cron.openapi.json",
+      "httpOperations": 8,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "desktop",
+      "file": "desktop.openapi.json",
+      "httpOperations": 5,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "dialogue",
+      "file": "dialogue.openapi.json",
+      "httpOperations": 11,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "envs",
+      "file": "envs.openapi.json",
+      "httpOperations": 3,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "experts",
+      "file": "experts.openapi.json",
+      "httpOperations": 13,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "fastapi",
+      "file": "fastapi.openapi.json",
+      "httpOperations": 0,
+      "supplementalRoutes": 8
+    },
+    {
+      "name": "filesystem",
+      "file": "filesystem.openapi.json",
+      "httpOperations": 8,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "health",
+      "file": "health.openapi.json",
+      "httpOperations": 1,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "i18n",
+      "file": "i18n.openapi.json",
+      "httpOperations": 2,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "internal-mcp",
+      "file": "internal-mcp.openapi.json",
+      "httpOperations": 3,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "knowledge",
+      "file": "knowledge.openapi.json",
+      "httpOperations": 29,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "loops",
+      "file": "loops.openapi.json",
+      "httpOperations": 29,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "mbti",
+      "file": "mbti.openapi.json",
+      "httpOperations": 7,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "mcp",
+      "file": "mcp.openapi.json",
+      "httpOperations": 0,
+      "supplementalRoutes": 2
+    },
+    {
+      "name": "memory",
+      "file": "memory.openapi.json",
+      "httpOperations": 31,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "mobile",
+      "file": "mobile.openapi.json",
+      "httpOperations": 5,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "observability",
+      "file": "observability.openapi.json",
+      "httpOperations": 3,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "octop-service",
+      "file": "octop-service.openapi.json",
+      "httpOperations": 0,
+      "supplementalRoutes": 2
+    },
+    {
+      "name": "ollama",
+      "file": "ollama.openapi.json",
+      "httpOperations": 7,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "onnx",
+      "file": "onnx.openapi.json",
+      "httpOperations": 8,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "personal-space",
+      "file": "personal-space.openapi.json",
+      "httpOperations": 36,
+      "supplementalRoutes": 37
+    },
+    {
+      "name": "plugins",
+      "file": "plugins.openapi.json",
+      "httpOperations": 14,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "proactive-care",
+      "file": "proactive-care.openapi.json",
+      "httpOperations": 2,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "providers",
+      "file": "providers.openapi.json",
+      "httpOperations": 10,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "search",
+      "file": "search.openapi.json",
+      "httpOperations": 1,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "security",
+      "file": "security.openapi.json",
+      "httpOperations": 7,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "settings",
+      "file": "settings.openapi.json",
+      "httpOperations": 5,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "setup",
+      "file": "setup.openapi.json",
+      "httpOperations": 11,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "skill-packages",
+      "file": "skill-packages.openapi.json",
+      "httpOperations": 15,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "skills",
+      "file": "skills.openapi.json",
+      "httpOperations": 18,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "slash",
+      "file": "slash.openapi.json",
+      "httpOperations": 1,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "starlink",
+      "file": "starlink.openapi.json",
+      "httpOperations": 25,
+      "supplementalRoutes": 3
+    },
+    {
+      "name": "storage-backends",
+      "file": "storage-backends.openapi.json",
+      "httpOperations": 1,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "subagents",
+      "file": "subagents.openapi.json",
+      "httpOperations": 5,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "teams",
+      "file": "teams.openapi.json",
+      "httpOperations": 15,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "terminal",
+      "file": "terminal.openapi.json",
+      "httpOperations": 1,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "tls",
+      "file": "tls.openapi.json",
+      "httpOperations": 3,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "update",
+      "file": "update.openapi.json",
+      "httpOperations": 6,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "usage",
+      "file": "usage.openapi.json",
+      "httpOperations": 2,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "users",
+      "file": "users.openapi.json",
+      "httpOperations": 22,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "voice",
+      "file": "voice.openapi.json",
+      "httpOperations": 7,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "websocket",
+      "file": "websocket.openapi.json",
+      "httpOperations": 0,
+      "supplementalRoutes": 7
+    },
+    {
+      "name": "workspace",
+      "file": "workspace.openapi.json",
+      "httpOperations": 15,
+      "supplementalRoutes": 0
+    },
+    {
+      "name": "zhijun",
+      "file": "zhijun.openapi.json",
+      "httpOperations": 44,
+      "supplementalRoutes": 0
+    }
+  ]
+}

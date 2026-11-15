@@ -1,0 +1,89 @@
+{
+  "bundle": [
+    "managed-spec.bundle.json",
+    "packaged-app.bundle.json"
+  ],
+  "request": [
+    "dev.request.json",
+    "prod.request.json",
+    "packaged.request.json",
+    "deploy.request.json",
+    "rollback.request.json",
+    "restart.request.json",
+    "stop.request.json",
+    "uninstall.request.json",
+    "purge.request.json"
+  ],
+  "receipt": [
+    "success.receipt.json",
+    "failed-degraded.receipt.json",
+    "rejected.receipt.json",
+    "failed-recovered.receipt.json",
+    "recovery-required.receipt.json",
+    "recover.receipt.json",
+    "prod.receipt.json",
+    "packaged.receipt.json",
+    "deploy.receipt.json",
+    "rollback.receipt.json",
+    "restart.receipt.json",
+    "stop.receipt.json",
+    "uninstall.receipt.json",
+    "purge.receipt.json"
+  ],
+  "linked": [
+    {
+      "bundle": "managed-spec.bundle.json",
+      "request": "dev.request.json",
+      "receipt": "success.receipt.json",
+      "context": "context.json"
+    },
+    {
+      "bundle": "managed-spec.bundle.json",
+      "request": "prod.request.json",
+      "receipt": "prod.receipt.json",
+      "context": "context.json"
+    },
+    {
+      "bundle": "packaged-app.bundle.json",
+      "request": "packaged.request.json",
+      "receipt": "packaged.receipt.json",
+      "context": "context.json"
+    },
+    {
+      "bundle": "managed-spec.bundle.json",
+      "request": "deploy.request.json",
+      "receipt": "deploy.receipt.json",
+      "context": "context.json"
+    },
+    {
+      "bundle": "managed-spec.bundle.json",
+      "request": "rollback.request.json",
+      "receipt": "rollback.receipt.json",
+      "context": "context.json"
+    },
+    {
+      "bundle": "managed-spec.bundle.json",
+      "request": "restart.request.json",
+      "receipt": "restart.receipt.json",
+      "context": "context.json"
+    },
+    {
+      "bundle": "managed-spec.bundle.json",
+      "request": "stop.request.json",
+      "receipt": "stop.receipt.json",
+      "context": "context.json"
+    },
+    {
+      "bundle": "managed-spec.bundle.json",
+      "request": "uninstall.request.json",
+      "receipt": "uninstall.receipt.json",
+      "context": "context.json"
+    },
+    {
+      "bundle": "managed-spec.bundle.json",
+      "request": "purge.request.json",
+      "receipt": "purge.receipt.json",
+      "context": "context.json"
+    }
+  ]
+}

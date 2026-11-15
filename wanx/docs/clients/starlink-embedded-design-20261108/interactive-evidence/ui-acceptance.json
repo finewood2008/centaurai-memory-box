@@ -1,0 +1,12 @@
+{
+  "passed": true,
+  "nodeDrag": true,
+  "pan": true,
+  "wheel": true,
+  "fit": true,
+  "clickEvidence": true,
+  "materialPreview": true,
+  "tabs": true,
+  "editSaveNewVersion": true,
+  "errors": []
+}

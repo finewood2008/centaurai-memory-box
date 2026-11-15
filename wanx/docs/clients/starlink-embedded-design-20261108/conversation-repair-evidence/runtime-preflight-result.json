@@ -1,0 +1,27 @@
+{
+  "passed": true,
+  "production_settings_valid_at_live_location": true,
+  "private_data_path": "/Volumes/ORICO/wanx/apps/starlink-ontology-fix-20261031/.runtime/starlink-conversation-preflight-hibg2m8p/data",
+  "worker_started": false,
+  "live_data_written": false,
+  "schema": 30,
+  "services_initialized": [
+    "modeling",
+    "modeling_intents",
+    "modeling_execution",
+    "modeling_review",
+    "modeling_turns",
+    "modeling_worker",
+    "processing_models",
+    "warehouses",
+    "knowledge",
+    "search",
+    "sensitive"
+  ],
+  "health_ready": 200,
+  "signature_required": true,
+  "warehouse_rows_exact": true,
+  "warehouse_count": 24,
+  "key_rows_exact": true,
+  "key_count": 17
+}

@@ -1,0 +1,87 @@
+---
+title: 查看和管理记忆
+description: 找回过去的工作，核对记忆来源，删除不再需要的内容。
+icon: Brain
+---
+
+import searchScreen from "../../assets/memory-search-full.jpg";
+import filterScreen from "../../assets/memory-filter-full.jpg";
+import detailScreen from "../../assets/memory-detail-full.jpg";
+import deleteScreen from "../../assets/memory-delete-full.jpg";
+import dataScreen from "../../assets/memory-data-full.jpg";
+import overviewScreen from "../../assets/memory-overview-full.jpg";
+
+Memmy 会把已授权的对话和任务内容整理成记忆。你可以直接在任务里询问过去的背景，也可以到「记忆管理」查看具体记录。
+
+## 查看所有记忆
+
+Memmy 会把你本机的 AI 对话整理成多种不同类型的记忆，并在后续任务里继续更新与进化：
+
+- **记忆**：一次执行或一轮对话留下的记录。
+- **经验**：反复做同类任务后总结出的做法。
+- **场域认知**：对项目、常用工具和工作环境的认识。
+- **技能**：可以再次调用的步骤。技能进化会根据后来的任务继续整理和改进。
+
+在「记忆管理 → 概览」中按这些类型查看数量、每日新增和来源。
+
+<ProductScreenshot src={overviewScreen} alt="Memmy 完整窗口：记忆概览中的数量、每日统计和来源分布" caption="数量按记忆类型分开。下面是最近一年的每日新增，以及各来源占比。" />
+
+「记忆管理 → 分析」里的「近 7 天使用技能…次」统计当前已启用技能被召回和被调用的总次数。同一次召回里，同一个技能只计一次；另一次召回或一次调用会再计。这不是不同技能的个数。只编辑技能不会增加这个次数。
+
+## 在任务里找回背景
+
+新建任务，给出主题、时间或其他你记得的线索。如果找错了，补充更具体的名称或时间；要求已经变化时，在当前任务里明确说明新的要求。
+
+## 搜索并核对来源
+
+1. 在工作台左侧打开「记忆管理」，再选择「记忆」。
+2. 在顶部输入关键词，按 Enter 搜索。搜索框右侧的「全部 Agent」可切换来源。
+3. 点击一条结果，查看来源、时间和记忆摘要；有原始回合的记录还会展示「本轮步骤」，可对照当时的提问与回复。
+
+<ProductScreenSteps steps={[
+  { label: "搜索关键词", src: searchScreen, alt: "Memmy 完整窗口：搜索客户后显示两条相关记忆", caption: "输入一个能辨认主题的词，例如“客户”。截图中的访谈与课程记录均为虚构示例。" },
+  { label: "按来源筛选", src: filterScreen, alt: "Memmy 完整窗口：记忆搜索框右侧的全部 Agent 来源菜单", caption: "知道在哪个 AI 里聊过时，可以缩小来源范围。想恢复查看所有来源，切回「全部 Agent」。" },
+  { label: "打开记忆详情", src: detailScreen, alt: "Memmy 完整窗口：记忆详情中的来源、时间、摘要和原始提问回复", caption: "先核对来源和时间，再看摘要与本轮步骤，确认这是你要继续的那段工作。" }
+]} />
+
+记忆可以来自 Memmy 任务、已授权同步的其他 AI 对话，以及已开启的电脑历史记录。刚结束的任务可能仍在整理；页面右上角的「刷新本页」可以重新加载列表。
+
+## 删除一条记忆
+
+在记忆列表中打开条目，点击详情底部的「删除」。按钮会变为「确认删除」，再次点击才会移除这条记忆；不想删除时点击「取消」。
+
+<ProductScreenshot src={deleteScreen} alt="Memmy 完整窗口：用户记忆详情底部的删除按钮" caption="操作针对当前打开的这一条。先核对详情标题与内容，再决定是否确认。" />
+
+<details>
+<summary>停止后续同步，或导出和清空本地记忆</summary>
+
+要停止其他 AI 的历史同步，在「跨Agent接入」关闭自动同步；需要停止接入组件读写时，移除对应 Hook、插件或 Skill。已经导入的记忆会保留。
+
+批量导出与清空入口在「记忆管理 → 跨Agent接入」页面底部的「数据管理」：
+
+- **导出本地数据**：选择导出位置，保存需要保留的数据。
+- **清除所有本地数据**：先显示确认范围，再点击「清空记忆数据库」。这会清空本地记忆库、导入去重缓存和同步进度，账号及模型配置保留。
+
+<ProductScreenshot src={dataScreen} alt="Memmy 完整窗口：跨 Agent 接入页面底部的数据管理区" caption="这里是批量管理入口。上方的自动同步开关控制之后是否继续同步。" />
+
+</details>
+
+<details>
+<summary>搜不到刚同步的内容</summary>
+
+先把来源切回「全部 Agent」，换用原对话里的具体词语搜索。到「跨Agent接入」确认扫描已经结束，再刷新记忆列表；显示摘要或索引处理中时，等待整理完成。
+
+如果条目显示处理失败，打开详情查看原因，并按界面提供的重试或设置入口处理。
+
+</details>
+
+<details>
+<summary>记忆和文件材料怎么配合使用</summary>
+
+记忆帮助找回过去的对话、要求和决定。需要继续处理原文件时，仍要通过输入框「+」添加附件，或选择对应的项目文件夹。需要长期查阅的文档可以放进知识库，并开启「参与召回」。
+
+</details>
+
+## 相关说明
+
+[连接其他 AI 的记忆](/docs/memory/sources) · [数据与隐私](/docs/security/security)

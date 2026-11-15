@@ -1,0 +1,106 @@
+export {
+  RuntimeConfigSchema as DesktopRuntimeConfigSchema,
+  type RuntimeConfig as DesktopRuntimeConfig
+} from "@memmy/local-api-contracts";
+export type { BrowserAllowAllState } from "@memmy/local-api-contracts";
+
+export interface DesktopBrowserAllowAllApi {
+  getBrowserAllowAll(): Promise<import("@memmy/local-api-contracts").BrowserAllowAllState>;
+  setBrowserAllowAll(enabled: boolean): Promise<import("@memmy/local-api-contracts").BrowserAllowAllState>;
+  onBrowserAllowAllChanged(listener: (state: import("@memmy/local-api-contracts").BrowserAllowAllState) => void): () => void;
+}
+
+export type MicrophoneAccessStatus = "not-determined" | "granted" | "denied" | "restricted" | "unsupported";
+
+export interface DesktopBrowserExtensionDragApi {
+  /** Call during dragstart; true means the bundled extension folder began a native drag. */
+  dragBrowserExtension(): boolean;
+}
+
+export interface DesktopMenuBarIconResult {
+  enabled: boolean;
+}
+
+export interface DesktopMemoryServiceRestartResult {
+  ok: true;
+  baseUrl: string;
+}
+
+export interface DesktopAppInfo {
+  name: string;
+  version: string;
+  platform: string;
+  arch: string;
+  isPackaged: boolean;
+  isWindowsStore: boolean;
+  updateManifestUrl?: string;
+}
+
+export type DesktopUpdateCheckStatus = "not-configured" | "latest" | "available";
+
+export type DesktopUpdateMode = "manual" | "silent" | "force";
+
+export interface DesktopUpdateCheckResult {
+  status: DesktopUpdateCheckStatus;
+  currentVersion: string;
+  latestVersion?: string;
+  minSupportedVersion?: string;
+  updateMode?: DesktopUpdateMode;
+  force?: boolean;
+  downloadUrl?: string;
+  preparedUpdatePath?: string;
+  releaseNotes?: string;
+  publishedAt?: string;
+}
+
+export interface DesktopUpdateDownloadOptions {
+  openInstaller?: boolean;
+}
+
+export interface DesktopUpdateDownloadProgress {
+  downloadUrl: string;
+  filePath: string;
+  transferredBytes: number;
+  totalBytes: number | null;
+  percent: number | null;
+}
+
+export interface DesktopUpdateInstallResult {
+  filePath: string;
+  opened: boolean;
+  willQuit?: boolean;
+  background?: boolean;
+}
+
+export interface DesktopImageActionRequest {
+  url: string;
+  name?: string;
+  mime?: string;
+  data?: Uint8Array;
+}
+
+export type DesktopSystemFileIconResult = string | null;
+
+export type DesktopSystemFolderIconKind = "folder" | "documents" | "downloads" | "desktop";
+
+export type DesktopImageSaveResult =
+  | { canceled: true }
+  | { canceled: false; filePath: string; bytes: number };
+
+export type DesktopProjectDirectorySelection =
+  | { canceled: true }
+  | { canceled: false; path: string };
+
+export interface DesktopWorkspaceDirectoryEntry {
+  name: string;
+  path: string;
+  relativePath: string;
+  kind: "file" | "directory";
+}
+
+export interface DesktopWorkspaceDirectoryResult {
+  rootPath: string;
+  relativePath: string;
+  entries: DesktopWorkspaceDirectoryEntry[];
+  truncated: boolean;
+}

@@ -1,0 +1,117 @@
+{
+  "schemaVersion": 1,
+  "format": "kaiwu-release-directory-v1",
+  "applicationId": "example.application",
+  "version": "0.1.0",
+  "releaseId": "example-application-0.1.0-r1",
+  "backend": {
+    "kind": "expert",
+    "profileRef": {
+      "id": "example-expert-profile",
+      "revision": 1
+    },
+    "artifactId": "backend-app",
+    "template": {
+      "resourceId": "example-expert-template",
+      "version": "1.0.0",
+      "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "client": {
+    "mode": "install",
+    "artifactId": "client-app"
+  },
+  "artifacts": [
+    {
+      "artifactId": "backend-app",
+      "role": "backend",
+      "path": "backend/expert.json",
+      "mediaType": "application/json",
+      "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "sizeBytes": 1,
+      "platforms": [
+        {
+          "os": "linux",
+          "arch": "x64"
+        }
+      ]
+    },
+    {
+      "artifactId": "client-app",
+      "role": "client",
+      "path": "client/application.zip",
+      "mediaType": "application/zip",
+      "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "sizeBytes": 1,
+      "platforms": [
+        {
+          "os": "darwin",
+          "arch": "arm64"
+        }
+      ]
+    },
+    {
+      "artifactId": "config-schema",
+      "role": "support",
+      "path": "support/config.schema.json",
+      "mediaType": "application/json",
+      "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "sizeBytes": 1,
+      "platforms": [
+        {
+          "os": "linux",
+          "arch": "x64"
+        }
+      ]
+    },
+    {
+      "artifactId": "dependency-lock",
+      "role": "support",
+      "path": "support/dependencies.lock.json",
+      "mediaType": "application/json",
+      "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "sizeBytes": 1,
+      "platforms": [
+        {
+          "os": "linux",
+          "arch": "x64"
+        }
+      ]
+    },
+    {
+      "artifactId": "verification",
+      "role": "support",
+      "path": "support/verification.json",
+      "mediaType": "application/json",
+      "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "sizeBytes": 1,
+      "platforms": [
+        {
+          "os": "linux",
+          "arch": "x64"
+        }
+      ]
+    }
+  ],
+  "resources": [
+    {
+      "key": "primaryModel",
+      "kind": "model",
+      "required": true
+    },
+    {
+      "key": "referenceFiles",
+      "kind": "files",
+      "required": false
+    }
+  ],
+  "configurationArtifactId": "config-schema",
+  "dependencyLockArtifactId": "dependency-lock",
+  "data": {
+    "schemaVersion": "1",
+    "upgradePolicy": "compatible",
+    "taskPolicy": "none",
+    "persistentPaths": []
+  },
+  "verificationArtifactId": "verification"
+}

@@ -1,0 +1,1450 @@
+import { PluginSkillRefSchema, type PluginSkillRef } from "@memmy/local-api-contracts";
+import { createHash } from "node:crypto";
+import net from "node:net";
+import os from "node:os";
+import path from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import {
+  INBOUND_META_RUNTIME_CONTROL,
+  InboundMessage,
+  RUNTIME_CONTROL_ACK,
+  RUNTIME_CONTROL_MCP_RELOAD,
+} from "../../runtime-messages/events.js";
+import { loadConfig, resolveConfigEnvVars } from "../../../config/loader.js";
+import { VERSION } from "../../../version.js";
+import { Tool, type ToolExecutionContext } from "./base.js";
+import { RequestContext, RequestContextStore } from "./context.js";
+import { MacPermissionPreflight, nativePermissionDoctor, type PermissionPreflight } from "../../../tools/computer-use/mac-permission-preflight.js";
+import { probeNativePermissions, guideNativePermissions } from "../../../tools/computer-use/native-permission-probe.js";
+import { stopOwnedNativeAgent } from "../../../tools/computer-use/native-agent-lifecycle.js";
+import { ToolRegistry } from "./registry.js";
+import { storeToolImageArtifact } from "../../../utils/artifacts.js";
+import { isManagedOcuConfig, managedOcuEnvironment, openComputerUseEnvironment, resolveOpenComputerUseCommand } from "../../../tools/computer-use/open-computer-use-binary.js";
+
+import { computerUsePermissionError } from "../../../tools/computer-use/mac-permission-settings.js";
+import { OcuUserIntervened } from "../../../tools/computer-use/mac-focus-guard.js";
+import { NativeAppApprovalDenied, nativeAppApprovalGate } from "../../../tools/computer-use/native-app-approvals.js";
+
+import { ManagedOcuSession, OcuBlocked, OcuUncertain } from "../../../tools/computer-use/managed-ocu-session.js";
+import { ManagedOcuSessionPool, type ManagedOcuHost } from "../../../tools/computer-use/managed-ocu-session-pool.js";
+import { activeComputerUseTurnId, emitComputerUseSurface, nativeSurfaceTargetId, mcpPreviewImage, mcpTargetPid, mcpTargetAssociatedWindowIds, mcpTargetWindowId, registerComputerUseSurfaceAction, registerNativeTurnCleanup } from "../../../tools/computer-use/surface-preview.js";
+import { createNativeSurfaceActionHandler } from "../../../tools/computer-use/native-surface-control.js";
+
+const TRANSIENT_EXC_NAMES = new Set([
+  "ClosedResourceError",
+  "BrokenResourceError",
+  "EndOfStream",
+  "BrokenPipeError",
+  "ConnectionResetError",
+  "ConnectionRefusedError",
+  "ConnectionAbortedError",
+  "ConnectionError",
+]);
+
+const WINDOWS_SHELL_LAUNCHERS = new Set(["npx", "npm", "pnpm", "yarn", "bunx"]);
+const SANITIZE_RE = /_+/g;
+const MAX_TOOL_NAME_LENGTH = 64;
+const TOOL_NAME_HASH_LENGTH = 12;
+const RELOAD_LOCKS = new WeakMap<object, Promise<void>>();
+// Per MCP connection and conversation, populated only by the internal request projection.
+const PRIVATE_SKILL_READY = new WeakMap<object, Map<string, Map<string, PluginSkillRef>>>();
+
+type Runtime = {
+  ClientSession: new (read: any, write: any) => any;
+  StdioServerParameters: new (init: any) => any;
+  stdioClient: (params: any) => any;
+  sseClient: (url: string, opts?: any) => any;
+  streamableHttpClient: (url: string, opts?: any) => any;
+};
+
+let runtimeOverride: Runtime | null = null;
+
+export function setMcpRuntimeForTest(runtime: Runtime | null): void {
+  runtimeOverride = runtime;
+}
+
+class SdkStdioServerParameters {
+  constructor(init: any) {
+    Object.assign(this, init);
+  }
+}
+
+class SdkClientSession {
+  private client: Client;
+  private transport: any;
+
+  constructor(transport: any) {
+    this.transport = transport;
+    this.client = new Client({ name: "memmy-agent", version: VERSION });
+  }
+
+  async enter(): Promise<this> {
+    return this;
+  }
+
+  async initialize(): Promise<void> {
+    await this.client.connect(this.transport);
+  }
+
+  async close(): Promise<void> {
+    await this.client.close();
+  }
+
+  async ping(): Promise<any> {
+    return this.client.ping({ timeout: 3000 });
+  }
+
+  async listTools(): Promise<any> {
+    return this.client.listTools({}, { timeout: 15_000 });
+  }
+
+  async callTool(
+    name: string,
+    args: Record<string, any>,
+    timeout: number,
+    meta?: Record<string, string>,
+    signal?: AbortSignal | null,
+  ): Promise<any> {
+    return this.client.callTool(
+      { name, arguments: args, ...(meta ? { _meta: meta } : {}) },
+      undefined,
+      {
+        timeout: timeout * 1000,
+        maxTotalTimeout: timeout * 1000,
+        resetTimeoutOnProgress: true,
+        // Request a progress token even when callers do not surface progress.
+        // Local interactive plugin calls use it for transport keepalives while
+        // they are legitimately waiting for user input.
+        onprogress: () => undefined,
+        ...(signal ? { signal } : {})
+      },
+    );
+  }
+
+  async notifyTurnEnded(): Promise<void> {
+    await this.client.notification({ method: 'notifications/turn-ended' });
+  }
+
+  async listResources(): Promise<any> {
+    return this.client.listResources();
+  }
+
+  async readResource(uri: string, timeout: number): Promise<any> {
+    return this.client.readResource({ uri }, { timeout: timeout * 1000 });
+  }
+
+  async listPrompts(): Promise<any> {
+    return this.client.listPrompts();
+  }
+
+  async getPrompt(name: string, args: Record<string, any>, timeout: number): Promise<any> {
+    return this.client.getPrompt(
+      { name, arguments: args },
+      { timeout: timeout * 1000 },
+    );
+  }
+}
+
+async function loadRuntime(): Promise<Runtime> {
+  const rejectRedirects = (url: string | URL, init?: RequestInit) =>
+    fetch(url, { ...init, redirect: "error" });
+  const httpTransportOptions = (opts: any = {}) => ({
+    requestInit: { headers: opts.headers },
+    fetch: rejectRedirects,
+  });
+  if (runtimeOverride) return runtimeOverride;
+  return {
+    ClientSession: SdkClientSession as any,
+    StdioServerParameters: SdkStdioServerParameters as any,
+    stdioClient: (params: any) => [new StdioClientTransport(params), null],
+    sseClient: (url: string, opts: any = {}) => [new SSEClientTransport(new URL(url), {
+      ...httpTransportOptions(opts),
+      eventSourceInit: { fetch: rejectRedirects },
+    } as any), null],
+    streamableHttpClient: (url: string, opts: any = {}) => [
+      new StreamableHTTPClientTransport(new URL(url), httpTransportOptions(opts) as any),
+      null,
+    ],
+  };
+}
+
+export function sanitizeName(name: string): string {
+  const sanitized = name.replace(/[^a-zA-Z0-9_-]/g, "_").replace(SANITIZE_RE, "_");
+  if (sanitized.length <= MAX_TOOL_NAME_LENGTH) return sanitized;
+
+  // OpenAI-compatible APIs cap function names at 64 characters. Keep a readable
+  // prefix and a deterministic digest so similarly prefixed MCP tools stay unique.
+  const digest = createHash("sha256").update(sanitized).digest("hex").slice(0, TOOL_NAME_HASH_LENGTH);
+  const prefixLength = MAX_TOOL_NAME_LENGTH - TOOL_NAME_HASH_LENGTH - 1;
+  return `${sanitized.slice(0, prefixLength)}_${digest}`;
+}
+
+export function isTransient(error: unknown): boolean {
+  return TRANSIENT_EXC_NAMES.has((error as Error)?.name ?? (error as any)?.constructor?.name ?? "");
+}
+
+function timeoutPromise<T>(promise: Promise<T>, seconds: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(label)), seconds * 1000);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+// A failed optional MCP server must not hold the whole agent turn open if its
+// transport never completes close(). Keep closing in the background so a late
+// completion is still handled, while bounding the wait before trying the next server.
+async function closeFailedMcpConnection(name: string, closers: Array<() => Promise<void>>): Promise<void> {
+  if (!closers.length) return;
+  const closeAll = (async () => {
+    for (const close of closers.reverse()) {
+      await Promise.resolve().then(close).catch(() => undefined);
+    }
+  })();
+  try {
+    await timeoutPromise(closeAll, 2, `MCP server '${name}' cleanup timed out`);
+  } catch {
+    console.warn(`MCP server '${name}': cleanup timed out; continuing without this server`);
+  }
+}
+
+export async function probeHttpUrl(url: string, timeout = 3): Promise<boolean> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  const host = parsed.hostname || "127.0.0.1";
+  const port = parsed.port ? Number(parsed.port) : parsed.protocol === "https:" ? 443 : 80;
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ host, port });
+    const timer = setTimeout(() => {
+      socket.destroy();
+      resolve(false);
+    }, timeout * 1000);
+    socket.once("connect", () => {
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(true);
+    });
+    socket.once("error", () => {
+      clearTimeout(timer);
+      resolve(false);
+    });
+  });
+}
+
+function windowsCommandBasename(command: string): string {
+  return command.replace(/\\/g, "/").split("/").pop()!.toLowerCase();
+}
+
+function whichFromPath(command: string, searchPath?: string): string | null {
+  if (!searchPath) return null;
+  for (const dir of searchPath.split(";")) {
+    for (const ext of ["", ".cmd", ".bat", ".exe", ".com"]) {
+      const candidate = path.win32.join(dir, `${command}${ext}`);
+      if (candidate.toLowerCase().endsWith(".cmd") || candidate.toLowerCase().endsWith(".bat")) return candidate;
+    }
+  }
+  return null;
+}
+
+export function normalizeWindowsStdioCommand(
+  command: string,
+  args: string[] | null = null,
+  env: Record<string, string> | null = null,
+  platform = os.platform() === "win32" ? "nt" : "posix",
+): [string, string[], Record<string, string> | null] {
+  const normalizedArgs = [...(args ?? [])];
+  if (platform !== "nt") return [command, normalizedArgs, env];
+  const basename = windowsCommandBasename(command);
+  if (["cmd", "cmd.exe", "powershell", "powershell.exe", "pwsh", "pwsh.exe"].includes(basename)) {
+    return [command, normalizedArgs, env];
+  }
+  if (basename.endsWith(".exe") || basename.endsWith(".com")) return [command, normalizedArgs, env];
+  const resolved = whichFromPath(command, env?.PATH) ?? command;
+  const resolvedBase = windowsCommandBasename(resolved);
+  const shouldWrap =
+    WINDOWS_SHELL_LAUNCHERS.has(basename) || basename.endsWith(".cmd") || basename.endsWith(".bat") || resolvedBase.endsWith(".cmd") || resolvedBase.endsWith(".bat");
+  if (!shouldWrap) return [command, normalizedArgs, env];
+  const comspec = env?.COMSPEC ?? process.env.COMSPEC ?? "cmd.exe";
+  return [comspec, ["/d", "/c", command, ...normalizedArgs], env];
+}
+
+function extractNullableBranch(options: any): [Record<string, any>, boolean] | null {
+  if (!Array.isArray(options)) return null;
+  const nonNull = [];
+  let sawNull = false;
+  for (const option of options) {
+    if (!option || typeof option !== "object" || Array.isArray(option)) return null;
+    if (option.type === "null") {
+      sawNull = true;
+      continue;
+    }
+    nonNull.push(option);
+  }
+  return sawNull && nonNull.length === 1 ? [nonNull[0], true] : null;
+}
+
+export function normalizeSchemaForOpenAI(schema: any): Record<string, any> {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) return { type: "object", properties: {}, required: [] };
+  let normalized: Record<string, any> = { ...schema };
+  if (Array.isArray(normalized.type)) {
+    const nonNull = normalized.type.filter((item: string) => item !== "null");
+    if (normalized.type.includes("null") && nonNull.length === 1) {
+      normalized.type = nonNull[0];
+      normalized.nullable = true;
+    }
+  }
+  for (const key of ["oneOf", "anyOf"]) {
+    const nullable = extractNullableBranch(normalized[key]);
+    if (nullable) {
+      const [branch] = nullable;
+      const rest = { ...normalized };
+      delete rest[key];
+      normalized = { ...rest, ...branch, nullable: true };
+      break;
+    }
+  }
+  if (normalized.properties && typeof normalized.properties === "object") {
+    normalized.properties = Object.fromEntries(
+      Object.entries(normalized.properties).map(([name, prop]) => [name, normalizeSchemaForOpenAI(prop)]),
+    );
+  }
+  if (normalized.items && typeof normalized.items === "object") normalized.items = normalizeSchemaForOpenAI(normalized.items);
+  if (normalized.type === "object") {
+    normalized.properties ??= {};
+    normalized.required ??= [];
+  }
+  return normalized;
+}
+
+function textFromContentBlock(block: any): string {
+  if (block && typeof block === "object" && typeof block.text === "string") return block.text;
+  return String(block);
+}
+
+export type McpContentMode = "text" | "structured" | "auto";
+
+function inlineImageUrl(block: any): string | null {
+  if (block?.type !== "image_url") return null;
+  const value = typeof block.image_url === "string" ? block.image_url : block.image_url?.url;
+  return typeof value === "string"
+    && /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(value)
+    ? value : null;
+}
+
+function hasImageContent(content: any[]): boolean {
+  return content.some((block) => (block?.type === "image"
+    && typeof block.data === "string" && typeof block.mimeType === "string")
+    || inlineImageUrl(block) !== null);
+}
+
+function sanitizeStructuredContent(value: any, textContent: string, key = ""): any {
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeStructuredContent(item, textContent));
+  }
+  if (!value || typeof value !== "object") {
+    if (
+      typeof value === "string" &&
+      value.length > 1024 &&
+      /(base64|blob|image_data|screenshot_data)/i.test(key)
+    ) {
+      return `[omitted ${value.length} character binary payload]`;
+    }
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([childKey, childValue]) => {
+        return !(
+          childKey === "tree_markdown" &&
+          typeof childValue === "string" &&
+          textContent.includes(childValue)
+        );
+      })
+      .map(([childKey, childValue]) => [
+        childKey,
+        sanitizeStructuredContent(childValue, textContent, childKey),
+      ]),
+  );
+}
+
+export function convertMcpToolContent(
+  result: any,
+  mode: McpContentMode = "text",
+): string | Array<Record<string, any>> {
+  const content = Array.isArray(result?.content) ? result.content : [];
+  const effectiveMode = mode === "auto" ? (hasImageContent(content) ? "structured" : "text") : mode;
+  if (effectiveMode === "text") {
+    return content.map(textFromContentBlock).join("\n") || "(no output)";
+  }
+  const converted: Array<Record<string, any>> = [];
+  for (const block of content) {
+    if (block?.type === "text" && typeof block.text === "string") {
+      converted.push({ type: "text", text: block.text });
+      continue;
+    }
+    if (
+      block?.type === "image" &&
+      typeof block.data === "string" &&
+      typeof block.mimeType === "string"
+    ) {
+      try {
+        const stored = storeToolImageArtifact(block.data, block.mimeType);
+        converted.push({
+          type: "image_url",
+          image_url: { url: stored.dataUrl, detail: "auto" },
+          meta: { path: stored.path },
+        });
+      } catch (error) {
+        converted.push({
+          type: "text",
+          text: `[image unavailable: ${error instanceof Error ? error.message : "invalid image"}]`,
+        });
+      }
+      continue;
+    }
+    const imageUrl = inlineImageUrl(block);
+    if (imageUrl) {
+      converted.push({
+        type: "image_url",
+        image_url: { url: imageUrl, detail: block.image_url?.detail ?? "auto" },
+      });
+      continue;
+    }
+    converted.push({
+      type: "text",
+      text: `[unsupported MCP content: ${String(block?.type ?? typeof block)}]`,
+    });
+  }
+  if (result?.structuredContent != null) {
+    try {
+      const textContent = content
+        .filter((block: any) => block?.type === "text" && typeof block.text === "string")
+        .map((block: any) => block.text)
+        .join("\n");
+      const structured = sanitizeStructuredContent(result.structuredContent, textContent);
+      converted.push({
+        type: "text",
+        text: `[structuredContent]\n${JSON.stringify(structured)}`,
+      });
+    } catch (error) {
+      converted.push({
+        type: "text",
+        text: `[structured MCP content unavailable: ${error instanceof Error ? error.message : "invalid content"}]`,
+      });
+    }
+  }
+  return converted.length ? converted : [{ type: "text", text: "(no output)" }];
+}
+
+export type InMemoryMcpConnection = {
+  client: Client;
+  server: any;
+  clientTransport: InMemoryTransport;
+  serverTransport: InMemoryTransport;
+  close: () => Promise<void>;
+};
+
+export async function connectInMemoryMcpServer(server: any): Promise<InMemoryMcpConnection> {
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "memmy-agent-browser", version: VERSION });
+  try {
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+  } catch (error) {
+    await Promise.allSettled([
+      client.close(),
+      server.close?.(),
+      clientTransport.close(),
+      serverTransport.close(),
+    ]);
+    throw error;
+  }
+  let closed = false;
+  return {
+    client,
+    server,
+    clientTransport,
+    serverTransport,
+    close: async () => {
+      if (closed) return;
+      closed = true;
+      await Promise.allSettled([
+        client.close(),
+        server.close?.(),
+        clientTransport.close(),
+        serverTransport.close(),
+      ]);
+    },
+  };
+}
+
+function ocuPermissionMessage(status: PermissionPreflight): string {
+  if (status.state === 'unknown' && status.reason === 'requestUnavailable') return `未能确认当前聊天请求的身份，本次应用操作未执行。请重新发送操作请求。${status.diagnostic ? `诊断编号：${status.diagnostic.id}。` : ''}`;
+  if (status.state === 'unknown' && status.reason === 'connectionFailed') return `电脑操作辅助程序连接或读取失败，本次应用操作未执行。请重新发送消息，Memmy 会重新连接；这次错误不能确认系统权限是否已开启。${status.diagnostic ? `诊断编号：${status.diagnostic.id}。` : ''}`;
+  if (process.platform === 'win32') return 'Memmy Computer Use 未能确认本次电脑操作，操作未执行。请确认 Windows 11 已登录且桌面未锁定；若目标程序以管理员身份运行，请改用普通权限打开。UAC 安全桌面需要你亲自处理，然后重新发送消息。';
+  if (status.state === 'unknown' && status.reason === 'helperPauseFailed') return '未能安全暂停当前 Memmy Computer Use 辅助程序，本次操作未执行，未打开授权设置。请关闭正在使用它的其他任务后重新发送消息。';
+  if (status.state === 'unknown' && status.reason === 'desktopUnavailable') return '请返回 Memmy 的可见聊天窗口后重新发送消息，以便检查 Memmy Computer Use 的权限。本次应用操作未执行。';
+  if (process.env.MEMMY_DESKTOP_MANAGED_GATEWAY === '1' && (status.state === 'missing' || (status.state === 'unknown' && status.reason === 'screenCaptureUnavailable'))) return '电脑操作已暂停，尚未完成权限设置。你可以重新发送消息，在授权面板中完成设置后点击“继续任务”。';
+  if (status.state === 'unknown' && status.reason === 'screenCaptureUnavailable') return 'Memmy Computer Use 已能读取 Memmy 界面，但未取得截图，本次应用操作未执行。辅助程序已暂停，请在 Memmy 的引导框点击“打开系统设置”，检查 Memmy Computer Use 的屏幕录制权限。完成后重新发送消息，Memmy 会启动当前辅助程序并重新检查。';
+  if (status.state !== 'missing') return '无法确认 Memmy Computer Use 的系统权限或连接状态，本次应用操作未执行。请检查辅助程序后重新发送消息。';
+  const permissions = status.missingPermissions ?? [status.permission];
+  const labels = permissions.map(p => p === 'screenRecording' ? '屏幕录制' : p === 'inputMonitoring' ? '输入监控' : '辅助功能');
+  const settings = labels.map(label => `系统设置 → 隐私与安全性 → ${label === '屏幕录制' ? '屏幕与系统音频录制（屏幕录制）' : label}`).join('\n');
+  const guide = process.env.MEMMY_DESKTOP_MANAGED_GATEWAY === '1' ? '请在 Memmy 的引导框点击“打开系统设置”。' : '请打开 Memmy 客户端完成授权。';
+  const restart = process.env.MEMMY_DESKTOP_MANAGED_GATEWAY === '1' ? '辅助程序已暂停。完成后重新发送消息，Memmy 会启动当前辅助程序并重新检查；本次操作不会自动继续。' : '若系统提示「退出并重新打开」，请重启 Memmy Computer Use 辅助程序；Memmy 无需退出。完成后重新发送消息，我会重新检查权限。';
+  return `Memmy Computer Use 缺少 macOS「${labels.join('、')}」权限，本次应用操作未执行。\n\n${guide}若找不到窗口，请打开：\n${settings}\n开启其中的 Memmy Computer Use。\n\n${restart}`;
+}
+
+export class MCPToolWrapper extends Tool {
+  static pluginDiscoverable = false;
+  private session: any;
+  private readonly serverName: string;
+  private readonly requestContext = new RequestContextStore();
+  originalName: string;
+  private toolName: string;
+  private toolDescription: string;
+  private toolParameters: Record<string, any>;
+  private toolTimeout: number;
+  private sendMemmyContext: boolean;
+
+  constructor(session: any, serverName: string, toolDef: any, toolTimeout = 30, private readonly permissionPreflight?: MacPermissionPreflight, private readonly managed?: ManagedOcuHost) {
+    super();
+    this.session = session;
+    this.serverName = serverName;
+    this.originalName = toolDef.name;
+    this.toolName = sanitizeName(`mcp_${serverName}_${toolDef.name}`);
+    this.toolDescription = toolDef.description || toolDef.name;
+    this.toolParameters = normalizeSchemaForOpenAI(toolDef.inputSchema ?? { type: "object", properties: {} });
+    this.toolTimeout = toolTimeout;
+    this.sendMemmyContext = serverName === "plugins";
+  }
+
+  get exclusive(): boolean { return Boolean(this.managed || this.permissionPreflight); }
+
+  get supportsSubagentComputerUse(): boolean { return Boolean(this.managed); }
+
+  get name(): string {
+    return this.toolName;
+  }
+
+  get description(): string {
+    if (this.managed && this.originalName !== 'list_apps') {
+      return `${this.toolDescription}\nFor a new user request, call this tool even after an earlier permission or connection failure. Memmy rechecks permissions and reconnects before executing; never infer current permission from previous messages. If this attempt is blocked by permission or an uncertain connection, end this turn and wait for a new user message. A temporary yield to physical user input is recoverable: continue from the refreshed state once the user is idle. Discard stale element indices and coordinates; never replay an action that may already have been dispatched. On macOS and Windows, the observed window stays bound to this request. To select a different window, including a newly created document listed in the result, first call get_app_state with its window_id, then use its fresh state. A closed or unavailable target window is recoverable; inspect the listed windows instead of treating it as a permission failure.`;
+    }
+    return this.toolDescription;
+  }
+
+  get parameters() {
+    return this.toolParameters;
+  }
+
+  setContext(context: RequestContext): void {
+    this.requestContext.set(context);
+  }
+
+  /** Internal channel: never routed through execute(), tool results, UI events or history. */
+  async resolvePluginSkillInstructions(ref: PluginSkillRef, signal?: AbortSignal | null, sessionKey?: string | null): Promise<string> {
+    if (this.serverName !== "plugins" || this.originalName !== "read_plugin_skill") throw new Error("plugin_skill_loader_unavailable");
+    const expected = PluginSkillRefSchema.parse(ref);
+    let result: any;
+    try {
+      result = await this.session.callTool("resolve_plugin_skill_context", { ref: expected }, this.toolTimeout,
+        { "memmy.dev/cloud-skills": "1" }, signal);
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      // No private text or raw transport error is sent into the transcript.
+      throw Object.assign(new Error("plugin_skill_unavailable"), { code: "plugin_skill_unavailable", retryable: true });
+    }
+    const loadError = result?._meta?.["memmy.dev/private-skill-error"];
+    if (result?.isError && ["plugin_skill_access_denied", "plugin_skill_unavailable", "plugin_skill_bundle_missing", "plugin_skill_invalid", "plugin_skill_version_changed"].includes(loadError?.code)) {
+      throw Object.assign(new Error(loadError.code), { code: loadError.code, retryable: loadError.code === "plugin_skill_unavailable" && loadError.retryable === true });
+    }
+    const envelope = result?._meta?.["memmy.dev/private-skill-context"];
+    const actual = PluginSkillRefSchema.safeParse(envelope?.ref);
+    if (actual.success && envelope.reloadRequired === true && actual.data.pluginId === expected.pluginId && actual.data.skillId === expected.skillId) {
+      throw Object.assign(new Error("plugin_skill_version_changed"), { code: "plugin_skill_version_changed", ref: actual.data });
+    }
+    if (result?.isError || !actual.success || JSON.stringify(actual.data) !== JSON.stringify(expected)
+      || typeof envelope.instructions !== "string" || Buffer.byteLength(envelope.instructions) > 512 * 1024) throw new Error("plugin_skill_load_failed");
+    let sessions = PRIVATE_SKILL_READY.get(this.session);
+    if (!sessions) { sessions = new Map(); PRIVATE_SKILL_READY.set(this.session, sessions); }
+    const key = sessionKey ?? "default";
+    let ready = sessions.get(key);
+    if (!ready) { ready = new Map(); sessions.set(key, ready); }
+    ready.set(`${expected.pluginId}/${expected.skillId}`, expected);
+    return envelope.instructions;
+  }
+
+  async execute(params: Record<string, any> = {}, context?: ToolExecutionContext): Promise<string | Array<Record<string, any>>> {
+    if (context?.abortSignal?.aborted) return "(MCP tool call was cancelled)";
+    if (this.managed) {
+      const currentRequest = this.requestContext.get();
+      const requestTurnId = currentRequest?.metadata.turnId ?? currentRequest?.metadata.turn_id;
+      // Capture the runtime owner before awaiting native work. A newer turn or
+      // a later setContext must never adopt an older request's delayed result.
+      const executionTurnId = typeof requestTurnId === 'string' && requestTurnId.trim() && requestTurnId.length <= 512
+        ? requestTurnId.trim()
+        : currentRequest?.sessionKey && currentRequest.channel && currentRequest.chatId
+          ? activeComputerUseTurnId({ sessionKey: currentRequest.sessionKey,
+            channel: currentRequest.channel, chatId: currentRequest.chatId }) : undefined;
+      // The interrupt registry is host-owned. Keep its fallback owner in the
+      // native invocation context too, so finishTurn releases the same turn.
+      // Snapshot metadata without mutating the caller's authorization context.
+      const executionRequest = currentRequest ? new RequestContext({ ...currentRequest,
+        metadata: { ...currentRequest.metadata, ...(executionTurnId ? { turnId: executionTurnId } : {}) },
+      }) : null;
+      if (executionRequest?.sessionKey && executionRequest.channel && executionRequest.chatId
+        && executionTurnId
+        && typeof this.managed.finishTurn === 'function') {
+        registerNativeTurnCleanup({ sessionKey: executionRequest.sessionKey, channel: executionRequest.channel,
+          chatId: executionRequest.chatId, turnId: executionTurnId }, this.managed,
+        () => this.managed!.finishTurn(executionRequest));
+      }
+      try {
+        const result = await this.managed.invoke(this.originalName, params, this.toolTimeout,
+          executionRequest, context?.abortSignal, { modelVisible: true });
+        const permission = computerUsePermissionError(this.serverName, result);
+        if (permission) {
+          context?.stopTurn?.(ocuPermissionMessage({ state: 'missing', permission }));
+        }
+        const request = executionRequest;
+        if (!permission && this.originalName !== 'list_apps' && result?.isError !== true && request?.sessionKey && request.channel && request.chatId) {
+          const appName = String(params.app ?? params.app_name ?? params.application ?? '桌面应用');
+          // Dispatches without an interrupt hook still carry their runtime ID.
+          const turnId = executionTurnId;
+          const frame = mcpPreviewImage(result);
+          // Window capture can provide the live surface even if this result has
+          // no screenshot (or its image exceeds the IPC preview limit).
+          const targetWindowId = frame?.targetWindowId ?? mcpTargetWindowId(result);
+          const targetPid = ['darwin', 'win32'].includes(process.platform) ? mcpTargetPid(result) : undefined;
+          const targetAssociatedWindowIds = mcpTargetAssociatedWindowIds(result);
+          const appKey = this.managed.appKeyFor?.(result);
+          const targetId = nativeSurfaceTargetId(appName, targetPid, targetWindowId);
+          if (frame || targetWindowId !== undefined) emitComputerUseSurface({
+            surface: 'computer', sessionKey: request.sessionKey, channel: request.channel,
+            chatId: request.chatId, targetId, title: appName.slice(0, 256),
+            ...(turnId ? { turnId } : {}),
+            ...(appKey ? { appKey } : {}),
+            imageDataUrl: frame?.url, targetWindowId,
+            ...(targetPid ? { targetPid } : {}),
+            ...(['darwin', 'win32'].includes(process.platform) && targetPid && targetWindowId ? { targetAssociatedWindowIds } : {}),
+          });
+          if ((frame || targetWindowId !== undefined) && this.managed) {
+            const identity = { sessionKey: request.sessionKey, channel: request.channel,
+              chatId: request.chatId, targetId, ...(turnId ? { turnId } : {}) };
+            const surfaceLifetime = new AbortController();
+            const signal = context?.abortSignal
+              ? AbortSignal.any([context.abortSignal, surfaceLifetime.signal]) : surfaceLifetime.signal;
+            registerComputerUseSurfaceAction(identity, createNativeSurfaceActionHandler({
+              managed: this.managed, context: request, timeout: this.toolTimeout,
+              // Window-only surfaces can still open the exact native window
+              // and stop this turn. Pointer actions wait for real dimensions.
+              appName, appKey, identity, signal, initialFrame: { url: frame?.url ?? '',
+                width: frame?.width ?? 0, height: frame?.height ?? 0, targetWindowId, targetPid, targetAssociatedWindowIds },
+            }), surfaceLifetime);
+          }
+        }
+        const output = convertMcpToolContent(result, 'auto');
+        return this.managed.presentModelResult(this.originalName, params, result, output, request);
+      } catch (error) {
+        if (context?.abortSignal?.aborted) return "(MCP tool call was cancelled)";
+        if (error instanceof NativeAppApprovalDenied) {
+          context?.stopTurn?.(error.message);
+          return error.message;
+        }
+        if (error instanceof OcuUserIntervened) {
+          context?.stopTurn?.(error.message);
+          return error.message;
+        }
+        if (error instanceof OcuUncertain) {
+          const message = 'Memmy Computer Use 在操作过程中断开，无法确认执行结果，操作未被重复执行。请检查当前界面，再发送新消息。';
+          context?.stopTurn?.(message);
+          return error.message;
+        }
+        const status = error instanceof OcuBlocked ? error.status : { state: 'unknown' as const };
+        const message = ocuPermissionMessage(status);
+        context?.stopTurn?.(message);
+        return message;
+      }
+    }
+    if (this.permissionPreflight && this.originalName !== 'list_apps') {
+      const status = await this.permissionPreflight.check(this.requestContext.get());
+      if (status.state !== "granted") {
+        context?.stopTurn?.(ocuPermissionMessage(status));
+        // The native doctor only reads status. Memmy owns permission guidance;
+        // never open a second Settings or helper window from this fallback.
+        return status.state === "missing"
+          ? `Computer Use is waiting for macOS ${status.permission} permission. The requested application operation was not executed. Ask the user to open Memmy desktop and complete its permission guide. Only the helper may need restarting; Memmy stays open. End this turn. Wait for a NEW user message after authorization; do not retry in this turn or use browser/exec/AppleScript as a fallback.`
+          : "Computer Use could not verify its native macOS permissions. The requested application operation was not executed. Explain that the permission check failed and end this turn. Do not use another executor as a fallback; wait for a new user message before retrying.";
+      }
+    }
+    if (context?.abortSignal?.aborted) return "(MCP tool call was cancelled)";
+    const meta = this.sendMemmyContext ? pluginCallMeta(context) : undefined;
+    const turnId = this.requestContext.get()?.metadata?.turn_id;
+    if (meta && typeof turnId === "string") meta["memmy.dev/turn-id"] = turnId;
+    const ready = PRIVATE_SKILL_READY.get(this.session)?.get(context?.sessionKey ?? "default");
+    if (meta && ready?.size) meta["memmy.dev/private-skills-ready"] = JSON.stringify([...ready.values()]);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const result: any = await timeoutPromise(
+          this.session.callTool(this.originalName, params, this.toolTimeout, meta, context?.abortSignal),
+          this.toolTimeout,
+          "timeout",
+        );
+        const permission = computerUsePermissionError(this.serverName, result);
+        if (permission) this.permissionPreflight?.deny(this.requestContext.get(), permission);
+        if (permission && this.permissionPreflight) context?.stopTurn?.(ocuPermissionMessage({ state: 'missing', permission }));
+        return convertMcpToolContent(result, "auto");
+      } catch (error) {
+        if (this.permissionPreflight) {
+          this.permissionPreflight.block(this.requestContext.get());
+          context?.stopTurn?.('Memmy Computer Use 在操作过程中断开，无法确认执行结果，操作未被重复执行。请发送新消息后再试。');
+          return 'Computer Use restarted or disconnected during the operation. Its result is unknown and it was not replayed.';
+        }
+        if ((error as Error).message === "timeout") return `(MCP tool call timed out after ${this.toolTimeout}s)`;
+        if ((error as Error).name === "CancelledError") return "(MCP tool call was cancelled)";
+        if (isTransient(error) && attempt === 0) continue;
+        if (isTransient(error)) return `(MCP tool call failed after retry: ${(error as Error).name})`;
+        return `(MCP tool call failed: ${(error as Error).name || "Error"})`;
+      }
+    }
+    return "(MCP tool call failed)";
+  }
+}
+
+function pluginCallMeta(context?: ToolExecutionContext): Record<string, string> | undefined {
+  const entries = [
+    ["memmy.dev/cloud-skills", "1"],
+    ["memmy.dev/session-key", context?.sessionKey],
+    ["memmy.dev/tool-call-id", context?.uiToolCallId ?? context?.callId],
+    ["memmy.dev/model-preset", context?.modelPreset],
+  ].filter((entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].length > 0);
+  return entries.length ? Object.fromEntries(entries) : undefined;
+}
+
+export class MCPResourceWrapper extends Tool {
+  static pluginDiscoverable = false;
+  private session: any;
+  private uri: string;
+  private toolName: string;
+  private toolDescription: string;
+  private resourceTimeout: number;
+
+  constructor(session: any, serverName: string, resourceDef: any, resourceTimeout = 30) {
+    super();
+    this.session = session;
+    this.uri = resourceDef.uri;
+    this.toolName = sanitizeName(`mcp_${serverName}_resource_${resourceDef.name}`);
+    this.toolDescription = `[MCP Resource] ${resourceDef.description || resourceDef.name}\nURI: ${this.uri}`;
+    this.resourceTimeout = resourceTimeout;
+  }
+
+  get name(): string {
+    return this.toolName;
+  }
+
+  get description(): string {
+    return this.toolDescription;
+  }
+
+  get parameters() {
+    return { type: "object", properties: {}, required: [] };
+  }
+
+  override get readOnly(): boolean {
+    return true;
+  }
+
+  async execute(): Promise<string> {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const result: any = await timeoutPromise(
+          this.session.readResource(this.uri, this.resourceTimeout),
+          this.resourceTimeout,
+          "timeout",
+        );
+        return (result.contents ?? [])
+          .map((block: any) => {
+            if (block && typeof block.text === "string") return block.text;
+            if (block && block.blob != null) return `[Binary resource: ${Buffer.from(block.blob).length} bytes]`;
+            return String(block);
+          })
+          .join("\n") || "(no output)";
+      } catch (error) {
+        if ((error as Error).message === "timeout") return `(MCP resource read timed out after ${this.resourceTimeout}s)`;
+        if ((error as Error).name === "CancelledError") return "(MCP resource read was cancelled)";
+        if (isTransient(error) && attempt === 0) continue;
+        if (isTransient(error)) return `(MCP resource read failed after retry: ${(error as Error).name})`;
+        return `(MCP resource read failed: ${(error as Error).name || "Error"})`;
+      }
+    }
+    return "(MCP resource read failed)";
+  }
+}
+
+export class MCPPromptWrapper extends Tool {
+  static pluginDiscoverable = false;
+  private session: any;
+  private promptName: string;
+  private toolName: string;
+  private toolDescription: string;
+  private toolParameters: Record<string, any>;
+  private promptTimeout: number;
+
+  constructor(session: any, serverName: string, promptDef: any, promptTimeout = 30) {
+    super();
+    this.session = session;
+    this.promptName = promptDef.name;
+    this.toolName = sanitizeName(`mcp_${serverName}_prompt_${promptDef.name}`);
+    this.toolDescription = `[MCP Prompt] ${promptDef.description || promptDef.name}\nReturns a filled prompt template that can be used as a workflow guide.`;
+    const properties: Record<string, any> = {};
+    const required: string[] = [];
+    for (const arg of promptDef.arguments ?? []) {
+      properties[arg.name] = { type: "string", ...(arg.description ? { description: arg.description } : {}) };
+      if (arg.required) required.push(arg.name);
+    }
+    this.toolParameters = { type: "object", properties, required };
+    this.promptTimeout = promptTimeout;
+  }
+
+  get name(): string {
+    return this.toolName;
+  }
+
+  get description(): string {
+    return this.toolDescription;
+  }
+
+  get parameters() {
+    return this.toolParameters;
+  }
+
+  override get readOnly(): boolean {
+    return true;
+  }
+
+  async execute(params: Record<string, any> = {}): Promise<string> {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const result: any = await timeoutPromise(
+          this.session.getPrompt(this.promptName, params, this.promptTimeout),
+          this.promptTimeout,
+          "timeout",
+        );
+        return (result.messages ?? [])
+          .flatMap((message: any) => (Array.isArray(message.content) ? message.content : [message.content]))
+          .map(textFromContentBlock)
+          .join("\n") || "(no output)";
+      } catch (error) {
+        if ((error as Error).message === "timeout") return `(MCP prompt call timed out after ${this.promptTimeout}s)`;
+        if ((error as Error).name === "CancelledError") return "(MCP prompt call was cancelled)";
+        if ((error as any).error?.message) {
+          return `(MCP prompt call failed: ${(error as any).error.message} [code ${(error as any).error.code}])`;
+        }
+        if (isTransient(error) && attempt === 0) continue;
+        if (isTransient(error)) return `(MCP prompt call failed after retry: ${(error as Error).name})`;
+        const name = (error as Error).name || "Error";
+        return `(MCP prompt call failed: ${name})`;
+      }
+    }
+    return "(MCP prompt call failed)";
+  }
+}
+
+type Stack = {
+  close?: () => Promise<void>;
+  aclose: () => Promise<void>;
+  refreshTools?: (registry: ToolRegistry) => Promise<void>;
+};
+
+async function enterMaybe(context: any, stack: Array<() => Promise<void>>): Promise<any> {
+  const value = await context;
+  if (Array.isArray(value)) {
+    for (const item of value.slice(2)) {
+      if (item && typeof item.destroy === "function") stack.push(() => Promise.resolve(item.destroy()));
+      else if (item && typeof item.close === "function") stack.push(() => Promise.resolve(item.close()));
+    }
+    return value;
+  }
+  if (value && typeof value.enter === "function") {
+    const entered = await value.enter();
+    if (typeof value.close === "function") stack.push(() => Promise.resolve(value.close()));
+    return entered;
+  }
+  if (value && typeof value[Symbol.asyncDispose] === "function") {
+    stack.push(() => value[Symbol.asyncDispose]());
+    return value;
+  }
+  return value;
+}
+
+function cfgValue(cfg: any, ...names: string[]): any {
+  for (const name of names) {
+    if (cfg?.[name] !== undefined) return cfg[name];
+  }
+  return undefined;
+}
+
+export async function connectMcpServers(
+  servers: Record<string, any>,
+  registry: ToolRegistry,
+): Promise<Record<string, Stack>> {
+  let runtime: Runtime;
+  try {
+    runtime = await loadRuntime();
+  } catch (error) {
+    console.error(`MCP runtime unavailable: ${(error as Error).message}`);
+    return {};
+  }
+  const stacks: Record<string, Stack> = {};
+
+  for (const [name, cfg] of Object.entries(servers)) {
+    const closers: Array<() => Promise<void>> = [];
+    try {
+      let transport = cfgValue(cfg, "type", "transport");
+      const command = cfgValue(cfg, "command");
+      const url = cfgValue(cfg, "url");
+      if (!transport) transport = command ? "stdio" : url?.replace(/\/+$/g, "").endsWith("/sse") ? "sse" : "streamableHttp";
+      let read: any;
+      let write: any;
+      let managed: ManagedOcuSessionPool | undefined;
+      if (transport === "stdio") {
+        const [normalizedCommand, args, configuredEnv] = normalizeWindowsStdioCommand(
+          resolveOpenComputerUseCommand(command),
+          cfgValue(cfg, "args") ?? [],
+          openComputerUseEnvironment(command, cfgValue(cfg, "env") ?? null),
+          cfgValue(cfg, "platform"),
+        );
+        const managedConfig = isManagedOcuConfig(name, cfg);
+        const env = managedConfig ? managedOcuEnvironment(normalizedCommand, configuredEnv) : configuredEnv;
+        const params = new runtime.StdioServerParameters({
+          command: normalizedCommand,
+          args,
+          env,
+          cwd: cfgValue(cfg, "cwd") ?? null,
+        });
+        if (managedConfig) {
+          const desktop = process.env.MEMMY_DESKTOP_MANAGED_GATEWAY === '1';
+          const helperApp = path.dirname(path.dirname(path.dirname(normalizedCommand)));
+          managed = new ManagedOcuSessionPool((ownerId, appLeases) => {
+            const ownerEnv = process.platform === 'darwin' ? { ...env,
+              OPEN_COMPUTER_USE_AGENT_SOCKET_NAMESPACE: `${env!.OPEN_COMPUTER_USE_AGENT_SOCKET_NAMESPACE}:task:${ownerId}` } : env;
+            const stopOwner = desktop && process.platform === 'darwin'
+              ? () => stopOwnedNativeAgent(normalizedCommand, ownerEnv!.OPEN_COMPUTER_USE_AGENT_SOCKET_NAMESPACE)
+              : undefined;
+            const passivePermissionStatus = desktop && process.platform === 'darwin'
+              ? nativePermissionDoctor({ command: normalizedCommand, args, env: ownerEnv, cwd: cfgValue(cfg, 'cwd') ?? null })
+              : undefined;
+            return new ManagedOcuSession(async () => {
+              const ownerParams = new runtime.StdioServerParameters({ command: normalizedCommand, args,
+                env: process.platform === 'darwin'
+                  ? { ...ownerEnv, MEMMY_LOCKED_MAC_USE_ENABLED: '0' } : ownerEnv,
+                cwd: cfgValue(cfg, 'cwd') ?? null });
+              const owned: Array<() => Promise<void>> = [];
+              try {
+                const [input, output] = await enterMaybe(runtime.stdioClient(ownerParams), owned);
+                const candidate = new runtime.ClientSession(input, output);
+                const live = typeof candidate.enter === 'function' ? await enterMaybe(candidate, owned) : candidate;
+                const close = async () => {
+                  for (const fn of owned.splice(0).reverse()) await fn().catch(() => undefined);
+                  await stopOwner?.();
+                };
+                await timeoutPromise(live.initialize(), 15, 'Computer Use initialization timed out');
+                return { session: live, close };
+              } catch (error) {
+                for (const fn of owned.reverse()) await fn().catch(() => undefined);
+                await stopOwner?.().catch(() => undefined);
+                throw error;
+              }
+            }, desktop && process.platform === 'darwin'
+              ? (session, signal, requireScreenshot) => probeNativePermissions(session, signal, undefined, requireScreenshot)
+              : desktop && process.platform === 'win32' ? async () => ({ state: 'granted' as const })
+                : nativePermissionDoctor({ command: normalizedCommand, args, env: ownerEnv, cwd: cfgValue(cfg, 'cwd') ?? null }),
+            desktop && process.platform === 'darwin'
+              ? (status, signal, check, canContinue, observe) => guideNativePermissions(status, helperApp, signal, check, canContinue, observe) : undefined,
+            stopOwner,
+            { passivePermissionStatus, appApprovals: nativeAppApprovalGate, platform: process.platform, appLeases });
+          });
+          closers.push(() => managed!.close());
+        } else {
+          [read, write] = await enterMaybe(runtime.stdioClient(params), closers);
+        }
+      } else if (transport === "sse" || transport === "streamableHttp") {
+        if (!url || !(await probeHttpUrl(url))) continue;
+        if (transport === "sse") {
+          [read, write] = await enterMaybe(runtime.sseClient(url, { headers: cfgValue(cfg, "headers") ?? null }), closers);
+        } else {
+          const entered = await enterMaybe(runtime.streamableHttpClient(url, { headers: cfgValue(cfg, "headers") ?? null }), closers);
+          [read, write] = entered;
+        }
+      } else {
+        continue;
+      }
+
+      const session = managed ?? new runtime.ClientSession(read, write);
+      const liveSession = typeof session.enter === "function" ? await enterMaybe(session, closers) : session;
+      const discovered = await timeoutPromise((async () => {
+        await liveSession.initialize?.();
+        const tools = await liveSession.listTools?.();
+        let resources: any[] = [];
+        let prompts: any[] = [];
+        try {
+          resources = (await liveSession.listResources?.())?.resources ?? [];
+        } catch {
+          // Resource discovery is optional for MCP servers that do not implement it.
+        }
+        try {
+          prompts = (await liveSession.listPrompts?.())?.prompts ?? [];
+        } catch {
+          // Prompt discovery is optional for MCP servers that do not implement it.
+        }
+        return { tools, resources, prompts };
+      })(), 15, `MCP server '${name}' discovery timed out`);
+      const enabledTools = new Set(cfgValue(cfg, "enabled_tools", "enabledTools") ?? ["*"]);
+      const allowAll = enabledTools.has("*");
+      const registeredTools = new Set<string>();
+      let registeredRegistry = registry;
+      const registerTools = (tools: any, targetRegistry = registeredRegistry) => {
+        for (const toolName of registeredTools) {
+          registeredRegistry.unregister(toolName);
+          if (targetRegistry !== registeredRegistry) targetRegistry.unregister(toolName);
+        }
+        registeredTools.clear();
+        const matched = new Set<string>();
+        const availableRaw = (tools?.tools ?? []).map((tool: any) => tool.name);
+        const availableWrapped = (tools?.tools ?? []).map((tool: any) => sanitizeName(`mcp_${name}_${tool.name}`));
+        for (const toolDef of tools?.tools ?? []) {
+          const wrapped = sanitizeName(`mcp_${name}_${toolDef.name}`);
+          if (!allowAll && !enabledTools.has(toolDef.name) && !enabledTools.has(wrapped)) continue;
+          targetRegistry.register(new MCPToolWrapper(liveSession, name, toolDef, cfgValue(cfg, "tool_timeout", "toolTimeout") ?? 30, undefined, managed));
+          registeredTools.add(wrapped);
+          if (enabledTools.has(toolDef.name)) matched.add(toolDef.name);
+          if (enabledTools.has(wrapped)) matched.add(wrapped);
+        }
+        if (enabledTools.size && !allowAll) {
+          const unknown = [...enabledTools].map(String).filter((entry) => !matched.has(entry)
+            && !(managed && ["get_screen_state", "mcp_open_computer_use_get_screen_state"].includes(entry)));
+          if (unknown.length) {
+            console.warn(
+              `MCP server '${name}': enabledTools entries not found: ${unknown.join(", ")}. ` +
+                `Available raw names: ${availableRaw.join(", ") || "(none)"}. ` +
+                `Available wrapped names: ${availableWrapped.join(", ") || "(none)"}`,
+            );
+          }
+        }
+        registeredRegistry = targetRegistry;
+      };
+      registerTools(discovered.tools);
+      for (const resource of discovered.resources) {
+        registry.register(new MCPResourceWrapper(liveSession, name, resource, cfgValue(cfg, "tool_timeout", "toolTimeout") ?? 30));
+      }
+      for (const prompt of discovered.prompts) {
+        registry.register(new MCPPromptWrapper(liveSession, name, prompt, cfgValue(cfg, "tool_timeout", "toolTimeout") ?? 30));
+      }
+      stacks[name] = {
+        refreshTools: async (targetRegistry) => {
+          // Discover first so a temporary failure does not discard usable tools or interrupt active calls.
+          const tools = await timeoutPromise(liveSession.listTools?.(), 15, `MCP server '${name}' tool refresh timed out`);
+          registerTools(tools, targetRegistry);
+        },
+        close: async () => {
+          for (const close of closers.reverse()) await close().catch(() => undefined);
+        },
+        aclose: async () => {
+          for (const close of closers.reverse()) await close().catch(() => undefined);
+        },
+      };
+    } catch (error) {
+      const text = String((error as Error).message ?? error).toLowerCase();
+      const protocolPollution = ["parse error", "invalid json", "unexpected token", "jsonrpc", "content-length"]
+        .some((marker) => text.includes(marker));
+      if (protocolPollution) {
+        console.error(
+          `MCP server '${name}': failed to connect. Hint: this looks like stdio protocol pollution. ` +
+            "Make sure the MCP server writes only JSON-RPC to stdout and sends logs/debug output to stderr instead.",
+        );
+      } else if (text.includes("cannot connect") || text.includes("spawn")) {
+        // Surface launcher failures without turning ordinary server errors into
+        // an extra log line that can hide the actionable pollution hint.
+        console.error(String((error as Error).message ?? error));
+      }
+      await closeFailedMcpConnection(name, closers);
+    }
+  }
+
+  return stacks;
+}
+
+type McpState = {
+  mcpServers?: Record<string, any>;
+  mcpStacks?: Record<string, Stack>;
+  mcpConnected?: boolean;
+  mcpConnecting?: boolean;
+};
+
+function asNameSet(value: Iterable<string> | null | undefined): Set<string> | null {
+  if (value == null) return null;
+  return value instanceof Set ? new Set(value) : new Set([...value].map(String));
+}
+
+function metadataOf(message: any): Record<string, any> | null {
+  const metadata = message?.metadata;
+  return metadata && typeof metadata === "object" && !Array.isArray(metadata) ? metadata : null;
+}
+
+export function sessionExtra(metadata: Record<string, any> | null | undefined): Record<string, any> {
+  const presets = metadata && typeof metadata === "object" ? metadata.mcp_presets : null;
+  return Array.isArray(presets) && presets.length ? { mcp_presets: presets } : {};
+}
+
+export function runtimeLines(
+  message: any,
+  {
+    availableServerNames = null,
+    configuredServerNames = undefined,
+    connectedServerNames = undefined,
+    skip = false,
+  }: {
+    availableServerNames?: Iterable<string> | null;
+    configuredServerNames?: Iterable<string> | null | undefined;
+    connectedServerNames?: Iterable<string> | null | undefined;
+    skip?: boolean;
+  } = {},
+): string[] {
+  if (skip) return [];
+  const available = asNameSet(availableServerNames);
+  const configured = configuredServerNames === undefined ? available : asNameSet(configuredServerNames);
+  const connected = connectedServerNames === undefined ? available : asNameSet(connectedServerNames);
+  const structured = metadataOf(message)?.mcp_presets;
+  if (!Array.isArray(structured)) return [];
+
+  const lines: string[] = [];
+  for (const item of structured.slice(0, 8)) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const rawName = String(item.name ?? "").trim().toLowerCase();
+    if (!rawName) continue;
+    const display = String(item.display_name ?? rawName).trim() || rawName;
+    const transport = String(item.transport ?? "mcp").trim() || "mcp";
+    const prefix = `mcp_${rawName}_`;
+    if (configured && !configured.has(rawName)) {
+      lines.push(
+        `MCP Preset Attachment: @${rawName} (${display}; transport=${transport}) is configured in WebUI Settings, ` +
+          "but this gateway has not loaded the latest MCP settings yet. " +
+          `Tools with prefix \`${prefix}\` may not be available yet; if they are missing, tell the user to restart memmy.`,
+      );
+      continue;
+    }
+    if (connected && !connected.has(rawName)) {
+      lines.push(
+        `MCP Preset Attachment: @${rawName} (${display}; transport=${transport}) is configured, ` +
+          "but its MCP connection is not currently live. " +
+          `Tools with prefix \`${prefix}\` may be unavailable; tell the user to open Settings, ` +
+          "run the preset test, and restart memmy only if hot reload is unavailable.",
+      );
+      continue;
+    }
+    lines.push(
+      `MCP Preset Attachment: @${rawName} (${display}; transport=${transport}; tool_prefix=${prefix}). ` +
+        `Prefer available tools whose names start with \`${prefix}\` for this request; ` +
+        "do not substitute shell commands for this MCP integration unless the user asks.",
+    );
+  }
+  return lines;
+}
+
+export async function connectMissingServers(state: McpState, registry: ToolRegistry): Promise<void> {
+  state.mcpServers ??= {};
+  state.mcpStacks ??= {};
+  const missing = Object.fromEntries(
+    Object.entries(state.mcpServers).filter(([name]) => !(name in (state.mcpStacks ?? {}))),
+  );
+  if (state.mcpConnecting || !Object.keys(missing).length) return;
+  state.mcpConnecting = true;
+  try {
+    const connected = await connectMcpServers(missing, registry);
+    Object.assign(state.mcpStacks, connected);
+    state.mcpConnected = Object.keys(state.mcpStacks).length > 0;
+  } catch {
+    state.mcpConnected = Object.keys(state.mcpStacks).length > 0;
+  } finally {
+    state.mcpConnecting = false;
+  }
+}
+
+async function withReloadLock<T>(state: object, fn: () => Promise<T>): Promise<T> {
+  const previous = RELOAD_LOCKS.get(state) ?? Promise.resolve();
+  let release = () => {};
+  const current = previous.then(() => new Promise<void>((resolve) => {
+    release = resolve;
+  }));
+  RELOAD_LOCKS.set(state, current);
+  await previous;
+  try {
+    return await fn();
+  } finally {
+    release();
+    if (RELOAD_LOCKS.get(state) === current) RELOAD_LOCKS.delete(state);
+  }
+}
+
+export function reloadLock(state: object): Promise<void> {
+  return RELOAD_LOCKS.get(state) ?? Promise.resolve();
+}
+
+function stableValue(value: any): any {
+  if (value && typeof value.toObject === "function") return stableValue(value.toObject());
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .flatMap((key) => {
+          const current = value[key];
+          if (current === undefined) return [];
+          if (key === "args" && Array.isArray(current) && current.length === 0) return [];
+          if ((key === "command" || key === "cwd" || key === "url") && current === "") return [];
+          if ((key === "toolTimeout" || key === "tool_timeout") && current === 30) return [];
+          if (
+            (key === "enabledTools" || key === "enabled_tools") &&
+            Array.isArray(current) &&
+            current.length === 1 &&
+            current[0] === "*"
+          ) return [];
+          if ((key === "env" || key === "headers") && current && typeof current === "object" && !Array.isArray(current) && Object.keys(current).length === 0) return [];
+          return [[key, stableValue(current)]];
+        }),
+    );
+  }
+  return value;
+}
+
+export function serverSignature(cfg: any): string {
+  return JSON.stringify(stableValue(cfg));
+}
+
+export function toolPrefix(serverName: string): string {
+  return sanitizeName(`mcp_${serverName}_`);
+}
+
+export function unregisterServerTools(state: McpState, registry: ToolRegistry, serverName: string): number {
+  const prefix = toolPrefix(serverName);
+  let removed = 0;
+  for (const toolName of [...registry.toolNames]) {
+    if (toolName.startsWith(prefix)) {
+      registry.unregister(toolName);
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
+export async function closeServer(state: McpState, serverName: string): Promise<void> {
+  const stack = state.mcpStacks?.[serverName];
+  if (!stack) return;
+  delete state.mcpStacks![serverName];
+  try {
+    if (typeof stack.aclose === "function") await stack.aclose();
+    else if (typeof stack.close === "function") await stack.close();
+  } catch {
+    // MCP SDK cleanup can surface transport cancellation errors after a server is already gone.
+  }
+}
+
+export async function reloadServers(state: McpState, registry: ToolRegistry): Promise<Record<string, any>> {
+  return withReloadLock(state as object, async () => {
+    let nextServers: Record<string, any>;
+    try {
+      const config = resolveConfigEnvVars(loadConfig());
+      nextServers = { ...config.tools.mcpServers };
+    } catch (error) {
+      return {
+        ok: false,
+        message: "Could not reload MCP config. Restart memmy to pick up changes.",
+        requires_restart: true,
+        error: String((error as Error).message ?? error),
+      };
+    }
+
+    state.mcpServers ??= {};
+    state.mcpStacks ??= {};
+    const currentServers = { ...state.mcpServers };
+    const currentNames = new Set(Object.keys(currentServers));
+    const nextNames = new Set(Object.keys(nextServers));
+    const removed = [...currentNames].filter((name) => !nextNames.has(name)).sort();
+    const added = [...nextNames].filter((name) => !currentNames.has(name)).sort();
+    const changed = [...currentNames]
+      .filter((name) => nextNames.has(name) && serverSignature(currentServers[name]) !== serverSignature(nextServers[name]))
+      .sort();
+
+    let toolsRemoved = 0;
+    for (const name of [...removed, ...changed]) {
+      toolsRemoved += unregisterServerTools(state, registry, name);
+      await closeServer(state, name);
+    }
+
+    state.mcpServers = nextServers;
+    const changedOrAdded = new Set([...added, ...changed]);
+    const retryMissing = [...nextNames]
+      .filter((name) => !(name in (state.mcpStacks ?? {})) && !changedOrAdded.has(name))
+      .sort();
+    const toConnectNames = [...new Set([...added, ...changed, ...retryMissing])].sort();
+    const toConnect = Object.fromEntries(toConnectNames.map((name) => [name, nextServers[name]]));
+    const connected = toConnectNames.length ? await connectMcpServers(toConnect, registry) : {};
+    Object.assign(state.mcpStacks, connected);
+    state.mcpConnected = Object.keys(state.mcpStacks).length > 0;
+
+    const failed = toConnectNames.filter((name) => !(name in connected)).sort();
+    const refreshed: string[] = [];
+    // The local plugin bridge's URL stays the same when plugins are installed or disabled.
+    // Refresh its live catalog without replacing the transport used by ongoing interactions.
+    if (nextNames.has("plugins") && !toConnectNames.includes("plugins")) {
+      const refresh = state.mcpStacks?.plugins?.refreshTools;
+      if (refresh) {
+        try {
+          await refresh(registry);
+          refreshed.push("plugins");
+        } catch {
+          failed.push("plugins");
+        }
+      }
+    }
+    const unchanged = !removed.length && !added.length && !changed.length && !retryMissing.length && !refreshed.length;
+    let message: string;
+    if (failed.length) message = `MCP config reloaded, but some servers did not connect: ${failed.join(", ")}`;
+    else if (unchanged) message = "MCP config is already live.";
+    else if (retryMissing.length && !added.length && !changed.length && !removed.length) message = "MCP connections refreshed without restarting memmy.";
+    else message = "MCP config reloaded without restarting memmy.";
+
+    return {
+      ok: failed.length === 0,
+      message,
+      added,
+      changed,
+      removed,
+      retried: retryMissing,
+      refreshed,
+      connected: Object.keys(state.mcpStacks).sort(),
+      configured: Object.keys(state.mcpServers).sort(),
+      tool_counts: Object.fromEntries([...nextNames].sort().map((name) => [
+        name, registry.toolNames.filter((toolName) => toolName.startsWith(toolPrefix(name))).length,
+      ])),
+      failed,
+      tools_removed: toolsRemoved,
+      requires_restart: false,
+    };
+  });
+}
+
+function createAck(): { promise: Promise<Record<string, any>>; resolve: (value: Record<string, any>) => void; done: boolean } {
+  let resolveFn!: (value: Record<string, any>) => void;
+  const ack = {
+    done: false,
+    promise: new Promise<Record<string, any>>((resolve) => {
+      resolveFn = resolve;
+    }),
+    resolve(value: Record<string, any>) {
+      if (ack.done) return;
+      ack.done = true;
+      resolveFn(value);
+    },
+  };
+  return ack;
+}
+
+export async function requestMcpReload(bus: any, { timeout = 15 }: { timeout?: number } = {}): Promise<Record<string, any>> {
+  const ack = createAck();
+  const publish = bus?.publishInbound;
+  if (typeof publish !== "function") {
+    return {
+      ok: false,
+      message: "MCP hot reload is unavailable. Restart memmy to pick up changes.",
+      requires_restart: true,
+    };
+  }
+  await publish.call(bus, new InboundMessage({
+    channel: "system",
+    senderId: "webui-settings",
+    chatId: "runtime",
+    content: RUNTIME_CONTROL_MCP_RELOAD,
+    metadata: {
+      [INBOUND_META_RUNTIME_CONTROL]: RUNTIME_CONTROL_MCP_RELOAD,
+      [RUNTIME_CONTROL_ACK]: ack,
+    },
+  }));
+  const timeoutMs = timeout * 1000;
+  return Promise.race([
+    ack.promise.then((result) => result && typeof result === "object" && !Array.isArray(result)
+      ? result
+      : {
+          ok: false,
+          message: "MCP hot reload returned an unexpected response.",
+          requires_restart: true,
+        }),
+    new Promise<Record<string, any>>((resolve) => setTimeout(() => resolve({
+      ok: false,
+      message: "MCP hot reload timed out. Restart memmy to pick up changes.",
+      requires_restart: true,
+    }), timeoutMs)),
+  ]);
+}
+
+function resolveAck(ack: any, result: Record<string, any>): void {
+  if (!ack) return;
+  if (typeof ack === "function") ack(result);
+  else if (typeof ack.resolve === "function") ack.resolve(result);
+}
+
+export async function handleRuntimeControl(
+  state: McpState,
+  msg: InboundMessage,
+  registry: ToolRegistry,
+  canReload = true,
+): Promise<boolean> {
+  const metadata = msg?.metadata && typeof msg.metadata === "object" ? msg.metadata : {};
+  const control = metadata[INBOUND_META_RUNTIME_CONTROL];
+  if (control !== RUNTIME_CONTROL_MCP_RELOAD) return false;
+
+  let result: Record<string, any>;
+  if (!canReload) {
+    result = {
+      ok: false,
+      message: "MCP hot reload was skipped while agent turns were active. Restart memmy to pick up changes.",
+      requires_restart: true,
+    };
+  } else {
+    try {
+      result = await reloadServers(state, registry);
+    } catch (error) {
+      result = {
+        ok: false,
+        message: "MCP hot reload failed. Restart memmy to pick up changes.",
+        requires_restart: true,
+        error: String((error as Error).message ?? error),
+      };
+    }
+  }
+  resolveAck(metadata[RUNTIME_CONTROL_ACK], result);
+  return true;
+}
+
+export class MCPTool extends MCPToolWrapper {}
+
+export class MCPConnectionManager {
+  async close(): Promise<void> {}
+}

@@ -1,0 +1,190 @@
+import type { MemmyMemoryConnection, MemmyMemoryRequestEnvelope, JsonRecord } from "./types.js";
+import { normalizeTimeZoneOffset } from "../utils/time-zone.js";
+import {
+  L3WorldModelBoundaryResponseSchema,
+  L3WorldModelTraceHeadResponseSchema,
+  MemoryHealthSnapshotSchema,
+  SessionL3WorldModelContextResponseSchema,
+  l3WorldModelGetTransport,
+  type L3WorldModelBoundaryRequest,
+  type L3WorldModelBoundaryResponse,
+  type L3WorldModelRequestEnvelope,
+  type L3WorldModelTraceHeadResponse,
+  type MemoryHealthSnapshot,
+  type SessionL3WorldModelContextResponse
+} from "@memmy/local-api-contracts";
+
+export class MemmyMemoryHttpError extends Error {
+  status: number;
+  body: any;
+
+  constructor(status: number, message: string, body: any = null) {
+    super(message);
+    this.name = "MemmyMemoryHttpError";
+    this.status = status;
+    this.body = body;
+  }
+}
+
+type FetchLike = typeof fetch;
+
+export type MemoryRequestOptions = { signal?: AbortSignal; timeoutMs?: number };
+
+export const DEFAULT_MEMOS_MEMORY_TIMEOUT_MS = 60_000;
+
+/**
+ * Budget for memory calls that sit on a user-visible path.
+ *
+ * Memory enrichment is best effort — the hooks that use it already log
+ * "Continuing" and proceed without it. Waiting the full background timeout for
+ * something we are prepared to skip stalls the send behind a service that may
+ * be busy with a long scan, and the desktop client gives up on the send after
+ * 30 seconds. A best-effort enrichment must never outlast the path it decorates.
+ */
+export const INTERACTIVE_MEMORY_TIMEOUT_MS = 8_000;
+
+export class MemmyMemoryClient {
+  baseUrl: string;
+  token: string | null;
+  timeoutMs: number;
+  timeZone: string;
+  private fetchImpl: FetchLike;
+
+  constructor(connection: MemmyMemoryConnection, fetchImpl: FetchLike = fetch) {
+    this.baseUrl = connection.baseUrl.replace(/\/+$/, "");
+    this.token = connection.token ?? null;
+    this.timeoutMs = connection.timeoutMs ?? DEFAULT_MEMOS_MEMORY_TIMEOUT_MS;
+    this.timeZone = normalizeTimeZoneOffset(connection.timeZone);
+    this.fetchImpl = fetchImpl;
+  }
+
+  private url(path: string, query?: Record<string, any>): string {
+    const url = new URL(path.startsWith("/") ? path : `/${path}`, this.baseUrl);
+    for (const [key, value] of Object.entries(query ?? {})) {
+      if (value == null || value === "") continue;
+      url.searchParams.set(key, Array.isArray(value) ? value.join(",") : String(value));
+    }
+    return url.toString();
+  }
+
+  private async request<T>(method: string, path: string, opts: {
+    query?: Record<string, any>;
+    body?: any;
+    headers?: Record<string, string>;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  } = {}): Promise<T> {
+    const headers: Record<string, string> = { accept: "application/json", ...(opts.headers ?? {}) };
+    headers["x-memmy-time-zone"] = this.timeZone;
+    if (this.token) headers.authorization = `Bearer ${this.token}`;
+    if (opts.body !== undefined) headers["content-type"] = "application/json";
+    const requestId = opts.body && typeof opts.body === "object" ? opts.body.requestId : null;
+    if (requestId) headers["x-request-id"] = String(requestId);
+
+    const response = await this.fetchImpl(this.url(path, opts.query), {
+      method,
+      headers,
+      body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+      signal: opts.signal
+        ? AbortSignal.any([opts.signal, AbortSignal.timeout(opts.timeoutMs ?? this.timeoutMs)])
+        : AbortSignal.timeout(opts.timeoutMs ?? this.timeoutMs),
+    });
+    const text = await response.text();
+    const parsed = text.trim() ? safeJsonParse(text) : null;
+    if (!response.ok) {
+      const fallback = text || `${method} ${path} failed with ${response.status}`;
+      const message = parsed?.error?.message ?? parsed?.message ?? fallback;
+      throw new MemmyMemoryHttpError(response.status, message, parsed ?? text);
+    }
+    return parsed as T;
+  }
+
+  get<T = any>(path: string, query?: Record<string, any>, options: MemoryRequestOptions = {}): Promise<T> {
+    return this.request<T>("GET", path, { ...options, query });
+  }
+
+  post<T = any>(path: string, body: any = {}, options: MemoryRequestOptions = {}): Promise<T> {
+    return this.request<T>("POST", path, { ...options, body });
+  }
+
+  async health(options: MemoryRequestOptions = {}): Promise<MemoryHealthSnapshot> {
+    return MemoryHealthSnapshotSchema.parse(await this.get("/api/v1/health", undefined, options));
+  }
+
+  openSession(body: JsonRecord & MemmyMemoryRequestEnvelope, options: MemoryRequestOptions = {}): Promise<JsonRecord> {
+    return this.post("/api/v1/sessions/open", body, options);
+  }
+
+  closeSession(sessionId: string, body: MemmyMemoryRequestEnvelope, options: MemoryRequestOptions = {}): Promise<JsonRecord> {
+    return this.post(`/api/v1/sessions/${encodeURIComponent(sessionId)}/close`, body, options);
+  }
+
+  startTurn(turnId: string, body: JsonRecord & MemmyMemoryRequestEnvelope, options: MemoryRequestOptions = {}): Promise<JsonRecord> {
+    return this.post("/api/v1/turns/start", {
+      ...body,
+      turnId,
+      query: body.query,
+    }, options);
+  }
+
+  completeTurn(turnId: string, body: JsonRecord & MemmyMemoryRequestEnvelope, options: MemoryRequestOptions = {}): Promise<JsonRecord> {
+    return this.post(`/api/v1/turns/${encodeURIComponent(turnId)}/complete`, body, options);
+  }
+
+  search(body: JsonRecord & MemmyMemoryRequestEnvelope): Promise<JsonRecord> {
+    return this.post("/api/v1/memory/search", body);
+  }
+
+  getMemory(id: string): Promise<JsonRecord> {
+    return this.get(`/api/v1/memory/${encodeURIComponent(id)}`);
+  }
+
+  async l3WorldModelTraceHead(
+    sessionId: string,
+    envelope: L3WorldModelRequestEnvelope,
+    options: MemoryRequestOptions = {}
+  ): Promise<L3WorldModelTraceHeadResponse> {
+    const transport = l3WorldModelGetTransport(envelope);
+    const value = await this.request<unknown>(
+      "GET",
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/l3-world-model-trace-head`,
+      { ...options, query: transport.query, headers: transport.headers }
+    );
+    return L3WorldModelTraceHeadResponseSchema.parse(value);
+  }
+
+  async l3WorldModelBoundary(
+    sessionId: string,
+    request: L3WorldModelBoundaryRequest,
+    options: MemoryRequestOptions = {}
+  ): Promise<L3WorldModelBoundaryResponse> {
+    return L3WorldModelBoundaryResponseSchema.parse(await this.post(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/l3-world-model-boundary`,
+      request,
+      options
+    ));
+  }
+
+  async l3WorldModelContext(
+    sessionId: string,
+    envelope: L3WorldModelRequestEnvelope,
+    options: MemoryRequestOptions = {}
+  ): Promise<SessionL3WorldModelContextResponse> {
+    const transport = l3WorldModelGetTransport(envelope);
+    const value = await this.request<unknown>(
+      "GET",
+      `/api/v1/l3-world-model/sessions/${encodeURIComponent(sessionId)}/context`,
+      { ...options, query: transport.query, headers: transport.headers }
+    );
+    return SessionL3WorldModelContextResponseSchema.parse(value);
+  }
+
+}
+
+function safeJsonParse(text: string): any {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}

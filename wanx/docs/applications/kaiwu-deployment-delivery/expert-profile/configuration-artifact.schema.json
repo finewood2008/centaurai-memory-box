@@ -1,0 +1,9 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:wanx:expert-app:v1:configuration-artifact",
+  "const": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  }
+}

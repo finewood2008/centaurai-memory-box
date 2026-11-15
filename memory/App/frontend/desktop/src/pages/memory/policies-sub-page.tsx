@@ -1,0 +1,621 @@
+import {readMemoryPanelDetail} from "../../api/memory-runtime-client.js";
+import { usePanelReadGuard } from "./panel-visibility.js";
+import { canPreservePanelResult } from "./panel-view-status.js";
+import { usePanelViewStatus } from "./panel-view-status.js";
+import { usePanelLoad } from "./use-panel-load.js";
+import { useEffect, useRef, useState } from "react";
+import type { GetMemoryOutput, MemoryListItem, PanelItemsOutput } from "@memmy/local-api-contracts";
+import type { MemoryRuntimeClient } from "../../api/memory-runtime-client.js";
+import { formatUserDateTime } from "../../lib/user-time-zone.js";
+import {
+  buildMemoryUiDeletedEvent,
+  buildMemoryUiDetailOpenedEvent,
+  buildMemoryUiPanelRefreshedEvent,
+  buildMemoryUiSearchSubmittedEvent
+} from "../../analytics/memory-ui-analytics.js";
+import { useAnalytics } from "../../analytics/use-analytics.js";
+import type { MessageKey } from "../../i18n/messages.js";
+import { useTranslation } from "../../i18n/use-translation.js";
+import { ChevronRight, Search, Sparkles, X } from "./memory-prototype-icons.js";
+import { MemoryDrawerDeleteAction } from "./memory-delete-action.js";
+import { toMemoryDetailErrorMessage } from "./memory-detail-error.js";
+import { cleanMemoryBody, displayMemoryTitle, drawerEyebrow, experienceDisplayTitle, isExperienceWaiting, waitingPrimaryText } from "./memory-display.js";
+import {
+  MemoryReferenceTags,
+  type MemoryReferenceOpenRequest,
+  type OpenMemoryReference
+} from "./memory-reference-tags.js";
+import {
+  clearMemoryPanelCache,
+  memoryPanelCacheKey,
+  memoryPanelLatestCacheKey,
+  readMemoryPanelCacheFirst,
+  writeMemoryPanelCaches
+} from "./memory-panel-cache.js";
+import { MemoryPagination, normalizePage } from "./memory-pagination.js";
+import { MemoryRefreshButton } from "./memory-refresh-button.js";
+import { MemoryStateBox } from "./memory-state-box.js";
+import { type RemoteData, toErrorMessage } from "./remote-state.js";
+
+type DetailState = RemoteData<GetMemoryOutput> | null;
+const POLICIES_CACHE_SECTION = "policies";
+type PolicyStatusTone = "candidate" | "active" | "archived" | "deleted" | "unknown";
+
+interface ExperienceView {
+  title: string;
+  status?: string;
+  trigger?: string;
+  procedure?: string;
+  verification?: string;
+  boundary?: string;
+  support?: number;
+  gain?: number;
+  rawGain?: number;
+  confidence?: number;
+  sourceEpisodes: string[];
+  sourceTraces: string[];
+  preference: string[];
+  antiPattern: string[];
+  source?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface PoliciesSubPageProps {
+  client: MemoryRuntimeClient | null;
+  openRequest?: MemoryReferenceOpenRequest;
+  onOpenMemoryReference: OpenMemoryReference;
+}
+
+function policiesCacheKeys(query: string, page: number): string[] {
+  return [
+    memoryPanelCacheKey(POLICIES_CACHE_SECTION, query.trim(), normalizePage(page)),
+    memoryPanelLatestCacheKey(POLICIES_CACHE_SECTION)
+  ];
+}
+
+export function PoliciesSubPage(props: PoliciesSubPageProps) {
+  const canRead = usePanelReadGuard(props.client);
+  const { t } = useTranslation();
+  const { track } = useAnalytics();
+  const policiesFilterLayer = "L2";
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const detailGeneration = useRef(0);
+  useEffect(() => () => { detailGeneration.current++; }, [props.client]);
+  const requestIdRef = useRef(0);
+  const requestAbortRef = useRef<AbortController | null>(null);
+  const submitSearch = usePanelLoad({ query, identity: [props.client, page, t], load: () => refresh(),
+    invalidate: () => { requestIdRef.current++; requestAbortRef.current?.abort(); } });
+  const [state, setState] = useState<RemoteData<PanelItemsOutput>>({ status: "loading" });
+  const [detail, setDetail] = useState<DetailState>(null);
+
+  const viewStatus=usePanelViewStatus(props.client,"L2",()=>{requestIdRef.current++; requestAbortRef.current?.abort(); detailGeneration.current++; setDetail(null); setState({status:"loading"});},()=>refresh());
+  function refresh(nextPage = page, options: { useCache?: boolean; preserve?:boolean } = {}): Promise<PanelItemsOutput | undefined> {
+    if (!canRead()) return Promise.resolve(undefined);
+    if (!props.client) {
+      const message = t("memory.clientNotReady");
+      setState({ status: "error", message });
+      return Promise.reject(new Error(message));
+    }
+
+    const normalizedPage = normalizePage(nextPage);
+    requestAbortRef.current?.abort();
+    const controller = new AbortController();
+    requestAbortRef.current = controller;
+    const requestId = ++requestIdRef.current;
+    const cacheKeys = policiesCacheKeys(query, normalizedPage);
+    const cached = (options.useCache ?? true) && !props.client.resetPanelView ? readMemoryPanelCacheFirst<PanelItemsOutput>(cacheKeys) : null;
+    if (cached) {
+      setState({ status: "ready", data: cached });
+    } else {
+      setState((current) => current.status === "ready" ? current : { status: "loading" });
+    }
+
+    return props.client
+      .listPanelItems({ layer: "L2", q: query.trim() || undefined, page: normalizedPage }, controller.signal)
+      .then((data) => {
+        if (requestId !== requestIdRef.current) return undefined;
+        if (!props.client?.resetPanelView) writeMemoryPanelCaches(cacheKeys, data);
+        viewStatus.clear();
+        setState({ status: "ready", data });
+        if (data.page !== normalizedPage) setPage(data.page);
+        return data;
+      })
+      .catch((error) => {
+        if (requestId !== requestIdRef.current) return undefined;
+        setState(current => options.preserve && canPreservePanelResult(error) && current.status === "ready" ? current : { status: "error", message: toErrorMessage(error) });
+        throw error;
+      });
+  }
+
+  function changeQuery(value: string) {
+    setQuery(value);
+    detailGeneration.current++; setDetail(null);
+    setPage(1);
+  }
+
+  function runSearch() {
+    detailGeneration.current++; setDetail(null);
+    setPage(1);
+    void submitSearch(() => refresh(1), [props.client, 1, t])
+      .then((data) => {
+        if (!data) {
+          return;
+        }
+        track(buildMemoryUiSearchSubmittedEvent({
+          subPage: "policies",
+          filterLayer: policiesFilterLayer,
+          resultCount: data.total
+        }));
+      })
+      .catch(() => undefined);
+  }
+
+  function changePage(nextPage: number) {
+    const normalizedPage = normalizePage(nextPage);
+    if (normalizedPage === page) {
+      return;
+    }
+
+    detailGeneration.current++; setDetail(null);
+    setPage(normalizedPage);
+  }
+
+  function openDetailById(id: string) {
+    const generation = ++detailGeneration.current;
+    track(buildMemoryUiDetailOpenedEvent({
+      subPage: "policies",
+      filterLayer: policiesFilterLayer
+    }));
+    if (!props.client) {
+      setDetail({ status: "error", message: t("memory.clientNotReady") });
+      return;
+    }
+
+    setDetail({ status: "loading" });
+    void readMemoryPanelDetail(props.client,id)
+      .then((data) => { if (generation === detailGeneration.current) setDetail({ status: "ready", data }); })
+      .catch((error) => { if (generation === detailGeneration.current) setDetail({ status: "error", message: toMemoryDetailErrorMessage(error, t("memory.detailUnavailable")) }); });
+  }
+
+  function openDetail(item: MemoryListItem) {
+    openDetailById(item.id);
+  }
+
+  async function deleteDetail(id: string) {
+    if (!props.client) {
+      throw new Error(t("memory.clientNotReady"));
+    }
+
+    await props.client.deleteMemory(id);
+    track(buildMemoryUiDeletedEvent({
+      subPage: "policies",
+      filterLayer: policiesFilterLayer
+    }));
+    clearMemoryPanelCache();
+    detailGeneration.current++; setDetail(null);
+    void viewStatus.reloadCurrent().catch(() => undefined);
+  }
+
+
+  useEffect(() => {
+    if (props.openRequest) {
+      openDetailById(props.openRequest.id);
+    }
+  }, [props.openRequest?.requestId]);
+
+  return (
+    <section className="memory-panel">
+      <div className="memory-panel__header">
+        <div className="memory-panel__header-main">
+          <h3 className="memory-panel__title">
+            <Sparkles size={18} className="text-text-ink/60" />
+            {t("memory.policies.title")}
+          </h3>
+          <p className="memory-panel__subtitle">{t("memory.policies.description")}</p>
+        </div>
+        <MemoryRefreshButton onClick={async () => {
+        props.client?.refreshPanelView?.("L2");
+          const data = await refresh(page, { useCache: false, preserve: true });
+          if (data) {
+            track(buildMemoryUiPanelRefreshedEvent({
+              subPage: "policies",
+              filterLayer: policiesFilterLayer,
+              resultCount: data.total
+            }));
+          }
+        }} />
+      </div>
+      <div className="memory-toolbar">
+        <label className="memory-search">
+          <Search size={15} className="memory-search__icon" />
+          <input
+            type="search"
+            value={query}
+            placeholder={t("memory.policies.searchPlaceholder")}
+            onChange={(event) => changeQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                runSearch();
+              }
+            }}
+            className="memory-search__input"
+          />
+        </label>
+      </div>
+      <ExperienceState
+        state={state}
+        detail={detail}
+        onOpenDetail={openDetail}
+        onDeleteDetail={deleteDetail}
+        onCloseDetail={() => { detailGeneration.current++; setDetail(null); }}
+        onPageChange={changePage}
+        onOpenMemoryReference={props.onOpenMemoryReference}
+      />
+    </section>
+  );
+}
+
+export function ExperienceState(props: {
+  state: RemoteData<PanelItemsOutput>;
+  detail: DetailState;
+  onOpenDetail: (item: MemoryListItem) => void;
+  onDeleteDetail: (id: string) => Promise<void>;
+  onCloseDetail: () => void;
+  onPageChange: (page: number) => void;
+  onOpenMemoryReference: OpenMemoryReference;
+}) {
+  const { t } = useTranslation();
+
+  return (
+    <>
+      {props.state.status === "loading" && <MemoryStateBox message={t("memory.policies.loading")} />}
+      {props.state.status === "error" && <MemoryStateBox message={props.state.message} tone="error" />}
+      {props.state.status === "ready" && props.state.data.items.length === 0 && <MemoryStateBox message={t("memory.policies.empty")} />}
+      {props.state.status === "ready" && props.state.data.items.length > 0 && (
+        <>
+          <div className="memory-list">
+            {props.state.data.items.map((item) => {
+              const waiting = isExperienceWaiting(item);
+              const title = waiting ? waitingPrimaryText(item) : (experienceDisplayTitle(item) ?? displayMemoryTitle(item));
+              return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => props.onOpenDetail(item)}
+                className="memory-card"
+              >
+                <div className="memory-card__body">
+                  <div className="memory-card__title">{title}</div>
+                  <div className="memory-card__meta">
+                    {waiting && (
+                      <span className="memory-pill memory-pill--processing">
+                        {t("memory.memories.processing.summary")}
+                      </span>
+                    )}
+                    <PolicyStatusPill status={item.status} />
+                    <span>{t("memory.memories.updatedAt")}: {formatDateTime(item.updatedAt)}</span>
+                    {item.tags.slice(0, 4).map((tag) => (
+                      <span key={tag}>{tag}</span>
+                    ))}
+                  </div>
+                </div>
+                <div className="memory-card__tail">
+                  <ChevronRight size={16} />
+                </div>
+              </button>
+              );
+            })}
+          </div>
+          <MemoryPagination data={props.state.data} onPageChange={props.onPageChange} />
+        </>
+      )}
+      <ExperienceDrawer
+        detail={props.detail}
+        onClose={props.onCloseDetail}
+        onDelete={props.onDeleteDetail}
+        onOpenMemoryReference={props.onOpenMemoryReference}
+      />
+    </>
+  );
+}
+
+function ExperienceDrawer(props: {
+  detail: DetailState;
+  onClose: () => void;
+  onDelete: (id: string) => Promise<void>;
+  onOpenMemoryReference: OpenMemoryReference;
+}) {
+  const { t } = useTranslation();
+
+  if (!props.detail) {
+    return null;
+  }
+
+  const readyDetail = props.detail.status === "ready" ? props.detail.data : null;
+  const waiting = readyDetail ? isExperienceWaiting(readyDetail.item) : false;
+  const generatedTitle = readyDetail && !waiting ? experienceDisplayTitle(readyDetail.item) : undefined;
+  const eyebrow = readyDetail ? drawerEyebrow(readyDetail.item) : t("memory.policies.detailTitle");
+
+  return (
+    <div className="memory-drawer-backdrop" onClick={props.onClose}>
+      <button type="button" className="memory-drawer-backdrop__close" tabIndex={-1} aria-hidden="true" onClick={(e) => {
+        e.stopPropagation();
+        props.onClose();
+      }} />
+      <aside className="memory-drawer" role="dialog" aria-modal="true" aria-labelledby={generatedTitle ? "memory-policy-title" : "memory-policy-eyebrow"} onClick={(e) => e.stopPropagation()}>
+        <header className="memory-drawer__header">
+          <div>
+            <div className="memory-drawer__identity">
+              <span id="memory-policy-eyebrow" className="memory-drawer__eyebrow">{eyebrow}</span>
+            </div>
+            {generatedTitle ? <h4 id="memory-policy-title" className="memory-drawer__title">{generatedTitle}</h4> : null}
+          </div>
+          <button type="button" className="memory-drawer__close" onClick={props.onClose} aria-label={t("common.close")}>
+            <X size={16} />
+          </button>
+        </header>
+        <div className="memory-drawer__body">
+          {props.detail.status === "loading" && <MemoryStateBox message={t("memory.policies.detailLoading")} />}
+          {props.detail.status === "error" && <MemoryStateBox message={props.detail.message} tone="error" />}
+          {props.detail.status === "ready" && (
+            <ExperienceDetail detail={props.detail.data} onOpenMemoryReference={props.onOpenMemoryReference} />
+          )}
+        </div>
+        {readyDetail && <MemoryDrawerDeleteAction onDelete={() => props.onDelete(readyDetail.item.id)} />}
+      </aside>
+    </div>
+  );
+}
+
+function ExperienceDetail(props: { detail: GetMemoryOutput; onOpenMemoryReference: OpenMemoryReference }) {
+  const { t } = useTranslation();
+  const experience = experienceFromDetail(props.detail);
+
+  return (
+    <>
+      <section className="memory-detail-card memory-detail-card--meta">
+        <h5 className="memory-detail-card__label">{t("memory.memories.meta")}</h5>
+        <div className="memory-detail-metrics">
+          <Metric label={t("memory.memories.status")} value={policyStatusLabel(experience.status ?? props.detail.item.status, t)} />
+          <Metric label={t("memory.policies.support")} value={formatNumber(experience.support, 0)} />
+          <Metric label={t("memory.policies.gain")} value={formatNumber(experience.gain, 3)} />
+          <Metric label={t("memory.policies.confidence")} value={formatNumber(experience.confidence, 2)} />
+          <Metric label={t("memory.memories.createdAt")} value={formatDateTime(experience.createdAt ?? props.detail.item.createdAt)} />
+          <Metric label={t("memory.memories.updatedAt")} value={formatDateTime(experience.updatedAt ?? props.detail.item.updatedAt)} />
+        </div>
+        {experience.source && (
+          <div className="memory-policy-source">
+            <span>{t("memory.tasks.source")}</span>
+            {experience.source}
+          </div>
+        )}
+      </section>
+
+      <PolicySection title={t("memory.policies.trigger")} body={experience.trigger ?? props.detail.item.summary} />
+      <PolicySection title={t("memory.policies.procedure")} body={experience.procedure ?? props.detail.item.body} />
+      <PolicySection title={t("memory.policies.verification")} body={experience.verification} />
+      <PolicySection title={t("memory.policies.boundary")} body={experience.boundary} />
+
+      <GuidanceSection preference={experience.preference} antiPattern={experience.antiPattern} />
+
+      <LinkedIdsSection
+        title={t("memory.policies.sourceTasks")}
+        ids={experience.sourceEpisodes}
+        empty={t("memory.policies.noSourceTasks")}
+        fallbackPage="tasks"
+        onOpen={props.onOpenMemoryReference}
+      />
+      <LinkedIdsSection
+        title={t("memory.policies.sourceMemories")}
+        ids={experience.sourceTraces.length > 0 ? experience.sourceTraces : props.detail.item.sourceMemoryIds}
+        empty={t("memory.policies.noSourceMemories")}
+        fallbackPage="memories"
+        onOpen={props.onOpenMemoryReference}
+      />
+    </>
+  );
+}
+
+function Metric(props: { label: string; value: string }) {
+  return (
+    <div className="memory-detail-metric">
+      <div className="memory-detail-metric__label">{props.label}</div>
+      <div className="memory-detail-metric__value">{props.value}</div>
+    </div>
+  );
+}
+
+function PolicySection(props: { title: string; body?: string }) {
+  return (
+    <section className="memory-detail-card">
+      <h5 className="memory-detail-card__label">{props.title}</h5>
+      <div className="memory-policy-section-body">{cleanMemoryBody(props.body) || "-"}</div>
+    </section>
+  );
+}
+
+function GuidanceSection(props: { preference: string[]; antiPattern: string[] }) {
+  const { t } = useTranslation();
+  const hasGuidance = props.preference.length > 0 || props.antiPattern.length > 0;
+
+  return (
+    <section className="memory-detail-card">
+      <h5 className="memory-detail-card__label">{t("memory.policies.guidance")}</h5>
+      {!hasGuidance && <div className="memory-policy-empty">{t("memory.policies.guidanceEmpty")}</div>}
+      {props.preference.length > 0 && <GuidanceList title={t("memory.policies.prefer")} entries={props.preference} tone="prefer" />}
+      {props.antiPattern.length > 0 && <GuidanceList title={t("memory.policies.avoid")} entries={props.antiPattern} tone="avoid" />}
+    </section>
+  );
+}
+
+function GuidanceList(props: { title: string; entries: string[]; tone: "prefer" | "avoid" }) {
+  return (
+    <div className={`memory-policy-guidance memory-policy-guidance--${props.tone}`}>
+      <div className="memory-policy-guidance__title">{props.title}</div>
+      <ul className="memory-policy-guidance__list">
+        {props.entries.map((entry, index) => (
+          <li key={`${props.tone}-${index}`}>{entry}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function LinkedIdsSection(props: {
+  title: string;
+  ids: string[];
+  empty: string;
+  fallbackPage: "memories" | "tasks";
+  onOpen: OpenMemoryReference;
+}) {
+  const hasIds = props.ids.some(Boolean);
+
+  return (
+    <section className="memory-detail-card">
+      <h5 className="memory-detail-card__label">{props.title}</h5>
+      {!hasIds ? (
+        <div className="memory-policy-empty">{props.empty}</div>
+      ) : (
+        <MemoryReferenceTags ids={props.ids} fallbackPage={props.fallbackPage} onOpen={props.onOpen} />
+      )}
+    </section>
+  );
+}
+
+export function PolicyStatusPill(props: { status?: string }) {
+  const { t } = useTranslation();
+
+  return <span className={`memory-pill memory-pill--policy-${policyStatusTone(props.status)}`}>{policyStatusLabel(props.status, t)}</span>;
+}
+
+function experienceFromDetail(detail: GetMemoryOutput): ExperienceView {
+  const metadata = detail.item.metadata;
+  const properties = recordValue(metadata.properties);
+  const info = recordValue(metadata.info);
+  const internalInfo = recordValue(properties.internal_info);
+  const policy = recordValue(internalInfo.policy);
+  const decisionGuidance = recordValue(
+    firstDefined(policy.decision_guidance, policy.decisionGuidance, internalInfo.decision_guidance, internalInfo.decisionGuidance)
+  );
+
+  return {
+    title: experienceDisplayTitle(detail.item)
+      ?? (isExperienceWaiting(detail.item)
+        ? waitingPrimaryText(detail.item)
+        : displayMemoryTitle(detail.item, firstString(policy.title, internalInfo.title))),
+    status: firstString(policy.status, internalInfo.status, info.status, detail.item.status),
+    trigger: firstString(policy.trigger, internalInfo.trigger, parseBodyField(detail.item.body, "Trigger")),
+    procedure: firstString(policy.procedure, policy.action, internalInfo.procedure, parseBodyField(detail.item.body, "Procedure")),
+    verification: firstString(policy.verification, internalInfo.verification, parseBodyField(detail.item.body, "Verification")),
+    boundary: firstString(policy.boundary, policy.caveats, internalInfo.boundary, parseBodyField(detail.item.body, "Boundary")),
+    support: numberValue(policy.support) ?? numberValue(internalInfo.support) ?? numberValue(info.support),
+    gain: numberValue(policy.gain) ?? numberValue(internalInfo.gain) ?? numberValue(info.gain),
+    rawGain: numberValue(policy.raw_gain) ?? numberValue(policy.rawGain) ?? numberValue(internalInfo.raw_gain) ?? numberValue(info.raw_gain),
+    confidence: numberValue(policy.policy_confidence) ?? numberValue(internalInfo.policy_confidence) ?? numberValue(info.policy_confidence),
+    sourceEpisodes: stringArray(policy.source_episode_ids ?? internalInfo.source_episode_ids),
+    sourceTraces: stringArray(policy.source_trace_ids ?? internalInfo.source_trace_ids ?? internalInfo.source_memory_ids),
+    preference: stringArray(decisionGuidance.preference),
+    antiPattern: stringArray(decisionGuidance.antiPattern ?? decisionGuidance.anti_pattern),
+    source: firstString(metadata.source, internalInfo.source),
+    createdAt: detail.item.createdAt,
+    updatedAt: detail.item.updatedAt
+  };
+}
+
+function parseBodyField(body: string, label: string): string | undefined {
+  const lines = body.split(/\r?\n/);
+  const startIndex = lines.findIndex((line) => line.toLowerCase().startsWith(`${label.toLowerCase()}:`));
+  if (startIndex < 0) {
+    return undefined;
+  }
+
+  const first = (lines[startIndex] ?? "").slice(label.length + 1).trim();
+  const chunks = first ? [first] : [];
+  for (let index = startIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    if (/^[A-Z][A-Za-z ]{1,30}:\s*/.test(line)) {
+      break;
+    }
+    chunks.push(line);
+  }
+
+  return chunks.join("\n").trim() || undefined;
+}
+
+export function policyStatusTone(status: string | undefined): PolicyStatusTone {
+  const toneByStatus: Record<string, PolicyStatusTone> = {
+    resolving: "candidate",
+    candidate: "candidate",
+    activated: "active",
+    active: "active",
+    archived: "archived",
+    deleted: "deleted"
+  };
+
+  return toneByStatus[status ?? ""] ?? "unknown";
+}
+
+function policyStatusLabel(status: string | undefined, t: (key: MessageKey) => string): string {
+  const keyByTone: Record<PolicyStatusTone, MessageKey> = {
+    candidate: "memory.policies.status.candidate",
+    active: "memory.policies.status.active",
+    archived: "memory.policies.status.archived",
+    deleted: "memory.memories.status.deleted",
+    unknown: "memory.policies.status.unknown"
+  };
+
+  return t(keyByTone[policyStatusTone(status)]);
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function firstDefined(...values: unknown[]): unknown {
+  return values.find((value) => value !== undefined && value !== null);
+}
+
+function firstString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return undefined;
+}
+
+function numberValue(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+
+  return undefined;
+}
+
+function stringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim());
+}
+
+function formatNumber(value: number | undefined, digits: number): string {
+  return value === undefined ? "-" : value.toFixed(digits);
+}
+
+function formatDateTime(value: string | undefined): string {
+  if (!value) {
+    return "-";
+  }
+
+  return formatUserDateTime(value);
+}

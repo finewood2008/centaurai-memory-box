@@ -1,0 +1,1 @@
+{"schemaVersion":1,"name":"知客","entry":"src/app.js","capabilities":["data","model","files","foundation"],"collections":{"customer_extensions":{"customerId":"string","fields":"string"},"drafts":{"customerId":"string","prompt":"string","text":"string","createdAt":"string","model":"string","archived":"boolean"},"flow_settings":{"name":"string","value":"string"}}}

@@ -1,0 +1,286 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "releaseId": {
+      "$ref": "https://schemas.wanx.example/deployment/v1/common.schema.json#/definitions/id"
+    },
+    "applicationId": {
+      "$ref": "https://schemas.wanx.example/deployment/v1/common.schema.json#/definitions/id"
+    },
+    "payloadKind": {
+      "enum": [
+        "managed-spec",
+        "packaged-app"
+      ]
+    },
+    "specVersionId": {
+      "$ref": "https://schemas.wanx.example/deployment/v1/common.schema.json#/definitions/id"
+    },
+    "specDigest": {
+      "$ref": "https://schemas.wanx.example/deployment/v1/common.schema.json#/definitions/digest"
+    },
+    "specRef": {
+      "$ref": "https://schemas.wanx.example/deployment/v1/common.schema.json#/definitions/reference"
+    },
+    "artifactDescriptors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "artifactId": {
+            "$ref": "https://schemas.wanx.example/deployment/v1/common.schema.json#/definitions/id"
+          },
+          "role": {
+            "enum": [
+              "backend",
+              "client",
+              "assets"
+            ]
+          },
+          "mediaType": {
+            "enum": [
+              "application/zip",
+              "application/vnd.oci.image.manifest.v1+json",
+              "application/json",
+              "application/octet-stream"
+            ]
+          },
+          "digest": {
+            "$ref": "https://schemas.wanx.example/deployment/v1/common.schema.json#/definitions/digest"
+          },
+          "sizeBytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "sourceRef": {
+            "$ref": "https://schemas.wanx.example/deployment/v1/common.schema.json#/definitions/reference"
+          },
+          "platforms": {
+            "type": "array",
+            "items": {
+              "$ref": "https://schemas.wanx.example/deployment/v1/common.schema.json#/definitions/platform"
+            },
+            "minItems": 1,
+            "maxItems": 128
+          }
+        },
+        "required": [
+          "artifactId",
+          "role",
+          "mediaType",
+          "digest",
+          "sizeBytes",
+          "sourceRef",
+          "platforms"
+        ]
+      },
+      "minItems": 0,
+      "maxItems": 128
+    },
+    "dependencyLockDigest": {
+      "$ref": "https://schemas.wanx.example/deployment/v1/common.schema.json#/definitions/digest"
+    },
+    "runtimeRequirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "runtimeRef": {
+          "$ref": "https://schemas.wanx.example/deployment/v1/common.schema.json#/definitions/reference"
+        },
+        "platforms": {
+          "type": "array",
+          "items": {
+            "$ref": "https://schemas.wanx.example/deployment/v1/common.schema.json#/definitions/platform"
+          },
+          "minItems": 1,
+          "maxItems": 128
+        },
+        "resourceBudget": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "memoryBytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "storageBytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "memoryBytes",
+            "storageBytes"
+          ]
+        },
+        "healthContractRef": {
+          "$ref": "https://schemas.wanx.example/deployment/v1/common.schema.json#/definitions/reference"
+        },
+        "dataCompatibilityRef": {
+          "$ref": "https://schemas.wanx.example/deployment/v1/common.schema.json#/definitions/reference"
+        },
+        "candidateMode": {
+          "const": true
+        }
+      },
+      "required": [
+        "runtimeRef",
+        "platforms",
+        "resourceBudget",
+        "healthContractRef",
+        "dataCompatibilityRef",
+        "candidateMode"
+      ]
+    },
+    "clientDelivery": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "install"
+            },
+            "artifactId": {
+              "$ref": "https://schemas.wanx.example/deployment/v1/common.schema.json#/definitions/id"
+            }
+          },
+          "required": [
+            "mode",
+            "artifactId"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "load"
+            },
+            "runtimeRef": {
+              "$ref": "https://schemas.wanx.example/deployment/v1/common.schema.json#/definitions/reference"
+            },
+            "resourceArtifactIds": {
+              "type": "array",
+              "items": {
+                "$ref": "https://schemas.wanx.example/deployment/v1/common.schema.json#/definitions/id"
+              },
+              "minItems": 0,
+              "maxItems": 128,
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "mode",
+            "runtimeRef",
+            "resourceArtifactIds"
+          ]
+        }
+      ]
+    },
+    "bundleDigest": {
+      "$ref": "https://schemas.wanx.example/deployment/v1/common.schema.json#/definitions/digest"
+    },
+    "provenanceRef": {
+      "$ref": "https://schemas.wanx.example/deployment/v1/common.schema.json#/definitions/reference"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "releaseId",
+    "applicationId",
+    "payloadKind",
+    "artifactDescriptors",
+    "dependencyLockDigest",
+    "runtimeRequirements",
+    "clientDelivery",
+    "bundleDigest",
+    "provenanceRef"
+  ],
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://schemas.wanx.example/deployment/v1/bundle.schema.json",
+  "title": "DeploymentBundle v1 draft",
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "payloadKind": {
+            "const": "managed-spec"
+          }
+        },
+        "type": "object"
+      },
+      "then": {
+        "required": [
+          "specVersionId",
+          "specDigest",
+          "specRef"
+        ],
+        "properties": {
+          "specVersionId": {},
+          "specDigest": {},
+          "specRef": {}
+        },
+        "type": "object"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "payloadKind": {
+            "const": "packaged-app"
+          }
+        },
+        "type": "object"
+      },
+      "then": {
+        "properties": {
+          "artifactDescriptors": {
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "specVersionId"
+              ],
+              "properties": {
+                "specVersionId": {}
+              },
+              "type": "object"
+            },
+            {
+              "required": [
+                "specDigest"
+              ],
+              "properties": {
+                "specDigest": {}
+              },
+              "type": "object"
+            },
+            {
+              "required": [
+                "specRef"
+              ],
+              "properties": {
+                "specRef": {}
+              },
+              "type": "object"
+            }
+          ]
+        },
+        "type": "object"
+      }
+    }
+  ]
+}

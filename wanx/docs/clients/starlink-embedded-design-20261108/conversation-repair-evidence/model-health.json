@@ -1,0 +1,17 @@
+{
+  "timestamp": 1794139554,
+  "kind": "single_synthetic_configured_model_diagnostic",
+  "model_adapter_source": "wanx-master-starlink-fix-20261031/src/octop/infra/semantica/models.py",
+  "relay": "127.0.0.1:18100",
+  "source_unchanged": true,
+  "configuration_changed": false,
+  "model_id": "1:deepseek-v4-flash",
+  "model": "deepseek-v4-flash",
+  "provider": "DeepSeek",
+  "location": "external",
+  "revision_matches_stored": true,
+  "usage_reported": true,
+  "success": true,
+  "http_status": 200,
+  "provider_error": null
+}

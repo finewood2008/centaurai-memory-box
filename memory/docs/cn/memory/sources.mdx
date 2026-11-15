@@ -1,0 +1,77 @@
+---
+title: 连接其他 AI 的记忆
+description: 导入已有对话，让受支持的 AI 工具在新任务中使用同一份记忆。
+icon: ScanSearch
+---
+
+import scanScreen from "../../assets/agent-sources-scan-full.jpg";
+import connectedScreen from "../../assets/agent-sources-connected-full.jpg";
+import preferencesScreen from "../../assets/agent-sources-preferences-full.jpg";
+import manualScreen from "../../assets/agent-sources-manual-full.jpg";
+
+如果你同时使用 Cursor、Claude Code、Codex 等工具，可以把它们的历史对话带进 Memmy，再决定是否让它们持续使用和更新记忆。
+
+## 导入已有对话
+
+1. 打开「记忆管理 → 跨Agent接入」。
+2. 在「已发现的 Agent」中找到对应工具。还没同步过时点击「首次扫描」，之后使用「同步新增」。
+3. 等待摘要和索引处理完成，到「记忆管理 → 记忆」搜索一个熟悉的项目名。
+
+首次扫描会整理一部分近期历史，之后只同步新增对话。扫描对话与安装记忆接入组件是两个独立按钮。
+
+<details>
+<summary>没找到工具，或需要更早的历史</summary>
+
+内置来源包括 Cursor、Claude Code、Codex、OpenCode、OpenClaw、Hermes、DeepSeek Harness、WorkBuddy、Pi 和 qwenwork。列表只展示本机检测到的来源；先确认工具已使用过，并保存了本地历史。
+
+在列表下方展开「高级」，点击「添加其他 Agent」。选择或输入框架名称，历史会话路径可以留空；确认后，Memmy 会新建任务，协助查找历史目录并完成接入。
+
+<ProductScreenshot src={manualScreen} alt="Memmy 完整窗口：添加其他 Agent 的名称与可选历史路径" caption="名称是必填项；知道历史会话保存位置时可补充路径。图中使用内置名称选项。" />
+
+需要补充更早的历史时，在「高级」中选择「扫描全部历史」。处理时间和模型消耗可能更多。
+
+</details>
+
+## 让其他 AI 使用记忆
+
+在目标工具那一行，点击「安装 Hook」「安装插件」或「安装 Skill」。安装后，状态会变为「已安装 Hook」「已安装插件」或「已写入 Skill」，操作按钮也会变为「移除」。
+
+<ProductScreenSteps steps={[
+  { label: "扫描与安装入口", src: scanScreen, alt: "Memmy 完整窗口：首次扫描和安装记忆接入组件", caption: "每个 Agent 右侧有两个入口：扫描按钮导入对话，安装按钮让该 AI 接入记忆。界面中的来源与数量为示例。" },
+  { label: "接入完成后", src: connectedScreen, alt: "Memmy 完整窗口：已安装 Hook 的 Agent 来源", caption: "安装成功后核对来源状态。已有历史的 Agent 显示「同步新增」，可继续导入后续对话。" }
+]} />
+
+安装后，保持 Memmy 记忆服务可用，在目标工具中新开一项任务：
+
+<PromptExample composer={true} prompt="整理我最近一周的工作内容，告诉我未完成的待办事项，并说明来源。" />
+
+找到正确背景后，继续交代下一步。若提示未连接，查看来源卡片的安装状态，并按工具提示重新打开会话。
+
+## 调整自动同步
+
+向下找到「自动同步」，分别控制：
+
+- **启动时主动扫描**：Memmy 启动后扫描已接入 Agent 的新增会话。
+- **定时扫描**：Memmy 运行期间每小时扫描一次新增会话。
+- **发现新 Agent 时自动接入**：为新发现的工具安装接入组件；关闭后由你手动接入。
+
+<ProductScreenshot src={preferencesScreen} alt="Memmy 完整窗口：自动同步的三个开关" caption="这三个开关分别控制启动扫描、定时扫描和新 Agent 接入，可按需要单独调整。" />
+
+<details>
+<summary>不同接入方式如何使用记忆？</summary>
+
+- Claude Code、Codex、OpenCode、OpenClaw、Hermes 和 DeepSeek Harness 等接入，可在请求前查找相关记忆，并在回合结束后采集对话。
+- Cursor 的 Hook 主要采集新对话和接续任务；记忆也可由 Skill 按需查找。
+- WorkBuddy、Pi 和 qwenwork 使用 Skill 按需读写。
+
+</details>
+
+## 停止接入
+
+在来源卡片上移除 Hook、插件或 Skill；需要停止历史同步时，也关闭自动同步。移除组件不会删除已经导入的记忆。
+
+共享记忆不会搬运项目文件。要继续处理原来的文件，目标工具还需要能访问对应文件夹。
+
+## 相关说明
+
+[查看和管理记忆](/docs/memory/overview) · [数据与隐私](/docs/security/security)

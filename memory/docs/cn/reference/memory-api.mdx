@@ -1,0 +1,48 @@
+---
+title: Memory Runtime API
+icon: Database
+---
+
+默认地址 `http://127.0.0.1:18960`。设置 `storage.token`、`MEMMY_MEMORY_TOKEN` 或 `MEMORY_SERVICE_TOKEN` 后，除健康检查外的接口需要携带 bearer token。
+
+| Method | Path | 说明 |
+| --- | --- | --- |
+| `GET` | `/api/v1/health` | 健康检查 |
+| `POST` | `/api/v1/sessions/open` | 打开 Agent 会话 |
+| `POST` | `/api/v1/sessions/:sessionId/close` | 关闭会话 |
+| `POST` | `/api/v1/turns/start` | 记录回合开始 |
+| `POST` | `/api/v1/turns/:turnId/complete` | 记录回合完成 |
+| `POST` | `/api/v1/memory/search` | 检索记忆 |
+| `POST` | `/api/v1/memory/add` | 写入记忆 |
+| `GET` | `/api/v1/memory/:id` | 记忆详情 |
+| `DELETE` | `/api/v1/memory/:id` | 删除记忆 |
+| `GET` | `/api/v1/panel/overview` | 面板概览 |
+| `GET` | `/api/v1/panel/analysis` | 记忆分析 |
+| `GET` | `/api/v1/panel/items` | 条目列表 |
+
+## 分析指标
+
+`GET /api/v1/panel/analysis` 返回 `metrics`。`metrics.recentlyUsedSkills` 统计当前状态为 `activated` 的技能的召回命中和调用记录。窗口按请求解析出的时区，覆盖当天和之前六个日历日，以每条事件的创建时间判断是否计入。
+
+同一次召回里，同一个技能 ID 只计一次。不同召回和调用分别计数。这个值是使用总次数，不是不同技能的数量，也不是最近编辑过的技能数量。只编辑技能不会增加该值。
+
+## 本地存储配置
+
+`memmyMemory` 是一份扁平配置。`activeProfile` 和 `profiles` 属于旧结构，当前运行时会拒绝带这两个字段的配置。
+
+```yaml
+memmyMemory:
+  version: 1
+  roleRouting:
+    summary: follow
+    evolution: follow
+  storage:
+    mode: local
+    backend: sqlite
+    sqlitePath: ~/.memmy/memory-service/memory.sqlite
+    endpoint: http://127.0.0.1:18960
+    token: local-token
+  embedding:
+    provider: local
+    mode: local
+```

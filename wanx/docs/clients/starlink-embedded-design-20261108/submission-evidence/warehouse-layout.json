@@ -1,0 +1,44 @@
+[
+  {
+    "width": 1100,
+    "starlink": {
+      "height": 114,
+      "padding": "20px 22px",
+      "radius": "20px",
+      "font": "25px",
+      "icon": 72
+    },
+    "sharedBanner": {
+      "height": 114,
+      "padding": "20px 22px",
+      "radius": "20px",
+      "font": "25px",
+      "icon": 72
+    },
+    "warehouseInBanner": false,
+    "warehouseInToolbar": true,
+    "warehouseIcon": true,
+    "overflow": false
+  },
+  {
+    "width": 800,
+    "starlink": {
+      "height": 114,
+      "padding": "20px 22px",
+      "radius": "20px",
+      "font": "25px",
+      "icon": 72
+    },
+    "sharedBanner": {
+      "height": 114,
+      "padding": "20px 22px",
+      "radius": "20px",
+      "font": "25px",
+      "icon": 72
+    },
+    "warehouseInBanner": false,
+    "warehouseInToolbar": true,
+    "warehouseIcon": true,
+    "overflow": false
+  }
+]

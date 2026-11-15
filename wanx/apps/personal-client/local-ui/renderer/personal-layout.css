@@ -1,0 +1,195 @@
+/* Personal client only: the approved warm six-section layout. */
+.topbar{padding:16px 28px;gap:20px;min-height:84px}
+.main-nav{padding:4px;gap:3px;border-radius:12px}
+.main-nav .nav-item{min-width:70px;padding:9px 15px;border-radius:9px}
+.page-content.store-page,.page-content.workshop-page,.page-content.data-page-content,.page-content.box-page-content{width:100%;max-width:1320px;padding:24px 28px 32px}
+.personal-module-title{display:flex;align-items:center;gap:13px;min-width:0}
+.personal-module-title h2{font-family:inherit;font-size:25px;font-weight:650;line-height:1.3;letter-spacing:-.6px}
+.personal-module-title p{margin:6px 0 0;font-size:12px;color:#8b8175;line-height:1.6}
+.personal-module-mark{display:grid;place-items:center;flex:none;width:44px;height:44px;border:1px solid #ded3c4;border-radius:13px;background:#f0e8dc;color:#a07150;box-shadow:inset 0 1px #fff9}
+.personal-module-mark svg{width:27px;height:27px}
+.store-heading,.box-page-content>.page-heading,.space-files-page>.personal-module-title,.workshop-page .workshop-heading{padding:18px 20px;margin:0 0 18px;border:1px solid #e8ded0;border-radius:16px;background:linear-gradient(110deg,#f5ede2,#faf7f2 65%);box-shadow:0 4px 18px #59432a04;gap:18px}
+.store-heading{align-items:center;flex-wrap:wrap}
+.store-page .wanx-section-banner .applications-banner-actions { flex-direction: row; margin-inline-start: auto; max-width: 100%; padding-bottom: 0; }
+.store-page .applications-banner-actions .connection-line {
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: #fffcf5b3;
+  font-size: 11px;
+}
+.applications-banner-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-inline-size: 100%;
+  padding: 4px;
+  border: 1px solid #dacbb8;
+  border-radius: 12px;
+  background: linear-gradient(#fffaf1f2, #f0e8dbf2);
+  box-shadow: 0 2px 7px #6744211a, inset 0 1px #fffc;
+}
+.store-page .applications-banner-controls .applications-tabs {
+  display: flex;
+  min-inline-size: 0;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.store-page .applications-banner-controls .applications-tab {
+  min-height: 34px;
+  padding: 6px 15px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #6c5f50;
+  font-size: 12px;
+  font-weight: 550;
+  white-space: nowrap;
+}
+.store-page .applications-banner-controls .applications-tab[aria-selected=true] {
+  background: #fffdfa;
+  color: #834d36;
+  box-shadow: 0 1px 4px #59432a1f;
+}
+.store-page .applications-tab::after { display: none; }
+.applications-banner-refresh {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  margin-inline-start: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #715946;
+}
+.applications-banner-refresh::before {
+  position: absolute;
+  inset-block: 7px;
+  inset-inline-start: -5px;
+  width: 1px;
+  background: #d6c8b5;
+  content: "";
+}
+.store-page .applications-banner-controls .applications-tab:hover:not([aria-selected=true]),
+.applications-banner-refresh:hover:not(:disabled) { background: #fffaf0; }
+.applications-banner-refresh:focus-visible { outline: 2px solid var(--fn-color-brand); outline-offset: 1px; }
+.applications-banner-refresh:disabled { opacity: .55; }
+@media (width < 1320px) {
+  body.academy-drawer-open .store-page .wanx-section-banner:has(.applications-banner-actions) {
+    margin-inline-end: var(--academy-drawer-width);
+    flex-wrap: wrap;
+  }
+  body.academy-drawer-open .store-page .applications-banner-controls,
+  body.academy-drawer-open .store-page .applications-banner-controls .applications-tabs { flex-wrap: wrap; }
+  body.academy-drawer-open .store-page .applications-banner-controls .applications-tab { padding-inline: 10px; }
+}
+.store-page .section-heading{margin-bottom:15px}.store-page .section-heading h3{font-size:17px;letter-spacing:-.2px}
+.store-page .section-heading p{margin-top:5px;font-size:11px}.store-page .content-section{margin-top:24px}
+.store-page .application-list{grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.store-page .application-card{padding:20px;border-radius:15px;box-shadow:0 3px 12px #59432a03}
+.store-page .store-feature-carousel{margin-bottom:22px}
+/* Dialogue keeps the live transcript and composer; tighten chrome and align the rail. */
+#ai-dialogue-host{max-width:1320px;padding:24px 28px 26px}
+.ai-dialogue{gap:18px}.ai-dialogue-heading{padding:15px 19px;border:1px solid #e8ded0;border-radius:16px;background:linear-gradient(110deg,#f5ede2,#faf7f2 65%)}
+.ai-page-title h2{font-size:25px;font-weight:650}.ai-page-title p{margin-top:5px}
+.ai-page-mark{width:44px;height:44px;border-radius:13px;background:#f0e8dc}
+.ai-assistant-workbench{grid-template-columns:245px minmax(0,1fr);border-radius:16px;border-color:#e0d6c8;box-shadow:0 3px 15px #59432a03}
+.ai-chat-workspace{padding:16px 20px 15px}
+.ai-history-sidebar{background:#f5f1ea}.ai-history-row{border-radius:9px}
+.ai-composer{border-radius:13px;box-shadow:0 3px 14px #61462e08}
+.ai-welcome h3{font-size:26px}.ai-welcome>p{font-size:12px}
+/* The workshop retains its genuine project, preview, version and model controls. */
+.workshop-page .workshop{--wk-accent:#a35c43;--wk-border:#e2d8ca}
+.workshop-page .workshop-heading{min-height:0;color:#332e29;box-shadow:0 4px 18px #59432a04}
+.workshop-page .workshop-heading:after{display:none}
+.workshop-page .workshop-brand{gap:13px}
+.workshop-page .workshop-brand-icon{width:48px;height:48px;border-radius:12px;box-shadow:0 3px 10px #6c442a0d}
+.workshop-page .workshop-eyebrow{color:#9b816a;font-size:9px;letter-spacing:.14em}
+.workshop-page .workshop-heading h3{font-size:25px;font-weight:650;color:#332e29;letter-spacing:-.6px}
+.workshop-page .workshop-heading p{font-size:12px;color:#8b8175;margin-top:5px}
+.workshop-page .workshop-heading .button{border-color:#d9cabb;color:#786957;background:#fffdfa}
+.workshop-page .workshop-heading .button.primary{background:#a35c43;color:#fffdfa;border-color:#a35c43;box-shadow:none}
+.workshop-page .workshop-layout{grid-template-columns:245px minmax(0,1fr);min-height:570px;border-radius:16px;border-color:#e0d6c8;box-shadow:0 3px 15px #59432a03}
+.workshop-page .workshop-list{background:#f5f1ea;border-color:#e2d8ca;padding:17px 12px;color:#51483c}
+.workshop-page .workshop-list>strong{color:#66594a}
+.workshop-page .workshop-list input{background:#fffdfa;border-color:#e1d7c8;color:#51483c}
+.workshop-page .workshop-row{padding:12px;border:1px solid transparent;border-radius:10px;gap:6px;color:#66594a}
+.workshop-page .workshop-row strong{color:#66594a;font-size:13px;font-weight:600}
+.workshop-page .workshop-row span{color:#938574;font-size:11px}
+.workshop-page .workshop-row:hover{background:#eee7dd}
+.workshop-page .workshop-row.selected{border-color:#d9c4a8;background:#eee2d2;box-shadow:inset 3px 0 #a77a50}
+.workshop-page .workshop-row.selected strong{color:#78573b}.workshop-page .workshop-row.selected span{color:#8a7965}
+.workshop-page .workshop-filters button{color:#8a7965;border-color:#e2d8ca;background:transparent}
+.workshop-page .workshop-filters button.active,.workshop-page .workshop-filters button[aria-pressed=true]{color:#885b39;background:#e9dfd1;border-color:#dcc8ad}
+.workshop-page .workshop-detail{padding:20px;background:#fffdfa}
+.workshop-page .workshop-detail>header h3{font-size:20px;color:#3e372e}
+.workshop-page .workshop-meta-strip{background:#f7f3ed;border-color:#e8dfd3;border-radius:11px}
+.workshop-page .workshop-meta-strip strong{color:#68533e}.workshop-page .workshop-summary{font-size:12px;line-height:1.8}
+.workshop-page .kaiwu-product-tabs{border-color:#e5dbcd}
+.workshop-page .kaiwu-preview-host{border:1px solid #e3dacd;border-radius:11px;overflow:hidden}
+/* Space remains a real disk browser, with its own independently scrolling file body. */
+.space-files-page{max-width:1320px;width:100%;margin:0 auto;padding:24px 28px 26px;gap:0}
+.space-files-page>.personal-module-title{flex:none}
+.personal-space-browser{display:flex;flex-direction:column;flex:1;min-height:0;min-width:0;position:relative;border:1px solid #e0d6c8;border-radius:16px;background:#fffdfa;overflow:hidden}
+.personal-space-browser>.space-workspace{min-height:0}
+.space-browser{grid-template-columns:205px minmax(0,1fr)}
+.space-sidebar{background:#f5f1ea;padding-inline:12px}.space-sidebar-scroll{padding-top:13px}
+.space-toolbar{padding:12px 16px;gap:8px;flex-wrap:wrap;min-height:59px;background:#fffdfa}
+.space-toolbar-title{max-width:190px}.space-sidebar-bottom{padding:8px 5px 12px}
+.space-file-list{padding:16px}.space-file-row{border-radius:11px}
+/* Box status uses a clearer overview and compact grouped controls, with all actions preserved. */
+.box-page-content .box-overview{padding:22px;border-radius:16px;border-color:#e0d6c8;box-shadow:0 3px 15px #59432a03}
+.box-page-content .box-overview-heading{align-items:flex-start}.box-page-content .box-identity h3{font-size:21px}
+.box-page-content .box-identity>img{width:43px;height:49px}
+.box-page-content .box-resource-grid{padding:17px 0 0;margin-top:20px}
+.box-page-content .box-resource-grid strong{font-size:24px;color:#544534;margin:8px 0}
+.box-page-content .box-operation{border-radius:13px;padding:17px;background:#fffdfa}
+.box-page-content .box-device-grid .device-card{border-radius:13px;background:#fffdfa}
+.box-page-content .box-device-grid .device-card.selected{background:#f7f0e6;border-color:#d7c09f}
+.box-page-content .content-section{margin-top:24px}.box-page-content .box-section-heading h3,.box-page-content .section-heading h3{font-size:16px}
+@media(min-width:1600px){.topbar{padding-inline:max(28px,calc((100vw - 1320px)/2 + 28px))}}
+@media(max-width:1080px){.topbar{gap:12px;padding-inline:20px}.main-nav .nav-item{min-width:53px;padding-inline:10px}.brand-copy strong{font-size:14px}.workshop-page .workshop-layout{grid-template-columns:225px minmax(0,1fr)}.ai-assistant-workbench{grid-template-columns:220px minmax(0,1fr)}.space-browser{grid-template-columns:185px minmax(0,1fr)}}
+@media(max-width:900px){.workshop-page .workshop-layout{grid-template-columns:1fr}.workshop-page .workshop-heading{align-items:flex-start;flex-wrap:wrap}.workshop-page .workshop-heading>div:last-child{width:100%;justify-content:flex-end}.store-heading{flex-wrap:wrap}.store-heading .store-toolbar{margin-left:auto}.workshop-page .workshop-detail{padding:16px}}
+@media(max-width:760px){.topbar{flex-wrap:wrap;padding:13px 16px;gap:10px}.topbar .brand{margin-right:auto}.topbar .main-nav{order:3;flex:1 1 100%;margin:0;justify-content:space-between}.main-nav .nav-item{min-width:0;flex:1;padding:8px 5px;font-size:12px}.page-content.store-page,.page-content.workshop-page,.page-content.data-page-content,.page-content.box-page-content,#ai-dialogue-host,.space-files-page{padding:16px}.personal-module-title h2,.workshop-page .workshop-heading h3,.ai-page-title h2{font-size:21px}.store-heading,.box-page-content>.page-heading,.space-files-page>.personal-module-title,.workshop-page .workshop-heading,.ai-dialogue-heading{padding:14px;border-radius:13px}.personal-module-title p{font-size:11px}.personal-module-mark{width:38px;height:38px;border-radius:11px}.ai-chat-workspace{padding:12px}.ai-assistant-workbench{grid-template-columns:190px minmax(0,1fr)}.ai-page-actions{gap:7px}.space-browser{grid-template-columns:155px minmax(0,1fr)}.space-sidebar{padding-inline:8px}.space-toolbar-title{max-width:120px}.box-page-content>.page-heading{flex-wrap:wrap}.box-page-content .settings-actions{margin-left:auto}.box-page-content .box-resource-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.box-page-content .box-resource-grid>div:nth-child(3){border:0;padding-left:0}}
+@media(max-width:560px){.ai-assistant-workbench{grid-template-columns:minmax(0,1fr)}.ai-history-sidebar{position:absolute;inset:0 auto 0 0;width:min(260px,85%);z-index:8;box-shadow:8px 0 25px #58432c13}.ai-dialogue-heading{gap:8px;flex-wrap:wrap}.space-browser{grid-template-columns:125px minmax(0,1fr)}.space-toolbar>.space-row-actions{flex-wrap:wrap}.personal-module-title p{max-width:220px}.store-page .application-list{grid-template-columns:1fr}}
+.workshop-page .workshop{--wk-ink:#514436}.workshop-page .workshop-brand-icon{filter:none}
+.workshop-page .workshop-filters{background:#eae3d9}.workshop-page .workshop-filters button[aria-pressed=true]{color:#885b39;background:#fffdfa}
+.workshop-page .workshop-row:hover:not(.selected){background:#eee7dd}
+.workshop-page .workshop-detail-actions>.primary,.workshop-page .workshop-dialog>.button.primary{background:#a35c43;border-color:#a35c43;color:#fffdfa;box-shadow:none}
+.workshop-page .workshop-heading .button.primary:hover{background:#824731}
+.workshop-page .workshop-meta-strip small{color:#938574}
+.workshop-page .workshop .kaiwu-product{border-color:#e2d8ca}.workshop-page .workshop .kaiwu-product-tabs{background:#f7f3ed;border-color:#e5dbcd}
+.workshop-page .workshop .kaiwu-product-tabs [aria-selected=true],.workshop-page .workshop .kaiwu-version-history header strong{color:#8a5e3e}
+.workshop-page .workshop .kaiwu-product-tabs [aria-selected=true]:after{background:#b48750}
+.workshop-page .workshop .kaiwu-version-history article{border-color:#e5dbcd}
+.workshop-page .workshop input:focus{outline-color:#b48750}
+.workshop-page .workshop .workshop-archived{background:#faf6ee}.workshop-page .workshop .workshop-archived h3,.workshop-page .workshop .workshop-dialog h3{color:#66513d}
+.workshop-page .workshop .workshop-dialog{border-color:#e2d8ca}.workshop-page .workshop-menu button{color:#71614e}.workshop-page .workshop-menu button:hover{background:#f4ede3}
+
+/* Shared banner rhythm for the six personal first-level sections. */
+.wanx-section-banner,.workshop-page .workshop-heading.wanx-section-banner,.team-data-page .data-page-bar.wanx-section-banner{position:relative;isolation:isolate;overflow:hidden;display:flex;align-items:center;justify-content:space-between;flex:none;gap:18px;min-height:100px;margin:0 0 18px;padding:18px 20px;border:1px solid #e4d8c8;border-radius:16px;background:linear-gradient(110deg,#f4ebde,#faf7f2 68%);box-shadow:inset 0 1px 0 #fffdf9,0 4px 18px #59432a04}
+.wanx-section-banner::before{content:"";position:absolute;inset:0;pointer-events:none;z-index:0;opacity:.15;background-image:repeating-linear-gradient(0deg,#896b4718 0,#896b4718 .5px,transparent .5px,transparent 3px),repeating-linear-gradient(90deg,#fff9 0,#fff9 .5px,transparent .5px,transparent 4px);mask-image:linear-gradient(90deg,transparent,#000 45%)}
+.wanx-section-banner::after,.workshop-page .workshop-heading.wanx-section-banner::after{content:"";display:block;position:absolute;inset:0 9% 0 auto;width:400px;height:100%;border:0;border-radius:0;transform:none;pointer-events:none;z-index:0;box-shadow:none;background-repeat:no-repeat;background-position:center;background-size:auto 140px;opacity:.28;mask-image:linear-gradient(90deg,transparent,#000 24%,#000 88%,transparent)}
+.wanx-section-banner>div{position:relative;z-index:1;min-width:0}
+.wanx-section-banner .personal-module-title,.wanx-section-banner .workshop-brand,.wanx-section-banner .data-page-title,.wanx-section-banner .ai-page-title{display:flex;align-items:center;gap:13px;min-width:0}
+.wanx-section-banner h2,.wanx-section-banner h3,.workshop-page .workshop-heading.wanx-section-banner h2,.team-data-page .wanx-section-banner h2,.ai-dialogue-heading.wanx-section-banner h2{display:flex;align-items:baseline;flex-wrap:wrap;gap:5px 12px;margin:0;color:#342e28;font-family:inherit;font-size:25px;font-weight:650;line-height:1.3;letter-spacing:-.6px}
+.wanx-section-banner .wanx-section-english,.team-data-page .wanx-section-banner h2 .wanx-section-english{display:inline-block;margin:0;color:#9d846c;font-family:inherit;font-size:10px;font-weight:550;letter-spacing:.12em;line-height:1.5;white-space:nowrap}
+.wanx-section-banner p,.workshop-page .workshop-heading.wanx-section-banner p,.team-data-page .wanx-section-banner .data-page-title p{margin:6px 0 0;font-size:12px;color:#8b8175;font-weight:400;line-height:1.6}
+.wanx-section-banner .personal-module-mark,.wanx-section-banner .data-page-mark,.wanx-section-banner .ai-page-mark{width:44px;height:44px;min-width:44px;display:grid;place-items:center;border:1px solid #dccbb3;border-radius:13px;background:#fffaf1;box-shadow:inset 0 1px #fff,0 2px 5px #78572e06}
+.workshop-page .workshop-heading.wanx-section-banner .workshop-brand-icon{width:44px;height:44px;min-width:44px;border-radius:11px;filter:none;box-shadow:0 3px 8px #6545210d}
+.wanx-section-banner .personal-module-mark svg,.wanx-section-banner .data-page-mark svg,.wanx-section-banner .ai-page-mark svg{width:27px;height:27px}
+.wanx-section-banner .store-toolbar,.wanx-section-banner .settings-actions,.wanx-section-banner .ai-page-actions,.wanx-section-banner .data-page-actions,.wanx-section-banner.workshop-heading>div:last-child{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap;flex-shrink:0}
+.wanx-section-banner .button,.wanx-section-banner .store-refresh,.wanx-section-banner .ai-history-toggle,.wanx-section-banner .ai-collapsed-new{min-height:35px;padding:8px 13px;font-size:12px;line-height:1.5;border-radius:9px;white-space:nowrap}
+.wanx-section-banner .ai-history-leading{margin:0}.wanx-section-banner .ai-heading-left{gap:0}.wanx-section-banner .ai-collapsed-new{width:auto}
+.space-files-page>.wanx-section-banner{flex:none}.space-files-page>.wanx-section-banner .personal-module-title{margin:0;padding:0;background:none;border:0;box-shadow:none}
+@media(max-width:900px){.wanx-section-banner::after,.workshop-page .workshop-heading.wanx-section-banner::after{right:0;opacity:.22}.wanx-section-banner .store-toolbar .connection-line{display:none}}
+@media(max-width:760px){.wanx-section-banner,.workshop-page .workshop-heading.wanx-section-banner,.team-data-page .data-page-bar.wanx-section-banner{min-height:94px;padding:14px;gap:12px;flex-wrap:wrap;border-radius:13px}.wanx-section-banner h2,.wanx-section-banner h3,.workshop-page .workshop-heading.wanx-section-banner h2,.team-data-page .wanx-section-banner h2,.ai-dialogue-heading.wanx-section-banner h2{font-size:21px;gap:4px 9px}.wanx-section-banner .wanx-section-english{font-size:9px}.wanx-section-banner p{font-size:11px}.wanx-section-banner .store-toolbar,.wanx-section-banner .settings-actions,.wanx-section-banner .ai-page-actions,.wanx-section-banner .data-page-actions,.wanx-section-banner.workshop-heading>div:last-child{margin-left:auto;width:auto}.wanx-section-banner::after,.workshop-page .workshop-heading.wanx-section-banner::after{opacity:.18;width:280px}}
+/* Restore the section description hidden by the legacy compact dialogue header. */
+.ai-dialogue-heading.wanx-section-banner .ai-page-title p{display:block}

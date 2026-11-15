@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wanx-expert-create-result/1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "id",
+    "agent_id",
+    "user_id",
+    "name",
+    "description",
+    "default_model",
+    "state",
+    "expert_id",
+    "bootstrap_pending"
+  ],
+  "properties": {
+    "id": {
+      "type": [
+        "string",
+        "integer"
+      ]
+    },
+    "agent_id": {
+      "type": "string"
+    },
+    "user_id": {
+      "type": "integer"
+    },
+    "name": {
+      "type": "string"
+    },
+    "description": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "default_model": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "state": {
+      "type": "string"
+    },
+    "expert_id": {
+      "type": "string"
+    },
+    "bootstrap_pending": {
+      "type": "boolean"
+    }
+  }
+}

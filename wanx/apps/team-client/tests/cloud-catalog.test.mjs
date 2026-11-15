@@ -1,0 +1,23 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createCloudCatalog } from '../applications/cloud-catalog.mjs';
+const catalog = name => ({items:[{applicationId:'example.cloud-app',name,description:'云端介绍'}]});
+const fail = (code,status) => Object.assign(Error(code),{code,status});
+function fixture(){let scope='service:account-A',epoch=0,value=null,reply=()=>catalog('云端产品');const calls=[];const store={load:async()=>value,save:async v=>{value=structuredClone(v);}};const session=()=>{const e=epoch;return()=>{if(e!==epoch)throw fail('MARKET_SESSION_CHANGED');};};const options={store,session,getScope:()=>scope,now:()=>1700000000000,request:async input=>{calls.push(input);return reply();}};return {options,calls,create:()=>createCloudCatalog(options),respond:f=>reply=f,change:s=>{scope=s;epoch++;},get saved(){return value;}};}
+test('new and renamed apps come only from the remote catalog, including authoritative empty results',async()=>{const h=fixture(),c=h.create();assert.equal((await c.list()).items[0].name,'云端产品');h.respond(()=>catalog('新名称'));assert.equal((await c.list()).items[0].name,'新名称');h.respond(()=>({items:[]}));assert.deepEqual((await c.list()).items,[]);h.respond(()=>{throw fail('ACCOUNT_NETWORK_ERROR');});assert.deepEqual((await c.list()).items,[]);});
+test('successful account catalog survives restart, stays marked offline and is never shared across accounts',async()=>{const h=fixture();await h.create().list();h.respond(()=>{throw fail('ACCOUNT_NETWORK_ERROR');});const cached=await h.create().list();assert.equal(cached.items[0].name,'云端产品');assert.deepEqual(cached.catalogState,{source:'cache',offline:true,fetchedAt:1700000000000});h.change('service:account-B');await assert.rejects(h.create().list(),{code:'ACCOUNT_NETWORK_ERROR'});h.change('other-service:account-A');await assert.rejects(h.create().list(),{code:'ACCOUNT_NETWORK_ERROR'});});
+test('auth failures, invalid catalog and rejected requests cannot be hidden by cached results',async()=>{const h=fixture(),c=h.create();await c.list();for(const e of [fail('ACCOUNT_SESSION_EXPIRED',401),fail('ACCOUNT_ACCESS_DENIED',403),fail('ACCOUNT_CANCELLED'),fail('ACCOUNT_REDIRECT_REJECTED')]){h.respond(()=>{throw e;});await assert.rejects(c.list(),{code:e.code});}h.respond(()=>({items:[{applicationId:'../invalid',name:'bad'}]}));await assert.rejects(c.list(),{code:'MARKET_INVALID_RESPONSE'});});
+test('account change fences in-flight response and prevents persisting it',async()=>{const h=fixture(),c=h.create();let resolve;h.respond(()=>new Promise(r=>resolve=r));const pending=c.list();h.change('service:account-B');resolve(catalog('账号A'));await assert.rejects(pending,{code:'MARKET_SESSION_CHANGED'});assert.equal(h.saved,null);});
+test('older successful responses cannot overwrite a newer cached catalog',async()=>{const h=fixture(),c=h.create();let resolve;h.respond(()=>new Promise(r=>resolve=r));const old=c.list();h.respond(()=>catalog('新目录'));await c.list();resolve(catalog('旧目录'));await old;h.respond(()=>{throw fail('ACCOUNT_NETWORK_ERROR');});assert.equal((await c.list()).items[0].name,'新目录');});
+test('cache failure preserves a live catalog and never fabricates a built-in list',async()=>{const h=fixture();h.options.store={load:async()=>{throw Error('locked');},save:async()=>{throw Error('locked');}};const c=h.create();assert.equal((await c.list()).catalogState.source,'cloud');const empty=fixture();empty.respond(()=>{throw fail('ACCOUNT_NETWORK_ERROR');});await assert.rejects(empty.create().list(),{code:'ACCOUNT_NETWORK_ERROR'});});
+
+test('catalog projection never caches credentials, download addresses or unlisted entries', async () => {
+ const h=fixture();h.respond(()=>({items:[{applicationId:'example.visible',name:'可见',iconUrl:'https://cdn.example.org/icon.png',description:'',downloadUrl:'secret-download',accessToken:'secret-token'},{applicationId:'example.hidden',name:'隐藏',listed:false}],token:'secret'}));
+ const c=h.create(),value=await c.list();assert.equal(value.items.length,1);assert.equal(value.items[0].iconUrl,'https://cdn.example.org/icon.png');assert.doesNotMatch(JSON.stringify(h.saved),/secret|example.hidden/);
+});
+
+test('service outages use cache but integrity and trust failures remain visible', async () => {
+ const h=fixture(),c=h.create();await c.list();
+ for(const code of ['ACCOUNT_REQUEST_FAILED','MARKET_DATABASE_UNAVAILABLE','MARKET_STORAGE_UNAVAILABLE']){h.respond(()=>{throw fail(code,503);});assert.equal((await c.list()).catalogState.offline,true);}
+ for(const code of ['MARKET_INTEGRITY_ERROR','MARKET_TRUST_NOT_CONFIGURED']){h.respond(()=>{throw fail(code,503);});await assert.rejects(c.list(),{code});}
+});

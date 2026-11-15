@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "kind": "restart",
+  "target": {
+    "organizationId": "org-demo",
+    "boxId": "box-demo",
+    "applicationId": "app-demo",
+    "environment": "prod"
+  },
+  "expectedGeneration": 1,
+  "idempotencyKey": "request-restart-demo",
+  "decisionRef": {
+    "id": "decision-restart-demo",
+    "revision": 1
+  }
+}

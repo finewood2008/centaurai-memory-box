@@ -1,0 +1,5 @@
+{
+  "title": "Reference",
+  "icon": "Library",
+  "pages": ["openai-api", "managed-agent", "memory-api", "local-api", "ports"]
+}

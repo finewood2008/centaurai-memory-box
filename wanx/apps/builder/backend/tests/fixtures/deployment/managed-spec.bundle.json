@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "releaseId": "release-spec-demo-v1",
+  "applicationId": "app-demo",
+  "payloadKind": "managed-spec",
+  "specVersionId": "spec-demo-v1",
+  "specDigest": "sha256:2be7c0ea36e416cf43325d5ce5c1663d86511f59be34bb9dcc9a1faa71154213",
+  "specRef": {
+    "id": "spec-demo-v1",
+    "digest": "sha256:2be7c0ea36e416cf43325d5ce5c1663d86511f59be34bb9dcc9a1faa71154213"
+  },
+  "artifactDescriptors": [],
+  "dependencyLockDigest": "sha256:16182804ef45ae45c7ec7d35070ef86dd7241003ac3e0c0c319625d74870aedb",
+  "runtimeRequirements": {
+    "runtimeRef": {
+      "id": "runtime-demo",
+      "revision": 1
+    },
+    "platforms": [
+      {
+        "os": "linux",
+        "arch": "arm64"
+      }
+    ],
+    "resourceBudget": {
+      "memoryBytes": 268435456,
+      "storageBytes": 536870912
+    },
+    "healthContractRef": {
+      "id": "health-contract-demo",
+      "revision": 1
+    },
+    "dataCompatibilityRef": {
+      "id": "data-compatibility-demo",
+      "revision": 1
+    },
+    "candidateMode": true
+  },
+  "clientDelivery": {
+    "mode": "load",
+    "runtimeRef": {
+      "id": "renderer-demo",
+      "revision": 1
+    },
+    "resourceArtifactIds": []
+  },
+  "provenanceRef": {
+    "id": "provenance-spec-demo",
+    "revision": 1
+  },
+  "bundleDigest": "sha256:fe1f6fe97dbab33261b84c56146641619dff68234c4d985ae7ae1f5657a20c92"
+}

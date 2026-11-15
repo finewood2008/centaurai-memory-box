@@ -1,0 +1,65 @@
+---
+title: 安装并开始使用
+description: 安装 Memmy，找回一段过去的工作，再接着做下去。
+icon: Rocket
+---
+
+import welcomeScreen from "../../assets/welcome-desktop-full.png";
+import permissionScreen from "../../assets/first-permission-full.jpg";
+
+## 1. 安装并完成设置
+
+下载安装包并打开 Memmy。在欢迎页输入手机号，点击「获取验证码」，填入短信验证码后点击「登录 / 注册」。
+
+<MemmyDownload />
+
+<ProductScreenshot src={welcomeScreen} alt="Memmy 完整欢迎界面" caption="账号登录在中间的卡片中；自定义 API Key 入口位于下方。点击图片可在本页放大查看。" />
+
+<details>
+<summary>使用自己的 API Key（无需注册）</summary>
+
+在欢迎页选择「使用自定义大模型 API Key（无需注册）」：
+
+1. 选择服务商，填写模型 ID、API 地址和 API Key。
+2. 选择用于记忆检索的 Embedding 方式，并为记忆摘要和技能进化选择模型。
+3. 语音识别和生图暂时不用可以跳过。
+4. 点击「测试连接」，成功后保存。
+
+</details>
+
+## 2. 带入过去的对话
+
+首次设置会询问是否读取其他 AI 工具的历史对话。想先体验记忆，可以选「仅允许扫描」；希望同时为受支持的工具安装记忆接入组件，可以选「全部允许」。暂时不导入，选「不允许」。
+
+<ProductScreenshot src={permissionScreen} alt="Memmy 首次导入历史对话的完整授权界面" caption="三个选项位于窗口底部；之后可在「记忆管理 → 跨 Agent 接入」调整。" />
+
+进入工作台后，打开「记忆管理 → 跨Agent接入」，找到你用过的工具。首次点击「首次扫描」，已经同步过则点击「同步新增」。等待摘要和索引处理完成，在「记忆」中搜索一个熟悉的项目名，打开一条记录。
+
+<details>
+<summary>没有历史对话，或暂时不想导入</summary>
+
+先在 Memmy 新建任务，发送一段信息。
+
+在「记忆管理 → 记忆」找到相关记忆后，另开一个新任务，继续对话。
+
+</details>
+
+## 3. 让 Memmy 找回背景
+
+新建一个任务，参考下面这段话，找回记忆：
+
+<PromptExample composer={true} prompt="你还记得之前做的几场用户访谈吗？请帮我规划一场 30 分钟的团队会议，主题是用户反馈整改。" />
+
+看看回答是否对应你记得的事情。若没找到，回到「记忆管理 → 记忆」确认该记录已处理完成，再用记录里的具体名称提问。
+
+能在新任务中找回过去的内容，并用它继续工作，就完成了第一次记忆体验。
+
+## 4. 工具与连接
+
+Memmy 可以通过集成工具接入你工作时使用的服务和资料，例如 Notion、GitHub 等。你也可以连接钉钉、飞书、微信等聊天渠道，给 Memmy 布置任务，或安装插件，把一项完整能力加入当前任务。当一项任务依赖对话以外的信息、要在另一个系统里完成操作，或需要重复同一套流程时，就用它们。
+
+在左侧打开「连接与工具」。接着看 [连接外部工具](/docs/tools/integrations)、[连接聊天渠道](/docs/channels) 或 [插件](/docs/plugins/overview)。
+
+## 相关说明
+
+[遇到问题时排查](/docs/help/faq)

@@ -1,0 +1,1022 @@
+import { ensurePanelCache, panelAnalysisLogs, panelMemoryStats, panelVisibleMemoryIds } from "../../storage/panel-cache.js";
+import type { MemoryRow } from "../../types.js";
+import { effectiveEpisodeMemoryIds } from "../../storage/memory-relations.js";
+import {externalEvidenceNamespaceForMemory} from "../external-evidence-source.js";
+import {PanelLogReader} from "../../storage/panel-log-read.js";
+import { PanelTaskReader, type PanelTurnField } from "../../storage/panel-task-read.js";
+import { MemoryServiceError } from "../../utils/error.js";
+import type { MemmyConfig } from "../../config/index.js";
+import { isRecord } from "../../utils/json.js";
+import type { StorageBackendCapabilities } from "../../storage/backend.js";
+import type {
+  ApiLogRecord,
+  ChangeLogRecord,
+  EmbeddingRetryStatus,
+  EpisodeRecord,
+  EvolutionJobRecord,
+  L3WorldModelScopeRecord,
+  RawTurnRecord,
+  RecallEventRecord,
+  Repositories,
+  SkillTrialRecord
+} from "../../storage/repositories.js";
+import { detailSummaryForMemory } from "./memory.js";
+import type {
+  HealthResponse,
+  MemoryFilter,
+  MemoryKind,
+  MemoryLayer,
+  MemoryListItem,
+  PanelMemoryListItem,
+  RecallMemoryLayer,
+  RawTurnSummary,
+  RequestEnvelope,
+  RuntimeNamespace,
+  UserMemoryRecord,
+  WorldModelScope
+} from "../../types.js";
+import { nowIso, resolveTimeZone } from "../../utils/time.js";
+import {
+  panelAverage,
+  panelDateKey,
+  panelDateKeys,
+  panelLastSevenDateKeys,
+  panelPercentile95,
+  panelRecallScore,
+  panelRoundDecimal,
+  panelRoundInt,
+  panelToolLatency
+} from "./model-costs.js";
+import {
+  evidenceMemoryIds,
+  storedGeneratedTitle,
+  waitingSourceText
+} from "./display-fields.js";
+import {
+  panelCountByDate,
+  panelListItemFromMemory,
+  panelSourceDistribution
+} from "./panel.js";
+import { feedbackPolarityCounts } from "./episode.js";
+
+const PANEL_ITEMS_PAGE_SIZE = 20;
+const PANEL_DAILY_ACTIVITY_DAYS = 371;
+const PANEL_USAGE_EVENT_LIMIT = 10_000;
+
+type PanelChange = {
+  seq: number;
+  op: "created" | "updated" | "archived" | "deleted";
+  kind: MemoryKind | "session" | "episode" | "job" | "feedback" | "raw_turn" | "repair" | "skill_trial" | "recall" | "artifact";
+  id: string;
+  version?: number;
+  source: "turn_complete" | "feedback" | "worker" | "panel" | "system";
+  updatedAt: string;
+};
+
+/**
+ * Boundary dependencies for the panel read model.  This keeps the model free of
+ * a reverse dependency on MemoryService while retaining the service's existing
+ * serialization, health, cursor, and configuration behavior.
+ */
+export interface PanelReadModelDependencies {
+  repos: Repositories;
+  config: () => MemmyConfig;
+  storageCapabilities: () => StorageBackendCapabilities;
+  schemaVersion: () => { version: number; lastMigrationId?: string };
+  health: (routes?: string[]) => HealthResponse;
+  models: () => HealthResponse["models"];
+  resolveContext: (request: RequestEnvelope & { sessionId?: string; userId?: string }) => {
+    userId: string;
+    conversationId?: string;
+    namespace: RuntimeNamespace;
+  };
+  encodeChangeCursor: (seq: number, namespace?: RuntimeNamespace) => string;
+  decodeChangeCursor: (cursor: string | undefined, namespace?: RuntimeNamespace) => number;
+  episodeRef: (episode: EpisodeRecord, titleJobPending?: boolean) => Record<string, unknown>;
+  rawTurnSummary: (rawTurn: RawTurnRecord) => RawTurnSummary;
+  now?: () => string;
+}
+
+export class PanelReadModel {
+  private readonly now: () => string;
+
+  constructor(private readonly deps: PanelReadModelDependencies) {
+    this.now = deps.now ?? nowIso;
+  }
+
+  auditLogs(input: RequestEnvelope & {
+    userId?: string;
+    targetKind?: string;
+    targetId?: string;
+    limit?: number;
+  } = {}): {
+    items: ReturnType<Repositories["runtime"]["listAudit"]>;
+    serverTime: string;
+  } {
+    return {
+      items: this.deps.repos.runtime.listAudit({
+        userId: input.userId ?? this.deps.resolveContext(input).userId,
+        targetKind: input.targetKind,
+        targetId: input.targetId,
+        limit: input.limit
+      }),
+      serverTime: this.now()
+    };
+  }
+
+  serviceLogs(input: RequestEnvelope & {
+    userId?: string;
+    limit?: number;
+    cursor?: string;
+  } = {}): {
+    cursor: string;
+    entries: Array<{
+      type: "change" | "audit" | "job";
+      id: string;
+      at: string;
+      userId?: string;
+      action: string;
+      targetKind?: string;
+      targetId?: string;
+      source?: string;
+      payload?: unknown;
+    }>;
+    changes: PanelChange[];
+    audits: ReturnType<Repositories["runtime"]["listAudit"]>;
+    jobs: EvolutionJobRecord[];
+    serverTime: string;
+  } {
+    const limit = input.limit ?? 50;
+    const changes = this.panelChanges({
+      namespace: input.namespace,
+      limit,
+      cursor: input.cursor
+    });
+    const audits = this.deps.repos.runtime.listAudit({ limit });
+    const jobs = [
+      ...this.deps.repos.runtime.listJobs("failed", limit),
+      ...this.deps.repos.runtime.listJobs("dead_letter", limit)
+    ].slice(0, limit);
+    const entries = [
+      ...changes.items.map((change) => ({
+        type: "change" as const,
+        id: String(change.seq),
+        at: change.createdAt,
+        userId: change.userId,
+        action: `${change.kind}.${change.op}`,
+        targetKind: change.kind,
+        targetId: change.entityId,
+        source: change.source,
+        payload: changeLogToPanelChange(change)
+      })),
+      ...audits.map((audit) => ({
+        type: "audit" as const,
+        id: audit.id,
+        at: audit.createdAt,
+        userId: audit.userId,
+        action: audit.action,
+        targetKind: audit.targetKind,
+        targetId: audit.targetId,
+        source: "audit",
+        payload: audit
+      })),
+      ...jobs.map((job) => ({
+        type: "job" as const,
+        id: job.id,
+        at: job.updatedAt,
+        userId: job.userId,
+        action: `job.${job.status}`,
+        targetKind: job.jobType,
+        targetId: job.targetMemoryId,
+        source: "worker",
+        payload: job
+      }))
+    ].sort((a, b) => Date.parse(b.at) - Date.parse(a.at)).slice(0, limit);
+    return {
+      cursor: changes.cursor,
+      entries,
+      changes: changes.changes,
+      audits,
+      jobs,
+      serverTime: this.now()
+    };
+  }
+
+  panelLogs(input: Parameters<PanelLogReader["list"]>[0], request:RequestEnvelope={}) {
+    if(input.skillId) {
+      const memory=this.deps.repos.memories.getForDisplay(input.skillId)
+        ?? (input.skillId.includes("::") ? this.deps.repos.memories.getForDisplay(input.skillId.split("::").at(-1)!.trim()) : undefined);
+      if(!memory || memory.memoryLayer!=="Skill") throw new MemoryServiceError("not_found","Skill unavailable");
+      const internal=memory.properties.internal_info;
+      const evidence=isRecord(internal.external_evidence)||isRecord(internal.external_evidence_candidate);
+      if(evidence && request.namespace && (externalEvidenceNamespaceForMemory(memory).tenantId||null)!==(request.namespace.tenantId||null)) throw new MemoryServiceError("forbidden","Skill unavailable");
+    }
+    const result = new PanelLogReader(this.deps.repos.db,!request.namespace?.userId).list(input);
+    return {...result,logs:this.withCurrentTraceSummaries(result.logs)};
+  }
+  panelLogDetail(id:number,request:RequestEnvelope={}) {return {log:this.withCurrentTraceSummaries([new PanelLogReader(this.deps.repos.db,!request.namespace?.userId).detail(id)])[0]!,serverTime:this.now()};}
+
+  apiLogs(input: {
+    tools?: Array<"memory_add" | "memory_search" | "skill_generate" | "skill_evolve">;
+    sourceAgent?: string;
+    excludedSourceAgents?: string[];
+    limit?: number;
+    offset?: number;
+  } = {},local=false): {
+    logs: ReturnType<Repositories["runtime"]["listApiLogs"]>["logs"];
+    total: number;
+    limit: number;
+    offset: number;
+    nextOffset?: number;
+    serverTime: string;
+  } {
+    const limit = Math.max(1, Math.min(input.limit ?? 50, 500));
+    const offset = Math.max(0, input.offset ?? 0);
+    const result = this.deps.repos.runtime.listApiLogs({
+      toolNames: input.tools,
+      sourceAgent: input.sourceAgent,
+      excludedSourceAgents: input.excludedSourceAgents,
+      limit,
+      offset
+    });
+    const visible = new PanelLogReader(this.deps.repos.db,local).visibleIds(result.logs.map(log => log.id));
+    return {
+      logs: this.withCurrentTraceSummaries(result.logs.filter(log => visible.has(log.id))),
+      total: result.total,
+      limit,
+      offset,
+      nextOffset: offset + result.logs.length < result.total ? offset + result.logs.length : undefined,
+      serverTime: this.now()
+    };
+  }
+
+  private withCurrentTraceSummaries(logs: ApiLogRecord[]): ApiLogRecord[] {
+    const ids = new Set<string>();
+    for (const log of logs) {
+      if (log.toolName !== "memory_add") continue;
+      try {
+        const output = JSON.parse(log.outputJson);
+        if (!Array.isArray(output.details)) continue;
+        for (const detail of output.details) {
+          if (!isRecord(detail)) continue;
+          const id = detail.role === "span" ? detail.spanId ?? detail.traceId : detail.role === "trace" ? detail.traceId : undefined;
+          if (typeof id === "string") ids.add(id);
+        }
+      } catch { /* Preserve the existing malformed-log fallback. */ }
+    }
+    const byId = new Map(this.deps.repos.memories.getManyForPanel([...ids]).map(memory => [memory.id, memory]));
+    return logs.map(log => this.withTraceSummaries(log, byId));
+  }
+
+  private withTraceSummaries(log: ApiLogRecord, byId: Map<string, MemoryRow>): ApiLogRecord {
+    if (log.toolName !== "memory_add") return log;
+
+    try {
+      const output = JSON.parse(log.outputJson) as unknown;
+      if (!isRecord(output) || !Array.isArray(output.details)) return log;
+
+      let changed = false;
+      const details = output.details.map((detail) => {
+        if (!isRecord(detail) || (detail.role !== "trace" && detail.role !== "span")) return detail;
+        const memoryId = typeof (detail.role === "span" ? detail.spanId : detail.traceId) === "string"
+          ? detail.role === "span" ? detail.spanId : detail.traceId
+          : detail.traceId;
+        if (typeof memoryId !== "string") return detail;
+        const memory = byId.get(memoryId);
+        const spanGoal = memory && detail.role === "span"
+          ? this.spanGoalForMemory(memory)
+          : undefined;
+        const summary = memory && detail.role === "trace" ? detailSummaryForMemory(memory) : undefined;
+        const key = detail.role === "span" ? "spanGoal" : "summary";
+        const value = spanGoal ?? summary;
+        if (value === undefined || (detail.role === "span" && !value) || detail[key] === value) return detail;
+        changed = true;
+        return { ...detail, [key]: value };
+      });
+
+      return changed ? { ...log, outputJson: JSON.stringify({ ...output, details }) } : log;
+    } catch {
+      return log;
+    }
+  }
+
+  private spanGoalForMemory(memory: Parameters<typeof detailSummaryForMemory>[0]): string | undefined {
+    const span = isRecord(memory.properties.internal_info.span) ? memory.properties.internal_info.span : undefined;
+    const goal = span?.span_goal;
+    return typeof goal === "string" && goal.trim() ? goal.trim() : undefined;
+  }
+
+  serviceMetrics(input: RequestEnvelope & { userId?: string } = {}): {
+    storage: StorageBackendCapabilities;
+    schema: { version: number; lastMigrationId?: string };
+    memory: ReturnType<PanelReadModel["panelOverview"]>["stats"];
+    changeSeq: number;
+    feedback: { recent: number; positive: number; negative: number; neutral: number };
+    jobs: Record<"queued" | "leased" | "succeeded" | "failed" | "dead_letter", number>;
+    embeddingRetries: Record<"pending" | "in_progress" | "succeeded" | "failed", number>;
+    models: HealthResponse["models"];
+    serverTime: string;
+  } {
+    const overview = this.panelOverview(input);
+    return {
+      storage: this.deps.storageCapabilities(),
+      schema: this.deps.schemaVersion(),
+      memory: overview.stats,
+      changeSeq: overview.latestChangeSeq,
+      feedback: (() => {
+        const recent = this.deps.repos.runtime.listFeedback({ limit: 1000 });
+        return { recent: recent.length, ...feedbackPolarityCounts(recent) };
+      })(),
+      jobs: overview.stats.jobs,
+      embeddingRetries: overview.stats.embeddingRetries,
+      models: this.deps.models(),
+      serverTime: this.now()
+    };
+  }
+
+  adminStatus(input: RequestEnvelope & { userId?: string } = {}, routes: string[] = []): {
+    health: HealthResponse;
+    overview: ReturnType<PanelReadModel["panelOverview"]>;
+    failedJobs: EvolutionJobRecord[];
+    deadLetterJobs: EvolutionJobRecord[];
+    serverTime: string;
+  } {
+    return {
+      health: this.deps.health(routes),
+      overview: this.panelOverview(input),
+      failedJobs: this.deps.repos.runtime.listJobs("failed", 20),
+      deadLetterJobs: this.deps.repos.runtime.listJobs("dead_letter", 20),
+      serverTime: this.now()
+    };
+  }
+
+  configStatus(_input: RequestEnvelope = {}): {
+    version: number;
+    config: MemmyConfig;
+    redacted: boolean;
+    serverTime: string;
+  } {
+    const config = this.deps.config();
+    return {
+      version: config.version,
+      config: redactConfig(config) as MemmyConfig,
+      redacted: true,
+      serverTime: this.now()
+    };
+  }
+
+  panelOverview(_input: RequestEnvelope & { userId?: string } = {}): {
+    stats: {
+      byLayer: Record<MemoryLayer, number>;
+      byStatus: Record<"activated" | "resolving" | "archived" | "deleted", number>;
+      episodes: Record<"open" | "processing" | "closed", number>;
+      jobs: Record<"queued" | "leased" | "succeeded" | "failed" | "dead_letter", number>;
+      embeddingRetries: Record<"pending" | "in_progress" | "succeeded" | "failed", number>;
+      lastChangeSeq?: number;
+    };
+    counts: Record<MemoryLayer, number>;
+    queuedJobs: number;
+    latestChangeSeq: number;
+    cursor: string;
+    etag: string;
+    serverTime: string;
+  } {
+    const byLayer = this.memoryLayerCounts();
+    const byStatus = this.memoryStatusCounts();
+    const latestChangeSeq = this.deps.repos.runtime.latestChangeSeq();
+    const jobs = this.jobStatusCounts();
+    const embeddingRetries = this.embeddingRetryStatusCounts();
+    return {
+      stats: {
+        byLayer,
+        byStatus,
+        episodes: this.episodeStatusCounts(),
+        jobs,
+        embeddingRetries,
+        lastChangeSeq: latestChangeSeq || undefined
+      },
+      counts: byLayer,
+      queuedJobs: jobs.queued,
+      latestChangeSeq,
+      cursor: this.deps.encodeChangeCursor(latestChangeSeq),
+      etag: `panel-overview-v${latestChangeSeq}`,
+      serverTime: this.now()
+    };
+  }
+
+  panelStatistics(input:RequestEnvelope, rows=Array.from(panelMemoryStats(this.deps.repos.db)), prepared = false) {
+    return {overview:this.panelOverviewSummary(input,rows),analysis:this.panelAnalysis(input,rows,prepared)};
+  }
+
+  panelOverviewSummary(input: RequestEnvelope & { userId?: string } = {}, rows?: ReturnType<Repositories["memories"]["listStats"]>): {
+    counts: { memories: number; userMemories: number; skills: number; experiences: number; worldModels: number };
+    sourceDistribution: Array<{ source: string; count: number; percentage: number }>;
+    dailyActivity: Array<{ date: string; count: number }>;
+  } {
+    const memories = rows ?? Array.from(panelMemoryStats(this.deps.repos.db));
+    const userId = input.userId ?? input.namespace?.userId;
+    const timeZone = resolveTimeZone(input.timeZone);
+    const dates = panelDateKeys(this.now(), PANEL_DAILY_ACTIVITY_DAYS, timeZone);
+    return {
+      counts: {
+        memories: memories.filter((memory) => memory.memoryLayer === "L1").length,
+        userMemories: this.deps.repos.userMemories.countForPanel({ userId }),
+        skills: memories.filter((memory) => memory.memoryLayer === "Skill").length,
+        experiences: memories.filter((memory) => memory.memoryLayer === "L2").length,
+        worldModels: memories.filter((memory) => memory.memoryLayer === "L3").length
+      },
+      dailyActivity: panelCountByDate(memories, dates, (memory) => memory.createdAt, timeZone),
+      sourceDistribution: panelSourceDistribution(memories)
+    };
+  }
+
+  panelAnalysis(input: RequestEnvelope & { userId?: string } = {}, rows?: ReturnType<Repositories["memories"]["listStats"]>, prepared = false): {
+    metrics: {
+      avgRecallScore: number;
+      recallEvents: number;
+      activeSkills: number;
+      recentlyUsedSkills: number;
+      avgToolLatencyMs: number;
+      p95ToolLatencyMs: number;
+    };
+    dailyMemoryWrites: Array<{ date: string; count: number }>;
+    dailySkillEvolutions: Array<{ date: string; count: number }>;
+    toolLatency: {
+      tools: Array<{ name: string; calls: number; avgMs: number; p95Ms: number }>;
+      series: Array<{ name: string; points: Array<{ date: string; avgMs: number }> }>;
+    };
+  } {
+    const timeZone = resolveTimeZone(input.timeZone);
+    const dates = panelLastSevenDateKeys(this.now(), timeZone);
+    const memories = rows ?? Array.from(panelMemoryStats(this.deps.repos.db));
+    const skillMemories = memories.filter((memory) => memory.memoryLayer === "Skill");
+    const activeSkillIds = new Set(
+      skillMemories.filter((memory) => memory.status === "activated").map((memory) => memory.id)
+    );
+    const logs = panelAnalysisLogs(this.deps.repos.db, prepared)
+      .filter((log) => dates.includes(panelDateKey(log.calledAt, timeZone)));
+    const recentlyUsedSkills = panelActivatedSkillUseCount({
+      activeSkillIds,
+      recallEvents: this.deps.repos.runtime.listRecallEvents({ limit: PANEL_USAGE_EVENT_LIMIT }),
+      skillTrials: this.deps.repos.runtime.listSkillTrials({ limit: PANEL_USAGE_EVENT_LIMIT }),
+      dates,
+      timeZone
+    });
+    const recallScores = logs
+      .filter((log) => log.toolName === "memory_search")
+      .map((log) => panelRecallScore(log.outputJson))
+      .filter((score): score is number => score !== undefined);
+    const durations = logs.map((log) => Math.max(0, Math.round(log.durationMs)));
+    return {
+      metrics: {
+        avgRecallScore: panelRoundDecimal(panelAverage(recallScores), 2),
+        recallEvents: logs.filter((log) => log.toolName === "memory_search").length,
+        activeSkills: activeSkillIds.size,
+        recentlyUsedSkills,
+        avgToolLatencyMs: panelRoundInt(panelAverage(durations)),
+        p95ToolLatencyMs: panelPercentile95(durations)
+      },
+      dailyMemoryWrites: panelCountByDate(memories, dates, (memory) => memory.createdAt, timeZone),
+      dailySkillEvolutions: panelCountByDate(skillMemories, dates, (memory) => memory.updatedAt, timeZone),
+      toolLatency: panelToolLatency(logs, dates, timeZone)
+    };
+  }
+
+  panelItems(input: RequestEnvelope & {
+    userId?: string;
+    userSummary?: boolean;
+    layer?: RecallMemoryLayer;
+    status?: "activated" | "resolving" | "archived" | "deleted";
+    q?: string;
+    tags?: string[];
+    sourceAgent?: string;
+    excludedSourceAgents?: string[];
+    page?: number;
+    limit?: number;
+    cursor?: string | number;
+  }): {
+    items: PanelMemoryListItem[];
+    page: number;
+    pageSize: number;
+    total: number;
+    totalPages: number;
+    hasNext: boolean;
+    hasPrev: boolean;
+    etag: string;
+    nextCursor?: string;
+    serverTime: string;
+  } {
+    const pageSize = normalizePanelItemsLimit(input.limit);
+    if (input.layer === "UserMemory") {
+      const userId = input.userId ?? input.namespace?.userId;
+      const requestedPage = normalizePageNumber(input.page);
+      if (input.status === "resolving") {
+        return emptyPanelItems(requestedPage, pageSize, this.now());
+      }
+      const status = input.status === "activated"
+        ? "active"
+        : input.status === "archived" || input.status === "deleted"
+          ? input.status
+          : undefined;
+      const total = this.deps.repos.userMemories.countForPanel({
+        userId,
+        status,
+        query: input.q,
+        sourceAgent: input.sourceAgent
+      });
+      const totalPages = Math.max(1, Math.ceil(total / pageSize));
+      const page = Math.min(requestedPage, totalPages);
+      const offset = (page - 1) * pageSize;
+      const memories = this.deps.repos.userMemories.listForPanel({
+        userId,
+        status,
+        query: input.q,
+        sourceAgent: input.sourceAgent,
+        limit: pageSize,
+        offset,
+        summaryOnly: input.userSummary
+      });
+      return {
+        items: memories.map(memory => { const item = userMemoryPanelItem(memory); return input.userSummary ? {...item, metadata: {...item.metadata, fullContentAvailable: true}} : item; }),
+        page,
+        pageSize,
+        total,
+        totalPages,
+        hasNext: offset + memories.length < total,
+        hasPrev: offset > 0,
+        etag: `panel-items-v${this.deps.repos.runtime.latestChangeSeq()}`,
+        nextCursor: offset + memories.length < total ? String(offset + memories.length) : undefined,
+        serverTime: this.now()
+      };
+    }
+    ensurePanelCache(this.deps.repos.db,["memories"]);
+    const filter: MemoryFilter = {
+      panelSource: true,
+      panelVisible: true,
+      memoryLayer: input.layer,
+      status: input.status,
+      tags: input.tags,
+      agentId: input.sourceAgent,
+      excludedAgentIds: input.excludedSourceAgents
+    };
+    const total = input.q?.trim()
+      ? this.deps.repos.memories.searchCount(input.q, { ...filter, status: filter.status ?? ["activated", "resolving"] })
+      : this.deps.repos.memories.count(filter);
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const requestedPage = normalizePageNumber(input.page);
+    const page = Math.min(requestedPage, totalPages);
+    const offset = normalizeOffsetCursor(input.cursor) ?? ((page - 1) * pageSize);
+    const memories = input.q?.trim()
+      ? this.deps.repos.memories.getManyForPanel(this.deps.repos.memories.searchPanelIds(
+          input.q,
+          { ...filter, status: filter.status ?? ["activated", "resolving"] },
+          pageSize,
+          offset
+        ).map((hit) => hit.id))
+      : this.deps.repos.memories.listForPanel(filter, pageSize, offset);
+    return {
+      items: this.displayItems(memories,!input.namespace?.userId),
+      page,
+      pageSize,
+      total,
+      totalPages,
+      hasNext: offset + memories.length < total,
+      hasPrev: offset > 0,
+      etag: `panel-items-v${this.deps.repos.runtime.latestChangeSeq()}`,
+      nextCursor: offset + memories.length < total ? String(offset + memories.length) : undefined,
+      serverTime: this.now()
+    };
+  }
+
+  private displayItems(memories: ReturnType<Repositories["memories"]["getManyForPanel"]>,local=true) {
+    const processingById = new Map(this.deps.repos.processing.getMany(memories.map((memory) => memory.id))
+      .map((processing) => [processing.memoryId, processing]));
+    const scopes = this.deps.repos.l3WorldModels.getScopesByMemoryIds(
+      memories.filter((memory) => memory.memoryLayer === "L3").map((memory) => memory.id)
+    );
+    const scopesByMemoryId = new Map(
+      scopes.flatMap((scope) => scope.memoryId ? [[scope.memoryId, scope] as const] : [])
+    );
+    const evidenceIds = [...new Set(memories.flatMap((memory) =>
+      memory.memoryLayer === "L2" && !storedGeneratedTitle(memory) ? evidenceMemoryIds(memory) : []
+    ))];
+    const visibleEvidence = this.deps.repos.memories.visibleEvidenceIds(evidenceIds,local);
+    const evidenceById = new Map(
+      this.deps.repos.memories.getManyForPanel(evidenceIds)
+        .filter(memory => visibleEvidence.has(memory.id))
+        .map((memory) => [memory.id, memory] as const)
+    );
+    return memories.map((memory) => {
+        const listed = panelListItemFromMemory(
+          this.deps.repos.memories.toListItem(memory),
+          memory,
+          processingById.get(memory.id)
+        );
+        const sourceText = memory.memoryLayer === "L2" && !listed.generatedTitle
+          ? waitingSourceText(memory, evidenceMemoryIds(memory).flatMap((id) => {
+            const source = evidenceById.get(id);
+            return source ? [source] : [];
+          }))
+          : undefined;
+        const item = sourceText ? { ...listed, sourceText } : listed;
+        const scope = scopesByMemoryId.get(memory.id);
+        const worldModelScope = memory.memoryLayer === "L3" && scope &&
+          scope.memoryId === memory.id && scope.userId === memory.userId
+          ? panelWorldModelScope(scope)
+          : undefined;
+        return worldModelScope ? { ...item, worldModelScope } : item;
+      });
+  }
+
+  panelMembers(input: Parameters<PanelReadModel["panelItems"]>[0] & {section?: "items" | "tasks"}): string[] {
+    if (input.section === "tasks") return this.deps.repos.runtime.panelEpisodeIds(input.namespace?.userId, input.q, input.sourceAgent);
+    if (input.layer === "UserMemory") {
+      const userId = input.namespace?.userId ?? input.userId;
+      if (input.status === "resolving") return [];
+      return this.deps.repos.userMemories.panelMemberIds({userId, query: input.q, sourceAgent: input.sourceAgent, status: input.status === "activated" ? "active" : input.status});
+    }
+    ensurePanelCache(this.deps.repos.db,["memories"]);
+    return this.deps.repos.memories.panelMemberIds({panelSource: true, panelVisible: true, memoryLayer: input.layer, status: input.status, tags:input.tags, agentId: input.sourceAgent, excludedAgentIds:input.excludedSourceAgents}, input.q);
+  }
+
+  panelPageByIds(ids: string[], input: Parameters<PanelReadModel["panelMembers"]>[0]) {
+    if (input.section === "tasks") return {tasks: this.taskSummaries(this.deps.repos.runtime.getEpisodesForPanel(ids),input)};
+    if (input.layer === "UserMemory") {
+      const userId = input.namespace?.userId ?? input.userId;
+      return {items: this.deps.repos.userMemories.getManyForPanel(ids,userId).map(memory => {
+        const item = userMemoryPanelItem(memory); return {...item, metadata: {...item.metadata, fullContentAvailable:true}};
+      })};
+    }
+    const visible=panelVisibleMemoryIds(this.deps.repos.db,ids);
+    return {items: this.displayItems(this.deps.repos.memories.getManyForPanel(ids.filter(id=>visible.has(id))),!input.namespace?.userId)};
+  }
+
+  panelTasks(input: RequestEnvelope & { q?: string; sourceAgent?: string; page?: number }): {
+    tasks: Array<{
+      id: string;
+      episode: Record<string, unknown>;
+      memoryIds: string[];
+      turns: RawTurnSummary[];
+      updatedAt: string;
+    }>;
+    page: number;
+    pageSize: 20;
+    total: number;
+    totalPages: number;
+    hasNext: boolean;
+    hasPrev: boolean;
+    serverTime: string;
+  } {
+    const pageSize = 20 as const;
+    const query = input.q?.trim() || undefined;
+    const userId = input.namespace?.userId;
+    const total = this.deps.repos.runtime.countEpisodes(userId, query, input.sourceAgent, true);
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const page = Math.min(normalizePageNumber(input.page), totalPages);
+    const episodes = this.deps.repos.runtime.listEpisodes(
+      userId,
+      pageSize,
+      (page - 1) * pageSize,
+      query,
+      input.sourceAgent,
+      true,
+    );
+    const existingIds = effectiveEpisodeMemoryIds(this.deps.repos.db, episodes,!input.namespace?.userId);
+    const pendingTitleIds = this.deps.repos.runtime.episodesWithJob(
+      episodes.map((episode) => episode.id), "episode_title", ["queued", "leased"]
+    );
+    return {
+      tasks: episodes.map((episode) => ({
+        id: episode.id,
+        episode: this.deps.episodeRef(
+          episode,
+          pendingTitleIds.has(episode.id)
+        ),
+        memoryIds: [...new Set(episode.l1MemoryIds)].filter((memoryId) => existingIds.get(episode.id)?.has(memoryId)),
+        turns: this.deps.repos.runtime.listRawTurnsByEpisode(episode.id, 1000).filter(turn=>!turn.redactedAt && turn.sessionId===episode.sessionId).map(this.deps.rawTurnSummary),
+        updatedAt: episode.updatedAt
+      })),
+      page,
+      pageSize,
+      total,
+      totalPages,
+      hasNext: page < totalPages,
+      hasPrev: page > 1,
+      serverTime: this.now()
+    };
+  }
+
+  panelTaskSummaries(input: RequestEnvelope & { q?: string; sourceAgent?: string; page?: number }) {
+    const pageSize = 20 as const;
+    const total = this.deps.repos.runtime.countEpisodes(input.namespace?.userId, input.q?.trim() || undefined, input.sourceAgent, true);
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const page = Math.min(normalizePageNumber(input.page), totalPages);
+    const episodes = this.deps.repos.runtime.listEpisodes(input.namespace?.userId, pageSize, (page-1)*pageSize, input.q?.trim() || undefined, input.sourceAgent, true);
+    return { tasks: this.taskSummaries(episodes,input), page, pageSize, total, totalPages, hasNext: page < totalPages, hasPrev: page > 1, serverTime: this.now() };
+  }
+
+  private taskSummaries(episodes: EpisodeRecord[],input:RequestEnvelope={}) {
+    const existing = effectiveEpisodeMemoryIds(this.deps.repos.db, episodes,!input.namespace?.userId);
+    const pending = this.deps.repos.runtime.episodesWithJob(episodes.map((episode) => episode.id), "episode_title", ["queued", "leased"]);
+    const previews = new PanelTaskReader(this.deps.repos.db,!input.namespace?.userId).summaries(episodes.map((episode) => episode.id));
+    return episodes.map((episode) => ({ id: episode.id, episode: this.deps.episodeRef(episode, pending.has(episode.id)),
+      memoryIds: [...new Set(episode.l1MemoryIds)].filter((id) => existing.get(episode.id)?.has(id)), updatedAt: episode.updatedAt,
+      firstUserText: previews.get(episode.id)?.firstUserText ?? "", firstAssistantText: previews.get(episode.id)?.firstAssistantText ?? "",
+      toolCallCount: previews.get(episode.id)?.toolCallCount ?? 0 }));
+  }
+
+  private requireTask(id: string, input: RequestEnvelope) {
+    const episode = this.deps.repos.runtime.getEpisode(id);
+    if (!episode || (input.namespace?.userId && episode.userId !== input.namespace.userId)) throw new MemoryServiceError("not_found", "Task is unavailable");
+    return episode;
+  }
+
+  panelTaskCheck(id: string, input: RequestEnvelope) {
+    this.requireTask(id, input);
+    return { latestTurnId: new PanelTaskReader(this.deps.repos.db,!input.namespace?.userId).latest(id)?.id, serverTime: this.now() };
+  }
+
+  panelTaskDetail(id: string, input: RequestEnvelope & { cursor?: string }) {
+    const episode = this.requireTask(id, input);
+    return { task: this.taskSummaries([episode],input)[0]!, ...new PanelTaskReader(this.deps.repos.db,!input.namespace?.userId).turns(id, input.cursor), serverTime: this.now() };
+  }
+
+  panelTaskField(id: string, turnId: string, field: PanelTurnField, input: RequestEnvelope & { offset?: number; revision?: string; toolId?:string }) {
+    this.requireTask(id, input);
+    return { ...new PanelTaskReader(this.deps.repos.db,!input.namespace?.userId).field(id, turnId, field, input.offset, input.revision, input.toolId), serverTime: this.now() };
+  }
+
+  panelChanges(input: RequestEnvelope & {
+    userId?: string;
+    limit?: number;
+    cursor?: string;
+  } = {}): {
+    cursor: string;
+    changes: PanelChange[];
+    hasMore: boolean;
+    items: ChangeLogRecord[];
+    serverTime: string;
+  } {
+    const limit = input.limit ?? 50;
+    const cursorSeq = this.deps.decodeChangeCursor(input.cursor);
+    const items = this.deps.repos.runtime.listChanges(undefined, limit, cursorSeq);
+    const lastSeq = items.reduce((max, item) => Math.max(max, item.seq), cursorSeq);
+    return {
+      cursor: this.deps.encodeChangeCursor(lastSeq),
+      changes: items.map(changeLogToPanelChange),
+      hasMore: items.length === limit,
+      items,
+      serverTime: this.now()
+    };
+  }
+
+  panelJobs(input: RequestEnvelope & {
+    userId?: string;
+    status?: "queued" | "leased" | "succeeded" | "failed" | "dead_letter";
+    limit?: number;
+  } = {}): {
+    jobs: Array<EvolutionJobRecord & { error?: { code: string; message: string } }>;
+    items: EvolutionJobRecord[];
+    nextCursor?: string;
+    serverTime: string;
+  } {
+    const items = this.deps.repos.runtime.listJobs(input.status, input.limit ?? 50);
+    return {
+      jobs: items.map((job) => ({
+        ...job,
+        error: job.lastError ? { code: "worker_error", message: job.lastError } : undefined
+      })),
+      items,
+      serverTime: this.now()
+    };
+  }
+
+  private jobStatusCounts(): Record<"queued" | "leased" | "succeeded" | "failed" | "dead_letter", number> {
+    return this.deps.repos.runtime.countJobsByStatus();
+  }
+
+  private memoryLayerCounts(): Record<MemoryLayer, number> {
+    return this.deps.repos.memories.countByLayer();
+  }
+
+  private memoryStatusCounts(): Record<"activated" | "resolving" | "archived" | "deleted", number> {
+    return this.deps.repos.memories.countByStatus();
+  }
+
+  private episodeStatusCounts(): Record<"open" | "processing" | "closed", number> {
+    return this.deps.repos.runtime.countEpisodesByStatus();
+  }
+
+  private embeddingRetryStatusCounts(): Record<"pending" | "in_progress" | "succeeded" | "failed", number> {
+    const statuses: EmbeddingRetryStatus[] = ["pending", "in_progress", "succeeded", "failed"];
+    const counts = { pending: 0, in_progress: 0, succeeded: 0, failed: 0 };
+    for (const status of statuses) {
+      counts[status] = this.deps.repos.runtime.countEmbeddingRetriesByStatus(status);
+    }
+    return counts;
+  }
+
+}
+
+export function panelActivatedSkillUseCount(input: {
+  activeSkillIds: ReadonlySet<string>;
+  recallEvents: RecallEventRecord[];
+  skillTrials: SkillTrialRecord[];
+  dates: string[];
+  timeZone: string;
+}): number {
+  if (input.activeSkillIds.size === 0) return 0;
+  const dates = new Set(input.dates);
+  const invoked = input.skillTrials.filter((trial) =>
+    input.activeSkillIds.has(trial.skillMemoryId) &&
+    dates.has(panelDateKey(trial.createdAt, input.timeZone))
+  ).length;
+  const recalled = input.recallEvents.reduce((count, event) => {
+    if (!dates.has(panelDateKey(event.createdAt, input.timeZone))) return count;
+    const recalledActiveSkills = new Set(
+      event.hitMemoryIds.filter((memoryId) => input.activeSkillIds.has(memoryId))
+    );
+    return count + recalledActiveSkills.size;
+  }, 0);
+  return invoked + recalled;
+}
+
+function panelWorldModelScope(scope: L3WorldModelScopeRecord): WorldModelScope {
+  if (!scope.projectId) return { kind: "general" };
+  const display = workspaceUriDisplay(scope.workspaceUri);
+  return {
+    kind: "project",
+    projectLabel: display.projectLabel,
+    workspaceDisplayPath: display.workspaceDisplayPath
+  };
+}
+
+export function workspaceUriDisplay(workspaceUri?: string): {
+  projectLabel: string | null;
+  workspaceDisplayPath: string | null;
+} {
+  if (!workspaceUri) return { projectLabel: null, workspaceDisplayPath: null };
+  try {
+    const url = new URL(workspaceUri);
+    const decodedSegments = url.pathname.split("/").map((segment) => decodeURIComponent(segment));
+    const decodedPath = decodedSegments.join("/");
+    const projectLabel = decodedSegments.filter(Boolean).at(-1) ?? null;
+    if (url.protocol !== "file:") {
+      return { projectLabel, workspaceDisplayPath: url.toString() };
+    }
+    const workspaceDisplayPath = url.host
+      ? `//${url.host}${decodedPath.startsWith("/") ? decodedPath : `/${decodedPath}`}`
+      : /^\/[A-Za-z]:\//u.test(decodedPath)
+        ? decodedPath.slice(1)
+        : decodedPath;
+    return { projectLabel, workspaceDisplayPath };
+  } catch {
+    return { projectLabel: null, workspaceDisplayPath: null };
+  }
+}
+
+export function redactConfig(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactConfig);
+  if (!isRecord(value)) return value;
+  const out: Record<string, unknown> = {};
+  for (const [key, next] of Object.entries(value)) {
+    out[key] = /token|apiKey|secret|password/i.test(key)
+      ? typeof next === "string" && next ? "[redacted]" : next
+      : redactConfig(next);
+  }
+  return out;
+}
+
+export function changeLogToPanelChange(change: ChangeLogRecord): PanelChange {
+  return {
+    seq: change.seq,
+    op: normalizeChangeOp(change.op) ?? changeOp(change.changeType),
+    kind: normalizeChangeKind(change.kind) ?? changeKind(change),
+    id: change.entityId ?? change.memoryId,
+    version: change.version ?? versionFromChange(change),
+    source: changeSource(change.source),
+    updatedAt: change.createdAt
+  };
+}
+
+export function userMemoryPanelItem(memory: UserMemoryRecord): PanelMemoryListItem {
+  const title = memory.content.split(/\r?\n/, 1)[0]?.trim() || memory.id;
+  return {
+    id: memory.id,
+    kind: "user_memory",
+    memoryLayer: "UserMemory",
+    status: memory.status === "active" ? "activated" : memory.status,
+    title: title.slice(0, 80),
+    summary: memory.content,
+    tags: memory.memoryTypes,
+    metadata: {
+      sourceTurnId: memory.sourceTurnId,
+      sourceTurnRefs: memory.sourceTurnRefs,
+      memoryTypes: memory.memoryTypes,
+      replacesMemoryId: memory.replacesMemoryId,
+      replacedByMemoryId: memory.replacedByMemoryId,
+      archivedAt: memory.archivedAt,
+      archiveReason: memory.archiveReason
+    },
+    createdAt: memory.createdAt,
+    updatedAt: memory.updatedAt,
+    version: Math.max(1, memory.sourceTurnRefs.length)
+  };
+}
+
+function emptyPanelItems(page: number, pageSize: number, serverTime: string): {
+  items: PanelMemoryListItem[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  hasNext: boolean;
+  hasPrev: boolean;
+  etag: string;
+  serverTime: string;
+} {
+  return {
+    items: [],
+    page,
+    pageSize,
+    total: 0,
+    totalPages: 1,
+    hasNext: false,
+    hasPrev: false,
+    etag: "panel-items-empty",
+    serverTime
+  };
+}
+
+function normalizePageNumber(value: number | undefined): number {
+  if (!Number.isFinite(value)) return 1;
+  return Math.max(1, Math.floor(value!));
+}
+
+function normalizePanelItemsLimit(value: number | undefined): number {
+  if (!Number.isFinite(value)) return PANEL_ITEMS_PAGE_SIZE;
+  return clampNumber(Math.floor(value!), 1, 100);
+}
+
+function normalizeOffsetCursor(value: string | number | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = typeof value === "number" ? value : Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : undefined;
+}
+
+function normalizeChangeOp(value: string | undefined): PanelChange["op"] | undefined {
+  return value === "created" || value === "updated" || value === "archived" || value === "deleted" ? value : undefined;
+}
+
+function normalizeChangeKind(value: string | undefined): PanelChange["kind"] | undefined {
+  return value === "trace" || value === "span" || value === "policy" || value === "world_model" || value === "skill" || value === "work_memory" || value === "observed_activity" ||
+    value === "session" || value === "episode" || value === "job" || value === "feedback" ||
+    value === "raw_turn" || value === "repair" || value === "skill_trial" || value === "recall" ||
+    value === "artifact"
+    ? value
+    : undefined;
+}
+
+function changeOp(changeType: string): PanelChange["op"] {
+  if (changeType.includes("delete")) return "deleted";
+  if (changeType.includes("archive")) return "archived";
+  if (changeType.includes("create") || changeType.includes("insert")) return "created";
+  return "updated";
+}
+
+function changeKind(change: ChangeLogRecord): PanelChange["kind"] {
+  if (change.changeType.includes("artifact") || change.memoryId.startsWith("artifact_")) return "artifact";
+  if (change.changeType.includes("skill_trial")) return "skill_trial";
+  if (change.changeType.includes("recall")) return "recall";
+  if (change.changeType.includes("session")) return "session";
+  if (change.changeType.includes("episode")) return "episode";
+  if (change.changeType.includes("job")) return "job";
+  if (change.changeType.includes("feedback")) return "feedback";
+  if (change.changeType.includes("repair") || change.memoryId.startsWith("repair_")) return "repair";
+  if (change.changeType.includes("raw_turn") || change.memoryId.startsWith("raw_")) return "raw_turn";
+  const after = isRecord(change.after) ? change.after : undefined;
+  const layer = after?.memoryLayer ?? after?.memory_layer;
+  if (layer === "L1") return "trace";
+  if (layer === "L2") return "policy";
+  if (layer === "L3") return "world_model";
+  if (layer === "Skill") return "skill";
+  return "trace";
+}
+
+function versionFromChange(change: ChangeLogRecord): number | undefined {
+  const after = isRecord(change.after) ? change.after : undefined;
+  return typeof after?.version === "number" ? after.version : undefined;
+}
+
+function changeSource(source: string): PanelChange["source"] {
+  if (source.startsWith("turn.")) return "turn_complete";
+  if (source.startsWith("feedback.")) return "feedback";
+  if (source.startsWith("worker.")) return "worker";
+  if (source.startsWith("panel.")) return "panel";
+  return "system";
+}
+
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}

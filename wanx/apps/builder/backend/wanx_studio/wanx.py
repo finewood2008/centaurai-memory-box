@@ -1,0 +1,301 @@
+"""Trusted WANX integration; only scoped local proxy credentials reach Codex."""
+from __future__ import annotations
+
+import asyncio
+from .local_authority import to_thread
+from .identity_scope import canonical_owner
+import json
+import os
+import re
+from dataclasses import replace
+from pathlib import Path
+from urllib.parse import urlsplit
+
+from fastapi import Depends, Request
+from fastapi.responses import JSONResponse
+
+from .api import create_router
+from .contracts import StudioError, TEXT_EXTENSIONS
+from .runner import Runner
+from .service import StudioService
+
+
+def output_budget(body,model):
+    # The interview needs room for a full seven-part PRD. Generated apps still
+    # request 4096 and other callers retain the 8192 default.
+    limit=model.max_output_tokens
+    return min(body.get('max_tokens',8192),limit if limit>0 else 32768,32768)
+
+
+class WanxModels:
+    def __init__(self, services):
+        self.services=services
+        # Keep the deployment boundary stable if configuration is revoked later.
+        self.device_managed=os.getenv('WANX_MODEL_PROVIDERS_ENABLED') not in {None,'0'} or any(
+            os.getenv(key) for key in ['WANX_PLATFORM_DEVICE_ID','WANX_MODEL_PROVIDERS_IDENTITY_DEVICE_ID']+
+            [prefix+name for prefix in ('WANX_MODEL_PROVIDERS_','WANX_RESOURCES_') for name in ('API_BASE','DEVICE_ID','KEY_FILE')])
+        self.selection=services.settings_repo.get_active_model()
+        self.info=self.resolve()
+
+    def __bool__(self):
+        # Default model configuration may be completed after server startup.
+        return self.resolve() is not None
+
+    def _runtime_entries(self):
+        from octop.infra.agents.providers.store import ProviderStore
+        from .contracts import digest
+        return {digest([p.id, m.id]): (p, m)
+                for p in ProviderStore(self.services.provider_repo).build_harness_configs()
+                for m in p.models}
+
+    def runtime_catalog(self):
+        entries = self._runtime_entries()
+        selected = self.resolve()
+        return {'models': [{'id': key, 'name': m.name or m.id, 'provider': p.name or p.id}
+                           for key, (p, m) in entries.items()],
+                'defaultId': next((key for key, pair in entries.items()
+                                   if selected and pair[0].id == selected[0].id and pair[1].id == selected[1].id), None)}
+
+    def for_runtime(self, model_id):
+        bound = WanxModels(self.services)
+        bound._runtime_id = model_id
+        return bound
+
+    def resolve(self):
+        if getattr(self, '_runtime_id', None):
+            found = self._runtime_entries().get(self._runtime_id)
+            if found: self.selection = (found[0].id, found[1].id)
+            return found
+        from octop.infra.agents.providers.store import ProviderStore
+        self.selection=self.services.settings_repo.get_active_model()
+        name,model_id=self.selection
+        providers=ProviderStore(self.services.provider_repo).build_harness_configs()
+        for provider in providers:
+            if provider.id==name:
+                for model in provider.models:
+                    if model.id==model_id:
+                        return provider,model
+        return None
+
+    def fingerprint(self):
+        from .contracts import digest
+        selected=self.resolve()
+        if not selected:return 'unconfigured'
+        provider,model=selected
+        row=self.services.provider_repo.get_by_name(self.selection[0])
+        return digest([self.selection,provider.id,getattr(provider,'base_url',None),model.id,model.max_output_tokens,getattr(row,'updated_at',None)])
+
+    def codex_provider(self, model_ref=None):
+        """Read only a device-leased local route, never a user's cloud key."""
+        if not self.device_managed or os.getenv('WANX_MODEL_PROVIDERS_ENABLED')=='0':
+            return None
+        from octop.infra.agents.providers.store import ProviderStore
+        from octop.infra.agents.providers.application_defaults import read_application_defaults
+        if model_ref is not None:
+            name,separator,selected=model_ref.partition('/')
+            if not separator or not selected:return None
+            chosen={'provider_name':name,'model':selected}
+        else:
+            defaults=read_application_defaults(self.services)
+            chosen=defaults['defaults'].get('kaiwu') if defaults['managed'] else None
+            if defaults['managed'] and (not chosen or not chosen['available']):return None
+        name=chosen['provider_name'] if chosen else 'admin-managed-qeetoken'
+        if not name.startswith('admin-managed-'):return None
+        ident=name.removeprefix('admin-managed-')
+        if not re.fullmatch(r'[a-z][a-z0-9-]{0,63}',ident):return None
+        row=self.services.provider_repo.get_by_name(name)
+        if row is None or not row.enabled or not row.api_key or not (row.note or '').startswith('wanx-admin-model-provider-v1:'):
+            return None
+        try:
+            endpoint=urlsplit(row.base_url or '')
+            endpoint.port
+        except ValueError:
+            return None
+        if endpoint.scheme!='http' or endpoint.hostname not in {'127.0.0.1','::1','localhost'} or endpoint.username or endpoint.password or endpoint.query or endpoint.fragment or endpoint.path!=f'/model-providers/{ident}/v1':
+            return None
+        provider=next((p for p in ProviderStore(self.services.provider_repo).build_harness_configs() if p.id==row.name),None)
+        if provider is None:return None
+        if chosen:
+            selected=chosen['model']
+            if not any(m.id==selected for m in provider.models):return None
+        else:
+            models=[m.id for m in provider.models if m.id.startswith('gpt-') and not re.search(r'embed|rerank|image|audio|realtime|transcri|tts',m.id,re.I)]
+            if not models:return None
+            active=self.services.settings_repo.get_active_model()
+            selected=active[1] if active[0]==row.name and active[1] in models else sorted(models)[0]
+        capability=ProviderStore(self.services.provider_repo).get_model_reasoning_capability(row.name+'/'+selected)
+        effort=None
+        if capability and capability['adapter']=='openai_reasoning_effort':
+            effort=capability['default_effort'] or ('medium' if 'medium' in capability['efforts'] else None)
+        return {'model':selected,'model_ref':row.name+'/'+selected,'base_url':row.base_url,'api_key':row.api_key,
+                'reasoning':bool(capability),'reasoning_effort':effort}
+
+    def codex_runners(self,settings,user_id):
+        from octop.infra.agents.providers.application_defaults import read_application_defaults
+        # Default changes must not revoke an already admitted task's engine.
+        if self.device_managed and (read_application_defaults(self.services)['managed'] or self.codex_provider()):
+            return settings.load_runners(user_id,defaults={'codex':{
+                'command':'codex','args':['app-server'],'trusted':True,'enabled':True,
+            }})
+        return settings.load_runners(user_id)
+
+    async def __call__(self, owner, body):
+        from langchain_core.messages import SystemMessage,HumanMessage,AIMessage,ToolMessage
+        from octop_harness.llm.factory import build_chat_model
+        from octop_harness.llm.session_header import aclose_session_http_clients
+        selected=await to_thread(self.resolve)
+        if not selected:
+            raise StudioError('RUNTIME_MODEL_UNAVAILABLE' if getattr(self, '_runtime_id', None) else 'MODEL_NOT_CONFIGURED',409)
+        provider,model=selected
+        if set(body)-{'messages','tools','max_tokens','tool_choice'} or len(json.dumps(body).encode())>(1600000 if getattr(self,'workshop_images',False) else 200000):
+            raise StudioError('MODEL_INPUT_INVALID',413)
+        messages=[]
+        for m in body.get('messages',[]):
+            text=m.get('content') or ''
+            if not isinstance(text,str):
+                allowed=getattr(self,'workshop_images',False) and m['role']=='user' and isinstance(text,list)
+                if not allowed or len(text)>2 or any(
+                    not isinstance(c,dict) or c.get('type') not in {'text','image_url'}
+                    or (c['type']=='text' and not isinstance(c.get('text'),str))
+                    or (c['type']=='image_url' and (not isinstance(c.get('image_url'),dict)
+                        or not isinstance(c['image_url'].get('url'),str)
+                        or not c['image_url']['url'].startswith('data:image/png;base64,')
+                        or len(c['image_url']['url'])>1400000)) for c in text
+                ):raise StudioError('MODEL_INPUT_INVALID')
+            if m['role']=='system':
+                messages.append(SystemMessage(content=text))
+            elif m['role']=='user':
+                messages.append(HumanMessage(content=text))
+            elif m['role']=='tool':
+                messages.append(ToolMessage(content=text,tool_call_id=m['tool_call_id']))
+            elif m['role']=='assistant':
+                calls=[{'id':t['id'],'name':t['function']['name'],'args':json.loads(t['function']['arguments'])} for t in m.get('tool_calls',[])]
+                messages.append(AIMessage(content=text,tool_calls=calls,additional_kwargs={'reasoning_content':m['reasoning_content']} if m.get('reasoning_content') else {}))
+            else:
+                raise StudioError('MODEL_INPUT_INVALID')
+        llm=build_chat_model(provider,replace(model,native_tool_search=False))
+        try:
+            # No implicit provider/SDK retry can consume an uncounted request.
+            llm.max_retries=0
+            for attribute in ('root_client','root_async_client','client','async_client'):
+                client=getattr(llm,attribute,None)
+                if client is not None and hasattr(client,'max_retries'):
+                    client.max_retries=0
+                underlying=getattr(client,'_client',None)
+                if underlying is not None and hasattr(underlying,'max_retries'):
+                    underlying.max_retries=0
+            if body.get('tools'):
+                allowed={'read_material','list_sources','read_source','write_source','validate_app','ask_product'}
+                if any(t.get('function',{}).get('name') not in allowed for t in body['tools']):
+                    raise StudioError('MODEL_TOOL_DENIED',403)
+                runnable=llm.bind_tools(body['tools'])
+            else:
+                runnable=llm
+            result=await asyncio.wait_for(runnable.ainvoke(messages,max_tokens=output_budget(body,model)),180)
+            text=result.content if isinstance(result.content,str) else ''.join(str(c.get('text','')) for c in result.content if isinstance(c,dict))
+            calls=[{'id':t['id'],'type':'function','function':{'name':t['name'],'arguments':json.dumps(t['args'],ensure_ascii=False)}} for t in result.tool_calls]
+            message={'role':'assistant','content':text,**({'tool_calls':calls} if calls else {})}
+            if result.additional_kwargs.get('reasoning_content'):
+                message['reasoning_content']=result.additional_kwargs['reasoning_content']
+            usage=result.usage_metadata
+            return {'model':model.id,'choices':[{'message':message,'finish_reason':'tool_calls' if calls else result.response_metadata.get('finish_reason','stop')}],
+                    'usage':{'prompt_tokens':usage.get('input_tokens',0),'completion_tokens':usage.get('output_tokens',0)} if usage else None}
+        except StudioError:
+            raise
+        except Exception as error:
+            # Upstream errors may contain keys, addresses or request bodies.
+            if getattr(self,'workshop_images',False):
+                import logging
+                import traceback
+                logging.getLogger(__name__).error(
+                    'Workshop model request failed (%s, status=%s): %s',
+                    type(error).__name__,getattr(error,'status_code',None),
+                    ' -> '.join(f'{f.name}:{f.lineno}' for f in traceback.extract_tb(error.__traceback__)))
+            raise StudioError('MODEL_UPSTREAM_FAILED',502) from None
+        finally:
+            await aclose_session_http_clients(llm)
+
+
+def mount_wanx(app,server,project_root:Path,*,catalog_services=None):
+    from octop.api.deps import current_user
+    from octop.infra.personal_space.service import PersonalSpace
+    models=WanxModels(catalog_services or server.services)
+    def space(owner):
+        return PersonalSpace(server.paths.root/'.wanx-personal-space',int(owner.removeprefix('wanx:')))
+
+    async def files(owner,ids):
+        await service.local_authority.resources(owner,[{'resourceId':'wanx','actions':['read']}])
+        def read():
+            storage=space(owner)
+            result=[]
+            for item_id in ids:
+                meta=storage.metadata(item_id)
+                if meta['kind']!='file' or Path(meta['name']).suffix.lower() not in TEXT_EXTENSIONS:
+                    raise StudioError('FILE_TYPE_UNSUPPORTED')
+                if meta['size']>262144:
+                    raise StudioError('FILE_TOO_LARGE',413)
+                data,_=storage.read_chunk(item_id,0,max(meta['size'],1))
+                try:
+                    text=data.decode('utf-8-sig')
+                except UnicodeError:
+                    raise StudioError('FILE_NOT_UTF8') from None
+                result.append({'id':item_id,'name':meta['name'],'text':text})
+            return result
+        return await to_thread(read)
+
+    service=getattr(server,'_wanx_studio_service',None)
+    if service is None or getattr(service,'closing',False):
+        service=StudioService(server.paths.root/'.wanx-app-studio',project_root,models,files)
+        server._wanx_studio_service=service
+    service.runner=Runner(service)
+    service.engines.provider=lambda owner:models.codex_runners(server.app_runtime.agent_registry.acp_settings,int(owner.split(":",1)[1]))
+    from .context_sources import WanxContextSources
+    from .team import TeamPublications
+    from .local_authority import LocalStudioAuthority
+    service.local_authority=LocalStudioAuthority(server.services,lambda:bool(getattr(app.state,'local_data_required',False)))
+    service.context_provider=WanxContextSources(server,space,files,service.local_authority)
+    service.team=TeamPublications(service,server.services,local_authority=service.local_authority)
+    from .deployment.miniapp_profile import configure
+    configure(service,server.services,server.paths.root/'deployment-target.json',server=server,source='studio')
+
+    async def identity(request:Request,user=Depends(current_user)):
+        import re
+        owner=canonical_owner(user)
+        from centuarai_local_data_gate import get_context
+        from .deployment.expert_dispatch import authorize_studio_audience
+        context=get_context(request.scope)
+        application=context.claims['applicationId'] if context else user.application_id
+        # Local management hosts retain the original WANX audience rule; a
+        # managed app is always constrained even when the native user is admin.
+        if re.fullmatch(r'ai\.wanx\.selfmade\.[a-f0-9]{32}',application or ''):
+            authorize_studio_audience(service,owner,application,request.url.path.removeprefix('/api/app-studio'),request.method)
+        elif user.application_id!='wanx':
+            raise StudioError('STUDIO_IDENTITY_FORBIDDEN',403)
+        token=service.local_authority.enter(user)
+        try:
+            service.team.user(owner)
+            if not service.team.is_admin(owner):
+                import re
+                path=request.url.path.removeprefix('/api/app-studio')
+                allowed=(request.method=='GET' and (path in {'/context','/projects'} or re.fullmatch(r'/projects/[a-f0-9]{32}/install/[a-f0-9]{64}',path) or re.fullmatch(r'/apps/ai\.wanx\.selfmade\.[a-f0-9]{32}(?:/install)?',path))) or (request.method=='POST' and (re.fullmatch(r'/apps/[a-z][a-z0-9.-]*/runtime',path) or re.fullmatch(r'/runtime/[A-Za-z0-9_-]+/(invoke|files)',path))) or (request.method=='DELETE' and re.fullmatch(r'/runtime/[A-Za-z0-9_-]+',path))
+                if not allowed:raise StudioError('STUDIO_ADMIN_REQUIRED',403)
+                if service.local_authority.required() and request.method=='GET' and path in {'/context','/projects'}:
+                    raise StudioError('STUDIO_ADMIN_REQUIRED',403)
+            yield owner
+        finally:
+            service.local_authority.reset(token)
+
+    router=create_router(service,identity)
+
+    @router.get('/files',summary='List owner file metadata for the trusted text-file picker')
+    async def list_files(parent:str='',owner=Depends(identity)):
+        await service.local_authority.resources(owner,[{'resourceId':'wanx','actions':['read']}])
+        return await to_thread(space(owner).listing,parent,False)
+
+    @app.exception_handler(StudioError)
+    async def failure(_request,error):
+        return JSONResponse({'code':error.code},error.status)
+
+    app.include_router(router)
+    app.state.app_studio=service
+    return service

@@ -1,0 +1,51 @@
+{
+  "scope": "STARLINK only",
+  "upstream": {
+    "wanx": "88aee2ecc2db013d87543b42aac44e84d5172890",
+    "starlink": "801fc41fd4b39dc7134d729e195703d47aaf5398",
+    "semantica": "8e2e8a01b9fc6f34ea240354ca04a85d71d63582"
+  },
+  "source": {
+    "starlink": "3be75195e83e81fa8242ed4fa89e77b780a46427",
+    "semantica": "dca0f9c964ea5f5b6d5d6e46f1f8c30de44e75cd",
+    "bundledVersion": "0.3.6-rc.20261108.compact.7"
+  },
+  "checks": {
+    "wanxStarlink": {
+      "passed": 343,
+      "failed": 0
+    },
+    "wanxPinnedPayload": {
+      "passed": 10,
+      "failed": 0
+    },
+    "starlinkDesktop": {
+      "passed": 337,
+      "skipped": 4,
+      "failed": 0
+    },
+    "semantica": {
+      "passed": 269,
+      "subtestsPassed": 101,
+      "failed": 0,
+      "warnings": 1
+    },
+    "nativePreload": {
+      "passed": 0,
+      "skipped": 1,
+      "failed": 0
+    }
+  },
+  "conflicts": {
+    "wanx": [],
+    "starlink": [],
+    "semantica": [
+      "app/services/processing_models.py"
+    ],
+    "resolved": true
+  },
+  "published": false,
+  "pushed": false,
+  "runtimeDataIncluded": false,
+  "liveServicesUpdatedDuringSubmission": false
+}

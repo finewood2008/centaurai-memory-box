@@ -1,0 +1,163 @@
+{
+  "name": "centuarai-wanx-client",
+  "version": "1.0.6",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "main": "shell/entry.mjs",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build:icons": "xcrun swift tools/generate-icons.swift",
+    "build:network": "node tools/build-network.mjs",
+    "build:network:all": "node tools/build-network.mjs --all",
+    "build:discovery": "node tools/build-discovery.mjs",
+    "build:memory": "node tools/build-memory.mjs",
+    "prestart": "npm run build:memory && npm run build:studio && node tools/ensure-network.mjs && node tools/build-discovery.mjs && node tools/build-maintenance.mjs && node tools/build-clipboard.mjs",
+    "start": "node tools/start-desktop.mjs",
+    "prestart:local": "npm run prestart",
+    "start:local": "node tools/start-local.mjs",
+    "pretest": "npm run build:studio",
+    "test": "node --test --test-concurrency=4 tests/*.test.mjs",
+    "test:native": "cd native && go test ./...",
+    "package:mac": "node tools/build-network.mjs darwin-arm64 darwin-x64 && node tools/build-discovery.mjs darwin-arm64 darwin-x64 && node tools/build-clipboard.mjs arm64 x64 && electron-builder --mac --dir",
+    "package:windows": "node tools/build-network.mjs win32-x64 win32-arm64 && node tools/build-discovery.mjs win32-x64 && electron-builder --win nsis",
+    "build:renderer": "npm run build:studio && esbuild local-ui/renderer/device-setup-entry.ts --bundle --format=iife --platform=browser --preserve-symlinks --tsconfig=tools/renderer-tsconfig.json --outfile=local-ui/renderer/device-setup.bundle.js && esbuild local-ui/renderer/wallet-entry.mjs --bundle --format=iife --platform=browser --preserve-symlinks --tsconfig=tools/renderer-tsconfig.json --outfile=local-ui/renderer/wallet.bundle.js",
+    "package:application": "node tools/package-application.mjs",
+    "patch:provisioning-sdk": "node tools/patch-provisioning-display-name.mjs && node tools/patch-provisioning-gatt.mjs",
+    "package:windows:x64:internal": "node shell/package-win.mjs",
+    "build:maintenance": "node tools/build-maintenance.mjs",
+    "prepackage:mac": "npm run build:maintenance && npm run build:renderer",
+    "prepackage:windows": "npm run build:maintenance && npm run build:renderer",
+    "build:studio": "node ../builder/tools/assemble-client.mjs personal",
+    "build:starlink": "node ../builder/tools/assemble-starlink.mjs personal"
+  },
+  "dependencies": {
+    "@nexusaos/consumer-contracts": "file:vendor/nexusaos-consumer-contracts-1.0.0.tgz",
+    "@nexusaos/device-discovery-contracts": "file:vendor/nexusaos-device-discovery-contracts-1.0.0.tgz",
+    "@nexusaos/device-discovery-electron": "file:vendor/nexusaos-device-discovery-electron-1.0.6.tgz",
+    "@nexusaos/local-provisioning-contracts": "file:vendor/nexusaos-local-provisioning-contracts-2.0.1-wanx.2.tgz",
+    "@nexusaos/local-provisioning-core": "file:vendor/nexusaos-local-provisioning-core-2.0.1-wanx.3.tgz",
+    "@nexusaos/local-provisioning-electron-ble": "file:vendor/nexusaos-local-provisioning-electron-ble-2.0.1-wanx.3.tgz",
+    "electron-updater": "6.8.9",
+    "qrcode": "1.5.4",
+    "semver": "7.8.5",
+    "ws": "8.22.0",
+    "yauzl": "3.4.0"
+  },
+  "devDependencies": {
+    "electron": "37.10.3",
+    "electron-builder": "26.15.3",
+    "esbuild": "0.25.9",
+    "yazl": "3.3.1"
+  },
+  "build": {
+    "appId": "ai.centuarai.wanx.client",
+    "afterPack": "tools/package-client-native.mjs",
+    "productName": "半人马AI-记忆盒子",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "client.mjs",
+      "platform.mjs",
+      "account/**",
+      "device-trust/**",
+      "shell/**",
+      "local-ui/**",
+      "!local-ui/memory/.wanx-source",
+      "network/**",
+      "octop/**",
+      "app-host/**",
+      "host-sdk/drive.cjs",
+      "applications/**",
+      "workshop/**",
+      "updates/**",
+      "resources/**",
+      "package.json",
+      "README.md",
+      "!**/.env",
+      "!**/.env.*",
+      "!**/.local/**"
+    ],
+    "extraResources": [
+      {
+        "from": "native/bin",
+        "to": "network",
+        "filter": [
+          "*-LICENSE",
+          "go-modules.txt",
+          "licenses/**"
+        ]
+      }
+    ],
+    "mac": {
+      "icon": "resources/icon.icns",
+      "category": "public.app-category.productivity",
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "extraResources": [
+        {
+          "from": "native/bin",
+          "to": "network",
+          "filter": [
+            "wanx-netbird-darwin-${arch}*",
+            "wanx-discovery-darwin-${arch}",
+            "wanx-clipboard-darwin-${arch}"
+          ]
+        }
+      ],
+      "extendInfo": {
+        "NSBluetoothAlwaysUsageDescription": "万象使用蓝牙发现附近的盒子并配置 Wi-Fi。",
+        "NSBluetoothPeripheralUsageDescription": "万象使用蓝牙发现附近的盒子并配置 Wi-Fi。"
+      }
+    },
+    "win": {
+      "icon": "resources/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "extraResources": [
+        {
+          "from": "native/bin",
+          "to": "network",
+          "filter": [
+            "wanx-netbird-win32-${arch}*",
+            "wanx-discovery-win32-x64.exe"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "include": "shell/installer.nsh",
+      "installerHeader": "resources/installer/header.bmp",
+      "installerSidebar": "resources/installer/sidebar.bmp",
+      "uninstallerSidebar": "resources/installer/sidebar.bmp",
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": false,
+      "installerLanguages": [
+        "zh_CN"
+      ],
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "overrides": {
+    "@nexusaos/local-provisioning-contracts": "$@nexusaos/local-provisioning-contracts"
+  },
+  "wanxEdition": "personal"
+}

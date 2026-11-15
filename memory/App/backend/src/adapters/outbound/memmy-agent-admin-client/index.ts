@@ -1,0 +1,29 @@
+/** Memmy agent admin client module. */
+import type {
+  ChannelConnectionsResponse,
+  ChannelDefinitionsResponse,
+  ChannelStatus
+} from "@memmy/local-api-contracts";
+
+export interface MemmyAgentAdminClient {
+  /** True for the entire Agent turn, including model thinking and interaction waits. */
+  hasActiveTasks?(signal?: AbortSignal): Promise<boolean>;
+  getChannelDefinitions(): Promise<ChannelDefinitionsResponse>;
+  getChannelConnections(): Promise<ChannelConnectionsResponse>;
+  /** Returns the canonical workspace currently bound to a WebUI conversation. */
+  getSessionWorkspace?(sessionKey: string): Promise<string | null>;
+  configureChannel(runtimeChannel: string): Promise<{ status: ChannelStatus; running: boolean }>;
+  stopChannel(runtimeChannel: string): Promise<{ status: ChannelStatus; running: boolean }>;
+  startWeixinLogin(): Promise<{ status: ChannelStatus; qrCodeDataUrl?: string; pollToken?: string }>;
+  pollWeixinLogin(pollToken: string): Promise<{ status: ChannelStatus; qrCodeDataUrl?: string; pollToken?: string }>;
+  startFeishuLogin(): Promise<{ status: ChannelStatus; qrCodeDataUrl?: string; pollToken?: string }>;
+  pollFeishuLogin(pollToken: string): Promise<{
+    status: ChannelStatus;
+    qrCodeDataUrl?: string;
+    pollToken?: string;
+    appId?: string;
+    appSecret?: string;
+    domain?: "feishu" | "lark";
+  }>;
+  reloadMcpConfig(): Promise<{ ok: boolean; message: string; requires_restart: boolean }>;
+}

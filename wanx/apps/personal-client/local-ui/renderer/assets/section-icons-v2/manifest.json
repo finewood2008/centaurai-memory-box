@@ -1,0 +1,58 @@
+[
+  {
+    "file": "my-ai.png",
+    "width": 1254,
+    "height": 1254,
+    "png_color_type": 6,
+    "bytes": 1532535,
+    "sha256": "0501195d88bf10df3dbce865452533ba4a94b8595f72ac6143f5a21c2efedcac"
+  },
+  {
+    "file": "chat.png",
+    "width": 1254,
+    "height": 1254,
+    "png_color_type": 6,
+    "bytes": 1710277,
+    "sha256": "1c372836df18c18c8db8708c0821e0135fe558c68db6b9ae64fa1f34438ae3aa"
+  },
+  {
+    "file": "apps.png",
+    "width": 1254,
+    "height": 1254,
+    "png_color_type": 6,
+    "bytes": 1474305,
+    "sha256": "b9c07746c9495ba3b24f6558b3ebcb554e8e0bac79990fc6c1995f513189d0f6"
+  },
+  {
+    "file": "workshop.png",
+    "width": 1254,
+    "height": 1254,
+    "png_color_type": 6,
+    "bytes": 1796412,
+    "sha256": "49c5d2e24a21aca4813b3ee2758e2a5a453583196351d11aa38e1714e410a643"
+  },
+  {
+    "file": "starlink.png",
+    "width": 1254,
+    "height": 1254,
+    "png_color_type": 6,
+    "bytes": 1625980,
+    "sha256": "5b251cac416472c38c18f7ac7f95c669e2c87b16f41b84eaf51a695d51e966f1"
+  },
+  {
+    "file": "space.png",
+    "width": 1254,
+    "height": 1254,
+    "png_color_type": 6,
+    "bytes": 1540001,
+    "sha256": "f8c311addcaf925c985612f0a44a7cf93eb4410cf2f70696a5d111e2dc6d263f"
+  },
+  {
+    "file": "boxes.png",
+    "width": 1254,
+    "height": 1254,
+    "png_color_type": 6,
+    "bytes": 1711940,
+    "sha256": "22c9d2fd4ae3b73dca32ecded0370d15ef8838eef77d3e8a528371cc60243c4b"
+  }
+]

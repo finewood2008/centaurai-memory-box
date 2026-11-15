@@ -1,0 +1,118 @@
+appId: cn.memtensor.memmy
+productName: 半人马AI 私人记忆盒子
+executableName: CentaurAI
+artifactName: CentaurAI-${version}-${arch}.${ext}
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - dist/**/*
+  - package.json
+  - "!dist/runtime/memory/**"
+  - "!dist/native/sqlcipher/**"
+  - "!**/node_modules/sqlite-vec-{darwin,linux}-*{,/**}"
+  - "!**/node_modules/sqlite-vec-windows-arm64{,/**}"
+  - "!dist/runtime/memmy-agent/dist/skills/docx{,/**}"
+  - "!dist/runtime/memmy-agent/dist/skills/pdf{,/**}"
+  - "!dist/runtime/memmy-agent/dist/skills/pptx{,/**}"
+  - "!dist/runtime/memmy-agent/dist/skills/xlsx{,/**}"
+  - "!dist/runtime/memmy-agent/dist/extra-dependencies/office-rendering{,/**}"
+  - "!dist/runtime/memmy-agent/dist/extra-dependencies/docx-rendering{,/**}"
+  - "!**/node_modules/open-computer-use/**"
+  - "!**/native-computer-use/*.app/**"
+  - "!**/native-computer-use/linux/**"
+  - "!**/native-computer-use/windows/arm64/**"
+  - "!**/native-computer-history/windows/arm64/**"
+  - "!**/node_modules/*/{test,tests,__tests__,doc,docs,example,examples,coverage,.github}"
+  - "!**/node_modules/*/{test,tests,__tests__,doc,docs,example,examples,coverage,.github}/**/*"
+  - "!**/node_modules/@*/*/{test,tests,__tests__,doc,docs,example,examples,coverage,.github}"
+  - "!**/node_modules/@*/*/{test,tests,__tests__,doc,docs,example,examples,coverage,.github}/**/*"
+  - "!**/node_modules/**/*.{test,spec}.*"
+  - "!**/.env"
+  - "!**/.env.*"
+  - "!**/node_modules/**/{README,README*.md,README*.mdown,README*.markdown,README*.rst,README*.txt,CHANGELOG,CHANGELOG*.md,CHANGELOG*.mdown,CHANGELOG*.markdown,CHANGELOG*.rst,CHANGELOG*.txt,CONTRIBUTING,CONTRIBUTING*.md,CONTRIBUTING*.mdown,CONTRIBUTING*.markdown,CONTRIBUTING*.rst,CONTRIBUTING*.txt,CODE_OF_CONDUCT,CODE_OF_CONDUCT*.md,CODE_OF_CONDUCT*.mdown,CODE_OF_CONDUCT*.markdown,CODE_OF_CONDUCT*.rst,CODE_OF_CONDUCT*.txt,SECURITY,SECURITY*.md,SECURITY*.mdown,SECURITY*.markdown,SECURITY*.rst,SECURITY*.txt}"
+
+asar: true
+npmRebuild: false
+asarUnpack:
+  - "**/plugin-runtime/windows/**"
+  - "dist/runtime/memmy-agent/dist/tools/computer-history/win/**"
+  - "dist/runtime/memmy-agent/dist/tools/computer-history/mac/wechat/read_messages.py"
+  - "dist/runtime/memmy-agent/dist/tools/computer-history/wechat_identity.py"
+  - "**/native-computer-use/**"
+  - "**/native-computer-history/windows/**"
+  - "**/*.node"
+  - "**/onnxruntime-node/bin/napi-v3/win32/x64/**/*.dll"
+  - "**/@img/sharp-win32-x64/lib/libvips*.dll"
+  - "**/@lydell/node-pty-win32-x64/prebuilds/win32-x64/conpty/**"
+  - "**/node_modules/sqlite-vec-*/vec0.*"
+  - "dist/runtime/memmy-agent/node_modules/@memmy/migrations/**"
+  - "dist/renderer/**"
+
+extraResources:
+  # The desktop dependency collector reads host modules when cross-building.
+  # Preserve the ASAR JS wrapper and expose its exact Windows DLL through the
+  # normal resources/node_modules ancestor lookup without changing host modules.
+  - from: dist/runtime/memory/node_modules/sqlite-vec-windows-x64
+    to: node_modules/sqlite-vec-windows-x64
+    filter:
+      - "**/*"
+  - from: extensions/memmy-browser
+    to: browser-extension
+    filter:
+      - "**/*"
+  - from: dist/runtime/memory
+    to: memory-runtime
+    filter:
+      - "**/*"
+  # electron-builder excludes a matcher-root node_modules directory. Copy it
+  # through its own matcher so the standalone Memory runtime stays complete.
+  - from: dist/runtime/memory/node_modules
+    to: memory-runtime/node_modules
+    filter:
+      - "**/*"
+  - from: dist/runtime/bin
+    to: cli
+    filter:
+      - "**/*"
+  - from: dist/embedding-models
+    to: embedding-models
+    filter:
+      - "**/*"
+  - from: dist/bundled-plugins
+    to: bundled-plugins
+    filter:
+      - "**/*"
+  - from: build/icon.ico
+    to: icon.ico
+
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+  requestedExecutionLevel: asInvoker
+  signAndEditExecutable: true
+  signExecutable: true
+  forceCodeSigning: true
+  # electron-builder's generated NSIS elevate helper is not used by this
+  # per-user installer and can intermittently make SimplySign's signtool
+  # launcher fail with spawn EPERM on the second edition build.
+  signExts:
+    - "!elevate.exe"
+  signtoolOptions:
+    signingHashAlgorithms:
+      - sha256
+
+nsis:
+  include: build/installer-win-unsigned.nsh
+  oneClick: false
+  perMachine: false
+  allowElevation: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: false
+  createStartMenuShortcut: true
+  shortcutName: 半人马AI 私人记忆盒子

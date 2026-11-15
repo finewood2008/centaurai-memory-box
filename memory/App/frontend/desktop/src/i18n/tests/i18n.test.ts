@@ -1,0 +1,118 @@
+/** I18n tests. */
+import { describe, expect, it } from "vitest";
+import { formatMessage, messageCatalogs, resolveLanguage } from "../messages.js";
+
+describe("desktop i18n helpers", () => {
+  it("falls back to zh-CN when language follows system or is unsupported", () => {
+    expect(resolveLanguage("system")).toBe("zh-CN");
+    expect(resolveLanguage("en-US")).toBe("en-US");
+    expect(resolveLanguage("fr-FR")).toBe("zh-CN");
+  });
+
+  it("formats named placeholders without leaking braces", () => {
+    expect(formatMessage("剩余 {count} Token", { count: 30000000 })).toBe("剩余 30000000 Token");
+  });
+
+  it("formats memory budget used totals with spaces around the slash in both locales", () => {
+    expect(messageCatalogs["zh-CN"]["settings.token.memoryBudgetUsed"]).toBe("{used}M / {limit}M");
+    expect(messageCatalogs["en-US"]["settings.token.memoryBudgetUsed"]).toBe("{used}M / {limit}M");
+    expect(formatMessage(messageCatalogs["zh-CN"]["settings.token.memoryBudgetUsed"], { used: "2.1", limit: "2" }))
+      .toBe("2.1M / 2M");
+    expect(formatMessage(messageCatalogs["en-US"]["settings.token.memoryBudgetUsed"], { used: "2.1", limit: "2" }))
+      .toBe("2.1M / 2M");
+    expect(messageCatalogs["zh-CN"]["settings.token.memoryBudgetScale"]).toBe("M");
+    expect(messageCatalogs["en-US"]["settings.token.memoryBudgetScale"]).toBe("M");
+    expect(messageCatalogs["zh-CN"]["settings.token.memoryBudgetUnit"]).toBe("Token");
+    expect(messageCatalogs["en-US"]["settings.token.memoryBudgetUnit"]).toBe("Token");
+    expect(messageCatalogs["zh-CN"]["memory.tokenBudget.capsuleDaily"]).toBe("已达记忆进化任务今日 Token 限额，暂停后台记忆进化。对话、记忆读写仍可继续进行。");
+    expect(messageCatalogs["zh-CN"]["memory.tokenBudget.capsuleTotal"]).toBe("已达记忆进化任务累计 Token 限额，暂停后台记忆进化。对话、记忆读写仍可继续进行。");
+    expect(messageCatalogs["en-US"]["memory.tokenBudget.capsuleDaily"]).toBe("Today's Token limit for memory evolution has been reached. Background evolution is paused. Chat and memory read/write can continue.");
+    expect(messageCatalogs["en-US"]["memory.tokenBudget.capsuleTotal"]).toBe("The lifetime Token limit for memory evolution has been reached. Background evolution is paused. Chat and memory read/write can continue.");
+  });
+
+  it("formats the welcome Agent trial quota from runtime values", () => {
+    expect(formatMessage(messageCatalogs["zh-CN"]["welcome.gift"], { count: "2,000,000" }))
+      .toBe("注册即送 2,000,000 Agent 任务体验 Token，开箱即用");
+    expect(formatMessage(messageCatalogs["en-US"]["welcome.gift"], { count: "2,000,000" }))
+      .toBe("Sign up to get 2,000,000 task tokens, ready to use");
+  });
+
+  it("localizes the Token gift details in Chinese and English", () => {
+    expect(messageCatalogs["zh-CN"]["welcome.gift.detail.subtitle"])
+      .toBe("另有 2,200 万记忆处理 Token，不计入任务额度");
+    expect(messageCatalogs["zh-CN"]["welcome.gift.detail.bullet.conversations"])
+      .toBe("可用于 Agent 对话和完整任务");
+    expect(messageCatalogs["zh-CN"]["welcome.gift.detail.bullet.memories"])
+      .toBe("可自动整理 5000+ 条历史对话为记忆");
+    expect(messageCatalogs["zh-CN"]["welcome.gift.detail.bullet.features"])
+      .toBe("覆盖全功能");
+    expect(messageCatalogs["en-US"]["welcome.gift.detail.subtitle"])
+      .toBe("Plus 22M memory-processing tokens, separate from task tokens");
+    expect(messageCatalogs["en-US"]["welcome.gift.detail.bullet.conversations"])
+      .toBe("Use task tokens for Agent conversations and full tasks");
+    expect(messageCatalogs["en-US"]["welcome.gift.detail.bullet.memories"])
+      .toBe("Automatically organize 5,000+ historical conversations into memories");
+    expect(messageCatalogs["en-US"]["welcome.gift.detail.bullet.features"])
+      .toBe("Full feature access");
+  });
+
+  it("uses native language names for language choices", () => {
+    expect(messageCatalogs["en-US"]["settings.general.language.zh"]).toBe("中文");
+  });
+
+  it("uses task wording for the rename dialog in Chinese and English", () => {
+    expect(messageCatalogs["zh-CN"]["appFrame.renameTaskPrompt"]).toBe("重命名任务");
+    expect(messageCatalogs["en-US"]["appFrame.renameTaskPrompt"]).toBe("Rename task");
+    expect(messageCatalogs["zh-CN"]["appFrame.task.rename"]).toBe("重命名任务");
+    expect(messageCatalogs["en-US"]["appFrame.task.rename"]).toBe("Rename task");
+  });
+
+  it("keeps the built-in recording capability scenario-neutral", () => {
+    expect(messageCatalogs["zh-CN"]["recording.page.title"]).toBe("录音");
+    expect(messageCatalogs["zh-CN"]["recording.page.defaultTitle"]).toBe("录音记录");
+    expect(messageCatalogs["zh-CN"]["plugin.ui.audio.recordingFile"]).toBe("录音-{stamp}");
+    expect(messageCatalogs["zh-CN"]["plugin.ui.audio.transcriptFile"]).toBe("录音转写-{stamp}");
+    expect(messageCatalogs["en-US"]["recording.page.title"]).toBe("Recording");
+    expect(messageCatalogs["en-US"]["recording.page.defaultTitle"]).toBe("Recording");
+    expect(messageCatalogs["en-US"]["plugin.ui.audio.recordingFile"]).toBe("recording-{stamp}");
+    expect(messageCatalogs["en-US"]["plugin.ui.audio.transcriptFile"]).toBe("recording-transcript-{stamp}");
+  });
+
+  it("keeps account verification errors localized per language", () => {
+    expect(messageCatalogs["zh-CN"]["login.error.invalidCode"]).toBe("验证码错误");
+    expect(messageCatalogs["zh-CN"]["login.error.invalidPhone"]).toBe("手机号格式错误");
+    expect(messageCatalogs["zh-CN"]["login.error.invalidEmail"]).toBe("邮箱格式错误");
+    expect(messageCatalogs["en-US"]["login.error.invalidCode"]).toBe("Incorrect verification code");
+    expect(messageCatalogs["en-US"]["login.error.invalidPhone"]).toBe("Phone number format is incorrect");
+    expect(messageCatalogs["en-US"]["login.error.invalidEmail"]).toBe("Email address format is incorrect");
+    expect(messageCatalogs["zh-CN"]["home.agent.platformApiFallback"]).toBe("抱歉，刚刚没有拿到有效回复，请稍后再试一次。");
+    expect(messageCatalogs["en-US"]["home.agent.platformApiFallback"]).toBe("Sorry, I couldn't get a valid response. Please try again in a moment.");
+  });
+
+  it("keeps governed error notices aligned in Chinese and English", () => {
+    expect(messageCatalogs["zh-CN"]["agent.error.quotaExceeded"])
+      .toBe("当前模型 Token 余额不足，请更换模型后重试");
+    expect(messageCatalogs["en-US"]["agent.error.quotaExceeded"])
+      .toBe("The current model has insufficient tokens. Switch models and try again.");
+    expect(messageCatalogs["zh-CN"]["agent.error.modelFailed"])
+      .toBe("模型请求失败，请稍后重试");
+    expect(messageCatalogs["en-US"]["agent.error.modelFailed"])
+      .toBe("The model request failed. Please try again later.");
+    expect(messageCatalogs["zh-CN"]["agent.error.imageInputUnsupported"])
+      .toBe("当前模型不支持图片输入，请切换到支持多模态能力的模型后重试");
+    expect(messageCatalogs["en-US"]["agent.error.imageInputUnsupported"])
+      .toBe("The current model does not support image input. Switch to a multimodal model and try again.");
+    expect(messageCatalogs["zh-CN"]["agent.error.imageAnalysisFailed"])
+      .toBe("图片解析失败，请稍后重试");
+    expect(messageCatalogs["en-US"]["agent.error.imageAnalysisFailed"])
+      .toBe("Image analysis failed. Please try again later.");
+    expect(messageCatalogs["zh-CN"]["memory.memories.processing.quotaExhaustedTitle"])
+      .toBe("当前模型 Token 余额不足，记忆处理失败，请更换模型后重试");
+    expect(messageCatalogs["en-US"]["memory.memories.processing.quotaExhaustedTitle"])
+      .toBe("The current model has insufficient tokens. Memory processing failed. Switch models and try again.");
+    expect(messageCatalogs["zh-CN"]["memory.memories.processing.autoRetryScheduledTitle"])
+      .toBe("记忆处理失败，稍后将自动重试");
+    expect(messageCatalogs["en-US"]["memory.memories.processing.autoRetryScheduledTitle"])
+      .toBe("Memory processing failed. It will retry automatically later.");
+  });
+});

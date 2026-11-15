@@ -1,0 +1,176 @@
+{
+  "sourceCommit": "5022e6a90c265f198c5dea794fcf16b00f7af430",
+  "bundleDigests": {
+    "managed-spec.bundle.json": "sha256:fe1f6fe97dbab33261b84c56146641619dff68234c4d985ae7ae1f5657a20c92",
+    "packaged-app.bundle.json": "sha256:406981b726831eeea3b33b9ef334ef98d8f2351113a3a777971666335d811875"
+  },
+  "requestDigests": {
+    "dev.request.json": "sha256:14973c9e6d87fe38c88efc6fef49635e18aae2269a761314ebdc5484db0ab3b8",
+    "prod.request.json": "sha256:6706fda592616ff66c30d67af05eb70740893f666610db4b8fb0c139b5c23a01",
+    "packaged.request.json": "sha256:c1d2ae8324bcf4d1636614803ffbb841e7cd3c644dbe89b1b8810f3af2cc743f",
+    "deploy.request.json": "sha256:403ef3c696f8f2e5c17c59a20ab712c54a3d7f640256474565dd53a658129993",
+    "rollback.request.json": "sha256:475d134c175ca60791037cae5c6c8f5f4996d494c5007be1e40c616dbd1f2a9d",
+    "restart.request.json": "sha256:0c0125e0baa3b6a51df782f449f530645a2785bff180499104e827aae6d988f5",
+    "stop.request.json": "sha256:a8de1577aee55eac7ed4fd30e6d7e7968e0de401c553a19337b928534fa88878",
+    "uninstall.request.json": "sha256:1a8033c16cccc0a73f1d23b0860d1fc2d61f1a10025e2d51e13867bd716dd43a",
+    "purge.request.json": "sha256:63854d240b3a0c243505170f041f83d12f158ff317cb79fbf57eac3913daefdf"
+  },
+  "canonical": [
+    {
+      "value": {
+        "z": 1,
+        "a": [
+          true,
+          null,
+          "x"
+        ]
+      },
+      "encoded": "{\"a\":[true,null,\"x\"],\"z\":1}",
+      "digest": "sha256:cc31fc728ab32ccfd6543dd8cce686b9633b3c47fbec82c88a466688f3a8cb81"
+    },
+    {
+      "value": {
+        "": 2,
+        "𐀀": 1
+      },
+      "encoded": "{\"𐀀\":1,\"\":2}",
+      "digest": "sha256:4045c21a23c8ae8f8d9add81f54bd506bee65885099876fb4afb378b1f2c3516"
+    },
+    {
+      "value": {
+        "escaped": "\b\f\n\r\t\"\\/",
+        "text": "中文 é"
+      },
+      "encoded": "{\"escaped\":\"\\b\\f\\n\\r\\t\\\"\\\\/\",\"text\":\"中文 é\"}",
+      "digest": "sha256:f1e82798f1cccf15879a499f9aee7c8c882e6d37310b52d398f2be42eb5c5320"
+    },
+    {
+      "value": {
+        "n": 9007199254740991,
+        "negative": -9007199254740991
+      },
+      "encoded": "{\"n\":9007199254740991,\"negative\":-9007199254740991}",
+      "digest": "sha256:9089f45acb73048912a10d7c43ecf429d644914bcba0f5920f6e425fef7c6579"
+    },
+    {
+      "value": [
+        null,
+        true,
+        false,
+        0
+      ],
+      "encoded": "[null,true,false,0]",
+      "digest": "sha256:0c0f30ddeec98cf73aaa2362c891575307f68c6cb6cd6d72d540cf46a803035d"
+    }
+  ],
+  "linked": [
+    {
+      "files": {
+        "bundle": "managed-spec.bundle.json",
+        "request": "dev.request.json",
+        "receipt": "success.receipt.json",
+        "context": "context.json"
+      },
+      "result": {
+        "valid": true,
+        "errors": []
+      }
+    },
+    {
+      "files": {
+        "bundle": "managed-spec.bundle.json",
+        "request": "prod.request.json",
+        "receipt": "prod.receipt.json",
+        "context": "context.json"
+      },
+      "result": {
+        "valid": true,
+        "errors": []
+      }
+    },
+    {
+      "files": {
+        "bundle": "packaged-app.bundle.json",
+        "request": "packaged.request.json",
+        "receipt": "packaged.receipt.json",
+        "context": "context.json"
+      },
+      "result": {
+        "valid": true,
+        "errors": []
+      }
+    },
+    {
+      "files": {
+        "bundle": "managed-spec.bundle.json",
+        "request": "deploy.request.json",
+        "receipt": "deploy.receipt.json",
+        "context": "context.json"
+      },
+      "result": {
+        "valid": true,
+        "errors": []
+      }
+    },
+    {
+      "files": {
+        "bundle": "managed-spec.bundle.json",
+        "request": "rollback.request.json",
+        "receipt": "rollback.receipt.json",
+        "context": "context.json"
+      },
+      "result": {
+        "valid": true,
+        "errors": []
+      }
+    },
+    {
+      "files": {
+        "bundle": "managed-spec.bundle.json",
+        "request": "restart.request.json",
+        "receipt": "restart.receipt.json",
+        "context": "context.json"
+      },
+      "result": {
+        "valid": true,
+        "errors": []
+      }
+    },
+    {
+      "files": {
+        "bundle": "managed-spec.bundle.json",
+        "request": "stop.request.json",
+        "receipt": "stop.receipt.json",
+        "context": "context.json"
+      },
+      "result": {
+        "valid": true,
+        "errors": []
+      }
+    },
+    {
+      "files": {
+        "bundle": "managed-spec.bundle.json",
+        "request": "uninstall.request.json",
+        "receipt": "uninstall.receipt.json",
+        "context": "context.json"
+      },
+      "result": {
+        "valid": true,
+        "errors": []
+      }
+    },
+    {
+      "files": {
+        "bundle": "managed-spec.bundle.json",
+        "request": "purge.request.json",
+        "receipt": "purge.receipt.json",
+        "context": "context.json"
+      },
+      "result": {
+        "valid": true,
+        "errors": []
+      }
+    }
+  ]
+}

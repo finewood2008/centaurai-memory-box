@@ -1,0 +1,905 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "contract": "wanx-business-api-catalog/1",
+  "version": "0.3.0",
+  "purpose": "整理现有 WANX 运行时入口，区分可形成合同的 API、合同缺口和禁止暴露的内部路由。",
+  "statuses": {
+    "open": "已有版本化路径、参数、响应、错误、权限和验收证据，可进入应用合同。",
+    "contract-only": "已有实现或稳定入口，但 App Kit 仍缺完整公共合同；应用不得按路径猜测调用。",
+    "inventory-only": "仅用于盘点现有路由，不代表应用权限。",
+    "forbidden": "明确不进入应用 API；通常包含管理写入、凭据或内部路由。",
+    "ready-for-acceptance": "公共请求/响应、错误、权限和兼容规则已写入 App Kit，但仍需真实盒子验收和版本登记后才能标记为 open。"
+  },
+  "requiredContract": [
+    "stable-path-and-method",
+    "request-parameters-and-extra-field-policy",
+    "response-types-and-json-schema",
+    "stable-error-codes-and-http-mapping",
+    "account-user-box-application-resource-scope",
+    "idempotency-retry-and-non-replay-rules",
+    "session-expiry-box-switch-and-revocation",
+    "compatibility-version-and-acceptance-evidence"
+  ],
+  "surfaces": [
+    {
+      "id": "space.drive",
+      "title": "空间 Drive API",
+      "status": "ready-for-acceptance",
+      "scope": "当前 Host 会话中的用户和盒子。用户的应用共享该用户的 Drive。",
+      "permission": "space.drive.read; space.drive.write",
+      "contractFiles": [
+        "drive-api.md",
+        "octop-modules/personal-space.openapi.json",
+        "schemas/space.v1.schema.json"
+      ],
+      "routes": [
+        {
+          "method": "GET",
+          "path": "/api/personal-space/overview",
+          "operation": "spaceOverview",
+          "permission": "space.drive.read"
+        },
+        {
+          "method": "GET",
+          "path": "/api/personal-space/files",
+          "operation": "spaceList",
+          "permission": "space.drive.read"
+        },
+        {
+          "method": "POST",
+          "path": "/api/personal-space/folders",
+          "operation": "spaceMkdir",
+          "permission": "space.drive.write"
+        },
+        {
+          "method": "GET",
+          "path": "/api/personal-space/files/{item_id}",
+          "operation": "spaceStat",
+          "permission": "space.drive.read"
+        },
+        {
+          "method": "PATCH",
+          "path": "/api/personal-space/files/{item_id}",
+          "operation": "spaceMove",
+          "permission": "space.drive.write"
+        },
+        {
+          "method": "DELETE",
+          "path": "/api/personal-space/files/{item_id}",
+          "operation": "spaceTrash",
+          "permission": "space.drive.write"
+        },
+        {
+          "method": "GET",
+          "path": "/api/personal-space/files/{item_id}/content",
+          "operation": "spaceReadRange",
+          "permission": "space.drive.read"
+        },
+        {
+          "method": "POST",
+          "path": "/api/personal-space/trash/{item_id}/restore",
+          "operation": "spaceRestore",
+          "permission": "space.drive.write"
+        },
+        {
+          "method": "DELETE",
+          "path": "/api/personal-space/trash/{item_id}",
+          "operation": "spacePurge",
+          "permission": "space.drive.write"
+        },
+        {
+          "method": "POST",
+          "path": "/api/personal-space/uploads",
+          "operation": "spaceCreateUpload",
+          "permission": "space.drive.write"
+        },
+        {
+          "method": "GET",
+          "path": "/api/personal-space/uploads/{upload_id}",
+          "operation": "spaceUploadStatus",
+          "permission": "space.drive.read"
+        },
+        {
+          "method": "PUT",
+          "path": "/api/personal-space/uploads/{upload_id}",
+          "operation": "spaceWriteChunk",
+          "permission": "space.drive.write"
+        },
+        {
+          "method": "DELETE",
+          "path": "/api/personal-space/uploads/{upload_id}",
+          "operation": "spaceCancelUpload",
+          "permission": "space.drive.write"
+        },
+        {
+          "method": "POST",
+          "path": "/api/personal-space/uploads/{upload_id}/complete",
+          "operation": "spaceCompleteUpload",
+          "permission": "space.drive.write"
+        },
+        {
+          "method": "POST",
+          "path": "/api/personal-space/app-folders",
+          "operation": "spaceEnsureAppFolder",
+          "permission": "space.drive.write"
+        }
+      ]
+    },
+    {
+      "id": "agent.thread",
+      "title": "Agent 与 Thread 业务 API",
+      "status": "ready-for-acceptance",
+      "scope": "当前应用、当前用户、已绑定 Agent 和项目 Thread",
+      "routes": [
+        {
+          "method": "GET",
+          "path": "/api/agents?scope=mine",
+          "operation": "listBoundAgents",
+          "sideEffect": "none",
+          "responseSchemaStatus": "missing",
+          "responseSchema": "schemas/agent-list.v1.schema.json",
+          "permission": "agents.read"
+        },
+        {
+          "method": "GET",
+          "path": "/api/agents/{agent_id}",
+          "operation": "readBoundAgent",
+          "sideEffect": "none",
+          "responseSchemaStatus": "missing",
+          "responseSchema": "schemas/agent.v1.schema.json",
+          "permission": "agents.read"
+        },
+        {
+          "method": "GET",
+          "path": "/api/agents/{agent_id}/status",
+          "operation": "readAgentStatus",
+          "sideEffect": "none",
+          "responseSchemaStatus": "missing",
+          "responseSchema": "schemas/agent-status.v1.schema.json",
+          "permission": "agents.read"
+        },
+        {
+          "method": "GET",
+          "path": "/api/agents/{agent_id}/threads",
+          "operation": "listThreads",
+          "parameters": [
+            "limit",
+            "cursor"
+          ],
+          "sideEffect": "none",
+          "responseSchemaStatus": "missing",
+          "responseSchema": "schemas/thread-list.v1.schema.json",
+          "permission": "threads.read"
+        },
+        {
+          "method": "POST",
+          "path": "/api/agents/{agent_id}/threads",
+          "operation": "createThread",
+          "sideEffect": "creates-thread",
+          "requestSchemaStatus": "missing",
+          "responseSchemaStatus": "missing",
+          "responseSchema": "schemas/thread-create.v1.schema.json",
+          "permission": "threads.create",
+          "idempotency": "repeat returns the current dashboard thread; SDK must not assume a new id"
+        },
+        {
+          "method": "GET",
+          "path": "/api/agents/{agent_id}/threads/{thread_id}/history",
+          "operation": "readThreadHistory",
+          "parameters": [
+            "limit",
+            "cursor"
+          ],
+          "sideEffect": "none",
+          "responseSchemaStatus": "missing",
+          "responseSchema": "schemas/thread-history.v1.schema.json",
+          "permission": "threads.read"
+        },
+        {
+          "method": "WS",
+          "path": "/api/agents/{agent_id}/chat/ws",
+          "operation": "streamThread",
+          "sideEffect": "may-run-agent",
+          "requestSchemaStatus": "missing",
+          "responseSchemaStatus": "missing",
+          "requestSchema": "schemas/chat-ws.v1.schema.json",
+          "responseSchema": "schemas/chat-ws.v1.schema.json",
+          "permission": "threads.stream",
+          "reconnect": "reconnect by subscribe(thread_id); server may replay status/chunks; clients must dedupe by message/event id when present"
+        },
+        {
+          "method": "POST",
+          "path": "/api/agents/{agent_id}/chat/hitl/resume",
+          "operation": "resumeHumanApproval",
+          "sideEffect": "resumes-agent",
+          "requestSchemaStatus": "missing",
+          "responseSchemaStatus": "missing",
+          "requestSchema": "schemas/hitl-resume.v1.schema.json",
+          "responseSchema": "schemas/chat-ws.v1.schema.json",
+          "permission": "threads.hitl",
+          "reconnect": "SSE is best-effort; reload thread history after disconnect"
+        }
+      ],
+      "missingBeforeOpen": [
+        "真实盒子验收",
+        "版本兼容登记",
+        "平台侧 request_id 幂等字段接入"
+      ],
+      "contractFiles": [
+        "schemas/agent-list.v1.schema.json",
+        "schemas/agent-status.v1.schema.json",
+        "schemas/thread-list.v1.schema.json",
+        "schemas/thread-create.v1.schema.json",
+        "schemas/thread-history.v1.schema.json",
+        "schemas/chat-ws.v1.schema.json",
+        "schemas/hitl-resume.v1.schema.json"
+      ],
+      "permission": "agents.read; threads.read; threads.create; threads.stream; threads.hitl"
+    },
+    {
+      "id": "expert.lifecycle",
+      "title": "专家生命周期公共 API",
+      "status": "ready-for-acceptance",
+      "scope": "当前用户可见的专家模板、当前应用绑定和当前盒子实例",
+      "routes": [
+        {
+          "method": "GET",
+          "path": "/api/experts",
+          "operation": "listExpertTemplates",
+          "sideEffect": "none",
+          "responseSchemaStatus": "missing",
+          "responseSchema": "schemas/expert-list.v1.schema.json",
+          "permission": "experts.read"
+        },
+        {
+          "method": "GET",
+          "path": "/api/experts/{expert_id}",
+          "operation": "readExpertTemplate",
+          "sideEffect": "none",
+          "responseSchemaStatus": "missing",
+          "responseSchema": "schemas/expert-detail.v1.schema.json",
+          "permission": "experts.read"
+        },
+        {
+          "method": "POST",
+          "path": "/api/agents/from-expert/{expert_id}",
+          "operation": "createAgentFromExpert",
+          "sideEffect": "creates-agent",
+          "requestSchemaStatus": "missing",
+          "responseSchemaStatus": "missing",
+          "requestSchema": "schemas/expert-create.v1.schema.json",
+          "responseSchema": "schemas/expert-create-result.v1.schema.json",
+          "permission": "experts.instantiate",
+          "idempotency": "client-generated request id; retry only after checking agent_id"
+        },
+        {
+          "method": "POST",
+          "path": "/api/agents/{agent_id}/start",
+          "operation": "startBoundAgent",
+          "sideEffect": "starts-agent",
+          "requestSchemaStatus": "missing",
+          "responseSchemaStatus": "none",
+          "permission": "agents.lifecycle",
+          "idempotency": "safe repeat after current status check"
+        },
+        {
+          "method": "POST",
+          "path": "/api/agents/{agent_id}/stop",
+          "operation": "stopBoundAgent",
+          "sideEffect": "stops-agent",
+          "requestSchemaStatus": "missing",
+          "responseSchemaStatus": "none",
+          "permission": "agents.lifecycle",
+          "idempotency": "safe repeat after current status check"
+        }
+      ],
+      "missingBeforeOpen": [
+        "真实盒子验收",
+        "版本兼容登记",
+        "平台侧 request_id 幂等字段接入"
+      ],
+      "contractFiles": [
+        "schemas/expert-list.v1.schema.json",
+        "schemas/expert-detail.v1.schema.json",
+        "schemas/expert-create.v1.schema.json",
+        "schemas/expert-create-result.v1.schema.json",
+        "schemas/agent-status.v1.schema.json"
+      ],
+      "permission": "experts.read; experts.instantiate; agents.lifecycle",
+      "idempotency": "创建接口由应用提供 request_id 以实现幂等；当前运行时路由尚未接收 request_id，因此 App Kit SDK 必须在同一进程阻止重复提交，平台后续版本将把 request_id 纳入请求合同。"
+    },
+    {
+      "id": "knowledge.retrieval",
+      "title": "知识库与检索 API",
+      "status": "contract-only",
+      "scope": "当前用户、应用授权的知识库和明确的资料范围",
+      "routes": [
+        {
+          "method": "GET",
+          "path": "/api/knowledge-bases/capability",
+          "operation": "readKnowledgeCapability",
+          "sideEffect": "none",
+          "responseSchemaStatus": "missing"
+        },
+        {
+          "method": "GET",
+          "path": "/api/knowledge-bases",
+          "operation": "listKnowledgeBases",
+          "sideEffect": "none",
+          "responseSchemaStatus": "missing"
+        },
+        {
+          "method": "GET",
+          "path": "/api/knowledge-bases/{kb_id}",
+          "operation": "readKnowledgeBase",
+          "sideEffect": "none",
+          "responseSchemaStatus": "missing"
+        },
+        {
+          "method": "GET",
+          "path": "/api/knowledge-bases/{kb_id}/documents",
+          "operation": "listKnowledgeDocuments",
+          "parameters": [
+            "prefix"
+          ],
+          "sideEffect": "none",
+          "responseSchemaStatus": "missing"
+        },
+        {
+          "method": "GET",
+          "path": "/api/knowledge-bases/{kb_id}/documents/{document_id}/preview",
+          "operation": "previewKnowledgeDocument",
+          "sideEffect": "none",
+          "responseSchemaStatus": "missing"
+        }
+      ],
+      "missingBeforeOpen": [
+        "stable retrieval/query endpoint",
+        "query and filter schema",
+        "passage/citation schema",
+        "ranking and retrieval_k contract",
+        "source authorization and revocation",
+        "quota and cost semantics",
+        "not-ready and partial-result errors"
+      ]
+    },
+    {
+      "id": "star-map",
+      "title": "星图 API",
+      "status": "open",
+      "scope": "当前 Host 会话所连接的服务，以及星图 Key 绑定的数据仓和读取权限。",
+      "permission": "starlink.warehouse.read; starlink.warehouse.reasoning",
+      "contractFiles": [
+        "starlink-api.md",
+        "octop-modules/starlink.openapi.json"
+      ],
+      "routes": [
+        {
+          "method": "GET",
+          "path": "/api/semantica/open/v1/warehouse",
+          "operation": "starlinkWarehouse",
+          "sideEffect": "none",
+          "permission": "starlink.warehouse.read",
+          "warehouseKeyScope": "documents"
+        },
+        {
+          "method": "GET",
+          "path": "/api/semantica/open/v1/documents",
+          "operation": "starlinkDocuments",
+          "sideEffect": "none",
+          "permission": "starlink.warehouse.read",
+          "warehouseKeyScope": "documents"
+        },
+        {
+          "method": "GET",
+          "path": "/api/semantica/open/v1/graph",
+          "operation": "starlinkGraph",
+          "sideEffect": "none",
+          "permission": "starlink.warehouse.read",
+          "warehouseKeyScope": "graph"
+        },
+        {
+          "method": "POST",
+          "path": "/api/semantica/open/v1/search",
+          "operation": "starlinkSearch",
+          "sideEffect": "none",
+          "permission": "starlink.warehouse.read",
+          "warehouseKeyScope": "search"
+        },
+        {
+          "method": "GET",
+          "path": "/api/semantica/open/v1/evidence/{id}",
+          "operation": "starlinkEvidence",
+          "sideEffect": "none",
+          "permission": "starlink.warehouse.read",
+          "warehouseKeyScope": "evidence"
+        },
+        {
+          "method": "POST",
+          "path": "/api/semantica/open/v1/reasoning/{operation}",
+          "operation": "starlinkReasoning",
+          "sideEffect": "prepare 可创建准备记录，detect=true 可触发检测",
+          "permission": "starlink.warehouse.reasoning",
+          "warehouseKeyScope": "reasoning"
+        }
+      ]
+    },
+    {
+      "id": "dialogue.session",
+      "title": "多模型对话会话 API",
+      "status": "ready-for-acceptance",
+      "scope": "当前 WANX 应用、当前账号的对话会话；不跨应用、不接受 provider 凭据、不允许任意上游 URL。",
+      "permission": "dialogue.models.read; dialogue.sessions.read; dialogue.sessions.create; dialogue.sessions.mutate; dialogue.sessions.stream",
+      "contractFiles": [
+        "schemas/dialogue-operation.v1.schema.json",
+        "schemas/dialogue-question.v1.schema.json",
+        "schemas/dialogue-add-models.v1.schema.json",
+        "schemas/dialogue-follow-up.v1.schema.json",
+        "schemas/dialogue-quota.v1.schema.json",
+        "schemas/dialogue-session-list.v1.schema.json",
+        "schemas/dialogue-session.v1.schema.json",
+        "schemas/dialogue-event.v1.schema.json"
+      ],
+      "routes": [
+        {
+          "method": "GET",
+          "path": "/api/dialogue/quota",
+          "operation": "readDialogueQuota",
+          "sideEffect": "none",
+          "responseSchema": "schemas/dialogue-quota.v1.schema.json",
+          "permission": "dialogue.sessions.read"
+        },
+        {
+          "method": "GET",
+          "path": "/api/dialogue/sessions",
+          "operation": "listDialogueSessions",
+          "sideEffect": "none",
+          "responseSchema": "schemas/dialogue-session-list.v1.schema.json",
+          "permission": "dialogue.sessions.read"
+        },
+        {
+          "method": "POST",
+          "path": "/api/dialogue/sessions",
+          "operation": "createDialogueSession",
+          "sideEffect": "creates-session-and-dispatches-models",
+          "requestSchema": "schemas/dialogue-question.v1.schema.json",
+          "responseSchema": "schemas/dialogue-session.v1.schema.json",
+          "permission": "dialogue.sessions.create",
+          "idempotency": "request_id + payload fingerprint; same request_id with different payload is IDEMPOTENCY_CONFLICT"
+        },
+        {
+          "method": "GET",
+          "path": "/api/dialogue/sessions/{session_id}",
+          "operation": "readDialogueSession",
+          "sideEffect": "none",
+          "responseSchema": "schemas/dialogue-session.v1.schema.json",
+          "permission": "dialogue.sessions.read"
+        },
+        {
+          "method": "DELETE",
+          "path": "/api/dialogue/sessions/{session_id}",
+          "operation": "deleteDialogueSession",
+          "sideEffect": "deletes-session-history-and-stops-answers",
+          "responseSchemaStatus": "none",
+          "permission": "dialogue.sessions.mutate",
+          "idempotency": "repeat after confirmed deletion is not replayable; treat 404 as terminal"
+        },
+        {
+          "method": "POST",
+          "path": "/api/dialogue/sessions/{session_id}/groups/{group_id}/answers",
+          "operation": "addDialogueModels",
+          "sideEffect": "dispatches-models",
+          "requestSchema": "schemas/dialogue-add-models.v1.schema.json",
+          "responseSchema": "schemas/dialogue-session.v1.schema.json",
+          "permission": "dialogue.sessions.mutate",
+          "idempotency": "request_id + payload fingerprint"
+        },
+        {
+          "method": "POST",
+          "path": "/api/dialogue/sessions/{session_id}/answers/{answer_id}/continue",
+          "operation": "continueDialogueAnswer",
+          "sideEffect": "creates-branch-and-dispatches-model",
+          "requestSchema": "schemas/dialogue-follow-up.v1.schema.json",
+          "responseSchema": "schemas/dialogue-session.v1.schema.json",
+          "permission": "dialogue.sessions.mutate",
+          "idempotency": "request_id + payload fingerprint"
+        },
+        {
+          "method": "POST",
+          "path": "/api/dialogue/sessions/{session_id}/answers/{answer_id}/retry",
+          "operation": "retryDialogueAnswer",
+          "sideEffect": "dispatches-model",
+          "requestSchema": "schemas/dialogue-operation.v1.schema.json",
+          "responseSchema": "schemas/dialogue-session.v1.schema.json",
+          "permission": "dialogue.sessions.mutate",
+          "idempotency": "request_id + payload fingerprint"
+        },
+        {
+          "method": "POST",
+          "path": "/api/dialogue/sessions/{session_id}/answers/{answer_id}/stop",
+          "operation": "stopDialogueAnswer",
+          "sideEffect": "stops-answer",
+          "responseSchema": "schemas/dialogue-session.v1.schema.json",
+          "permission": "dialogue.sessions.mutate",
+          "idempotency": "safe repeat after status read"
+        },
+        {
+          "method": "GET",
+          "path": "/api/dialogue/sessions/{session_id}/events",
+          "operation": "streamDialogueSnapshots",
+          "sideEffect": "none",
+          "responseSchema": "schemas/dialogue-event.v1.schema.json",
+          "permission": "dialogue.sessions.stream",
+          "reconnect": "reconnect by GET; stream emits revisioned snapshots and terminates when no answer is active"
+        }
+      ],
+      "missingBeforeOpen": [
+        "真实盒子验收",
+        "版本兼容登记"
+      ]
+    },
+    {
+      "id": "memory",
+      "title": "Agent 记忆 API",
+      "status": "ready-for-acceptance",
+      "scope": "当前用户拥有的、已绑定到当前应用的 Agent；不允许 as_user 管理员代理、不允许跨用户/跨应用读取。",
+      "permission": "memory.read; memory.write; memory.config.read; memory.config.write",
+      "contractFiles": [
+        "schemas/memory-list-filter.v1.schema.json",
+        "schemas/memory-page.v1.schema.json",
+        "schemas/memory-item.v1.schema.json",
+        "schemas/memory-mutation.v1.schema.json",
+        "schemas/memory-stats.v1.schema.json",
+        "schemas/memory-extract-config.v1.schema.json",
+        "schemas/memory-create-atom.v1.schema.json",
+        "schemas/memory-replace-atom.v1.schema.json"
+      ],
+      "routes": [
+        {
+          "method": "POST",
+          "path": "/api/agents/{agent_id}/memory/atoms/list",
+          "operation": "listMemoryAtoms",
+          "sideEffect": "none",
+          "requestSchema": "schemas/memory-list-filter.v1.schema.json",
+          "responseSchema": "schemas/memory-page.v1.schema.json",
+          "permission": "memory.read"
+        },
+        {
+          "method": "POST",
+          "path": "/api/agents/{agent_id}/memory/raw_events/list",
+          "operation": "listMemoryRawEvents",
+          "sideEffect": "none",
+          "requestSchema": "schemas/memory-list-filter.v1.schema.json",
+          "responseSchema": "schemas/memory-page.v1.schema.json",
+          "permission": "memory.read"
+        },
+        {
+          "method": "POST",
+          "path": "/api/agents/{agent_id}/memory/entities/list",
+          "operation": "listMemoryEntities",
+          "sideEffect": "none",
+          "requestSchema": "schemas/memory-list-filter.v1.schema.json",
+          "responseSchema": "schemas/memory-page.v1.schema.json",
+          "permission": "memory.read"
+        },
+        {
+          "method": "POST",
+          "path": "/api/agents/{agent_id}/memory/episodes/list",
+          "operation": "listMemoryEpisodes",
+          "sideEffect": "none",
+          "requestSchema": "schemas/memory-list-filter.v1.schema.json",
+          "responseSchema": "schemas/memory-page.v1.schema.json",
+          "permission": "memory.read"
+        },
+        {
+          "method": "POST",
+          "path": "/api/agents/{agent_id}/memory/journal/list",
+          "operation": "listMemoryJournal",
+          "sideEffect": "none",
+          "requestSchema": "schemas/memory-list-filter.v1.schema.json",
+          "responseSchema": "schemas/memory-page.v1.schema.json",
+          "permission": "memory.read"
+        },
+        {
+          "method": "POST",
+          "path": "/api/agents/{agent_id}/memory/candidates/list",
+          "operation": "listMemoryCandidates",
+          "sideEffect": "none",
+          "requestSchema": "schemas/memory-list-filter.v1.schema.json",
+          "responseSchema": "schemas/memory-page.v1.schema.json",
+          "permission": "memory.read"
+        },
+        {
+          "method": "GET",
+          "path": "/api/agents/{agent_id}/memory/raw_events/{event_id}",
+          "operation": "getMemoryRawEvents",
+          "sideEffect": "none",
+          "responseSchema": "schemas/memory-item.v1.schema.json",
+          "permission": "memory.read"
+        },
+        {
+          "method": "GET",
+          "path": "/api/agents/{agent_id}/memory/candidates/{candidate_id}",
+          "operation": "getMemoryCandidates",
+          "sideEffect": "none",
+          "responseSchema": "schemas/memory-item.v1.schema.json",
+          "permission": "memory.read"
+        },
+        {
+          "method": "GET",
+          "path": "/api/agents/{agent_id}/memory/atoms/{atom_id}",
+          "operation": "getMemoryAtoms",
+          "sideEffect": "none",
+          "responseSchema": "schemas/memory-item.v1.schema.json",
+          "permission": "memory.read"
+        },
+        {
+          "method": "GET",
+          "path": "/api/agents/{agent_id}/memory/entities/{entity_id}",
+          "operation": "getMemoryEntities",
+          "sideEffect": "none",
+          "responseSchema": "schemas/memory-item.v1.schema.json",
+          "permission": "memory.read"
+        },
+        {
+          "method": "GET",
+          "path": "/api/agents/{agent_id}/memory/episodes/{episode_id}",
+          "operation": "getMemoryEpisodes",
+          "sideEffect": "none",
+          "responseSchema": "schemas/memory-item.v1.schema.json",
+          "permission": "memory.read"
+        },
+        {
+          "method": "GET",
+          "path": "/api/agents/{agent_id}/memory/stats/counts",
+          "operation": "readMemoryCounts",
+          "sideEffect": "none",
+          "responseSchema": "schemas/memory-stats.v1.schema.json",
+          "permission": "memory.read"
+        },
+        {
+          "method": "GET",
+          "path": "/api/agents/{agent_id}/memory/stats/growth",
+          "operation": "readMemoryGrowth",
+          "sideEffect": "none",
+          "responseSchema": "schemas/memory-stats.v1.schema.json",
+          "permission": "memory.read"
+        },
+        {
+          "method": "GET",
+          "path": "/api/agents/{agent_id}/memory/stats/atom_kinds",
+          "operation": "readMemoryAtomKinds",
+          "sideEffect": "none",
+          "responseSchema": "schemas/memory-stats.v1.schema.json",
+          "permission": "memory.read"
+        },
+        {
+          "method": "GET",
+          "path": "/api/agents/{agent_id}/memory/journal/recent",
+          "operation": "readRecentMemoryJournal",
+          "sideEffect": "none",
+          "responseSchema": "schemas/memory-page.v1.schema.json",
+          "permission": "memory.read"
+        },
+        {
+          "method": "GET",
+          "path": "/api/agents/{agent_id}/memory/terminal/about_me",
+          "operation": "readMemoryTerminalAboutMe",
+          "sideEffect": "none",
+          "responseSchema": "schemas/memory-page.v1.schema.json",
+          "permission": "memory.read"
+        },
+        {
+          "method": "GET",
+          "path": "/api/agents/{agent_id}/memory/terminal/current_focus",
+          "operation": "readMemoryTerminalCurrentFocus",
+          "sideEffect": "none",
+          "responseSchema": "schemas/memory-page.v1.schema.json",
+          "permission": "memory.read"
+        },
+        {
+          "method": "GET",
+          "path": "/api/agents/{agent_id}/memory/terminal/things_you_told_me",
+          "operation": "readMemoryTerminalThingsYouToldMe",
+          "sideEffect": "none",
+          "responseSchema": "schemas/memory-page.v1.schema.json",
+          "permission": "memory.read"
+        },
+        {
+          "method": "GET",
+          "path": "/api/agents/{agent_id}/memory/terminal/recent_stories",
+          "operation": "readMemoryTerminalRecentStories",
+          "sideEffect": "none",
+          "responseSchema": "schemas/memory-page.v1.schema.json",
+          "permission": "memory.read"
+        },
+        {
+          "method": "GET",
+          "path": "/api/agents/{agent_id}/memory/terminal/entities",
+          "operation": "readMemoryTerminalEntities",
+          "sideEffect": "none",
+          "responseSchema": "schemas/memory-page.v1.schema.json",
+          "permission": "memory.read"
+        },
+        {
+          "method": "POST",
+          "path": "/api/agents/{agent_id}/memory/candidates/{candidate_id}:promote",
+          "operation": "promoteMemoryCandidate",
+          "sideEffect": "writes-memory-and-journal",
+          "responseSchema": "schemas/memory-mutation.v1.schema.json",
+          "permission": "memory.write",
+          "idempotency": "repeat on the same terminal candidate returns resource-not-found"
+        },
+        {
+          "method": "POST",
+          "path": "/api/agents/{agent_id}/memory/candidates/{candidate_id}:reject",
+          "operation": "rejectMemoryCandidate",
+          "sideEffect": "writes-memory-and-journal",
+          "responseSchema": "schemas/memory-mutation.v1.schema.json",
+          "permission": "memory.write"
+        },
+        {
+          "method": "POST",
+          "path": "/api/agents/{agent_id}/memory/atoms/{atom_id}:deprecate",
+          "operation": "deprecateMemoryAtom",
+          "sideEffect": "writes-memory-and-journal",
+          "responseSchema": "schemas/memory-mutation.v1.schema.json",
+          "permission": "memory.write"
+        },
+        {
+          "method": "POST",
+          "path": "/api/agents/{agent_id}/memory/atoms",
+          "operation": "createMemoryAtom",
+          "sideEffect": "writes-memory-and-journal",
+          "requestSchema": "schemas/memory-create-atom.v1.schema.json",
+          "responseSchema": "schemas/memory-mutation.v1.schema.json",
+          "permission": "memory.write"
+        },
+        {
+          "method": "POST",
+          "path": "/api/agents/{agent_id}/memory/atoms/{atom_id}:replace",
+          "operation": "replaceMemoryAtom",
+          "sideEffect": "writes-memory-and-journal",
+          "requestSchema": "schemas/memory-replace-atom.v1.schema.json",
+          "responseSchema": "schemas/memory-mutation.v1.schema.json",
+          "permission": "memory.write"
+        },
+        {
+          "method": "GET",
+          "path": "/api/agents/{agent_id}/memory/extract-config",
+          "operation": "readMemoryExtractConfig",
+          "sideEffect": "none",
+          "responseSchema": "schemas/memory-extract-config.v1.schema.json",
+          "permission": "memory.config.read"
+        },
+        {
+          "method": "PUT",
+          "path": "/api/agents/{agent_id}/memory/extract-config",
+          "operation": "updateMemoryExtractConfig",
+          "sideEffect": "updates-agent-memory-config",
+          "requestSchema": "schemas/memory-extract-config.v1.schema.json",
+          "responseSchema": "schemas/memory-extract-config.v1.schema.json",
+          "permission": "memory.config.write"
+        }
+      ],
+      "forbiddenRoutes": [
+        "/api/memory/portable/sources",
+        "/api/agents/{agent_id}/memory/portable/pack",
+        "/api/agents/{agent_id}/memory/portable/adopt",
+        "/api/agents/{agent_id}/memory/portable/doctor"
+      ],
+      "forbiddenReason": "跨宿主导入导出、上传包和 doctor 具有跨边界数据迁移与文件写入能力，不属于应用 API。",
+      "missingBeforeOpen": [
+        "真实盒子验收",
+        "版本兼容登记"
+      ]
+    }
+  ],
+  "readOnlyCatalog": [
+    {
+      "id": "models",
+      "title": "对话模型目录",
+      "status": "ready-for-acceptance",
+      "routes": [
+        {
+          "method": "GET",
+          "path": "/api/dialogue/models",
+          "operation": "listAccountModels",
+          "sideEffect": "none",
+          "responseSchema": "schemas/model-list.v1.schema.json",
+          "permission": "models.read"
+        }
+      ],
+      "forbiddenFields": [
+        "api_key",
+        "access_token",
+        "client_secret",
+        "authorization",
+        "provider write configuration"
+      ],
+      "missingBeforeOpen": [
+        "真实盒子验收",
+        "版本兼容登记"
+      ],
+      "contractFiles": [
+        "schemas/model-list.v1.schema.json"
+      ]
+    },
+    {
+      "id": "runtime-read",
+      "title": "运行时只读 API",
+      "status": "contract-only",
+      "routes": [
+        {
+          "method": "GET",
+          "path": "/api/settings/capabilities",
+          "operation": "readRuntimeCapabilities",
+          "sideEffect": "none",
+          "responseSchemaStatus": "missing"
+        },
+        {
+          "method": "GET",
+          "path": "/api/settings/timezone",
+          "operation": "readServerTimezone",
+          "sideEffect": "none",
+          "responseSchemaStatus": "missing"
+        },
+        {
+          "method": "GET",
+          "path": "/api/settings/upload",
+          "operation": "readUploadLimits",
+          "sideEffect": "none",
+          "responseSchemaStatus": "missing"
+        }
+      ],
+      "missingBeforeOpen": [
+        "application-scoped field allowlist",
+        "account/box switching semantics",
+        "compatibility version"
+      ]
+    }
+  ],
+  "permissionModel": "permissions.v1.json",
+  "sessionRules": {
+    "expired": "收到 401 或 HOST_SESSION_EXPIRED 后停止业务重试，重新从万象建立应用启动会话。",
+    "boxSwitch": "切换盒子后重新读取 WanxHostContext；旧 boxId 下的 Agent、Thread、记忆和模型绑定不得复用。",
+    "revocation": "应用被撤销或资源解绑后，后续调用返回 APPLICATION_RESOURCE_NOT_BOUND/NOT_FOUND，不得使用本地缓存继续写入。",
+    "nonReplay": "网络恢复不会自动重放创建、派发、记忆写入或生命周期操作；只有目录明确标为幂等的 request_id 操作可以由 SDK 重试。"
+  },
+  "excludedSurfaces": [
+    {
+      "id": "user-management",
+      "status": "forbidden",
+      "prefixes": [
+        "/api/users",
+        "/api/auth"
+      ],
+      "reason": "用户资料、账号、角色、邀请和认证由万象管理。应用使用 Host Context 识别当前用户。"
+    },
+    {
+      "id": "model-provider",
+      "status": "forbidden",
+      "prefixes": [
+        "/api/providers",
+        "/api/admin/providers"
+      ],
+      "reason": "Provider 目录、预设、配置、凭据和连接测试由万象管理。应用从 GET /api/dialogue/models 选择可用模型。"
+    },
+    {
+      "id": "agent-channel-management",
+      "status": "forbidden",
+      "prefixes": [
+        "/api/agents/{agent_id}/channels"
+      ],
+      "reason": "专用渠道路由由具备渠道权限的客户端使用，详情和绑定流程可能涉及第三方凭据。应用从 GET /api/agents/{agent_id}/status 的 channels 字段读取渠道摘要。"
+    },
+    {
+      "id": "administration",
+      "status": "forbidden",
+      "prefixes": [
+        "/api/admin"
+      ],
+      "reason": "管理接口由万象可信客户端和管理员使用。"
+    }
+  ]
+}

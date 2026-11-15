@@ -1,0 +1,36 @@
+{
+  "documents": {
+    "original_rows": 98,
+    "missing_or_changed": 0
+  },
+  "document_versions": {
+    "original_rows": 106,
+    "missing_or_changed": 0
+  },
+  "content_segments": {
+    "original_rows": 7568,
+    "missing_or_changed": 0
+  },
+  "published_entities": {
+    "original_rows": 193,
+    "missing_or_changed": 0
+  },
+  "published_facts": {
+    "original_rows": 157,
+    "missing_or_changed": 0
+  },
+  "fact_evidence": {
+    "original_rows": 328,
+    "missing_or_changed": 0
+  },
+  "xingtu_access_keys": {
+    "original_rows": 17,
+    "missing_or_changed": 0
+  },
+  "xingtu_warehouses": {
+    "original_rows": 23,
+    "missing_or_changed": 0
+  },
+  "schema": 30,
+  "foreign_key_violations": 0
+}

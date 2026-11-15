@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wanx-resource-binding/1",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["kind", "resourceId", "instanceId", "version"],
+      "properties": {"kind": {"const": "expert"}, "resourceId": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"}, "instanceId": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"}, "version": {"type": "string", "minLength": 1}},
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["kind", "resourceId", "packageId", "version"],
+      "properties": {"kind": {"const": "skill-package"}, "resourceId": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"}, "packageId": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"}, "version": {"type": "string", "minLength": 1}},
+      "additionalProperties": false
+    }
+  ]
+}

@@ -1,0 +1,263 @@
+diff --git a/desktop/application.manifest.json b/desktop/application.manifest.json
+index 77d09ad..4d0e212 100644
+--- a/desktop/application.manifest.json
++++ b/desktop/application.manifest.json
+@@ -1,7 +1,7 @@
+ {
+   "applicationId": "centaurai.wanx.semantica",
+   "name": "万象·星图",
+-  "version": "0.3.6-rc.20261107.integration.3",
++  "version": "0.3.6-rc.20261108.compact.5",
+   "protocolVersion": 1,
+   "runtime": "electron",
+   "launchMode": "shared",
+diff --git a/desktop/package-lock.json b/desktop/package-lock.json
+index c54cb83..7b2f0c2 100644
+--- a/desktop/package-lock.json
++++ b/desktop/package-lock.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "wanx-semantica",
+-  "version": "0.3.6-rc.20261107.integration.3",
++  "version": "0.3.6-rc.20261108.compact.5",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "wanx-semantica",
+-      "version": "0.3.6-rc.20261107.integration.3",
++      "version": "0.3.6-rc.20261108.compact.5",
+       "license": "UNLICENSED",
+       "dependencies": {
+         "@centaurai/wanx-host-sdk": "file:vendor/wanx-host-sdk"
+diff --git a/desktop/package.json b/desktop/package.json
+index 3c88258..de527c5 100644
+--- a/desktop/package.json
++++ b/desktop/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "wanx-semantica",
+-  "version": "0.3.6-rc.20261107.integration.3",
++  "version": "0.3.6-rc.20261108.compact.5",
+   "private": true,
+   "type": "module",
+   "main": "shell/main.mjs",
+@@ -8,9 +8,10 @@
+   "scripts": {
+     "test": "node --test tests/*.test.mjs",
+     "check": "node --check shell/main.mjs && node --check shell/service.mjs && node --check ui/app.js && node --check ui/native-skills.js",
+-    "package": "npm run build:workbench && node tools/package.mjs",
+-    "package:macos": "npm run build:workbench && node tools/package-macos.mjs",
+-    "build:workbench": "node tools/build-workbench.mjs"
++    "package": "npm run build:compact && npm run build:workbench && node tools/package.mjs",
++    "package:macos": "npm run build:compact && npm run build:workbench && node tools/package-macos.mjs",
++    "build:workbench": "node tools/build-workbench.mjs",
++    "build:compact": "node tools/build-compact.mjs"
+   },
+   "dependencies": {
+     "@centaurai/wanx-host-sdk": "file:vendor/wanx-host-sdk"
+diff --git a/desktop/shell/service.mjs b/desktop/shell/service.mjs
+index 466093c..dca2e57 100644
+--- a/desktop/shell/service.mjs
++++ b/desktop/shell/service.mjs
+@@ -622,9 +622,11 @@ export class SemanticaService {
+               (key === 'version_id' ? !/^[A-Za-z0-9_-]{1,128}$/.test(value) :
+                 !/^(0|[1-9][0-9]*)$/.test(value) || !Number.isSafeInteger(Number(value)))) throw fail('INVALID_RESOURCE');
+         }
+-        const start = Number(url.searchParams.get('start')), end = Number(url.searchParams.get('end'));
+-        if (!url.searchParams.has('version_id') || !url.searchParams.has('start') || !url.searchParams.has('end') ||
+-            end < start || end - start > 65536) throw fail('INVALID_RESOURCE');
++        const start = Number(url.searchParams.get('start')), end = url.searchParams.has('end') ? Number(url.searchParams.get('end')) : null;
++        // Let the existing backend clamp an omitted end to the version's actual
++        // length (and its 65536-character cap), including short documents.
++        if (!url.searchParams.has('version_id') || !url.searchParams.has('start') ||
++            end !== null && (end < start || end - start > 65536)) throw fail('INVALID_RESOURCE');
+         const generation = this.warehouseGeneration;
+         const result = await api('/documents/' + documentText[1] + '/text' + url.search, {workbench: true});
+         if (generation !== this.warehouseGeneration) throw fail('WAREHOUSE_CHANGED');
+diff --git a/desktop/tests/workbench-document-detail.test.mjs b/desktop/tests/workbench-document-detail.test.mjs
+index fddb518..449d9a0 100644
+--- a/desktop/tests/workbench-document-detail.test.mjs
++++ b/desktop/tests/workbench-document-detail.test.mjs
+@@ -97,9 +97,11 @@ test('immutable text ranges stay version-bound and within 65536 characters', asy
+   const url=`/api/documents/${document}/text`;
+   await service.call('workbench-request',{warehouseId:warehouse,url:url+'?version_id=v1&start=0&end=65536'});
+   assert.equal(requests[0].path,`/api/semantica/warehouses/${warehouse}/documents/${document}/text?version_id=v1&start=0&end=65536`);
++  await service.call('workbench-request',{warehouseId:warehouse,url:url+'?version_id=v1&start=0'});
++  assert.equal(requests[1].path,`/api/semantica/warehouses/${warehouse}/documents/${document}/text?version_id=v1&start=0`);
+   for(const query of ['?start=0&end=1','?version_id=v1&start=-1&end=1','?version_id=v1&start=0&end=65537','?version_id=v1&start=3&end=2','?version_id=v1&start=0&end=1&actor_id=other'])
+     await assert.rejects(service.call('workbench-request',{warehouseId:warehouse,url:url+query}),{code:'INVALID_RESOURCE'});
+-  assert.equal(requests.length,1);
++  assert.equal(requests.length,2);
+ });
+ 
+ test('the adapter adds no write, suffix, other resource, encoded ID or cross-warehouse route', async () => {
+diff --git a/desktop/ui/app.js b/desktop/ui/app.js
+index 034f41f..0119f64 100644
+--- a/desktop/ui/app.js
++++ b/desktop/ui/app.js
+@@ -1093,6 +1093,7 @@ async function saveSetting(button) {
+   }
+ }
+ async function refresh() {
++  if(document.body.dataset.starlinkMode==='compact')return;
+   if (!state.ready || state.refreshing) return;
+   if (state.view === "warehouses" || !state.warehouseId) {
+     state.refreshing = true;
+@@ -1256,6 +1257,8 @@ async function applyLaunchTarget(value) {
+   let ok = false;
+   try {
+     if (!state.ready || state.invalid || state.uploading || state.migrating) throw new Error("WAREHOUSE_BUSY");
++    if(globalThis.starlinkCompactCanLeave?.()===false)throw Error('UNSAVED_COMPACT_EDIT');
++    globalThis.starlinkRestoreFullMode?.();
+     const { target } = value;
+     const warehouses = await call("warehouses");
+     if (lastLaunchRequest !== value.requestId) return;
+@@ -2667,3 +2670,5 @@ $("#model-manage").addEventListener("click",async()=>{
+   catch(e){toast(errorText(e));}
+ });
+ if ($("#import-model-config")) $("#import-model-config").addEventListener("click",()=>{$("#import-dialog").close();setView("models");});
++
++window.starlinkCompactHost={context:()=>({warehouseId:state.warehouseId}),canLeave:()=>!state.editing&&!state.saving&&workbench.canLeave(),select:async(id,view='graph')=>{await selectWarehouse(id,view)}};
+diff --git a/desktop/ui/index.html b/desktop/ui/index.html
+index 34b82f4..b7bfae3 100644
+--- a/desktop/ui/index.html
++++ b/desktop/ui/index.html
+@@ -11,8 +11,15 @@
+     <link rel="stylesheet" href="styles.css" />
+     <link rel="stylesheet" href="onboarding.css" />
+     <link rel="stylesheet" href="conversation.css" />
++    <link rel="stylesheet" href="compact-mode.css" />
++    <link rel="stylesheet" data-compact-style media="not all" href="compact-assets/styles.css" />
++    <link rel="stylesheet" data-compact-style media="not all" href="compact-assets/personal-layout.css" />
++    <link rel="stylesheet" data-compact-style media="not all" href="compact-assets/material-theme.css" />
++    <link rel="stylesheet" data-compact-style media="not all" href="compact-assets/data.css" />
+   </head>
+   <body>
++    <nav class="starlink-mode-switch" aria-label="星图模式"><strong>星图 STARLINK</strong><div><button data-starlink-mode="compact" aria-pressed="false">精简版</button><button data-starlink-mode="full" aria-pressed="true">完整版</button></div></nav>
++    <div id="starlink-compact-root" hidden></div>
+     <section id="onboarding-shell" aria-label="个人知识仓初始化" hidden></section>
+     <div class="app" id="app">
+       <aside class="sidebar" aria-label="应用导航">
+@@ -971,6 +978,8 @@ Authorization: Bearer &lt;单仓访问凭证&gt;</pre><p>准备响应返回 prep
+     </dialog>
+     <div class="toast" id="toast" role="status" hidden></div>
+ 
++    <script src="compact-assets/data-view.js"></script>
+     <script type="module" src="app.js"></script>
++    <script type="module" src="compact-mode.js"></script>
+   </body>
+ </html>
+diff --git a/desktop/ui/compact-mode.js b/desktop/ui/compact-mode.js
+new file mode 100644
+index 0000000..ff55cc8
+--- /dev/null
++++ b/desktop/ui/compact-mode.js
+@@ -0,0 +1,52 @@
++const root=document.querySelector('#starlink-compact-root');
++const buttons=[...document.querySelectorAll('[data-starlink-mode]')];
++let view=null,ready=false,active=false,scope=null,identity=null,load=0;
++async function call(name,input={}){
++ const result=await window.semantica.call(name,input);
++ if(!['workbench-request','create-warehouse','reprocess-models'].includes(name))return result;
++ if(!result?.ok)throw Object.assign(new Error(result?.code||'COMPACT_RESPONSE_INVALID'),{code:result?.code,publicMessage:result?.message});
++ return result.value;
++}
++const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
++function render(){if(active&&view){root.innerHTML=view.render();root.querySelector('[data-data-action="assistant-access"]')?.remove()}}
++function scopeKey(v){return JSON.stringify([v.identity?.user?.id,v.identity?.boxId,v.identity?.dataScope])}
++async function request(name,input={}){
++ const action=name.replace(/^data\./,'');const warehouseId=input.warehouseId||view?.currentWarehouse();const target={...input,warehouseId};
++ if(action==='open-starlink'){await setMode('full',input);return {opened:true}}
++ if(action==='authorization-summary'){const keys=await call('keys',{warehouseId});let active_count=0;for(const k of keys.items||[])if(!k.revoked_at&&k.expires_at>Date.now()/1000)active_count++;return {active_count}}
++ if(action==='document-text')return call('workbench-request',{warehouseId,url:'/api/documents/'+encodeURIComponent(input.id)+'/text?'+new URLSearchParams({version_id:input.versionId,start:String(input.start||0),...(input.end!==undefined?{end:String(input.end)}:{})})});
++ if(action.startsWith('governance-')){
++  const paths={'governance-summary':'/summary','governance-reviews':'/reviews?'+new URLSearchParams({offset:String(input.offset||0),limit:String(input.limit||20)}),'governance-detail':'/reviews/'+encodeURIComponent(input.reviewId),'governance-flag':'/flag','governance-unflag':'/unflag','governance-propose':'/proposals','governance-resolve':'/reviews/'+encodeURIComponent(input.reviewId)+'/resolve','governance-apply':'/proposals/'+encodeURIComponent(input.proposalId)+'/apply'};
++  if(!paths[action])throw Error('COMPACT_ACTION_DENIED');const reading=['governance-summary','governance-reviews','governance-detail'].includes(action);const body={operation_id:input.operationId,expected_revision:input.expectedRevision,review_id:input.reviewId,action_id:input.actionId,reason:input.reason,kind:input.kind,target_id:input.targetId,confirmed:input.confirmed};
++  return call('workbench-request',{warehouseId,url:'/api/governance'+paths[action],method:reading?'GET':'POST',...(!reading?{body:JSON.stringify(body)}:{})});
++ }
++ if(!['warehouses','warehouse','create-warehouse','select-warehouse','documents','document','correct','jobs','graph','retrieval','search','retry-job','build-index','processing','reprocess-models','select-files','select-space-files','space-list','release-files','upload'].includes(action))throw Error('COMPACT_ACTION_DENIED');
++ if(['create-warehouse','retry-job','build-index'].includes(action))target.operationId??=crypto.randomUUID();
++ const before=load,result=await call(action,target);if(before!==load)throw Error('HOST_SESSION_EXPIRED');return result;
++}
++async function initialize(){
++ const seq=++load;root.innerHTML='<p class="starlink-mode-notice">正在读取万象账号与数据仓…</p>';
++ const v=await call('initialize');if(seq!==load)return;
++ if(scope!==scopeKey(v)){view?.suspend();view=null;scope=scopeKey(v)}identity=v.identity;
++ view??=window.createTeamDataView({edition:identity.dataScope==='team'?'team':'personal',request,changed:render});
++ view.sync({canLaunchApplications:true,account:{accountId:String(identity.user.id)},activeDeviceId:identity.boxId},identity.dataScope!=='team'||v.status?.native_owner_management===true);
++ await view.refresh();const selected=window.starlinkCompactHost?.context().warehouseId;if(selected&&v.warehouses.items.some(w=>w.id===selected))await view.action('select',{id:selected,tab:'graph'});ready=true;render();
++}
++window.starlinkCompactCanLeave=()=>!view?.hasMaterialDrafts();
++async function setMode(mode,target){
++ if(mode==='full'){
++  if(!window.starlinkCompactCanLeave()){alert('精简版中有未完成的正文编辑，请先保存或取消。');return}
++  active=false;root.hidden=true;document.querySelector('#app').hidden=false;for(const link of document.querySelectorAll('[data-compact-style]'))link.media='not all';view?.suspend();
++  if(target?.warehouseId||view?.currentWarehouse())await window.starlinkCompactHost?.select(target?.warehouseId||view.currentWarehouse(),target?.view||'graph');
++ }else{
++  if(window.starlinkCompactHost?.canLeave()===false){alert('完整版中有未完成的编辑，请先保存或取消。');return}
++  active=true;document.querySelector('#app').hidden=true;root.hidden=false;for(const link of document.querySelectorAll('[data-compact-style]'))link.media='all';await initialize();
++ }
++ document.body.dataset.starlinkMode=mode;buttons.forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.starlinkMode===mode)));
++}
++buttons.forEach(b=>b.addEventListener('click',()=>setMode(b.dataset.starlinkMode).catch(e=>{root.innerHTML='<p class="starlink-mode-notice">'+esc(e.publicMessage||'连接未就绪，请重试或返回完整版。')+'</p>'})));
++root.addEventListener('click',e=>{const b=e.target.closest('[data-data-action]');if(b){e.preventDefault();void view?.action(b.dataset.dataAction,b.dataset)}});
++root.addEventListener('submit',e=>{const f=e.target.closest('[data-data-form]');if(f){e.preventDefault();void view?.submit(f.dataset.dataForm,new FormData(f))}});
++root.addEventListener('input',e=>{if(e.target.name)view?.input(e.target.name,e.target.value)});
++window.semantica.subscribe(e=>{if(e.type==='invalidated'){load++;ready=false;view?.suspend();root.innerHTML='<p class="starlink-mode-notice">账号或设备连接已变化，请重新连接。</p>'}});
++window.starlinkRestoreFullMode=()=>{document.body.dataset.starlinkMode='full';active=false;root.hidden=true;document.querySelector('#app').hidden=false;view?.suspend();for(const link of document.querySelectorAll('[data-compact-style]'))link.media='not all';buttons.forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.starlinkMode==='full')))};
+diff --git a/desktop/ui/compact-mode.css b/desktop/ui/compact-mode.css
+new file mode 100644
+index 0000000..cbb834b
+--- /dev/null
++++ b/desktop/ui/compact-mode.css
+@@ -0,0 +1 @@
++[hidden]{display:none!important}.starlink-mode-switch{height:44px;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;padding:6px 20px;background:#f6f1e8;border-bottom:1px solid #ded3c2;color:#6a5238;font:12px/1.5 system-ui}.starlink-mode-switch strong{font-weight:600}.starlink-mode-switch button{border:0;background:none;padding:5px 15px;color:inherit;font:inherit;cursor:pointer}.starlink-mode-switch button[aria-pressed=true]{background:#fffdf8;border-radius:6px;box-shadow:0 1px 4px #49351c12}#starlink-compact-root{padding:20px;max-width:1480px;margin:auto}.starlink-mode-notice{padding:30px;color:#937d60}body[data-starlink-mode=full]>.app,body:not([data-starlink-mode])>.app{height:calc(100vh - 44px)}
+diff --git a/desktop/tools/build-compact.mjs b/desktop/tools/build-compact.mjs
+new file mode 100644
+index 0000000..bf0a14e
+--- /dev/null
++++ b/desktop/tools/build-compact.mjs
+@@ -0,0 +1,9 @@
++import {cp,mkdir,readFile,writeFile} from 'node:fs/promises';import path from 'node:path';import {fileURLToPath} from 'node:url';import {createHash} from 'node:crypto';
++const destination=fileURLToPath(new URL('../ui/compact-assets/',import.meta.url));
++let source=process.argv[2]||process.env.WANX_CLIENT_SOURCE;
++if(!source){try{source=JSON.parse(await readFile(fileURLToPath(new URL('../.compact-source.json',import.meta.url)),'utf8')).source}catch{throw Error('构建精简版需要万象客户端生成资源目录：node tools/build-compact.mjs <personal-client/local-ui/renderer>')}}
++source=path.resolve(source);await mkdir(destination,{recursive:true});const files=['data-view.js','data.css','styles.css','personal-layout.css','material-theme.css'],manifest={origin:'WANX canonical client UI',files:{}};
++await writeFile(fileURLToPath(new URL('../.compact-source.json',import.meta.url)),JSON.stringify({source})+'\n');
++for(const name of files){const data=await readFile(path.join(source,name));await writeFile(path.join(destination,name),data);manifest.files[name]=createHash('sha256').update(data).digest('hex')}
++for(const name of ['section-icons-v2/starlink.png','material-v1/starlink.png']){const target=path.join(destination,'assets',name);await mkdir(path.dirname(target),{recursive:true});await cp(path.join(source,'assets',name),target)}
++await writeFile(path.join(destination,'source-manifest.json'),JSON.stringify(manifest,null,2)+'\n');console.log('Generated shared STARLINK compact UI assets');
+diff --git a/desktop/tests/compact-mode.test.mjs b/desktop/tests/compact-mode.test.mjs
+new file mode 100644
+index 0000000..dc7bbd1
+--- /dev/null
++++ b/desktop/tests/compact-mode.test.mjs
+@@ -0,0 +1,27 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import {readFileSync} from 'node:fs';
++import vm from 'node:vm';
++
++function adapter(){
++ const requests=[];
++ const root={addEventListener(){}};
++ const sandbox={document:{querySelector:()=>root,querySelectorAll:()=>[]},window:{semantica:{subscribe(){},call:async(name,input)=>{requests.push({name,input});return {ok:true,value:{version_id:'version',text:'合成正文'}}}}},URLSearchParams};
++ vm.runInNewContext(readFileSync(new URL('../ui/compact-mode.js',import.meta.url),'utf8')+'\n;globalThis.testRequest=request;',sandbox);
++ return {request:sandbox.testRequest,requests};
++}
++test('compact preview preserves version and lets the native backend bound short-document reads',async()=>{
++ const {request,requests}=adapter();
++ for(const input of [{start:37},{start:37,end:51}]){
++  const value=await request('data.document-text',{warehouseId:'warehouse',id:'document',versionId:'version',...input});
++  assert.equal(value.version_id,'version');
++  const {name,input:target}=requests.at(-1),url=new URL(target.url,'http://fixture');
++  assert.equal(name,'workbench-request');assert.equal(target.warehouseId,'warehouse');
++  assert.equal(url.pathname,'/api/documents/document/text');
++  assert.equal(url.searchParams.get('version_id'),'version');assert.equal(url.searchParams.get('start'),'37');
++  assert.equal(url.searchParams.get('end'),input.end===undefined?null:String(input.end));
++ }
++});
++test('compact adapter does not expose arbitrary native actions',async()=>{
++ const {request,requests}=adapter();await assert.rejects(request('data.arbitrary',{url:'http://other'}),/COMPACT_ACTION_DENIED/);assert.equal(requests.length,0);
++});

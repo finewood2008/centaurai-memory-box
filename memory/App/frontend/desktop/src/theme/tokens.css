@@ -1,0 +1,144 @@
+/** Desktop design tokens. */
+:root {
+  color-scheme: light;
+
+  /* Centaur AI: warm paper, porcelain surfaces and copper hardware. */
+  --color-canvas-oat: #faf7f2;
+  --color-accent-neon-mint: #d8b886;
+  --color-sidebar-bg: #f4eee4;
+  --color-sidebar-divider: #e5d8c6;
+  --color-background-paper: #fffdf8;
+  --color-content-base: var(--color-canvas-oat);
+  --color-content-bg: var(--color-content-base);
+  --color-content-glow-neon: rgb(187 149 99 / 0.018);
+  --color-content-glow-ember: rgb(163 92 67 / 0.012);
+  --color-text-ink: #302d29;
+  --color-border-stone: #ddcfbd;
+  --color-outline-ebony: #302d29;
+  --color-action-sky: #5b4636;
+  --color-action-sky-hover: #49382c;
+  --color-nav-active-bg: #eee0cc;
+  --color-footer-slate: #eee4d6;
+  --color-icon-ember: #a35c43;
+  --color-accent-pink: #f1d6cc;
+  --color-accent-lavender: #e9e2ef;
+  --color-accent-mint: #e4ebdc;
+  --color-accent-peach: #f6e3d3;
+  --color-accent-lemon: #f3e7c7;
+  --color-status-success: #2dc999;
+  --color-status-success-soft: #d4f4ea;
+  --color-status-warning: #e4b44a;
+  --color-status-error: #f87b8e;
+  --color-status-error-soft: #fde4e7;
+  --color-role-assistant: #8ba1f3;
+  --color-role-assistant-soft: #e2e8fc;
+
+  /* Markdown sizes are em-relative to this root so body copy lands on 15px. */
+  --chat-md-root: calc(15px / 0.875);
+
+  /* Default UI font shared by Latin and CJK. */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable", "Segoe UI", "Helvetica Neue", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC", "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
+  /* Font chat stack. */
+  --font-chat: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable", "Segoe UI", "Helvetica Neue", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC", "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
+  /* Font mono stack. */
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Monaco, "Cascadia Mono", Consolas, "Liberation Mono", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC", monospace;
+  --codex-toolbar-height: 46px;
+  --codex-toolbar-button-size: 28px;
+  /* Codex sidebar nav icon inset color token. */
+  --codex-sidebar-nav-icon-inset: 20px;
+  /* Codex window control inset color token. */
+  --codex-window-control-inset: 84px;
+  --codex-sidebar-hidden-topbar-padding: 124px;
+  --codex-sidebar-width: 264px;
+  --codex-sidebar-min-width: 240px;
+  --codex-sidebar-max-width: 520px;
+  --codex-text-xs: 11px;
+  --codex-leading-xs: 16px;
+  --codex-text-sm: 12px;
+  --codex-leading-sm: 16px;
+  --codex-text-base: 14px;
+  --codex-leading-base: 20px;
+  --codex-icon-xs: 16px;
+  --codex-separator-width: 0.5px;
+  --codex-sidebar-divider-width: 0.8px;
+  --codex-scrollbar-size: 6px;
+  --codex-scrollbar-thumb: color-mix(in srgb, var(--color-border-stone) 36%, transparent);
+  --codex-radius-lg: 10px;
+  --codex-content-padding-x: 32px;
+
+  /* Radius card token. */
+  --radius-card: 16px;
+  --radius-card-lg: 20px;
+  --radius-composer: 16px;
+  --radius-pill: 9999px;
+  --radius-btn: 9px;
+  --radius-input: 9px;
+  --radius-menu: 8px;
+  --radius-tag: 9999px;
+  --shadow-card: inset 0 1px #fff, 0 3px 16px #6846210d;
+  --shadow-soft: 0 6px 20px #68462112;
+  --shadow-popover: 0 18px 52px #68462128;
+  --duration-fast: 150ms;
+  --duration-normal: 220ms;
+  --z-modal: 50;
+  --z-drawer: 10001;
+
+  /* Color canvas color token. */
+  --color-canvas: var(--color-canvas-oat);
+  --color-surface: var(--color-background-paper);
+  --color-surface-muted: color-mix(in srgb, var(--color-canvas-oat) 72%, white);
+  --color-ink: var(--color-text-ink);
+  --color-ink-muted: color-mix(in srgb, var(--color-text-ink) 58%, transparent);
+  --color-line: color-mix(in srgb, var(--color-border-stone) 72%, transparent);
+  --color-line-strong: var(--color-border-stone);
+  /* Border content panel color token. */
+  --border-content-panel: #e5d8c8;
+  --color-primary: var(--color-action-sky);
+  --color-primary-strong: var(--color-action-sky-hover);
+  --color-accent: var(--color-icon-ember);
+  --color-danger: var(--color-status-error);
+  --color-warning: var(--color-icon-ember);
+  --color-success: var(--color-status-success);
+  --color-info: var(--color-role-assistant);
+  --shadow-panel: var(--shadow-card);
+  --radius-sm: var(--radius-btn);
+  --radius-md: var(--radius-card);
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+}
+
+:root {
+  --file-icon-inline-size: 16px;
+  --file-icon-row-size: 22px;
+  --file-icon-card-size: 36px;
+  --file-icon-inline-radius: 0;
+  --file-icon-row-radius: 0;
+  --file-icon-card-radius: 0;
+  --file-icon-paper: #f3f6f5;
+  --file-icon-paper-sheen: #ffffff;
+  --file-icon-paper-edge: #c8d0ce;
+  --file-icon-paper-fold: #e1e8e6;
+  --file-icon-paper-fold-edge: #b9c4c1;
+  --file-icon-shadow: rgba(17, 29, 28, 0.16);
+  --file-icon-glyph-generic: #5f6b73;
+  --file-icon-glyph-pdf: #e5484d;
+  --file-icon-glyph-word: #2f6fdb;
+  --file-icon-glyph-spreadsheet: #1f9d63;
+  --file-icon-glyph-presentation: #e56f2d;
+  --file-icon-glyph-markdown: #3f6f9e;
+  --file-icon-glyph-text: #5f6b73;
+  --file-icon-glyph-code: #7357b8;
+  --file-icon-glyph-image: #8a55b5;
+  --file-icon-glyph-video: #7658b6;
+  --file-icon-glyph-audio: #d06b32;
+  --file-icon-glyph-archive: #a56b28;
+  --file-icon-folder-back: #79c5ef;
+  --file-icon-folder-front: #49a9e2;
+  --file-icon-folder-edge: #2e89bd;
+  --file-icon-folder-highlight: rgba(255, 255, 255, 0.72);
+  --file-icon-folder-paper: #f7f4ec;
+}

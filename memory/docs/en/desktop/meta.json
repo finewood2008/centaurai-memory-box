@@ -1,0 +1,14 @@
+{
+  "title": "Desktop",
+  "icon": "Monitor",
+  "pages": [
+    "workbench",
+    "projects",
+    "files",
+    "recording",
+    "browser",
+    "computer-use",
+    "pet",
+    "settings"
+  ]
+}

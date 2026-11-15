@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "kind": "deploy",
+  "target": {
+    "organizationId": "org-demo",
+    "boxId": "box-demo",
+    "applicationId": "app-demo",
+    "environment": "dev"
+  },
+  "releaseRef": {
+    "releaseId": "release-package-demo-v1",
+    "bundleDigest": "sha256:406981b726831eeea3b33b9ef334ef98d8f2351113a3a777971666335d811875"
+  },
+  "expectedGeneration": 0,
+  "idempotencyKey": "request-package-demo",
+  "decisionRef": {
+    "id": "test-allow-demo",
+    "revision": 1
+  },
+  "validationRef": {
+    "id": "validation-demo",
+    "revision": 1
+  },
+  "bindingSetRef": {
+    "id": "bindings-demo",
+    "revision": 1
+  },
+  "channelBindingsRef": {
+    "id": "channels-demo",
+    "revision": 1
+  },
+  "dataPlanRef": {
+    "id": "data-plan-demo",
+    "revision": 1
+  }
+}

@@ -1,0 +1,2060 @@
+import { type ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { createServer, type Server } from "node:http";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { PassThrough } from "node:stream";
+import YAML from "yaml";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  AgentGatewaySupervisor,
+  bundledMemoryInstallArguments,
+  createAgentGatewayStarter,
+  ensureMemoryService,
+  hasMemoryOwnerProgressed,
+  matchesMemoryServiceCommandLine,
+  preparePackagedBrowser,
+  preparePackagedRuntimeConfig,
+  readLiveMemoryServerLock,
+  resolveDevelopmentRuntimeExecutable,
+  resolveDevelopmentRuntimeEntryPaths,
+  resolveAgentGatewayStartupTimeout,
+  resolvePackagedRuntimeMigrationTargets,
+  resolveRuntimeEntryPaths,
+  runPackagedMigrationCommand,
+  restartExternalMemoryService,
+  sampleMemoryOwnerProgress,
+  spawnNodeService,
+  startAgentGatewayWithRecovery,
+  startPackagedBrowserPreparation,
+  waitForExternalAgentMcpConfig,
+  stopManagedChild,
+  stopManagedChildrenForDesktopExit,
+  syncBundledAgentSkills,
+  type ManagedChild,
+  type PackagedRuntimeConfig,
+  type RuntimeEntryPaths,
+  type StartPackagedRuntimeServicesOptions
+} from "../src/main/runtime-services.js";
+
+const tempRoots: string[] = [];
+const testServers: Server[] = [];
+type ConfigRecord = Record<string, unknown>;
+
+async function makeTempRoot(): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "memmy-desktop-runtime-"));
+  tempRoots.push(root);
+  return root;
+}
+
+async function readYaml(path: string): Promise<ConfigRecord> {
+  const parsed = YAML.parse(await readFile(path, "utf8"));
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as ConfigRecord : {};
+}
+
+function recordValue(parent: ConfigRecord, key: string): ConfigRecord {
+  const value = parent[key];
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as ConfigRecord;
+  }
+  throw new Error(`Expected ${key} to be an object`);
+}
+
+describe("packaged desktop runtime config", () => {
+  afterEach(async () => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    delete process.env.MEMMY_MIGRATIONS_READY_CONFIG;
+    delete process.env.MEMMY_MIGRATIONS_READY_WORKSPACE;
+    delete process.env.MEMMY_MIGRATIONS_READY_APP_DATABASE;
+    await Promise.all(testServers.splice(0).map((server) => new Promise<void>((resolveClose) => {
+      server.close(() => resolveClose());
+      server.closeAllConnections();
+    })));
+    await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  });
+
+  it("runs packaged migrations through the Agent CLI with exact targets", async () => {
+    const root = await makeTempRoot();
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const child = Object.assign(new EventEmitter(), {
+      stdout,
+      stderr,
+      exitCode: null,
+      signalCode: null,
+      kill: vi.fn()
+    }) as unknown as ChildProcess;
+    const spawnProcess = vi.fn(() => {
+      queueMicrotask(() => child.emit("close", 0, null));
+      return child;
+    });
+    process.env.MEMMY_MIGRATIONS_READY_CONFIG = "/stale/config.yaml";
+    process.env.MEMMY_MIGRATIONS_READY_WORKSPACE = "/stale/workspace";
+    process.env.MEMMY_MIGRATIONS_READY_APP_DATABASE = "/stale/app.sqlite";
+
+    await runPackagedMigrationCommand({
+      agentEntry: "/runtime/memmy-agent/dist/main.js",
+      configPath: join(root, "config.yaml"),
+      agentWorkspace: join(root, "workspace"),
+      appDatabaseFile: join(root, "app.sqlite"),
+      logDirectory: root,
+      logLevel: "info",
+      spawnProcess: spawnProcess as typeof import("node:child_process").spawn
+    });
+    expect(spawnProcess).toHaveBeenCalledWith(
+      process.execPath,
+      [
+        "/runtime/memmy-agent/dist/main.js",
+        "migrate",
+        "--config",
+        join(root, "config.yaml"),
+        "--workspace",
+        join(root, "workspace"),
+        "--app-database",
+        join(root, "app.sqlite")
+      ],
+      expect.objectContaining({
+        env: expect.objectContaining({
+          ELECTRON_RUN_AS_NODE: "1",
+          MEMMY_LOG_LEVEL: "info"
+        }),
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: false
+      })
+    );
+    const spawnedEnv = spawnProcess.mock.calls[0]?.[2]?.env;
+    expect(spawnedEnv).not.toHaveProperty("MEMMY_MIGRATIONS_READY_CONFIG");
+    expect(spawnedEnv).not.toHaveProperty("MEMMY_MIGRATIONS_READY_WORKSPACE");
+    expect(spawnedEnv).not.toHaveProperty("MEMMY_MIGRATIONS_READY_APP_DATABASE");
+  });
+
+  it("materializes bundled Memory without asking the OS to register a service", () => {
+    const args = bundledMemoryInstallArguments(
+      "/runtime/memory",
+      {
+        configPath: "/memmy/config.yaml",
+        agentWorkspace: "/memmy/workspace",
+        memoryDatabasePath: "/memmy/memory.sqlite",
+        memoryBaseUrl: "http://127.0.0.1:18960",
+        memoryToken: "",
+        memoryListenHost: "127.0.0.1",
+        memoryListenPort: 18960,
+        agentGatewayBaseUrl: "http://127.0.0.1:18980",
+        agentGatewayHealthHost: "127.0.0.1",
+        agentGatewayHealthPort: 18970,
+        agentGatewayBootstrapSecret: "secret"
+      },
+      true,
+      process.execPath
+    );
+
+    expect(args).toContain("--skip-service-registration");
+    expect(args).toContain("--skip-health-check");
+  });
+
+  it("starts the materialized bundled Memory runtime as a Desktop child", async () => {
+    const root = await makeTempRoot();
+    const home = join(root, "home");
+    const bundled = join(root, "bundled-memory");
+    const cliEntry = join(bundled, "dist", "src", "cli", "index.js");
+    const runtimeDir = join(home, "memory-service", "runtime", "fixture");
+    const bundledServerEntry = join(bundled, "dist", "src", "server", "index.js");
+    const installedServerEntry = join(runtimeDir, "dist", "src", "server", "index.js");
+    await mkdir(dirname(cliEntry), { recursive: true });
+    await mkdir(dirname(bundledServerEntry), { recursive: true });
+    await writeFile(bundledServerEntry, [
+      "const http = require('node:http');",
+      "const args = process.argv.slice(2);",
+      "const port = Number(args[args.indexOf('--port') + 1]);",
+      "const server = http.createServer((request, response) => {",
+      "  if (request.url === '/api/v1/health') {",
+      "    response.writeHead(200, { 'content-type': 'application/json' });",
+      "    response.end(JSON.stringify({ ok: true, protocolVersion: 1 }));",
+      "    return;",
+      "  }",
+      "  response.writeHead(404);",
+      "  response.end();",
+      "});",
+      "server.listen(port, '127.0.0.1');",
+      "const shutdown = () => server.close(() => process.exit(0));",
+      "process.once('SIGTERM', shutdown);",
+      "process.once('SIGINT', shutdown);"
+    ].join("\n"), "utf8");
+    await writeFile(cliEntry, [
+      "const fs = require('node:fs');",
+      "const path = require('node:path');",
+      "const args = process.argv.slice(2);",
+      "if (args[0] !== 'install' || !args.includes('--skip-service-registration') || !args.includes('--skip-health-check')) {",
+      "  console.error('Desktop must not register a bundled Memory service');",
+      "  process.exit(17);",
+      "}",
+      "const homeArg = args.indexOf('--home');",
+      "const home = args[homeArg + 1];",
+      "const bundledArg = args.indexOf('--runtime-directory');",
+      "const bundled = args[bundledArg + 1];",
+      "const installedRuntimeDir = path.join(home, 'memory-service', 'runtime', 'fixture');",
+      "const entrypoint = path.join(installedRuntimeDir, 'dist', 'src', 'server', 'index.js');",
+      "fs.mkdirSync(path.dirname(entrypoint), { recursive: true });",
+      "fs.copyFileSync(path.join(bundled, 'dist', 'src', 'server', 'index.js'), entrypoint);",
+      "fs.writeFileSync(path.join(home, 'memory-service', 'current.json'), JSON.stringify({ runtimeDir: installedRuntimeDir, entrypoint, runtimeExecutable: process.execPath }));",
+      "process.exit(0);"
+    ].join("\n"), "utf8");
+
+    const reservation = createServer();
+    await new Promise<void>((resolveListen, rejectListen) => {
+      reservation.once("error", rejectListen);
+      reservation.listen(0, "127.0.0.1", resolveListen);
+    });
+    const address = reservation.address();
+    if (!address || typeof address === "string") throw new Error("expected TCP address");
+    const port = address.port;
+    await new Promise<void>((resolveClose) => reservation.close(() => resolveClose()));
+
+    const runtimeConfig: PackagedRuntimeConfig = {
+      configPath: join(home, "config.yaml"),
+      agentWorkspace: join(home, "workspace"),
+      memoryDatabasePath: join(home, "memory.sqlite"),
+      memoryBaseUrl: "http://127.0.0.1:" + port,
+      memoryToken: "",
+      memoryListenHost: "127.0.0.1",
+      memoryListenPort: port,
+      agentGatewayBaseUrl: "http://127.0.0.1:18980",
+      agentGatewayHealthHost: "127.0.0.1",
+      agentGatewayHealthPort: 18970,
+      agentGatewayBootstrapSecret: "secret"
+    };
+    const children: ManagedChild[] = [];
+    try {
+      await ensureMemoryService(
+        { memoryEntry: join(root, "missing-memory.js"), agentEntry: join(root, "missing-agent.js") },
+        runtimeConfig,
+        children,
+        {
+          appPath: root,
+          appDatabaseFile: join(home, "app.sqlite"),
+          resourcesPath: root,
+          logDirectory: root,
+          logLevel: "info",
+          runtimeExecutable: process.execPath,
+          offlineMemoryRuntimeDirectory: bundled
+        },
+        true,
+        vi.fn()
+      );
+
+      expect(children).toHaveLength(1);
+      expect(children[0]?.name).toBe("memory");
+      expect(children[0]?.persistOnDesktopExit).toBe(true);
+      expect(children[0]?.process.pid).toBeTypeOf("number");
+    } finally {
+      await stopManagedChildrenForDesktopExit(children, true);
+    }
+  });
+
+  it("omits an implicit workspace override while still passing the Desktop database target", async () => {
+    const root = await makeTempRoot();
+    const child = Object.assign(new EventEmitter(), {
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      exitCode: null,
+      signalCode: null,
+      kill: vi.fn()
+    }) as unknown as ChildProcess;
+    const spawnProcess = vi.fn(() => {
+      queueMicrotask(() => child.emit("close", 0, null));
+      return child;
+    });
+
+    await runPackagedMigrationCommand({
+      agentEntry: "/runtime/memmy-agent/dist/main.js",
+      configPath: join(root, "config.yaml"),
+      appDatabaseFile: join(root, "app.sqlite"),
+      logDirectory: root,
+      logLevel: "info",
+      spawnProcess: spawnProcess as typeof import("node:child_process").spawn
+    });
+
+    expect(spawnProcess.mock.calls[0]?.[1]).toEqual([
+      "/runtime/memmy-agent/dist/main.js",
+      "migrate",
+      "--config",
+      join(root, "config.yaml"),
+      "--app-database",
+      join(root, "app.sqlite")
+    ]);
+  });
+
+  it("passes the finite Desktop startup budget to the bundled Memory installer", () => {
+    const args = bundledMemoryInstallArguments(
+      "/resources/memory",
+      {
+        configPath: "/memmy/config.yaml",
+        agentWorkspace: "/memmy/workspace",
+        memoryDatabasePath: "/memmy/memory.sqlite",
+        memoryBaseUrl: "http://127.0.0.1:18960",
+        memoryToken: "memory-token",
+        memoryListenHost: "127.0.0.1",
+        memoryListenPort: 18960,
+        agentGatewayBaseUrl: "http://127.0.0.1:18980",
+        agentGatewayHealthHost: "127.0.0.1",
+        agentGatewayHealthPort: 18970,
+        agentGatewayBootstrapSecret: "gateway-secret"
+      },
+      true,
+      "/runtime/node"
+    );
+
+    expect(args.slice(-2)).toEqual(["--health-check-timeout-ms", "120000"]);
+    expect(args).toContain("--skip-service-registration");
+    expect(args).toContain("--skip-health-check");
+  });
+
+  it("rejects when the packaged migration command exits unsuccessfully", async () => {
+    const root = await makeTempRoot();
+    const child = Object.assign(new EventEmitter(), {
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      exitCode: null,
+      signalCode: null,
+      kill: vi.fn()
+    }) as unknown as ChildProcess;
+
+    const promise = runPackagedMigrationCommand({
+      agentEntry: "/runtime/memmy-agent/dist/main.js",
+      configPath: join(root, "config.yaml"),
+      agentWorkspace: join(root, "workspace"),
+      appDatabaseFile: join(root, "app.sqlite"),
+      logDirectory: root,
+      logLevel: "info",
+      spawnProcess: (() => child) as typeof import("node:child_process").spawn
+    });
+    queueMicrotask(() => child.emit("close", 1, null));
+
+    await expect(promise).rejects.toThrow("Migration command exited with code 1");
+  });
+
+  it("terminates a packaged migration command that exceeds startup timeout", async () => {
+    const root = await makeTempRoot();
+    const child = Object.assign(new EventEmitter(), {
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      exitCode: null,
+      signalCode: null,
+      kill: vi.fn()
+    }) as unknown as ChildProcess;
+
+    await expect(runPackagedMigrationCommand({
+      agentEntry: "/runtime/memmy-agent/dist/main.js",
+      configPath: join(root, "config.yaml"),
+      agentWorkspace: join(root, "workspace"),
+      appDatabaseFile: join(root, "app.sqlite"),
+      logDirectory: root,
+      logLevel: "info",
+      timeoutMs: 5,
+      spawnProcess: (() => child) as typeof import("node:child_process").spawn
+    })).rejects.toThrow("Migration command timed out after 5ms");
+    expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+  });
+
+  it("requests a supervised Memory shutdown and waits for the replacement service", async () => {
+    let shutdownRequests = 0;
+    let activeServer: Server;
+    let port = 0;
+
+    const startServer = async () => {
+      activeServer = createServer((request, response) => {
+        expect(request.headers.authorization).toBe("Bearer memory-token");
+        if (request.method === "GET" && request.url === "/api/v1/health") {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(JSON.stringify({ ok: true }));
+          return;
+        }
+        if (request.method === "POST" && request.url === "/api/v1/admin/shutdown") {
+          shutdownRequests += 1;
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(JSON.stringify({ accepted: true }));
+          response.once("finish", () => {
+            activeServer.close();
+            activeServer.closeAllConnections();
+            setTimeout(() => void startServer(), 250);
+          });
+          return;
+        }
+        response.writeHead(404);
+        response.end();
+      });
+      testServers.push(activeServer);
+      await new Promise<void>((resolveListen, rejectListen) => {
+        activeServer.once("error", rejectListen);
+        activeServer.listen(port, "127.0.0.1", () => {
+          activeServer.off("error", rejectListen);
+          const address = activeServer.address();
+          if (!address || typeof address === "string") {
+            rejectListen(new Error("expected TCP address"));
+            return;
+          }
+          port = address.port;
+          resolveListen();
+        });
+      });
+    };
+
+    await startServer();
+    await restartExternalMemoryService({
+      baseUrl: `http://127.0.0.1:${port}`,
+      token: "memory-token"
+    });
+
+    expect(shutdownRequests).toBe(1);
+  });
+
+  it("creates missing packaged runtime config under the shared ~/.memmy home", async () => {
+    const memmyHome = await makeTempRoot();
+    const configPath = join(memmyHome, "config.yaml");
+
+    const runtime = await preparePackagedRuntimeConfig({
+      env: { MEMMY_HOME: memmyHome },
+      secretFactory: () => "stable-secret"
+    });
+    const config = await readYaml(configPath);
+
+    expect(runtime).toMatchObject({
+      configPath,
+      agentWorkspace: join(memmyHome, "workspace"),
+      memoryDatabasePath: join(memmyHome, "memory-service", "memory.sqlite"),
+      memoryBaseUrl: "http://127.0.0.1:18960",
+      memoryToken: "stable-secret",
+      memoryListenHost: "127.0.0.1",
+      memoryListenPort: 18960,
+      agentGatewayBaseUrl: "http://127.0.0.1:18980",
+      agentGatewayBootstrapSecret: "stable-secret"
+    });
+    expect(config).toMatchObject({
+      tools: {
+        mcpServers: {
+          memmy_computer_use: {
+            type: "stdio",
+            command: "open-computer-use",
+            args: ["mcp"]
+          }
+        }
+      },
+      agents: {
+        defaults: { workspace: join(memmyHome, "workspace") }
+      },
+      channels: {
+        websocket: {
+          enabled: true,
+          host: "127.0.0.1",
+          port: 18980,
+          tokenIssueSecret: "stable-secret",
+          websocketRequiresToken: true,
+          allowFrom: ["*"]
+        }
+      },
+      gateway: {
+        host: "127.0.0.1",
+        port: 18970,
+        heartbeat: { enabled: false }
+      },
+      fileMemory: {
+        enabled: false
+      },
+      memmyMemory: {
+        storage: {
+          mode: "local",
+          backend: "sqlite",
+          sqlitePath: join(memmyHome, "memory-service", "memory.sqlite"),
+          endpoint: "http://127.0.0.1:18960",
+          token: "stable-secret"
+        }
+      }
+    });
+    await expect(stat(join(memmyHome, "workspace"))).resolves.toBeTruthy();
+    await expect(stat(join(memmyHome, "memory-service"))).resolves.toBeTruthy();
+    expect(recordValue(recordValue(config, "agents"), "defaults")).not.toHaveProperty("model");
+    expect(recordValue(recordValue(config, "agents"), "defaults")).not.toHaveProperty("provider");
+  });
+
+  it.each(["127.0.0.1", "localhost", "[::1]"])("upgrades tokenless local config once and shares the persisted token: %s", async (host) => {
+    const memmyHome = await makeTempRoot();
+    const configPath = join(memmyHome, "config.yaml");
+    await writeFile(configPath, YAML.stringify({
+      channels: { websocket: { tokenIssueSecret: "existing-agent-secret" } },
+      memmyMemory: {
+        storage: { endpoint: `http://${host}:18960`, token: "" },
+        agentAccess: { autoScanKnownAgents: false }
+      }
+    }));
+    const first = await preparePackagedRuntimeConfig({ env: { MEMMY_HOME: memmyHome } });
+    expect(first.memoryToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(first.memoryToken).not.toBe(first.agentGatewayBootstrapSecret);
+    const second = await preparePackagedRuntimeConfig({
+      env: { MEMMY_HOME: memmyHome },
+      secretFactory: () => { throw new Error("must reuse persisted credential"); }
+    });
+    expect(second.memoryToken).toBe(first.memoryToken);
+    const config = await readYaml(configPath);
+    expect(recordValue(config, "memmyMemory")).toMatchObject({
+      storage: { token: first.memoryToken },
+      agentAccess: { autoScanKnownAgents: false }
+    });
+    if (process.platform !== "win32") expect((await stat(configPath)).mode & 0o777).toBe(0o600);
+  });
+
+  it.each([
+    { MEMMY_MEMORY_TOKEN: "current-env-token" },
+    { MEMORY_SERVICE_TOKEN: "legacy-env-token" }
+  ])("uses explicit environment credentials without persisting a replacement: %j", async (tokenEnv) => {
+    const memmyHome = await makeTempRoot();
+    const runtime = await preparePackagedRuntimeConfig({ env: { MEMMY_HOME: memmyHome, ...tokenEnv } });
+    expect(runtime.memoryToken).toBe(Object.values(tokenEnv)[0]);
+    const config = await readYaml(join(memmyHome, "config.yaml"));
+    expect(recordValue(recordValue(config, "memmyMemory"), "storage")).not.toHaveProperty("token");
+  });
+
+  it.each([
+    { endpoint: "https://memory.example.com" },
+    { endpoint: "http://192.0.2.1:18960" },
+    { endpoint: "http://127.0.0.1:18960", mode: "cloud" }
+  ])("does not invent a credential for an externally configured Memory service: %j", async (storage) => {
+    const memmyHome = await makeTempRoot();
+    const configPath = join(memmyHome, "config.yaml");
+    await writeFile(configPath, YAML.stringify({ memmyMemory: { storage } }));
+    const runtime = await preparePackagedRuntimeConfig({ env: { MEMMY_HOME: memmyHome } });
+    expect(runtime.memoryToken).toBe("");
+    expect(recordValue(recordValue(await readYaml(configPath), "memmyMemory"), "storage")).not.toHaveProperty("token");
+  });
+
+  it("does not provision a local token when the endpoint is overridden to a remote service", async () => {
+    const memmyHome = await makeTempRoot();
+    const runtime = await preparePackagedRuntimeConfig({
+      env: { MEMMY_HOME: memmyHome, MEMMY_MEMORY_URL: "https://memory.example.com" }
+    });
+    expect(runtime.memoryToken).toBe("");
+    expect(runtime.memoryBaseUrl).toBe("https://memory.example.com");
+  });
+
+  it("recognizes a live Memory server lock for the configured sqlite database", async () => {
+    const root = await makeTempRoot();
+    const databasePath = join(root, "memory.sqlite");
+    await writeFile(`${databasePath}.server.lock`, JSON.stringify({
+      pid: process.pid,
+      host: "127.0.0.1",
+      port: 18960,
+      sqlitePath: databasePath
+    }));
+
+    expect(readLiveMemoryServerLock(databasePath)).toEqual({
+      pid: process.pid,
+      host: "127.0.0.1",
+      port: 18960,
+      sqlitePath: databasePath
+    });
+  });
+
+  it("ignores a Memory server lock that names another sqlite database", async () => {
+    const root = await makeTempRoot();
+    const databasePath = join(root, "memory.sqlite");
+    await writeFile(`${databasePath}.server.lock`, JSON.stringify({
+      pid: process.pid,
+      sqlitePath: join(root, "other.sqlite")
+    }));
+
+    expect(readLiveMemoryServerLock(databasePath)).toBeNull();
+  });
+
+  it("waits for and reuses a live locked Memory service instead of spawning another", async () => {
+    const root = await makeTempRoot();
+    const databasePath = join(root, "memory.sqlite");
+    const reservation = createServer();
+    await new Promise<void>((resolveListen) => reservation.listen(0, "127.0.0.1", resolveListen));
+    const address = reservation.address();
+    if (!address || typeof address === "string") throw new Error("expected TCP address");
+    const port = address.port;
+    await new Promise<void>((resolveClose) => reservation.close(() => resolveClose()));
+    await writeFile(`${databasePath}.server.lock`, JSON.stringify({
+      pid: process.pid,
+      host: "127.0.0.1",
+      port,
+      sqlitePath: databasePath
+    }));
+
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true, protocolVersion: 1 }));
+    });
+    testServers.push(server);
+    setTimeout(() => server.listen(port, "127.0.0.1"), 100);
+    const children: ManagedChild[] = [];
+
+    await ensureMemoryService(
+      { memoryEntry: join(root, "missing-memory.js"), agentEntry: join(root, "missing-agent.js") },
+      {
+        configPath: join(root, "config.yaml"),
+        agentWorkspace: join(root, "workspace"),
+        memoryDatabasePath: databasePath,
+        memoryBaseUrl: `http://127.0.0.1:${port}`,
+        memoryToken: "",
+        memoryListenHost: "127.0.0.1",
+        memoryListenPort: port,
+        agentGatewayBaseUrl: "http://127.0.0.1:18980",
+        agentGatewayHealthHost: "127.0.0.1",
+        agentGatewayHealthPort: 18970,
+        agentGatewayBootstrapSecret: "secret"
+      },
+      children,
+      {
+        appPath: root,
+        appDatabaseFile: join(root, "app.sqlite"),
+        resourcesPath: root,
+        logDirectory: root,
+        logLevel: "info"
+      }
+    );
+
+    expect(children).toHaveLength(0);
+  });
+
+  it("reuses a compatible degraded Memory service started by dev-start", async () => {
+    const root = await makeTempRoot();
+    const databasePath = join(root, "memory.sqlite");
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        ok: false,
+        protocolVersion: 1,
+        serviceVersion: "2.1.3",
+        models: { summary: { lastError: "model unavailable" } }
+      }));
+    });
+    testServers.push(server);
+    await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("expected TCP address");
+    const children: ManagedChild[] = [];
+
+    await ensureMemoryService(
+      { memoryEntry: join(root, "missing-memory.js"), agentEntry: join(root, "missing-agent.js") },
+      {
+        configPath: join(root, "config.yaml"),
+        agentWorkspace: join(root, "workspace"),
+        memoryDatabasePath: databasePath,
+        memoryBaseUrl: `http://127.0.0.1:${address.port}`,
+        memoryToken: "",
+        memoryListenHost: "127.0.0.1",
+        memoryListenPort: address.port,
+        agentGatewayBaseUrl: "http://127.0.0.1:18980",
+        agentGatewayHealthHost: "127.0.0.1",
+        agentGatewayHealthPort: 18970,
+        agentGatewayBootstrapSecret: "secret"
+      },
+      children,
+      {
+        appPath: root,
+        appDatabaseFile: join(root, "app.sqlite"),
+        resourcesPath: root,
+        logDirectory: root,
+        logLevel: "info"
+      }
+    );
+
+    expect(children).toHaveLength(0);
+  });
+
+  it("rereads the migrated workspace instead of pinning the pre-migration legacy value", async () => {
+    const memmyHome = await makeTempRoot();
+    const configPath = join(memmyHome, "config.yaml");
+    const legacyWorkspace = join(memmyHome, "legacy-workspace");
+    await writeFile(configPath, YAML.stringify({
+      agent: { workspace: legacyWorkspace }
+    }), "utf8");
+
+    expect(await resolvePackagedRuntimeMigrationTargets({
+      MEMMY_HOME: memmyHome,
+      MEMMY_CONFIG: configPath
+    })).toEqual({ configPath });
+
+    await writeFile(configPath, YAML.stringify({
+      agents: { defaults: { workspace: legacyWorkspace } }
+    }), "utf8");
+    const runtime = await preparePackagedRuntimeConfig({
+      env: { MEMMY_HOME: memmyHome, MEMMY_CONFIG: configPath },
+      secretFactory: () => "stable-secret"
+    });
+
+    expect(runtime.agentWorkspace).toBe(legacyWorkspace);
+  });
+
+  it.each([
+    {},
+    { custom: { command: "custom-mcp", args: [] } },
+    { open_computer_use: { command: "/custom/ocu", args: ["mcp"], enabledTools: [] } }
+  ])("preserves existing MCP maps on desktop startup: %j", async (mcpServers) => {
+    const memmyHome = await makeTempRoot();
+    const configPath = join(memmyHome, "config.yaml");
+    await writeFile(configPath, YAML.stringify({ tools: { mcpServers } }));
+    await preparePackagedRuntimeConfig({
+      env: { MEMMY_HOME: memmyHome },
+      secretFactory: () => "stable-secret"
+    });
+    expect(recordValue(recordValue(await readYaml(configPath), "tools"), "mcpServers")).toEqual(mcpServers);
+  });
+
+  it("preserves existing user model, memory, and websocket settings", async () => {
+    const memmyHome = await makeTempRoot();
+    const configPath = join(memmyHome, "config.yaml");
+    const workspace = join(memmyHome, "custom-workspace");
+    const sqlitePath = join(memmyHome, "db", "memory.sqlite");
+    await writeFile(configPath, YAML.stringify({
+      fileMemory: {
+        enabled: true
+      },
+      agents: {
+        defaults: {
+          model: "anthropic/claude-sonnet",
+          provider: "anthropic",
+          workspace
+        }
+      },
+      channels: {
+        websocket: {
+          host: "0.0.0.0",
+          port: 19998,
+          tokenIssueSecret: "existing-secret",
+          websocketRequiresToken: false
+        }
+      },
+      gateway: {
+        host: "127.0.0.1",
+        port: 19997,
+        heartbeat: { enabled: true }
+      },
+      memmyMemory: {
+        storage: {
+          endpoint: "http://127.0.0.1:18888",
+          token: "memory-token",
+          sqlitePath
+        }
+      },
+      providers: {
+        anthropic: {
+          apiKey: "sk-test",
+          futureProviderField: "keep-provider",
+          endpoints: { chat: { futureEndpointField: "keep-endpoint" } }
+        }
+      },
+      modelPresets: {
+        "future-preset": { futurePresetField: "keep-preset" }
+      },
+      futureSection: {
+        keepMe: true
+      }
+    }), "utf8");
+
+    const runtime = await preparePackagedRuntimeConfig({
+      env: { MEMMY_CONFIG: configPath },
+      secretFactory: () => "new-secret"
+    });
+    const config = await readYaml(configPath);
+
+    expect(runtime).toMatchObject({
+      agentWorkspace: workspace,
+      memoryDatabasePath: sqlitePath,
+      memoryBaseUrl: "http://127.0.0.1:18888",
+      memoryToken: "memory-token",
+      agentGatewayBaseUrl: "http://127.0.0.1:19998",
+      agentGatewayBootstrapSecret: "existing-secret",
+      agentGatewayHealthHost: "127.0.0.1",
+      agentGatewayHealthPort: 19997
+    });
+    expect(recordValue(recordValue(config, "agents"), "defaults")).toMatchObject({
+      model: "anthropic/claude-sonnet",
+      provider: "anthropic",
+      workspace
+    });
+    expect(recordValue(recordValue(config, "channels"), "websocket")).toMatchObject({
+      host: "0.0.0.0",
+      port: 19998,
+      tokenIssueSecret: "existing-secret",
+      websocketRequiresToken: false
+    });
+    expect(recordValue(recordValue(config, "memmyMemory"), "storage")).toMatchObject({
+      endpoint: "http://127.0.0.1:18888",
+      token: "memory-token",
+      sqlitePath
+    });
+    expect(recordValue(config, "fileMemory")).toEqual({ enabled: true });
+    expect(recordValue(config, "futureSection")).toEqual({ keepMe: true });
+    expect(recordValue(recordValue(config, "providers"), "anthropic")).toMatchObject({
+      futureProviderField: "keep-provider",
+      endpoints: { chat: { futureEndpointField: "keep-endpoint" } }
+    });
+    expect(recordValue(recordValue(config, "modelPresets"), "future-preset")).toEqual({
+      futurePresetField: "keep-preset"
+    });
+  });
+
+  it("fills a missing file memory enabled field without changing explicit values", async () => {
+    const missingHome = await makeTempRoot();
+    const missingPath = join(missingHome, "config.yaml");
+    await writeFile(missingPath, "fileMemory: {}\n", "utf8");
+
+    await preparePackagedRuntimeConfig({
+      env: { MEMMY_CONFIG: missingPath },
+      secretFactory: () => "stable-secret"
+    });
+
+    expect(recordValue(await readYaml(missingPath), "fileMemory")).toEqual({
+      enabled: false
+    });
+
+    const explicitHome = await makeTempRoot();
+    const explicitPath = join(explicitHome, "config.yaml");
+    await writeFile(
+      explicitPath,
+      "fileMemory:\n  enabled: false\n",
+      "utf8"
+    );
+    await preparePackagedRuntimeConfig({
+      env: { MEMMY_CONFIG: explicitPath },
+      secretFactory: () => "stable-secret"
+    });
+    expect(recordValue(await readYaml(explicitPath), "fileMemory")).toEqual({
+      enabled: false
+    });
+  });
+
+  it.each([
+    ["null", null],
+    ["array", []],
+    ["scalar", false],
+    ["non-boolean enabled", { enabled: "false" }]
+  ])("preserves invalid file memory config for schema rejection: %s", async (_label, expected) => {
+    const memmyHome = await makeTempRoot();
+    const configPath = join(memmyHome, "config.yaml");
+    await writeFile(configPath, YAML.stringify({ fileMemory: expected }), "utf8");
+
+    await preparePackagedRuntimeConfig({
+      env: { MEMMY_CONFIG: configPath },
+      secretFactory: () => "stable-secret"
+    });
+
+    expect((await readYaml(configPath)).fileMemory).toEqual(expected);
+  });
+
+  it("does not restore the retired memory active profile field", async () => {
+    const memmyHome = await makeTempRoot();
+    const configPath = join(memmyHome, "config.yaml");
+    await writeFile(configPath, YAML.stringify({
+      memmyMemory: {
+        storage: {
+          endpoint: "http://127.0.0.1:18888"
+        },
+        profiles: {
+          byok: {
+            summary: {
+              provider: "openai_compatible",
+              endpoint: "https://api.example.com/v1",
+              model: "memory-model",
+              apiKey: "sk-memory"
+            },
+            embedding: {
+              provider: "local"
+            }
+          }
+        }
+      }
+    }), "utf8");
+
+    await preparePackagedRuntimeConfig({
+      env: { MEMMY_CONFIG: configPath },
+      secretFactory: () => "stable-secret"
+    });
+    const config = await readYaml(configPath);
+
+    const memmyMemory = recordValue(config, "memmyMemory");
+    expect(memmyMemory).not.toHaveProperty("activeProfile");
+    expect(memmyMemory).toMatchObject({
+      profiles: {
+        byok: {
+          summary: {
+            provider: "openai_compatible",
+            endpoint: "https://api.example.com/v1",
+            model: "memory-model",
+            apiKey: "sk-memory"
+          }
+        }
+      }
+    });
+  });
+
+  it("can resolve defaults without writing config or creating runtime directories", async () => {
+    const memmyHome = await makeTempRoot();
+    const configPath = join(memmyHome, "config.yaml");
+
+    const runtime = await preparePackagedRuntimeConfig({
+      ensureDirectories: false,
+      env: { MEMMY_HOME: memmyHome },
+      fillMissingAgentSecret: false,
+      secretFactory: () => "unused-secret",
+      writeConfig: false
+    });
+
+    expect(runtime).toMatchObject({
+      configPath,
+      agentGatewayBaseUrl: "http://127.0.0.1:18980",
+      agentGatewayBootstrapSecret: "",
+      memoryToken: ""
+    });
+    await expect(stat(configPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(stat(join(memmyHome, "workspace"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(stat(join(memmyHome, "memory-service"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("syncs bundled agent skills into the packaged runtime workspace", async () => {
+    const root = await makeTempRoot();
+    const runtimeDist = join(root, "runtime", "memmy-agent", "dist");
+    const agentEntry = join(runtimeDist, "main.js");
+    const agentWorkspace = join(root, "home", "workspace");
+
+    await mkdir(join(runtimeDist, "skills", "example", "references"), { recursive: true });
+    await writeFile(agentEntry, "", "utf8");
+    await writeFile(join(runtimeDist, "skills", "example", "SKILL.md"), "# Example\n", "utf8");
+    await writeFile(join(runtimeDist, "skills", "example", "references", "guide.md"), "guide\n", "utf8");
+
+    await syncBundledAgentSkills({ agentEntry, agentWorkspace });
+
+    await expect(readFile(join(agentWorkspace, "skills", "example", "SKILL.md"), "utf8"))
+      .resolves.toBe("# Example\n");
+    await expect(readFile(join(agentWorkspace, "skills", "example", "references", "guide.md"), "utf8"))
+      .resolves.toBe("guide\n");
+  });
+
+  it("prepares the packaged browser with the bundled agent runtime before services start", async () => {
+    const root = await makeTempRoot();
+    const agentEntry = join(root, "runtime", "memmy-agent", "dist", "main.js");
+    const logDirectory = join(root, "logs");
+    await mkdir(join(root, "runtime", "memmy-agent", "dist"), { recursive: true });
+    await mkdir(logDirectory, { recursive: true });
+    await writeFile(agentEntry, "// bundled agent\n", "utf8");
+    const child = new EventEmitter() as ChildProcess;
+    (child as any).stdout = Object.assign(new EventEmitter(), {
+      setEncoding: vi.fn(),
+    });
+    (child as any).stderr = Object.assign(new EventEmitter(), {
+      setEncoding: vi.fn(),
+    });
+    const spawnProcess = vi.fn(() => {
+      queueMicrotask(() => child.emit("exit", 0, null));
+      return child;
+    });
+    const runtimeConfig = {
+      configPath: join(root, "config.yaml"),
+      agentWorkspace: join(root, "workspace"),
+    } as PackagedRuntimeConfig;
+
+    await expect(
+      preparePackagedBrowser(
+        { agentEntry, memoryEntry: join(root, "memory.js") },
+        runtimeConfig,
+        {
+          appPath: root,
+          resourcesPath: root,
+          logDirectory,
+          logLevel: "info",
+        },
+        spawnProcess as any,
+      ),
+    ).resolves.toBe(true);
+
+    expect(spawnProcess).toHaveBeenCalledWith(
+      process.execPath,
+      [agentEntry, "internal", "browser-prepare"],
+      expect.objectContaining({
+        shell: false,
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"],
+        env: expect.objectContaining({
+          MEMMY_CONFIG: runtimeConfig.configPath,
+          MEMMY_AGENT_WORKSPACE: runtimeConfig.agentWorkspace,
+          ELECTRON_RUN_AS_NODE: "1",
+        }),
+      }),
+    );
+  });
+
+  it("starts packaged browser preparation without waiting and stops the owned child", async () => {
+    const root = await makeTempRoot();
+    const agentEntry = join(root, "runtime", "memmy-agent", "dist", "main.js");
+    const logDirectory = join(root, "logs");
+    await mkdir(join(root, "runtime", "memmy-agent", "dist"), { recursive: true });
+    await mkdir(logDirectory, { recursive: true });
+    await writeFile(agentEntry, "// bundled agent\n", "utf8");
+    const child = new EventEmitter() as ChildProcess;
+    (child as any).stdout = Object.assign(new EventEmitter(), {
+      setEncoding: vi.fn(),
+    });
+    (child as any).stderr = Object.assign(new EventEmitter(), {
+      setEncoding: vi.fn(),
+    });
+    child.kill = vi.fn(() => true);
+    const spawnProcess = vi.fn(() => child);
+    const runtimeConfig = {
+      configPath: join(root, "config.yaml"),
+      agentWorkspace: join(root, "workspace"),
+    } as PackagedRuntimeConfig;
+
+    const preparation = startPackagedBrowserPreparation(
+      { agentEntry, memoryEntry: join(root, "memory.js") },
+      runtimeConfig,
+      {
+        appPath: root,
+        resourcesPath: root,
+        logDirectory,
+        logLevel: "info",
+      },
+      spawnProcess as any,
+      "test-browser-attempt",
+    );
+    let completed = false;
+    void preparation.completion.then(() => {
+      completed = true;
+    });
+
+    await Promise.resolve();
+    expect(completed).toBe(false);
+    expect(spawnProcess).toHaveBeenCalledOnce();
+    expect(spawnProcess.mock.calls[0]?.[2]?.env).toMatchObject({
+      MEMMY_BROWSER_PREPARATION_ATTEMPT_ID: "test-browser-attempt",
+    });
+    await expect(readFile(
+      join(root, "mcp", "playwright", "browser-preparation-state.json"),
+      "utf8",
+    ).then((content) => JSON.parse(content))).resolves.toMatchObject({
+      status: "preparing",
+      attemptId: "test-browser-attempt",
+      progressPercent: 0,
+    });
+
+    preparation.stop();
+    await expect(preparation.completion).resolves.toBe(false);
+    preparation.stop();
+    expect(child.kill).toHaveBeenCalledOnce();
+  });
+
+  it("publishes an unavailable state when browser preparation cannot start", async () => {
+    const root = await makeTempRoot();
+    const agentEntry = join(root, "runtime", "memmy-agent", "dist", "main.js");
+    const logDirectory = join(root, "logs");
+    await mkdir(join(root, "runtime", "memmy-agent", "dist"), { recursive: true });
+    await mkdir(logDirectory, { recursive: true });
+    await writeFile(agentEntry, "// bundled agent\n", "utf8");
+
+    const preparation = startPackagedBrowserPreparation(
+      { agentEntry, memoryEntry: join(root, "memory.js") },
+      {
+        configPath: join(root, "config.yaml"),
+        agentWorkspace: join(root, "workspace"),
+      } as PackagedRuntimeConfig,
+      {
+        appPath: root,
+        resourcesPath: root,
+        logDirectory,
+        logLevel: "info",
+      },
+      vi.fn(() => {
+        throw new Error("spawn failed");
+      }) as any,
+      "failed-browser-attempt",
+    );
+
+    await expect(preparation.completion).resolves.toBe(false);
+    await expect(readFile(
+      join(root, "mcp", "playwright", "browser-preparation-state.json"),
+      "utf8",
+    ).then((content) => JSON.parse(content))).resolves.toMatchObject({
+      status: "unavailable",
+      attemptId: "failed-browser-attempt",
+      error: expect.stringContaining("spawn failed"),
+    });
+  });
+});
+
+describe("external Agent MCP startup", () => {
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+  it("retries a timeout and a busy result before accepting a usable bridge", async () => {
+    vi.useFakeTimers();
+    const reload = vi.fn().mockRejectedValueOnce(new Error("request timeout"))
+      .mockResolvedValueOnce({ ok: false, message: "busy", requires_restart: false })
+      .mockResolvedValueOnce({ ok: true, message: "ready", requires_restart: false });
+    const pending = waitForExternalAgentMcpConfig({ reload, isCanceled: () => false });
+    await vi.advanceTimersByTimeAsync(3_000);
+    await expect(pending).resolves.toBe(true);
+    expect(reload).toHaveBeenCalledTimes(3);
+  });
+
+  it("rejects a restart-required result even when the reload reports ok", async () => {
+    vi.useFakeTimers();
+    const reload = vi.fn(async () => ({ ok: true, message: "restart required", requires_restart: true }));
+    const pending = waitForExternalAgentMcpConfig({ reload, isCanceled: () => false });
+    const assertion = expect(pending).rejects.toThrow("after 3 attempts: restart required");
+    await vi.advanceTimersByTimeAsync(3_000);
+    await assertion;
+    expect(reload).toHaveBeenCalledTimes(3);
+  });
+
+  it("stops during backoff when quit wins and consumes a late canceled request failure", async () => {
+    vi.useFakeTimers();
+    let canceled = false;
+    const reload = vi.fn(async () => ({ ok: false, message: "busy", requires_restart: false }));
+    const pending = waitForExternalAgentMcpConfig({ reload, isCanceled: () => canceled });
+    await vi.advanceTimersByTimeAsync(0);
+    canceled = true;
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(pending).resolves.toBe(false);
+    expect(reload).toHaveBeenCalledTimes(1);
+
+    let rejectLate!: (error: Error) => void;
+    canceled = false;
+    const late = waitForExternalAgentMcpConfig({
+      reload: () => new Promise((_resolve, reject) => { rejectLate = reject; }), isCanceled: () => canceled
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    canceled = true;
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(late).resolves.toBe(false);
+    rejectLate(new Error("late request timeout"));
+    await vi.advanceTimersByTimeAsync(0);
+  });
+});
+
+describe("AgentGatewaySupervisor", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("defers Agent startup until requested and shares one in-flight attempt", async () => {
+    let resolveProbe!: (result: "ready") => void;
+    const probe = vi.fn(() => new Promise<"ready">((resolve) => {
+      resolveProbe = resolve;
+    }));
+    const harness = createSupervisorHarness({ probe });
+    const agentGateway: { startupIssue?: "model_config_invalid" } = {};
+    const onStart = vi.fn();
+    const onSettled = vi.fn();
+    const start = createAgentGatewayStarter(harness.supervisor, agentGateway, {
+      isClosing: () => false, onStart, onSettled
+    });
+
+    expect(probe).not.toHaveBeenCalled();
+    const first = start();
+    const second = start();
+    expect(second).toBe(first);
+    expect(probe).toHaveBeenCalledTimes(1);
+    resolveProbe("ready");
+    await expect(first).resolves.toBeNull();
+    await expect(start()).resolves.toBeNull();
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(onSettled).toHaveBeenCalledTimes(1);
+    expect(harness.spawn).not.toHaveBeenCalled();
+  });
+
+  it("preserves the model-config hint and recovery after a deferred failure", async () => {
+    const supervisor = {
+      ensureStarted: vi.fn(async () => {
+        throw new Error("Failed to load config: providers current contract rejected legacy field");
+      }),
+      startRecovery: vi.fn(),
+      waitForReady: vi.fn()
+    };
+    const agentGateway: { startupIssue?: "model_config_invalid" } = {};
+    const start = createAgentGatewayStarter(supervisor, agentGateway, {
+      isClosing: () => false
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    await expect(start()).resolves.toBe("model_config_invalid");
+    expect(agentGateway.startupIssue).toBe("model_config_invalid");
+    expect(supervisor.startRecovery).toHaveBeenCalledTimes(1);
+    await expect(start()).resolves.toBe("model_config_invalid");
+    expect(supervisor.ensureStarted).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not spawn or publish an issue when shutdown wins deferred startup", async () => {
+    let resolveProbe!: (result: "unreachable") => void;
+    const probe = vi.fn(() => new Promise<"unreachable">((resolve) => {
+      resolveProbe = resolve;
+    }));
+    const harness = createSupervisorHarness({ probe });
+    const agentGateway: { startupIssue?: "model_config_invalid" } = {};
+    let closing = false;
+    const start = createAgentGatewayStarter(harness.supervisor, agentGateway, {
+      isClosing: () => closing
+    });
+
+    const pending = start();
+    closing = true;
+    await harness.supervisor.close();
+    resolveProbe("unreachable");
+    await expect(pending).resolves.toBeNull();
+    await expect(start()).resolves.toBeNull();
+    expect(harness.spawn).not.toHaveBeenCalled();
+    expect(agentGateway.startupIssue).toBeUndefined();
+  });
+
+  it('binds a surface action to the live child that produced its frame', async () => {
+    const harness = createSupervisorHarness();
+    const received = vi.fn();
+    (harness.supervisor as any).options.onComputerUseSurface = received;
+    await harness.supervisor.ensureStarted();
+    const child = harness.spawned[0];
+    const send = vi.fn();
+    Object.assign(child.process, { connected: true, send });
+    const frame = { type: 'memmy:computer-use-surface:update', surface: 'browser',
+      sessionKey: 's', channel: 'gui', chatId: 'c', targetId: 'active-tab', title: 'Page' };
+    child.process.emit('message', frame);
+    expect(received).toHaveBeenCalledOnce();
+    const action = { type: 'memmy:computer-use-surface:action', surface: 'browser',
+      sessionKey: 's', channel: 'gui', chatId: 'c', targetId: 'active-tab',
+      action: 'click', x: 0.5, y: 0.5 };
+    received.mock.calls[0][1](action);
+    expect(send).toHaveBeenCalledWith(action, expect.any(Function));
+    await harness.supervisor.close();
+  });
+
+  it('relays embedded browser commands only for the live Agent child', async () => {
+    const harness = createSupervisorHarness();
+    const handle = vi.fn(async () => ({ tabId: 27, url: 'https://example.com/' }));
+    (harness.supervisor as any).options.handleEmbeddedBrowserRequest = handle;
+    await harness.supervisor.ensureStarted();
+    const child = harness.spawned[0];
+    const send = vi.fn();
+    Object.assign(child.process, { connected: true, send });
+    const request = { type: 'memmy:embedded-browser:request',
+      requestId: '98df6655-c97f-4907-8488-01fd87ccce62', command: 'probe', args: {} };
+    child.process.emit('message', request);
+    await vi.waitFor(() => expect(send).toHaveBeenCalledWith({
+      type: 'memmy:embedded-browser:result', requestId: request.requestId,
+      ok: true, result: { tabId: 27, url: 'https://example.com/' },
+    }, expect.any(Function)));
+    child.process.emit('message', { ...request, command: 'not-a-browser-command' });
+    expect(handle).toHaveBeenCalledTimes(1);
+    await harness.supervisor.close();
+  });
+
+  it('invalidates an embedded upload when the Agent cancels its request', async () => {
+    const harness = createSupervisorHarness();
+    let finish!: (value: unknown) => void;
+    let current!: () => boolean;
+    (harness.supervisor as any).options.handleEmbeddedBrowserRequest = vi.fn((_request, isCurrentChild) => {
+      current = isCurrentChild;
+      return new Promise(resolve => { finish = resolve; });
+    });
+    await harness.supervisor.ensureStarted();
+    const child = harness.spawned[0];
+    const send = vi.fn();
+    Object.assign(child.process, { connected: true, send });
+    const requestId = '98df6655-c97f-4907-8488-01fd87ccce62';
+    child.process.emit('message', { type: 'memmy:embedded-browser:request', requestId,
+      command: 'upload', tabId: 27, args: { paths: ['/workspace/report.txt'], target: 'ax-7' } });
+    expect(current()).toBe(true);
+    child.process.emit('message', { type: 'memmy:embedded-browser:cancel', requestId });
+    expect(current()).toBe(false);
+    finish({ uploaded: 1 });
+    await new Promise(resolve => setImmediate(resolve));
+    expect(send).not.toHaveBeenCalled();
+    await harness.supervisor.close();
+  });
+
+  it('relays a validated native app approval only to the live Agent child', async () => {
+    const harness = createSupervisorHarness();
+    const approve = vi.fn().mockResolvedValue('allow-once');
+    (harness.supervisor as any).options.approveNativeAppAccess = approve;
+    await harness.supervisor.ensureStarted();
+    const child = harness.spawned[0];
+    const send = vi.fn();
+    Object.assign(child.process, { connected: true, send });
+    const request = { type: 'memmy:native-app-access:request',
+      requestId: 'fe6181d5-3d95-4a11-b3fa-4586c5c5bdad', platform: 'darwin',
+      appId: 'com.apple.calculator', displayName: 'Calculator' };
+    child.process.emit('message', request);
+    await vi.waitFor(() => expect(send).toHaveBeenCalledWith({
+      type: 'memmy:native-app-access:result', requestId: request.requestId, decision: 'allow-once',
+    }, expect.any(Function)));
+    expect(approve).toHaveBeenCalledWith(request);
+    child.process.emit('message', { ...request, requestId: 'bad', appId: 'com.apple.Terminal' });
+    expect(approve).toHaveBeenCalledTimes(1);
+    await harness.supervisor.close();
+    child.process.emit('message', { ...request, requestId: 'f664df4b-68b7-4390-b3f3-9e68106b0988' });
+    expect(approve).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits for the Agent to finish clearing browser data', async () => {
+    const harness = createSupervisorHarness();
+    await harness.supervisor.ensureStarted();
+    const child = harness.spawned[0];
+    const send = vi.fn((request: any, callback: (error?: Error) => void) => {
+      callback();
+      queueMicrotask(() => child.process.emit('message', {
+        type: 'memmy:browser-profile:clear-result', requestId: request.requestId, ok: true,
+      }));
+    });
+    Object.assign(child.process, { connected: true, send });
+    await expect(harness.supervisor.clearBrowserData()).resolves.toBeUndefined();
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: 'memmy:browser-profile:clear' }), expect.any(Function));
+    await harness.supervisor.close();
+  });
+
+  it("uses one in-flight startup and leaves an already-running external gateway alone", async () => {
+    let resolveProbe: ((result: "ready") => void) | null = null;
+    const probe = vi.fn(() => new Promise<"ready">((resolve) => {
+      resolveProbe = resolve;
+    }));
+    const harness = createSupervisorHarness({ probe });
+
+    const first = harness.supervisor.ensureStarted();
+    const second = harness.supervisor.ensureStarted();
+
+    expect(second).toBe(first);
+    expect(probe).toHaveBeenCalledTimes(1);
+    resolveProbe?.("ready");
+    await Promise.all([first, second]);
+
+    expect(harness.supervisor.ownership).toBe("external");
+    expect(harness.spawn).not.toHaveBeenCalled();
+    expect(harness.children).toEqual([]);
+  });
+
+  it("fails initial startup cleanly without starting an infinite replacement loop", async () => {
+    vi.useFakeTimers();
+    const harness = createSupervisorHarness({
+      waitForHttpService: vi.fn(async () => {
+        throw new Error("startup timeout");
+      }),
+      stopManagedChild: vi.fn(async (child: ManagedChild) => {
+        emitChildClose(child, 1);
+      })
+    });
+
+    await expect(harness.supervisor.ensureStarted()).rejects.toThrow("startup timeout");
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(harness.spawn).toHaveBeenCalledTimes(1);
+    expect(harness.supervisor.hasReachedReady).toBe(false);
+    expect(harness.supervisor.restartTimer).toBeNull();
+  });
+
+  it("keeps retrying after an explicitly recoverable initial startup failure", async () => {
+    vi.useFakeTimers();
+    const waitForHttpService = vi.fn()
+      .mockRejectedValueOnce(new Error("invalid runtime config"))
+      .mockRejectedValueOnce(new Error("runtime config is still invalid"))
+      .mockResolvedValueOnce(undefined);
+    const harness = createSupervisorHarness({
+      waitForHttpService,
+      stopManagedChild: vi.fn(async (child: ManagedChild) => {
+        emitChildClose(child, 1);
+      })
+    });
+
+    await expect(harness.supervisor.ensureStarted()).rejects.toThrow("invalid runtime config");
+    harness.supervisor.startRecovery();
+    await vi.advanceTimersByTimeAsync(249);
+    expect(harness.spawn).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(harness.spawn).toHaveBeenCalledTimes(2);
+    expect(harness.supervisor.hasReachedReady).toBe(false);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(harness.spawn).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(harness.spawn).toHaveBeenCalledTimes(3);
+    expect(harness.supervisor.hasReachedReady).toBe(true);
+    expect(harness.supervisor.restartTimer).toBeNull();
+  });
+
+  it("cancels pending initial recovery during shutdown", async () => {
+    vi.useFakeTimers();
+    const harness = createSupervisorHarness({
+      waitForHttpService: vi.fn(async () => {
+        throw new Error("invalid runtime config");
+      }),
+      stopManagedChild: vi.fn(async (child: ManagedChild) => {
+        emitChildClose(child, 1);
+      })
+    });
+
+    await expect(harness.supervisor.ensureStarted()).rejects.toThrow("invalid runtime config");
+    harness.supervisor.startRecovery();
+    await harness.supervisor.close();
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(harness.spawn).toHaveBeenCalledTimes(1);
+    expect(harness.supervisor.restartTimer).toBeNull();
+  });
+
+  it("keeps startup pending until recovery makes the Agent ready", async () => {
+    const failure = new Error("invalid runtime config");
+    let recovered!: (issue: null) => void;
+    const supervisor = {
+      ensureStarted: vi.fn(async () => {
+        throw failure;
+      }),
+      startRecovery: vi.fn(),
+      waitForReady: vi.fn(() => new Promise<null>(resolve => { recovered = resolve; }))
+    };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const settled = vi.fn();
+    const startup = startAgentGatewayWithRecovery(supervisor).then(settled);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(settled).not.toHaveBeenCalled();
+    expect(supervisor.waitForReady).toHaveBeenCalledTimes(1);
+    recovered(null);
+    await startup;
+    expect(settled).toHaveBeenCalledWith(null);
+
+    expect(supervisor.startRecovery).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      "Agent gateway unavailable during desktop startup: invalid runtime config"
+    );
+  });
+
+  it("classifies a rejected model config without exposing the startup error", async () => {
+    const supervisor = {
+      ensureStarted: vi.fn(async () => {
+        throw new Error(
+          "agent-gateway exited before it became ready (code 1). stderr: memmy: Failed to load config from C:/Memmy/config.yaml: providers current contract does not accept legacy field 'apiBase'"
+        );
+      }),
+      startRecovery: vi.fn(),
+      waitForReady: vi.fn()
+    };
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    await expect(startAgentGatewayWithRecovery(supervisor)).resolves.toBe("model_config_invalid");
+    expect(supervisor.startRecovery).toHaveBeenCalledTimes(1);
+    expect(supervisor.waitForReady).not.toHaveBeenCalled();
+  });
+
+  it("releases startup only after a replacement child reaches readiness", async () => {
+    vi.useFakeTimers();
+    let makeReady!: () => void;
+    const wait = vi.fn()
+      .mockRejectedValueOnce(new Error("initial import failed"))
+      .mockImplementationOnce(() => new Promise<void>(resolve => { makeReady = resolve; }));
+    const harness = createSupervisorHarness({ waitForHttpService: wait,
+      stopManagedChild: vi.fn(async child => { emitChildClose(child, 1); }) });
+    const settled = vi.fn();
+    const startup = startAgentGatewayWithRecovery(harness.supervisor).then(settled);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(harness.spawn).toHaveBeenCalledTimes(2);
+    expect(settled).not.toHaveBeenCalled();
+    makeReady();
+    await startup;
+    expect(settled).toHaveBeenCalledWith(null);
+    await harness.supervisor.close();
+  });
+
+  it("releases startup when a usable external gateway appears during recovery", async () => {
+    vi.useFakeTimers();
+    const harness = createSupervisorHarness({
+      probe: vi.fn().mockResolvedValueOnce("unreachable").mockResolvedValueOnce("ready"),
+      waitForHttpService: vi.fn().mockRejectedValueOnce(new Error("initial import failed")),
+      stopManagedChild: vi.fn(async child => { emitChildClose(child, 1); })
+    });
+    const startup = startAgentGatewayWithRecovery(harness.supervisor);
+    await vi.advanceTimersByTimeAsync(250);
+    await expect(startup).resolves.toBeNull();
+    expect(harness.supervisor.hasReachedReady).toBe(true);
+    expect(harness.supervisor.ownership).toBe("external");
+    await harness.supervisor.close();
+  });
+
+  it("waits for a gateway already initializing without spawning a competing child", async () => {
+    vi.useFakeTimers();
+    const harness = createSupervisorHarness({ probe: vi.fn()
+      .mockResolvedValueOnce("starting").mockResolvedValueOnce("starting").mockResolvedValueOnce("ready") });
+    const settled = vi.fn();
+    const startup = startAgentGatewayWithRecovery(harness.supervisor).then(settled);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(harness.spawn).not.toHaveBeenCalled();
+    expect(settled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await startup;
+    expect(settled).toHaveBeenCalledWith(null);
+    expect(harness.spawn).not.toHaveBeenCalled();
+    await harness.supervisor.close();
+  });
+
+  it("recognizes the real bootstrap 503 response while waiting for Agent initialization", async () => {
+    vi.useFakeTimers();
+    const fetch = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("agent_runtime_initializing", { status: 503 }))
+      .mockResolvedValueOnce(new Response("agent_runtime_initializing", { status: 503 }))
+      .mockResolvedValueOnce(new Response("{}", { status: 200 }));
+    const harness = createSupervisorHarness({ useRealProbe: true });
+    const settled = vi.fn();
+    const startup = startAgentGatewayWithRecovery(harness.supervisor).then(settled);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(harness.spawn).not.toHaveBeenCalled();
+    expect(settled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await startup;
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(settled).toHaveBeenCalledWith(null);
+    expect(harness.spawn).not.toHaveBeenCalled();
+    await harness.supervisor.close();
+  });
+
+  it("continues replacement backoff when exit settles before the child's close event", async () => {
+    vi.useFakeTimers();
+    const harness = createSupervisorHarness({
+      waitForHttpService: vi.fn().mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new Error("replacement startup failed")).mockResolvedValueOnce(undefined),
+      stopManagedChild: vi.fn(async child => { child.process.emit("exit", 1, null); })
+    });
+    await harness.supervisor.ensureStarted();
+    emitChildClose(harness.spawned[0]!, 1);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(harness.spawn).toHaveBeenCalledTimes(2);
+    emitChildClose(harness.spawned[1]!, 1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(harness.spawn).toHaveBeenCalledTimes(3);
+    await harness.supervisor.close();
+  });
+
+  it("cancels the readiness wait and recovery when the splash is closed", async () => {
+    vi.useFakeTimers();
+    const harness = createSupervisorHarness({
+      waitForHttpService: vi.fn().mockRejectedValueOnce(new Error("initial import failed")),
+      stopManagedChild: vi.fn(async child => { emitChildClose(child, 1); })
+    });
+    const startup = startAgentGatewayWithRecovery(harness.supervisor);
+    await vi.advanceTimersByTimeAsync(0);
+    await harness.supervisor.close();
+    await expect(startup).resolves.toBeNull();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(harness.spawn).toHaveBeenCalledTimes(1);
+    expect(harness.supervisor.hasReachedReady).toBe(false);
+  });
+
+  it("opens the configuration repair entrypoint if a recovery attempt identifies model rejection", async () => {
+    vi.useFakeTimers();
+    const harness = createSupervisorHarness({
+      waitForHttpService: vi.fn().mockRejectedValueOnce(new Error("initial import failed"))
+        .mockRejectedValueOnce(new Error("Failed to load config: modelAssignments legacy format rejected")),
+      stopManagedChild: vi.fn(async child => { emitChildClose(child, 1); })
+    });
+    const startup = startAgentGatewayWithRecovery(harness.supervisor);
+    await vi.advanceTimersByTimeAsync(250);
+    await expect(startup).resolves.toBe("model_config_invalid");
+    expect(harness.supervisor.hasReachedReady).toBe(false);
+    await harness.supervisor.close();
+  });
+
+  it("gives serial MCP discovery its configured budget instead of restarting at 30 seconds", async () => {
+    const root = await makeTempRoot();
+    const configPath = join(root, "config.yaml");
+    await writeFile(configPath, YAML.stringify({ tools: { mcpServers: {
+      legacy: { command: "legacy-mcp" }, http: { url: "${MCP_URL}", type: "${MCP_TYPE}" }
+    } } }));
+    const wait = vi.fn(async () => undefined);
+    const harness = createSupervisorHarness({ waitForHttpService: wait, configPath });
+    await harness.supervisor.ensureStarted();
+    expect(wait).toHaveBeenCalledWith("agent-gateway", expect.any(String), expect.any(Object),
+      { "x-memmy-agent-auth": "gateway-secret" }, 70_000, expect.any(Function));
+    await harness.supervisor.close();
+  });
+
+  it("handles empty and old MCP configuration without inventing work or truncating many servers", () => {
+    expect(resolveAgentGatewayStartupTimeout(null)).toBe(30_000);
+    expect(resolveAgentGatewayStartupTimeout({})).toBe(30_000);
+    expect(resolveAgentGatewayStartupTimeout({ tools: { mcpServers: {} } })).toBe(30_000);
+    const mcpServers = Object.fromEntries(Array.from({ length: 20 }, (_, index) =>
+      [`server${index}`, { command: "old-command", enabledTools: [] }]));
+    expect(resolveAgentGatewayStartupTimeout({ tools: { mcpServers } })).toBe(430_000);
+  });
+
+  it("restarts an owned gateway with bounded escalating delays and ignores old child callbacks", async () => {
+    vi.useFakeTimers();
+    const harness = createSupervisorHarness();
+    await harness.supervisor.ensureStarted();
+    const first = harness.spawned[0]!;
+
+    emitChildClose(first, 1);
+    await vi.advanceTimersByTimeAsync(249);
+    expect(harness.spawn).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(harness.spawn).toHaveBeenCalledTimes(2);
+
+    const second = harness.spawned[1]!;
+    emitChildClose(first, 1);
+    emitChildClose(second, 1);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(harness.spawn).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(harness.spawn).toHaveBeenCalledTimes(3);
+
+    emitChildClose(harness.spawned[2]!, 1);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(harness.spawn).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(harness.spawn).toHaveBeenCalledTimes(4);
+
+    emitChildClose(harness.spawned[3]!, 1);
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(harness.spawn).toHaveBeenCalledTimes(4);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(harness.spawn).toHaveBeenCalledTimes(5);
+
+    emitChildClose(harness.spawned[4]!, 1);
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(harness.spawn).toHaveBeenCalledTimes(5);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(harness.spawn).toHaveBeenCalledTimes(6);
+
+    emitChildClose(harness.spawned[5]!, 1);
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(harness.spawn).toHaveBeenCalledTimes(6);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(harness.spawn).toHaveBeenCalledTimes(7);
+  });
+
+  it("moves to the next backoff step when a replacement never becomes ready", async () => {
+    vi.useFakeTimers();
+    const waitForHttpService = vi.fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("replacement timeout"))
+      .mockResolvedValueOnce(undefined);
+    const stopManagedChild = vi.fn(async (child: ManagedChild) => {
+      emitChildClose(child, 1);
+    });
+    const harness = createSupervisorHarness({ waitForHttpService, stopManagedChild });
+    await harness.supervisor.ensureStarted();
+
+    emitChildClose(harness.spawned[0]!, 1);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(harness.spawn).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(harness.spawn).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(harness.spawn).toHaveBeenCalledTimes(3);
+  });
+
+  it("resets the crash backoff after an owned replacement stays ready for 30 seconds", async () => {
+    vi.useFakeTimers();
+    const harness = createSupervisorHarness();
+    await harness.supervisor.ensureStarted();
+    emitChildClose(harness.spawned[0]!, 1);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(harness.spawn).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(harness.supervisor.restartAttempt).toBe(0);
+    emitChildClose(harness.spawned[1]!, 1);
+    await vi.advanceTimersByTimeAsync(249);
+    expect(harness.spawn).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(harness.spawn).toHaveBeenCalledTimes(3);
+  });
+
+  it("stops a still-running child after an error and schedules only one replacement on close", async () => {
+    vi.useFakeTimers();
+    const stop = vi.fn(async (child: ManagedChild) => {
+      emitChildClose(child, 1);
+    });
+    const harness = createSupervisorHarness({ stopManagedChild: stop });
+    await harness.supervisor.ensureStarted();
+    const first = harness.spawned[0]!;
+
+    first.process.emit("error", new Error("spawn pipe failed"));
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(harness.spawn).toHaveBeenCalledTimes(2);
+  });
+
+  it("switches to external ownership if another gateway appears during replacement delay", async () => {
+    vi.useFakeTimers();
+    const probe = vi.fn()
+      .mockResolvedValueOnce("unreachable")
+      .mockResolvedValueOnce("ready");
+    const harness = createSupervisorHarness({ probe });
+    await harness.supervisor.ensureStarted();
+
+    emitChildClose(harness.spawned[0]!, 1);
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(harness.supervisor.ownership).toBe("external");
+    expect(harness.spawn).toHaveBeenCalledTimes(1);
+    expect(harness.supervisor.ownedChild).toBeNull();
+  });
+
+  it("passes one valid managed restart notice to an exit-75 replacement", async () => {
+    vi.useFakeTimers();
+    const harness = createSupervisorHarness();
+    await harness.supervisor.ensureStarted();
+    const first = harness.spawned[0]!;
+    first.process.emit("message", {
+      type: "memmy-agent:restart",
+      channel: "websocket",
+      chatId: "chat-1",
+      startedAt: "123.5",
+      metadata: { reason: "command" }
+    });
+
+    emitChildClose(first, 75);
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(harness.spawn).toHaveBeenCalledTimes(2);
+    expect(harness.spawn.mock.calls[1]?.[3]).toMatchObject({
+      MEMMY_DESKTOP_MANAGED_GATEWAY: "1",
+      MEMMY_MIGRATIONS_READY_CONFIG: "/memmy/config.yaml",
+      MEMMY_MIGRATIONS_READY_WORKSPACE: "/memmy/workspace",
+      MEMMY_MIGRATIONS_READY_SESSION_DAG: resolve("/memmy/session-dag"),
+      MEMMY_APP_DATABASE: "/memmy/app.sqlite",
+      MEMMY_MIGRATIONS_READY_APP_DATABASE: "/memmy/app.sqlite",
+      MEMMY_BROWSER_PREPARATION_ATTEMPT_ID: "test-browser-attempt",
+      MEMMY_AGENT_RESTART_NOTIFY_CHANNEL: "websocket",
+      MEMMY_AGENT_RESTART_NOTIFY_CHAT_ID: "chat-1",
+      MEMMY_AGENT_RESTART_STARTED_AT: "123.5",
+      MEMMY_AGENT_RESTART_NOTIFY_METADATA: JSON.stringify({ reason: "command" })
+    });
+  });
+
+  it("keeps a managed restart notice until a replacement reaches readiness", async () => {
+    vi.useFakeTimers();
+    const waitForHttpService = vi.fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("replacement timeout"))
+      .mockResolvedValueOnce(undefined);
+    const stopManagedChild = vi.fn(async (child: ManagedChild) => {
+      emitChildClose(child, 1);
+    });
+    const harness = createSupervisorHarness({ waitForHttpService, stopManagedChild });
+    await harness.supervisor.ensureStarted();
+    const first = harness.spawned[0]!;
+    first.process.emit("message", {
+      type: "memmy-agent:restart",
+      channel: "websocket",
+      chatId: "chat-1",
+      startedAt: "123.5",
+      metadata: { reason: "command" }
+    });
+
+    emitChildClose(first, 75);
+    await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(harness.spawn).toHaveBeenCalledTimes(3);
+    expect(harness.spawn.mock.calls[2]?.[3]).toMatchObject({
+      MEMMY_AGENT_RESTART_NOTIFY_CHANNEL: "websocket",
+      MEMMY_AGENT_RESTART_NOTIFY_CHAT_ID: "chat-1",
+      MEMMY_AGENT_RESTART_STARTED_AT: "123.5",
+      MEMMY_AGENT_RESTART_NOTIFY_METADATA: JSON.stringify({ reason: "command" })
+    });
+  });
+
+  it("rejects invalid managed restart IPC and never respawns after shutdown", async () => {
+    vi.useFakeTimers();
+    const harness = createSupervisorHarness();
+    await harness.supervisor.ensureStarted();
+    const first = harness.spawned[0]!;
+    first.process.emit("message", {
+      type: "memmy-agent:restart",
+      channel: "websocket",
+      chatId: "chat-1",
+      startedAt: "",
+      metadata: {},
+      unexpected: true
+    });
+    emitChildClose(first, 75);
+
+    await harness.supervisor.close();
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(harness.spawn).toHaveBeenCalledTimes(1);
+    expect(harness.supervisor.stopping).toBe(true);
+    expect(harness.supervisor.restartTimer).toBeNull();
+  });
+});
+
+describe("spawnNodeService 落盘与 env 注入", () => {
+  it("keeps persistent Memory alive on Desktop exit unless the setting requests a stop", async () => {
+    const root = await makeTempRoot();
+    const entry = join(root, "persistent-service.js");
+    await writeFile(entry, "setInterval(() => {}, 1000);\n");
+    const memory = spawnNodeService("memory", entry, [], {}, {
+      logFilePath: join(root, "memory.log"),
+      logLevel: "info",
+      persistOnDesktopExit: true
+    });
+    const gateway = spawnNodeService("agent-gateway", entry, [], {}, {
+      logFilePath: join(root, "agent-gateway.log"),
+      logLevel: "info"
+    });
+
+    try {
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+      await stopManagedChildrenForDesktopExit([memory, gateway], false);
+
+      expect(gateway.process.exitCode !== null || gateway.process.signalCode !== null).toBe(true);
+      expect(memory.process.exitCode).toBeNull();
+      expect(memory.process.signalCode).toBeNull();
+
+      await stopManagedChildrenForDesktopExit([memory], true);
+      expect(memory.process.exitCode !== null || memory.process.signalCode !== null).toBe(true);
+    } finally {
+      await stopManagedChild(memory);
+      await stopManagedChild(gateway);
+    }
+  });
+
+  it("keeps the restart IPC channel available for persistent Memory", async () => {
+    const root = await makeTempRoot();
+    const entry = join(root, "persistent-memory-ipc.js");
+    await writeFile(entry, [
+      "process.send?.({ type: 'memmy-memory:restart' });",
+      "setInterval(() => {}, 1000);",
+    ].join("\n"));
+    const memory = spawnNodeService("memory", entry, [], {
+      MEMMY_DESKTOP_MANAGED_MEMORY: "1",
+    }, {
+      logFilePath: join(root, "memory-ipc.log"),
+      logLevel: "info",
+      ipc: true,
+      persistOnDesktopExit: true,
+    });
+
+    try {
+      await expect(new Promise((resolveMessage) => {
+        memory.process.once("message", resolveMessage);
+      })).resolves.toEqual({ type: "memmy-memory:restart" });
+      expect(memory.process.connected).toBe(true);
+    } finally {
+      await stopManagedChild(memory);
+    }
+  });
+
+  it("把子进程 stdout 落盘到指定日志文件", async () => {
+    const root = await makeTempRoot();
+    const entry = join(root, "entry.js");
+    await writeFile(entry, "process.stdout.write('hello-from-child\\n');\n");
+    const logFile = join(root, "memory.log");
+
+    const managed = spawnNodeService("memory", entry, [], {}, {
+      logFilePath: logFile,
+      logLevel: "info"
+    });
+    await new Promise<void>((done) => managed.process.once("exit", () => done()));
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+
+    expect(await readFile(logFile, "utf8")).toContain("hello-from-child");
+  });
+
+  it("把 Agent Gateway 子进程 stderr 落盘到 agent-gateway.log", async () => {
+    const root = await makeTempRoot();
+    const entry = join(root, "entry.js");
+    await writeFile(entry, "process.stderr.write('[session-dag] compaction failed SQLITE_CANTOPEN\\n');\n");
+    const logFile = join(root, "agent-gateway.log");
+
+    const managed = spawnNodeService("agent-gateway", entry, [], {}, {
+      logFilePath: logFile,
+      logLevel: "info"
+    });
+    await new Promise<void>((done) => managed.process.once("exit", () => done()));
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+
+    const logText = await readFile(logFile, "utf8");
+    expect(logText).toContain("[session-dag] compaction failed");
+    expect(logText).toContain("SQLITE_CANTOPEN");
+  });
+
+  it("把 MEMMY_LOG_LEVEL 注入子进程环境", async () => {
+    const root = await makeTempRoot();
+    const entry = join(root, "entry.js");
+    await writeFile(entry, "process.stdout.write(process.env.MEMMY_LOG_LEVEL ?? 'unset');\n");
+    const logFile = join(root, "agent-gateway.log");
+
+    const managed = spawnNodeService("agent-gateway", entry, [], {}, {
+      logFilePath: logFile,
+      logLevel: "debug"
+    });
+    await new Promise<void>((done) => managed.process.once("exit", () => done()));
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+
+    expect(await readFile(logFile, "utf8")).toContain("debug");
+  });
+
+  it("强杀后等待 Memory 子进程真正退出", async () => {
+    const root = await makeTempRoot();
+    const entry = join(root, "stubborn-memory.js");
+    await writeFile(entry, [
+      "process.on('SIGTERM', () => {});",
+      "process.stdout.write('ready\\n');",
+      "setInterval(() => {}, 1000);"
+    ].join("\n"));
+    const managed = spawnNodeService("memory", entry, [], {}, {
+      logFilePath: join(root, "stubborn-memory.log"),
+      logLevel: "info"
+    });
+    await new Promise<void>((ready) => managed.process.stdout?.once("data", () => ready()));
+
+    await stopManagedChild(managed);
+
+    expect(managed.exitDescription).toBe("signal SIGKILL");
+  });
+});
+
+describe("Memory lock owner progress", () => {
+  it("accounts for the database and its journal companions", async () => {
+    const root = await makeTempRoot();
+    const databasePath = join(root, "memory.sqlite");
+    await writeFile(databasePath, "a");
+    await writeFile(`${databasePath}-wal`, "bb");
+
+    const sample = sampleMemoryOwnerProgress(process.pid, databasePath);
+
+    expect(sample.databaseBytes).toBe(3);
+    expect(sample.databaseMtimeMs).toBeGreaterThan(0);
+    expect(sample.cpuMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("treats a database write as progress", async () => {
+    const root = await makeTempRoot();
+    const databasePath = join(root, "memory.sqlite");
+    await writeFile(databasePath, "a");
+    const previous = sampleMemoryOwnerProgress(process.pid, databasePath);
+
+    await writeFile(`${databasePath}-wal`, "growing");
+
+    expect(hasMemoryOwnerProgressed(previous, sampleMemoryOwnerProgress(process.pid, databasePath))).toBe(true);
+  });
+
+  it("treats accumulated cpu time alone as progress", () => {
+    const idle = { cpuMs: 5_000, databaseBytes: 10, databaseMtimeMs: 100 };
+    expect(hasMemoryOwnerProgressed(idle, { ...idle, cpuMs: 6_200 })).toBe(true);
+    expect(hasMemoryOwnerProgressed(idle, { ...idle, cpuMs: 5_100 })).toBe(false);
+  });
+
+  it("reports no progress once the process and the database go quiet", async () => {
+    const root = await makeTempRoot();
+    const databasePath = join(root, "memory.sqlite");
+    await writeFile(databasePath, "a");
+    const previous = sampleMemoryOwnerProgress(process.pid, databasePath);
+
+    expect(hasMemoryOwnerProgressed(previous, { ...previous })).toBe(false);
+  });
+});
+
+describe("Memory lock owner identification", () => {
+  const home = resolve("/memmy-home");
+  const serviceHome = join(home, "memory-service");
+  const activeEntry = join(serviceHome, "runtime", "2.1.2", "win32-x64", "dist", "src", "server", "index.js");
+  const previousEntry = join(serviceHome, "runtime", "2.1.1", "win32-x64", "dist", "src", "server", "index.js");
+
+  it("accepts a service left behind by the previous version", () => {
+    expect(matchesMemoryServiceCommandLine(`"C:/node.exe" "${previousEntry}" --config x`, activeEntry, serviceHome))
+      .toBe(true);
+  });
+
+  it("accepts the active pointer and the bundled runtime entry", () => {
+    expect(matchesMemoryServiceCommandLine(`node "${activeEntry}"`, activeEntry, serviceHome)).toBe(true);
+    expect(matchesMemoryServiceCommandLine(
+      "node /Applications/Memmy.app/Contents/Resources/memory-runtime/dist/src/server/index.js",
+      activeEntry,
+      serviceHome
+    )).toBe(true);
+  });
+
+  it("matches only the active pointer during a runtime takeover", () => {
+    expect(matchesMemoryServiceCommandLine(`node "${previousEntry}"`, activeEntry, serviceHome, true)).toBe(false);
+    expect(matchesMemoryServiceCommandLine(`node "${activeEntry}"`, activeEntry, serviceHome, true)).toBe(true);
+  });
+
+  it("rejects a service from another home and unrelated processes", () => {
+    const foreignEntry = join(resolve("/other-home"), "memory-service", "runtime", "2.1.1", "win32-x64", "dist", "src", "server", "index.js");
+    expect(matchesMemoryServiceCommandLine(`node "${foreignEntry}"`, activeEntry, serviceHome)).toBe(false);
+    expect(matchesMemoryServiceCommandLine("C:/Windows/explorer.exe", activeEntry, serviceHome)).toBe(false);
+    expect(matchesMemoryServiceCommandLine("", activeEntry, serviceHome)).toBe(false);
+  });
+});
+
+function createSupervisorHarness(overrides: {
+  configPath?: string;
+  useRealProbe?: boolean;
+  probe?: ReturnType<typeof vi.fn>;
+  waitForHttpService?: ReturnType<typeof vi.fn>;
+  stopManagedChild?: ReturnType<typeof vi.fn>;
+} = {}) {
+  const entries: RuntimeEntryPaths = {
+    memoryEntry: "/runtime/memory.js",
+    agentEntry: "/runtime/agent.js"
+  };
+  const runtimeConfig: PackagedRuntimeConfig = {
+    configPath: overrides.configPath ?? "/memmy/config.yaml",
+    appDatabaseFile: "/memmy/app.sqlite",
+    agentWorkspace: "/memmy/workspace",
+    memoryDatabasePath: "/memmy/memory.sqlite",
+    memoryBaseUrl: "http://127.0.0.1:18960",
+    memoryToken: "memory-token",
+    memoryListenHost: "127.0.0.1",
+    memoryListenPort: 18960,
+    agentGatewayBaseUrl: "http://127.0.0.1:18980",
+    agentGatewayHealthHost: "127.0.0.1",
+    agentGatewayHealthPort: 18970,
+    agentGatewayBootstrapSecret: "gateway-secret"
+  };
+  const options: StartPackagedRuntimeServicesOptions = {
+    appPath: "/app",
+    appDatabaseFile: "/memmy/app.sqlite",
+    resourcesPath: "/resources",
+    logDirectory: "/logs",
+    logLevel: "info"
+  };
+  const children: ManagedChild[] = [];
+  const spawned: ManagedChild[] = [];
+  const spawn = vi.fn(() => {
+    const child = createManagedChild();
+    spawned.push(child);
+    return child;
+  });
+  const supervisor = new AgentGatewaySupervisor(entries, runtimeConfig, children, options, {
+    probeHttpService: overrides.probe ?? (overrides.useRealProbe ? undefined : vi.fn(async () => "unreachable" as const)),
+    spawnNodeService: spawn,
+    waitForHttpService: overrides.waitForHttpService ?? vi.fn(async () => undefined),
+    stopManagedChild: overrides.stopManagedChild ?? vi.fn(async () => undefined)
+  }, "test-browser-attempt");
+  return { supervisor, children, spawned, spawn };
+}
+
+function createManagedChild(): ManagedChild {
+  const process = new EventEmitter() as EventEmitter & {
+    exitCode: number | null;
+    signalCode: NodeJS.Signals | null;
+    kill: ReturnType<typeof vi.fn>;
+  };
+  process.exitCode = null;
+  process.signalCode = null;
+  process.kill = vi.fn(() => true);
+  return {
+    name: "agent-gateway",
+    process: process as unknown as ChildProcess,
+    stdoutTail: [],
+    stderrTail: [],
+    exitDescription: null,
+    logWriter: null
+  };
+}
+
+function emitChildClose(child: ManagedChild, code: number): void {
+  child.process.emit("close", code, null);
+}

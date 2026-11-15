@@ -1,0 +1,36 @@
+node_modules/
+dist/
+App/memmy-agent/npm-packages/
+release/
+App/shell/desktop/release/
+Mac软件打包/
+memmy-memory-*.tgz
+.vite/
+*.log
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite.bak
+.DS_Store
+App/memmy-agent/package-lock.json
+sessions/
+artifacts/literature-review-*.json
+.*
+!.github/
+!.github/workflows/
+!.github/workflows/*.yml
+!.github/release-notes/
+!.github/release-notes/*.md
+.env
+.env.*
+!.env.example
+# Holds the Windows Computer History folder open until it has code: git does
+# not track empty directories, and `.*` above would otherwise drop the marker.
+!App/memmy-agent/src/tools/computer-history/win/.gitkeep
+App/backend/src/adapters/outbound/skill-writer/workspace-bridge/memmy-workspace-bridge.mjs
+Memory/src/agent-source/integration/workspace-bridge/memmy-workspace-bridge.mjs
+
+# Office rendering executables and libraries are provisioned during packaging.
+App/memmy-agent/extra-dependencies/office-rendering/*/bin/
+App/memmy-agent/extra-dependencies/office-rendering/*/native/
+/Mac软件打包/

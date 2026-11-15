@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 1,
+  "releaseId": "release-package-demo-v1",
+  "applicationId": "app-demo",
+  "payloadKind": "packaged-app",
+  "artifactDescriptors": [
+    {
+      "artifactId": "backend-demo",
+      "role": "backend",
+      "mediaType": "application/json",
+      "digest": "sha256:14fd08906f189a0a41b3903285e3c2a4ddb6049c4709a2c54a346af9c76b1dee",
+      "sizeBytes": 20,
+      "sourceRef": {
+        "id": "artifact-backend-demo",
+        "digest": "sha256:14fd08906f189a0a41b3903285e3c2a4ddb6049c4709a2c54a346af9c76b1dee"
+      },
+      "platforms": [
+        {
+          "os": "linux",
+          "arch": "arm64"
+        }
+      ]
+    },
+    {
+      "artifactId": "client-demo",
+      "role": "client",
+      "mediaType": "application/zip",
+      "digest": "sha256:8739c76e681f900923b900c9df0ef75cf421d39cabb54650c4b9ad19b6a76d85",
+      "sizeBytes": 22,
+      "sourceRef": {
+        "id": "artifact-client-demo",
+        "digest": "sha256:8739c76e681f900923b900c9df0ef75cf421d39cabb54650c4b9ad19b6a76d85"
+      },
+      "platforms": [
+        {
+          "os": "darwin",
+          "arch": "arm64"
+        }
+      ]
+    }
+  ],
+  "dependencyLockDigest": "sha256:16182804ef45ae45c7ec7d35070ef86dd7241003ac3e0c0c319625d74870aedb",
+  "runtimeRequirements": {
+    "runtimeRef": {
+      "id": "runtime-demo",
+      "revision": 1
+    },
+    "platforms": [
+      {
+        "os": "linux",
+        "arch": "arm64"
+      }
+    ],
+    "resourceBudget": {
+      "memoryBytes": 268435456,
+      "storageBytes": 536870912
+    },
+    "healthContractRef": {
+      "id": "health-contract-demo",
+      "revision": 1
+    },
+    "dataCompatibilityRef": {
+      "id": "data-compatibility-demo",
+      "revision": 1
+    },
+    "candidateMode": true
+  },
+  "clientDelivery": {
+    "mode": "install",
+    "artifactId": "client-demo"
+  },
+  "provenanceRef": {
+    "id": "provenance-package-demo",
+    "revision": 1
+  },
+  "bundleDigest": "sha256:406981b726831eeea3b33b9ef334ef98d8f2351113a3a777971666335d811875"
+}

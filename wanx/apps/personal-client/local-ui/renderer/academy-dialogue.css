@@ -1,0 +1,81 @@
+#academy-dialogue-host .ai-dialogue {
+  box-sizing: border-box;
+  gap: 8px;
+  padding: 8px 10px 10px;
+}
+
+#academy-dialogue-host .ai-dialogue-heading,
+#academy-dialogue-host .ai-heading-left,
+#academy-dialogue-host .ai-page-actions {
+  gap: 6px;
+}
+
+#academy-dialogue-host .ai-dialogue-heading {
+  min-height: 34px;
+  flex-wrap: wrap;
+}
+
+#academy-dialogue-host .ai-page-title {
+  gap: 5px;
+}
+
+#academy-dialogue-host .ai-page-title h2 {
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+#academy-dialogue-host .ai-page-mark {
+  display: none;
+}
+
+#academy-dialogue-host .ai-history-toggle,
+#academy-dialogue-host .ai-collapsed-new,
+#academy-dialogue-host .ai-channels-trigger {
+  padding: 5px 7px;
+}
+
+#academy-dialogue-host .ai-assistant-workbench,
+#academy-dialogue-host .ai-dialogue.history-collapsed .ai-assistant-workbench {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+#academy-dialogue-host .ai-history {
+  position: absolute;
+  inset: 0 auto 0 0;
+  z-index: 40;
+  width: min(280px, 90%);
+  max-width: none;
+  box-shadow: 10px 0 30px #4c352326;
+}
+
+#academy-dialogue-host .ai-chat-workspace {
+  padding: 8px 10px;
+}
+
+#academy-dialogue-host .ai-welcome {
+  margin-block: 18px;
+}
+
+#academy-dialogue-host .ai-welcome h3,
+#academy-dialogue-host .ai-empty h3 {
+  font-size: 19px;
+}
+
+#academy-dialogue-host .ai-composer-bottom {
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+#academy-dialogue-host .ai-composer-bottom > .ai-keyboard-hint {
+  display: none;
+}
+
+#academy-dialogue-host .ai-model-picker {
+  max-inline-size: calc(min(420px, 100vw - 30px) - 42px);
+}
+
+#academy-dialogue-host .ai-transcript,
+#academy-dialogue-host .ai-context-details {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}

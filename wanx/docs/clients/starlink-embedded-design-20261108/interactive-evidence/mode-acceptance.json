@@ -1,0 +1,9 @@
+{
+  "passed": true,
+  "sharedUi": true,
+  "sameWarehouse": true,
+  "draftBlocksSwitch": true,
+  "editAndSave": true,
+  "fullRestored": true,
+  "errors": []
+}

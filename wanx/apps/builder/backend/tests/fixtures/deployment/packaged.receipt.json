@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "receipt-package-demo",
+  "operationId": "operation-package-demo",
+  "operationRevision": 1,
+  "kind": "deploy",
+  "target": {
+    "organizationId": "org-demo",
+    "boxId": "box-demo",
+    "applicationId": "app-demo",
+    "environment": "dev"
+  },
+  "requestedReleaseRef": {
+    "releaseId": "release-package-demo-v1",
+    "bundleDigest": "sha256:406981b726831eeea3b33b9ef334ef98d8f2351113a3a777971666335d811875"
+  },
+  "previousGeneration": 0,
+  "committedGeneration": 1,
+  "environmentRevision": 1,
+  "commitStatus": "committed",
+  "outcome": "succeeded",
+  "componentResults": [
+    {
+      "componentId": "backend",
+      "role": "backend",
+      "required": true,
+      "status": "ready",
+      "actualReleaseRef": {
+        "releaseId": "release-package-demo-v1",
+        "bundleDigest": "sha256:406981b726831eeea3b33b9ef334ef98d8f2351113a3a777971666335d811875"
+      },
+      "actualVersion": "demo-v1"
+    },
+    {
+      "componentId": "client",
+      "role": "client",
+      "required": true,
+      "status": "ready",
+      "actualReleaseRef": {
+        "releaseId": "release-package-demo-v1",
+        "bundleDigest": "sha256:406981b726831eeea3b33b9ef334ef98d8f2351113a3a777971666335d811875"
+      },
+      "actualVersion": "demo-v1"
+    },
+    {
+      "componentId": "channel-demo",
+      "role": "channel",
+      "required": true,
+      "status": "ready",
+      "actualReleaseRef": {
+        "releaseId": "release-package-demo-v1",
+        "bundleDigest": "sha256:406981b726831eeea3b33b9ef334ef98d8f2351113a3a777971666335d811875"
+      },
+      "actualVersion": "demo-v1"
+    }
+  ],
+  "observedAt": "2026-11-13T00:00:00.000Z",
+  "correlationId": "correlation-demo"
+}

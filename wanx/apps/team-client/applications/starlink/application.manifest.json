@@ -1,0 +1,10 @@
+{
+  "applicationId": "centaurai.wanx.semantica",
+  "name": "万象·星图",
+  "version": "0.3.6-rc.20261112.onboarding.5",
+  "protocolVersion": 1,
+  "runtime": "electron",
+  "launchMode": "shared",
+  "entrypoint": "shell/main.mjs",
+  "description": "导入材料、检索证据与管理知识图谱，默认跟随 WANX 模型，并在万象客户端接收处理异常通知。"
+}

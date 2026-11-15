@@ -1,0 +1,3 @@
+const{contextBridge,ipcRenderer}=require('electron');
+const invoke=(...args)=>ipcRenderer.invoke(...args).catch(error=>{throw Error(String(error?.message||error).replace(/^Error invoking remote method '[^']+': (?:Error: )?/,''))});
+contextBridge.exposeInMainWorld('miniappHost',Object.freeze({haowenNative:body=>invoke('miniapp:haowen-native',body),knowledgeList:()=>invoke('miniapp:knowledge-list'),knowledgeSelect:ids=>invoke('miniapp:knowledge-select',ids),load:()=>invoke('miniapp:load'),invoke:(method,params)=>invoke('miniapp:invoke',method,params),list:parent=>invoke('miniapp:files-list',parent),select:ids=>invoke('miniapp:files-select',ids)}));

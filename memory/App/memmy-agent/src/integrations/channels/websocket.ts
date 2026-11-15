@@ -1,0 +1,6442 @@
+import { agentTaskActivity } from "../../core/agent-runtime/task-activity.js";
+import { historySummaryRuntime } from "../../providers/history-summary-runtime.js";
+import crypto from "node:crypto";
+import * as childProcess from "node:child_process";
+import fs from "node:fs";
+import http from "node:http";
+import https from "node:https";
+import { nativeExcelControl } from "../../tools/computer-use/excel-native-control.js";
+import { nativeAppApprovalStore } from "../../tools/computer-use/native-app-approvals.js";
+import { externalBrowserBridge } from "../../core/agent-runtime/tools/external-browser-bridge.js";
+import os from "node:os";
+import path from "node:path";
+import { lookup as lookupMime } from "mime-types";
+import {
+  ModelCapabilitySchema,
+  ModelEndpointProtocolSchema,
+} from "@memmy/local-api-contracts";
+import { requestMcpReload } from "../../core/agent-runtime/tools/mcp.js";
+import { BaseChannel, type ChannelHandleMessageOptions } from "./base.js";
+import { CronNotificationOutbox } from "./cron-notification-outbox.js";
+import {
+  OUTBOUND_META_AGENT_UI,
+  OutboundMessage,
+  parseTurnSource,
+  type TurnSource,
+} from "../../core/runtime-messages/index.js";
+import {
+  respondToAgentQuestion,
+  isAgentQuestionPending,
+  type AgentQuestionAnswer,
+  type AgentQuestionResponse,
+} from "../../core/agent-runtime/tools/ask-question.js";
+import { builtinCommandPalette } from "../../command/builtin.js";
+import { loadConfig } from "../../config/loader.js";
+import {
+  committedSelectionFromMetadata,
+  modelSelectionWire,
+  type ModelSelectionInput,
+  type ResolvedModelSelection,
+} from "../../providers/model-catalog.js";
+import type {
+  GoalControlRequest,
+  GoalControlResult,
+} from "../../core/agent-runtime/goal-runtime.js";
+import type {
+  RemoveQueuedWebuiMessageResult,
+  ReorderQueuedMessageResult,
+  SteerQueuedMessageResult,
+  StopExpectedTurnResult,
+  WebuiQueueMessageDescriptor,
+  WebuiQueueSnapshotDescriptor,
+} from "../../core/agent-runtime/loop.js";
+import { getDataDir, getMediaDir, getStandaloneTaskWorkspacesDir, getWorkspacePath } from "../../config/paths.js";
+import type { CronService } from "../../cron/service.js";
+import { goalStateWsBlob, type GoalStatus } from "../../core/session/goal-state.js";
+import { taskPlanStateWsBlob } from "../../core/session/task-plan-state.js";
+import {
+  readWebuiSessionBinding,
+  Session,
+  WebuiSessionBindingError,
+  WEBUI_PROJECT_ID_METADATA_KEY,
+  WEBUI_WORKSPACE_CWD_METADATA_KEY,
+} from "../../core/session/manager.js";
+import { websocketTurnWallStartedAt, websocketTurnWallStartTimes } from "../../core/session/webui-turns.js";
+import type { WebuiTitleService } from "../../core/session/webui-title.js";
+import { visibleWebuiUserContent } from "../../core/session/webui-user-content.js";
+import { TerminalRunControl } from "../../core/session/terminal-session-control.js";
+import { createStandaloneTaskWorkspace } from "../../core/session/standalone-task-workspace.js";
+import {
+  createOrCheckoutWorkspaceBranch,
+  readWorkspaceEnvironment,
+  readWorkspaceFileDiff,
+  switchWorkspaceBranch,
+  WorkspaceEnvironmentError,
+  type WorkspaceEnvironmentContext,
+} from "../../core/session/workspace-environment.js";
+import { scrubSubagentMessagesForChannel } from "../../utils/subagent-channel-display.js";
+import {
+  mcpPresetsSettingsAction,
+  normalizeMcpPresetMentions,
+} from "../../entrypoints/frontend-bridge/mcp-presets-api.js";
+import {
+  readWebuiSidebarState,
+  removeWebuiSidebarSessionKeys,
+  replaceWebuiSidebarState,
+  WebuiSidebarStateConflictError,
+} from "../../entrypoints/frontend-bridge/sidebar-state.js";
+import {
+  assertWebuiWorkspaceAvailable,
+  ProjectStore,
+  WebuiProjectError,
+  type WebuiProject,
+  type WebuiSessionTarget,
+} from "../../entrypoints/frontend-bridge/projects.js";
+import {
+  listWorkspaceFiles,
+  readWorkspaceFile,
+  resolveWorkspaceFile,
+  WorkspaceFilesError,
+  type WorkspaceFilesRootKind,
+} from "../../entrypoints/frontend-bridge/workspace-files.js";
+import {
+  GuiSessionProjection,
+  GuiSessionProjectionError,
+  isExternalGuiChatId,
+  isNativeGuiChatId,
+  stripGuiDisplayTitleSuffix,
+  toGuiChatId,
+  type ResolvedGuiSession,
+} from "../../entrypoints/frontend-bridge/gui-session-projection.js";
+import type { GatewayTranscriptMonitor } from "../../entrypoints/frontend-bridge/gui-transcript-sync.js";
+import {
+  createModelConfiguration,
+  settingsPayload,
+  updateAgentSettings,
+  updateImageGenerationSettings,
+  updateProviderSettings,
+  updateWebSearchSettings,
+  WebUISettingsError,
+} from "../../entrypoints/frontend-bridge/settings-api.js";
+import { deleteWebuiThread } from "../../entrypoints/frontend-bridge/thread-disk.js";
+import {
+  appendTranscriptObject,
+  buildWebuiThreadResponse,
+  readTranscriptLines,
+  rewriteLocalMarkdownImages,
+} from "../../entrypoints/frontend-bridge/transcript.js";
+import type { ChannelAdminApi } from "../../entrypoints/frontend-bridge/channels-api.js";
+import {
+  ComputerHistoryApiError,
+  getComputerHistoryDemoService,
+  clientSnapshot,
+} from "../../tools/computer-history/mac/computer-history-api.js";
+import type { ComputerHistoryDemoService } from "../../tools/computer-history/mac/computer-history-api.js";
+import { isComputerHistorySupported } from "../../tools/computer-history/platform.js";
+import {
+  removeSessionDagFiles,
+  type SessionDagQueueManager,
+} from "../../session-dag/index.js";
+
+type Query = Record<string, string[]>;
+type HttpRequestLike = { path: string; method?: string; headers?: http.IncomingHttpHeaders | Record<string, any>; body?: Buffer | string };
+type HttpLikeResponse = { status: number; headers: Record<string, string>; body: Buffer | string };
+type WorkspaceEnvironmentContextResult =
+  | { ok: true; context: WorkspaceEnvironmentContext }
+  | { ok: false; response: HttpLikeResponse };
+type RuntimeModelNameResolver = (() => string | null | undefined) | null;
+type RuntimeToolNamesResolver = (() => string[] | null | undefined) | null;
+type WebuiMediaKind = "image" | "video" | "audio" | "file";
+type WebuiArtifactKind = WebuiMediaKind | "directory";
+type WebuiMediaAttachment = {
+  kind: WebuiMediaKind;
+  name: string;
+  url?: string;
+  path?: string;
+};
+type AllowedArtifactPath = {
+  path: string;
+  kind: "file" | "directory";
+};
+
+function publicModelErrorContext(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const context = value as Record<string, unknown>;
+  if (context.source !== "account" && context.source !== "byok") return {};
+  const fields = ["presetId", "provider", "model", "capability"] as const;
+  if (fields.some((field) => typeof context[field] !== "string" || !String(context[field]).trim())) return {};
+  return {
+    presetId: String(context.presetId),
+    source: context.source,
+    provider: String(context.provider),
+    model: String(context.model),
+    capability: String(context.capability),
+    ...(typeof context.failedProvider === "string" && context.failedProvider.trim()
+      ? { failedProvider: context.failedProvider }
+      : {}),
+    ...(typeof context.failedModel === "string" && context.failedModel.trim()
+      ? { failedModel: context.failedModel }
+      : {}),
+  };
+}
+type SignedMediaPath = {
+  url: string;
+  name: string;
+  path: string;
+};
+type ResolvedArtifactPath = {
+  path: string;
+  kind: WebuiArtifactKind;
+  mediaUrl?: string;
+};
+type WebuiUploadClassification = {
+  kind: "image" | "file" | "audio";
+  mime: string;
+  extension: string;
+};
+type WebuiQueuedMessage = {
+  client_request_id: string;
+  text: string;
+  media_urls: WebuiMediaAttachment[];
+  queued_at: string;
+  source: TurnSource;
+  queue_surface?: "chat_composer" | null;
+  turn_admission?: "steer";
+  turn_id?: string;
+  user_event_on_consume?: boolean;
+};
+type ClientSurface = "gui" | "tui";
+type InflightWebuiMessageRequest = {
+  digest: string;
+  connections: Set<any>;
+  queued: boolean;
+  queuedItem: WebuiQueuedMessage | null;
+  queuedRevision: number;
+  steeredTurnId: string | null;
+};
+type WebSocketChannelOptions = {
+  sessionManager?: any;
+  projectStore?: ProjectStore | null;
+  staticDistPath?: string | null;
+  workspacePath?: string | null;
+  standaloneTaskRoot?: string | null;
+  runtimeModelName?: RuntimeModelNameResolver;
+  runtimeToolNames?: RuntimeToolNamesResolver;
+  runtimeReady?: (() => boolean) | null;
+  modelSelectionResolver?: ((input: ModelSelectionInput) => ResolvedModelSelection | null) | null;
+  cancelActiveTasks?: (sessionKey: string) => Promise<number>;
+  stopCurrentTurn?: (sessionKey: string, expectedTurnId: string | null) => Promise<number>;
+  closeBrowserChat?: (channel: string, chatId: string) => Promise<void>;
+  fileMemoryEnabled?: boolean;
+  goalControlHandler?: (request: GoalControlRequest) => Promise<GoalControlResult>;
+  activeGoalStopHandler?: (sessionKey: string) => Promise<boolean>;
+  getWebuiQueueSnapshot?: (
+    sessionKey: string,
+  ) => WebuiQueueSnapshotDescriptor | Promise<WebuiQueueSnapshotDescriptor>;
+  removeQueuedWebuiMessage?: (
+    sessionKey: string,
+    clientRequestId: string,
+  ) => RemoveQueuedWebuiMessageResult | Promise<RemoveQueuedWebuiMessageResult>;
+  reorderQueuedWebuiMessages?: (
+    sessionKey: string,
+    orderedIds: string[],
+    expectedRevision: number,
+  ) => ReorderQueuedMessageResult | Promise<ReorderQueuedMessageResult>;
+  steerQueuedWebuiMessage?: (
+    sessionKey: string,
+    clientRequestId: string,
+    expectedTurnId: string,
+  ) => SteerQueuedMessageResult | Promise<SteerQueuedMessageResult>;
+  stopExpectedTurn?: (
+    sessionKey: string,
+    expectedTurnId: string,
+  ) => StopExpectedTurnResult | Promise<StopExpectedTurnResult>;
+};
+type SessionDeletionServices = {
+  cronService: CronService;
+  sessionDagQueue: SessionDagQueueManager | null;
+};
+export type WebuiLanguage = "zh-CN" | "en-US";
+
+export type WebuiMessageDigestInput = {
+  chatId: string;
+  content: string;
+  mediaPaths: string[];
+  language: WebuiLanguage | null;
+  target: WebuiSessionTarget | null;
+  modelPreset: string | null | undefined;
+  queueSurface: "chat_composer" | null;
+  turnAdmission: "queue" | "steer";
+  expectedTurnId: string | null;
+  thinkingEnabled?: boolean;
+  thinkingLevel?: string | null;
+  interruptPendingTurnId?: string | null;
+};
+
+export function computeWebuiMessageDigest(input: WebuiMessageDigestInput): string {
+  return crypto.createHash("sha256").update(JSON.stringify({
+    chat_id: input.chatId,
+    content: input.content,
+    media_paths: input.mediaPaths,
+    language: input.language,
+    target: input.target,
+    model_preset: input.modelPreset,
+    queue_surface: input.queueSurface,
+    turn_admission: input.turnAdmission,
+    expected_turn_id: input.expectedTurnId,
+    thinking_enabled: input.thinkingEnabled ?? null,
+    thinking_level: input.thinkingLevel ?? null,
+    ...(input.interruptPendingTurnId ? { interrupt_pending_turn_id: input.interruptPendingTurnId } : {}),
+  })).digest("hex");
+}
+
+const CHAT_ID_RE = /^[A-Za-z0-9_:-]{1,64}$/;
+const API_KEY_RE = /^[A-Za-z0-9_:.-]{1,128}$/;
+const WEBUI_LANGUAGE_VALUES = new Set<WebuiLanguage>(["zh-CN", "en-US"]);
+const TURN_CONTENT_EVENTS = new Set([
+  "agent_question_response",
+  "context_compaction",
+  "delta",
+  "file_edit",
+  "message",
+  "reasoning_delta",
+  "reasoning_end",
+  "retry_wait",
+  "stop_result",
+  "stream_end",
+  "turn_end",
+  "user",
+]);
+const LOCALHOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
+const MCP_VALUES_HEADER = "x-memmy-agent-mcp-values";
+const MCP_VALUES_HEADER_MAX_BYTES = 64 * 1024;
+const MCP_PRESET_ACTIONS_BY_PATH: Record<string, string> = {
+  "/api/settings/mcp-presets/enable": "enable",
+  "/api/settings/mcp-presets/remove": "remove",
+  "/api/settings/mcp-presets/test": "test",
+  "/api/settings/mcp-presets/custom": "custom",
+  "/api/settings/mcp-presets/import": "import",
+  "/api/settings/mcp-presets/import-cursor": "import-cursor",
+  "/api/settings/mcp-presets/tools": "tools",
+  "/api/settings/mcp-presets/reload": "reload",
+};
+
+function normalizeAgentQuestionResponse(
+  requestId: unknown,
+  value: unknown,
+  cancelled?: unknown,
+): AgentQuestionResponse | null {
+  if (typeof requestId !== "string" || !UUID_RE.test(requestId)) return null;
+  if (cancelled === true) return Array.isArray(value) && value.length === 0 ? { requestId, answers: [], cancelled: true } : null;
+  if (!Array.isArray(value) || value.length < 1 || value.length > 4) return null;
+  const answers: AgentQuestionAnswer[] = [];
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const item = raw as Record<string, unknown>;
+    const questionId = typeof item.question_id === "string"
+      ? item.question_id.trim()
+      : typeof item.questionId === "string"
+        ? item.questionId.trim()
+        : "";
+    const rawSelected = Array.isArray(item.selected_option_ids)
+      ? item.selected_option_ids
+      : Array.isArray(item.selectedOptionIds)
+        ? item.selectedOptionIds
+        : null;
+    if (!questionId || questionId.length > 64 || !rawSelected || rawSelected.length > 8) return null;
+    const selectedOptionIds = rawSelected.map((entry) => typeof entry === "string" ? entry.trim() : "");
+    if (selectedOptionIds.some((entry) => !entry || entry.length > 64)) return null;
+    const rawOtherText = item.other_text ?? item.otherText;
+    if (rawOtherText != null && typeof rawOtherText !== "string") return null;
+    const otherText = typeof rawOtherText === "string" ? rawOtherText.trim() : "";
+    if (otherText.length > 2_000) return null;
+    answers.push({
+      questionId,
+      selectedOptionIds,
+      ...(otherText ? { otherText } : {}),
+    });
+  }
+  return { requestId, answers };
+}
+
+const MAX_WEBUI_UPLOAD_BODY_BYTES = 256 * 1024 * 1024;
+// Control characters and the escaped path separators are intentional filename exclusions.
+// eslint-disable-next-line no-control-regex, no-useless-escape
+const UNSAFE_FILENAME_CHARS = /[<>:"\/\\|?*\x00-\x1F]/g;
+const IMAGE_MIME_ALLOWED = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+const DOCUMENT_MIME_BY_EXTENSION: Record<string, string> = {
+  ".pdf": "application/pdf",
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+};
+const TEXT_MIME_BY_EXTENSION: Record<string, string> = {
+  ".txt": "text/plain",
+  ".md": "text/markdown",
+  ".csv": "text/csv",
+  ".json": "application/json",
+  ".xml": "application/xml",
+  ".html": "text/html",
+  ".htm": "text/html",
+  ".log": "text/plain",
+  ".yaml": "application/yaml",
+  ".yml": "application/yaml",
+  ".toml": "application/toml",
+  ".ini": "text/plain",
+  ".cfg": "text/plain",
+};
+const CODE_TEXT_EXTENSIONS = new Set([
+  ".astro", ".bib", ".c", ".cc", ".cjs", ".cpp", ".css", ".cts", ".go", ".gql",
+  ".graphql", ".h", ".hpp", ".java", ".jsx", ".mjs", ".mts", ".properties", ".py",
+  ".rb", ".rs", ".sh", ".sql", ".svelte", ".tex", ".ts", ".tsx", ".vue",
+]);
+const AUDIO_MIME_BY_EXTENSION: Record<string, string> = {
+  ".aac": "audio/aac",
+  ".flac": "audio/flac",
+  ".m4a": "audio/mp4",
+  ".mp3": "audio/mpeg",
+  ".ogg": "audio/ogg",
+  ".opus": "audio/opus",
+  ".wav": "audio/wav",
+  ".webm": "audio/webm",
+};
+const FILE_MIME_ALLOWED = new Set([
+  ...Object.values(DOCUMENT_MIME_BY_EXTENSION),
+  ...Object.values(TEXT_MIME_BY_EXTENSION),
+  "text/xml",
+  "text/yaml",
+]);
+const DISPLAY_MEDIA_RESPONSE_MIMES = new Set([...IMAGE_MIME_ALLOWED, "video/mp4", "video/webm", "video/quicktime"]);
+const DATA_URL_MIME_RE = /^data:([^;]+);base64,/i;
+const MAX_ISSUED_TOKENS = 10_000;
+const MAX_HTTP_JSON_BODY_BYTES = 64 * 1024;
+const MAX_ARTIFACT_STAGING_BYTES = 100 * 1024 * 1024;
+const MAX_TITLE_ATTACHMENT_TEXT_BYTES = 16 * 1024;
+/** Upload target that keeps the file in the default workspace's recordings folder. */
+const WEBUI_RECORDINGS_TARGET = "recordings";
+const WEBUI_RECORDINGS_DIR = "recordings";
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function stripTrailingSlash(value: string): string {
+  if (!value) return "/";
+  return value.length > 1 && value.endsWith("/") ? value.replace(/\/+$/g, "") || "/" : value;
+}
+
+export function normalizeConfigPath(value: string): string {
+  return stripTrailingSlash(value || "/");
+}
+
+export function parseRequestPath(pathWithQuery: string): [string, Query] {
+  const parsed = new URL(pathWithQuery || "/", "ws://memmy.local");
+  const query: Query = {};
+  for (const [key, value] of parsed.searchParams.entries()) {
+    (query[key] ??= []).push(value);
+  }
+  return [normalizeConfigPath(parsed.pathname || "/"), query];
+}
+
+export function parseQuery(pathWithQuery: string): Query {
+  return parseRequestPath(pathWithQuery)[1];
+}
+
+export function normalizeHttpPath(pathWithQuery: string): string {
+  return parseRequestPath(pathWithQuery)[0];
+}
+
+export function parseMcpSettingsQuery(request: any): Query {
+  const query = parseQuery(String(request?.path ?? "/"));
+  const headers = request?.headers ?? {};
+  const raw = getHeader(headers, MCP_VALUES_HEADER);
+  if (!raw) return query;
+  if (Buffer.byteLength(raw, "utf8") > MCP_VALUES_HEADER_MAX_BYTES) {
+    throw new Error("MCP settings payload is too large");
+  }
+  let payload: any;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    throw new Error("invalid MCP settings payload");
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("MCP settings payload must be a JSON object");
+  }
+  const merged: Query = Object.fromEntries(Object.entries(query).map(([key, values]) => [key, [...values]]));
+  for (const [key, value] of Object.entries(payload)) {
+    if (!key) throw new Error("MCP settings payload contains an invalid key");
+    if (value == null) continue;
+    const text = typeof value === "string" ? value.trim() : JSON.stringify(value);
+    if (text) merged[key] = [text];
+  }
+  return merged;
+}
+
+export function queryFirst(query: Query, key: string): string | null {
+  return query[key]?.[0] ?? null;
+}
+
+export function parseInboundPayload(raw: string): string | null {
+  const text = String(raw ?? "").trim();
+  if (!text) return null;
+  if (!text.startsWith("{")) return text;
+  try {
+    const data = JSON.parse(text);
+    if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+    for (const key of ["content", "text", "message"]) {
+      const value = data[key];
+      if (typeof value === "string" && value.trim()) return value;
+    }
+    return null;
+  } catch {
+    return text;
+  }
+}
+
+export function isValidChatId(value: any): boolean {
+  return typeof value === "string" && CHAT_ID_RE.test(value);
+}
+
+export function isValidGuiChatId(value: any): boolean {
+  return typeof value === "string"
+    && (isNativeGuiChatId(value) || isExternalGuiChatId(value));
+}
+
+export function normalizeWebuiLanguage(value: any): WebuiLanguage | null {
+  return typeof value === "string" && WEBUI_LANGUAGE_VALUES.has(value as WebuiLanguage)
+    ? value as WebuiLanguage
+    : null;
+}
+
+export function parseEnvelope(raw: string): Record<string, any> | null {
+  const text = String(raw ?? "").trim();
+  if (!text.startsWith("{")) return null;
+  try {
+    const data = JSON.parse(text);
+    return data && typeof data === "object" && !Array.isArray(data) && typeof data.type === "string" ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+function looksLikeEnvelopeJson(raw: string): boolean {
+  const text = String(raw ?? "").trim();
+  return text.startsWith("{") && /"type"\s*:/.test(text);
+}
+
+export function extractDataUrlMime(dataUrl: string): string | null {
+  const match = typeof dataUrl === "string" ? dataUrl.match(DATA_URL_MIME_RE) : null;
+  return match?.[1]?.trim().toLowerCase() || null;
+}
+
+export function sniffImageMime(bytes: Uint8Array): string | null {
+  if (bytes.length >= 8
+    && bytes[0] === 0x89
+    && bytes[1] === 0x50
+    && bytes[2] === 0x4e
+    && bytes[3] === 0x47
+    && bytes[4] === 0x0d
+    && bytes[5] === 0x0a
+    && bytes[6] === 0x1a
+    && bytes[7] === 0x0a) {
+    return "image/png";
+  }
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return "image/jpeg";
+  }
+  if (bytes.length >= 12
+    && bytes[0] === 0x52
+    && bytes[1] === 0x49
+    && bytes[2] === 0x46
+    && bytes[3] === 0x46
+    && bytes[8] === 0x57
+    && bytes[9] === 0x45
+    && bytes[10] === 0x42
+    && bytes[11] === 0x50) {
+    return "image/webp";
+  }
+  if (bytes.length >= 6
+    && bytes[0] === 0x47
+    && bytes[1] === 0x49
+    && bytes[2] === 0x46
+    && bytes[3] === 0x38
+    && (bytes[4] === 0x37 || bytes[4] === 0x39)
+    && bytes[5] === 0x61) {
+    return "image/gif";
+  }
+  return null;
+}
+
+function isAudioOnlyWebm(filePath: string, bytes?: Buffer): boolean {
+  if (path.extname(filePath).toLowerCase() !== ".webm") return false;
+  let header: Buffer;
+  if (bytes) {
+    header = bytes.subarray(0, 4096);
+  } else {
+    try {
+      const fd = fs.openSync(filePath, "r");
+      try {
+        header = Buffer.alloc(4096);
+        header = header.subarray(0, fs.readSync(fd, header, 0, header.length, 0));
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch {
+      return false;
+    }
+  }
+  const trackHeader = header.toString("latin1");
+  return /A_(?:OPUS|VORBIS)/u.test(trackHeader)
+    && !/V_(?:VP8|VP9|AV1|MPEG4|THEORA)/u.test(trackHeader);
+}
+
+function mediaMimeForPath(filePath: string, bytes?: Buffer): string {
+  if (isAudioOnlyWebm(filePath, bytes)) return "audio/webm";
+  return String(lookupMime(path.basename(filePath)) || "application/octet-stream");
+}
+
+function mediaKindForPath(filePath: string): WebuiMediaKind {
+  const mime = mediaMimeForPath(filePath);
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("video/")) return "video";
+  if (mime.startsWith("audio/")) return "audio";
+  return "file";
+}
+
+function artifactKindForFile(filePath: string): Exclude<WebuiArtifactKind, "directory"> {
+  return mediaKindForPath(filePath);
+}
+
+export function decodeApiKey(rawKey: string): string | null {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(rawKey);
+  } catch {
+    return null;
+  }
+  return API_KEY_RE.test(decoded) ? decoded : null;
+}
+
+export function decodeGuiSessionApiKey(rawKey: string): string | null {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(rawKey);
+  } catch {
+    return null;
+  }
+  if (!decoded.startsWith("websocket:")) return null;
+  const chatId = decoded.slice("websocket:".length);
+  return isNativeGuiChatId(chatId) || isExternalGuiChatId(chatId) ? decoded : null;
+}
+
+function invalidGuiSessionKeyResponse(rawKey: string): HttpLikeResponse {
+  return decodeApiKey(rawKey) == null
+    ? httpError(400, "invalid session key")
+    : httpError(404, "session not found");
+}
+
+export function isLocalhost(connection: any): boolean {
+  let host = Array.isArray(connection?.remoteAddress) ? connection.remoteAddress[0] : connection?.remoteAddress;
+  if (typeof host !== "string") return false;
+  if (host.startsWith("::ffff:")) host = host.slice(7);
+  return LOCALHOSTS.has(host);
+}
+
+export function bearerToken(headers: any): string | null {
+  const auth = getHeader(headers, "authorization");
+  if (!auth.toLowerCase().startsWith("bearer ")) return null;
+  return auth.slice(7).trim() || null;
+}
+
+export function b64urlEncode(data: Buffer | Uint8Array | string): string {
+  const buffer = typeof data === "string" ? Buffer.from(data) : Buffer.from(data);
+  return buffer.toString("base64url");
+}
+
+export function b64urlDecode(value: string): Buffer {
+  return Buffer.from(value, "base64url");
+}
+
+export function issueRouteSecretMatches(headers: any, configuredSecret: string): boolean {
+  if (!configuredSecret) return true;
+  const token = bearerToken(headers) ?? getHeader(headers, "x-memmy-agent-auth");
+  return Boolean(token) && safeCompare(token, configuredSecret);
+}
+
+export function defaultModelNameFromConfig(): string | null {
+  try {
+    const model = String(loadConfig().resolvePreset().model ?? "").trim();
+    return model || null;
+  } catch {
+    return null;
+  }
+}
+
+export function resolveBootstrapModelName(runtimeName: RuntimeModelNameResolver): string | null {
+  if (runtimeName) {
+    try {
+      const raw = runtimeName();
+      if (typeof raw === "string" && raw.trim()) return raw.trim();
+    } catch {
+      // Fall back to the persisted model configuration below.
+    }
+  }
+  return defaultModelNameFromConfig();
+}
+
+export function isWebsocketUpgrade(request: any): boolean {
+  const upgrade = getHeader(request?.headers, "upgrade");
+  const connection = getHeader(request?.headers, "connection");
+  return upgrade.toLowerCase().includes("websocket") && connection.toLowerCase().includes("upgrade");
+}
+
+export function httpResponse(
+  body: Buffer | string,
+  { status = 200, contentType = "text/plain; charset=utf-8", extraHeaders = {} }: {
+    status?: number;
+    contentType?: string;
+    extraHeaders?: Record<string, string>;
+  } = {},
+): HttpLikeResponse {
+  const buffer = typeof body === "string" ? Buffer.from(body, "utf8") : body;
+  return {
+    status,
+    headers: {
+      date: new Date().toUTCString(),
+      connection: "close",
+      "content-length": String(buffer.length),
+      "content-type": contentType,
+      ...extraHeaders,
+    },
+    body: buffer,
+  };
+}
+
+export function httpJsonResponse(data: Record<string, any>, { status = 200 }: { status?: number } = {}): HttpLikeResponse {
+  return httpResponse(JSON.stringify(data), { status, contentType: "application/json; charset=utf-8" });
+}
+
+export function httpError(status: number, message?: string): HttpLikeResponse {
+  return httpResponse(message ?? `HTTP ${status}`, { status });
+}
+
+export class WebSocketConfig {
+  enabled = false;
+  host = "127.0.0.1";
+  port = 18980;
+  path = "/";
+  token = "";
+  tokenIssuePath = "";
+  tokenIssueSecret = "";
+  tokenTtlS = 300;
+  websocketRequiresToken = true;
+  allowFrom: string[] = ["*"];
+  streaming = true;
+  maxMessageBytes = 37_748_736;
+  pingIntervalS = 20;
+  pingTimeoutS = 20;
+  sslCertfile = "";
+  sslKeyfile = "";
+  serverFactory?: ((channel: WebSocketChannel) => Promise<any> | any) | null;
+
+  constructor(init: Partial<WebSocketConfig> = {}) {
+    this.enabled = init.enabled ?? this.enabled;
+    this.host = init.host ?? this.host;
+    this.port = init.port ?? this.port;
+    this.path = normalizeRequiredPath(init.path ?? this.path, "path");
+    this.token = init.token ?? this.token;
+    this.tokenIssuePath = normalizeOptionalPath(init.tokenIssuePath ?? this.tokenIssuePath, "tokenIssuePath");
+    this.tokenIssueSecret = init.tokenIssueSecret ?? this.tokenIssueSecret;
+    this.tokenTtlS = boundedNumber(init.tokenTtlS ?? this.tokenTtlS, 30, 86_400, "tokenTtlS");
+    this.websocketRequiresToken = init.websocketRequiresToken ?? this.websocketRequiresToken;
+    this.allowFrom = Array.isArray(init.allowFrom) ? init.allowFrom.map(String) : this.allowFrom;
+    this.streaming = init.streaming ?? this.streaming;
+    this.maxMessageBytes = boundedNumber(init.maxMessageBytes ?? this.maxMessageBytes, 1024, 41_943_040, "maxMessageBytes");
+    this.pingIntervalS = boundedNumber(init.pingIntervalS ?? this.pingIntervalS, 5, 300, "pingIntervalS");
+    this.pingTimeoutS = boundedNumber(init.pingTimeoutS ?? this.pingTimeoutS, 5, 300, "pingTimeoutS");
+    this.sslCertfile = init.sslCertfile ?? this.sslCertfile;
+    this.sslKeyfile = init.sslKeyfile ?? this.sslKeyfile;
+    this.serverFactory = init.serverFactory ?? null;
+    if (this.tokenIssuePath && this.tokenIssuePath === this.path) {
+      throw new Error("tokenIssuePath must differ from path (the WebSocket upgrade path)");
+    }
+    if ((this.host === "0.0.0.0" || this.host === "::") && !this.token.trim() && !this.tokenIssueSecret.trim()) {
+      throw new Error("host is all interfaces but neither token nor tokenIssueSecret is set");
+    }
+  }
+
+  static pathMustStartWithSlash(value: string): string {
+    return normalizeRequiredPath(value, "path");
+  }
+
+  static tokenIssuePathFormat(value: string): string {
+    return normalizeOptionalPath(value, "tokenIssuePath");
+  }
+
+  tokenIssuePathDiffersFromWsPath(): this {
+    if (this.tokenIssuePath && this.tokenIssuePath === this.path) {
+      throw new Error("tokenIssuePath must differ from path (the WebSocket upgrade path)");
+    }
+    return this;
+  }
+
+  wildcardHostRequiresAuth(): this {
+    if ((this.host === "0.0.0.0" || this.host === "::") && !this.token.trim() && !this.tokenIssueSecret.trim()) {
+      throw new Error("host is all interfaces but neither token nor tokenIssueSecret is set");
+    }
+    return this;
+  }
+
+  toObject(): Record<string, any> {
+    return {
+      enabled: this.enabled,
+      host: this.host,
+      port: this.port,
+      path: this.path,
+      token: this.token,
+      tokenIssuePath: this.tokenIssuePath,
+      tokenIssueSecret: this.tokenIssueSecret,
+      tokenTtlS: this.tokenTtlS,
+      websocketRequiresToken: this.websocketRequiresToken,
+      allowFrom: this.allowFrom,
+      streaming: this.streaming,
+      maxMessageBytes: this.maxMessageBytes,
+      pingIntervalS: this.pingIntervalS,
+      pingTimeoutS: this.pingTimeoutS,
+      sslCertfile: this.sslCertfile,
+      sslKeyfile: this.sslKeyfile,
+    };
+  }
+}
+
+export class WebSocketChannel extends BaseChannel {
+  override config: WebSocketConfig;
+  displayName = "WebSocket";
+  subscriptions = new Map<string, Set<any>>();
+  connectionChats = new Map<any, Set<string>>();
+  connectionDefaultChats = new Map<any, string>();
+  issuedTokens = new Map<string, number>();
+  apiTokens = new Map<string, number>();
+  streamTextBuffers = new Map<string, string[]>();
+  activeTurnIdByChatId = new Map<string, string>();
+  activeTurnSourceByChatId = new Map<string, TurnSource>();
+  connectionSurface = new Map<any, ClientSurface>();
+  mediaSecret = crypto.randomBytes(32);
+  settingsRestartSections = new Set<string>();
+  sessionManager: any = null;
+  guiSessionProjection: GuiSessionProjection | null = null;
+  transcriptMonitor: GatewayTranscriptMonitor | null = null;
+  private lastWebuiTranscriptCreatedAt = 0;
+  private pendingCronOutbox: CronNotificationOutbox | null = null;
+  private flushingPendingCron = false;
+  terminalRunControl: TerminalRunControl | null = null;
+  staticDistPath: string | null = null;
+  runtimeModelName: RuntimeModelNameResolver = null;
+  runtimeToolNames: RuntimeToolNamesResolver = null;
+  private readonly runtimeReady: (() => boolean) | null;
+  private computerHistoryModelSignature: string | null = null;
+  private computerHistoryModelTimer: ReturnType<typeof setInterval> | null = null;
+  modelSelectionResolver: WebSocketChannelOptions["modelSelectionResolver"] = null;
+  workspacePath: string;
+  readonly standaloneTaskRoot: string | null;
+  readonly fileMemoryEnabled: boolean;
+  cancelActiveTasks: ((sessionKey: string) => Promise<number>) | null = null;
+  stopCurrentTurn: WebSocketChannelOptions["stopCurrentTurn"] = undefined;
+  sessionTurnBarrier: (<T>(sessionKey: string, operation: () => Promise<T>) => Promise<T>) | null = null;
+  sessionDeletionBarrier: (<T>(
+    sessionKey: string,
+    cancelRunning: boolean,
+    operation: () => Promise<T>,
+  ) => Promise<T>) | null = null;
+  closeBrowserChat: ((channel: string, chatId: string) => Promise<void>) | null = null;
+  server: any = null;
+  channelAdmin: ChannelAdminApi | null = null;
+  webuiTitleService: WebuiTitleService | null = null;
+  projectStore: ProjectStore | null = null;
+  inflightWebuiMessageRequests = new Map<string, InflightWebuiMessageRequest>();
+  queueProjectionChains = new Map<string, Promise<void>>();
+  sessionDeletionServices: SessionDeletionServices | null = null;
+  projectDeletionCoordinators = new Map<string, Promise<string[]>>();
+  projectDeletionRetryTimers = new Map<string, NodeJS.Timeout>();
+  sessionUpdateTimers = new Map<string, NodeJS.Timeout>();
+  sessionUpdateScopes = new Map<string, string>();
+  pendingProjectDeleteContinuation: Promise<void> | null = null;
+  goalControlHandler: WebSocketChannelOptions["goalControlHandler"] = undefined;
+  activeGoalStopHandler: WebSocketChannelOptions["activeGoalStopHandler"] = undefined;
+  getWebuiQueueSnapshot: WebSocketChannelOptions["getWebuiQueueSnapshot"] = undefined;
+  removeQueuedWebuiMessage: WebSocketChannelOptions["removeQueuedWebuiMessage"] = undefined;
+  reorderQueuedWebuiMessages: WebSocketChannelOptions["reorderQueuedWebuiMessages"] = undefined;
+  steerQueuedWebuiMessage: WebSocketChannelOptions["steerQueuedWebuiMessage"] = undefined;
+  stopExpectedTurn: WebSocketChannelOptions["stopExpectedTurn"] = undefined;
+  goalControlConnections = new Map<string, Set<any>>();
+  dispatchingGoalControls = new Map<string, string>();
+  readonly computerHistory: ComputerHistoryDemoService;
+
+  constructor(config: any = {}, bus?: any, options: WebSocketChannelOptions = {}) {
+    const normalized = config instanceof WebSocketConfig ? config : new WebSocketConfig(config);
+    super("websocket", normalized, bus);
+    this.config = normalized;
+    this.sessionManager = options.sessionManager ?? config?.sessionManager ?? null;
+    this.guiSessionProjection = this.sessionManager
+      ? new GuiSessionProjection(this.sessionManager)
+      : null;
+    this.terminalRunControl = this.sessionManager?.root
+      ? new TerminalRunControl(this.sessionManager.root)
+      : null;
+    this.projectStore = options.projectStore ?? config?.projectStore ?? null;
+    const staticDistPath = options.staticDistPath ?? config?.staticDistPath ?? null;
+    this.staticDistPath = staticDistPath ? path.resolve(String(staticDistPath)) : null;
+    this.runtimeModelName = options.runtimeModelName ?? config?.runtimeModelName ?? null;
+    this.runtimeToolNames = options.runtimeToolNames ?? config?.runtimeToolNames ?? null;
+    this.runtimeReady = options.runtimeReady ?? null;
+    this.modelSelectionResolver = options.modelSelectionResolver
+      ?? config?.modelSelectionResolver
+      ?? null;
+    this.fileMemoryEnabled = options.fileMemoryEnabled === true;
+    this.cancelActiveTasks = options.cancelActiveTasks ?? config?.cancelActiveTasks ?? null;
+    this.stopCurrentTurn = options.stopCurrentTurn ?? config?.stopCurrentTurn;
+    this.closeBrowserChat = options.closeBrowserChat ?? config?.closeBrowserChat ?? null;
+    this.goalControlHandler = options.goalControlHandler ?? config?.goalControlHandler;
+    this.activeGoalStopHandler = options.activeGoalStopHandler ?? config?.activeGoalStopHandler;
+    this.getWebuiQueueSnapshot = options.getWebuiQueueSnapshot ?? config?.getWebuiQueueSnapshot;
+    this.removeQueuedWebuiMessage = options.removeQueuedWebuiMessage ?? config?.removeQueuedWebuiMessage;
+    this.reorderQueuedWebuiMessages = options.reorderQueuedWebuiMessages ?? config?.reorderQueuedWebuiMessages;
+    this.steerQueuedWebuiMessage = options.steerQueuedWebuiMessage ?? config?.steerQueuedWebuiMessage;
+    this.stopExpectedTurn = options.stopExpectedTurn ?? config?.stopExpectedTurn;
+    const workspacePath = options.workspacePath ?? config?.workspacePath ?? getWorkspacePath();
+    this.workspacePath = path.resolve(String(workspacePath));
+    const standaloneTaskRoot = options.standaloneTaskRoot ?? config?.standaloneTaskRoot ?? null;
+    this.standaloneTaskRoot = standaloneTaskRoot ? path.resolve(String(standaloneTaskRoot)) : null;
+    this.computerHistory = getComputerHistoryDemoService();
+    if (process.env.MEMMY_COMPUTER_HISTORY !== "0" && isComputerHistorySupported()) {
+      void this.computerHistory.restoreObservationOnLaunch();
+    }
+  }
+
+  setChannelAdmin(admin: ChannelAdminApi | null): void {
+    this.channelAdmin = admin;
+  }
+
+  setWebuiTitleService(service: WebuiTitleService | null): void {
+    this.webuiTitleService = service;
+  }
+
+  /** Re-read the global summary assignment; task model selections are irrelevant. */
+  refreshComputerHistorySummaryModel(): boolean {
+    if (!isComputerHistorySupported()) return false;
+    try {
+      const selection = this.modelSelectionResolver?.({ capability: "memory_summary" });
+      if (!selection) throw new Error("summary_model_selection_unavailable");
+      // Include credentials through the provider signature, retaining only a
+      // digest so unchanged polling does not restart summaries or expose keys.
+      const signature = crypto.createHash("sha256").update(JSON.stringify([
+        selection.presetId, selection.source, selection.ownerAccountId, selection.snapshot.signature,
+      ])).digest("hex");
+      if (signature !== this.computerHistoryModelSignature) {
+        this.computerHistory.setLlmRuntime(historySummaryRuntime(selection), selection.source);
+        this.computerHistoryModelSignature = signature;
+      }
+      return true;
+    } catch {
+      if (this.computerHistoryModelSignature !== "unavailable") {
+        this.computerHistory.setLlmRuntime(null, null,
+          "Computer History summary model is unavailable. Configure a Memory summary model in Memmy settings.");
+        this.computerHistoryModelSignature = "unavailable";
+      }
+      return false;
+    }
+  }
+
+  private startComputerHistoryModelSync(): void {
+    if (!isComputerHistorySupported()) return;
+    this.refreshComputerHistorySummaryModel();
+    if (this.computerHistoryModelTimer) return;
+    this.computerHistoryModelTimer = setInterval(() => this.refreshComputerHistorySummaryModel(), 30_000);
+    this.computerHistoryModelTimer.unref();
+  }
+
+  setProjectStore(projectStore: ProjectStore): void {
+    this.projectStore = projectStore;
+  }
+
+  setTranscriptMonitor(monitor: GatewayTranscriptMonitor | null): void {
+    this.transcriptMonitor = monitor;
+  }
+
+  setSessionTurnBarrier(
+    barrier: <T>(sessionKey: string, operation: () => Promise<T>) => Promise<T>,
+  ): void {
+    this.sessionTurnBarrier = barrier;
+  }
+
+  setSessionDeletionBarrier(
+    barrier: <T>(
+      sessionKey: string,
+      cancelRunning: boolean,
+      operation: () => Promise<T>,
+    ) => Promise<T>,
+  ): void {
+    this.sessionDeletionBarrier = barrier;
+  }
+
+  setSessionDeletionServices(services: SessionDeletionServices): void {
+    this.sessionDeletionServices = services;
+    this.schedulePendingProjectDeletionContinuation();
+  }
+
+  static override defaultConfig(): Record<string, any> {
+    return { ...new WebSocketConfig().toObject(), enabled: true };
+  }
+
+  override get supportsStreaming(): boolean {
+    return Boolean(this.config.streaming);
+  }
+
+  attachConnection(connection: any, chatId: string): void {
+    if (this.connectionSurface.get(connection) === "tui") {
+      const attached = this.connectionChats.get(connection);
+      for (const previousChatId of attached ?? []) {
+        if (previousChatId === chatId) continue;
+        const subscribers = this.subscriptions.get(previousChatId);
+        subscribers?.delete(connection);
+        if (subscribers?.size === 0) this.subscriptions.delete(previousChatId);
+        attached?.delete(previousChatId);
+      }
+    }
+    (this.subscriptions.get(chatId) ?? this.subscriptions.set(chatId, new Set()).get(chatId)!).add(connection);
+    (this.connectionChats.get(connection) ?? this.connectionChats.set(connection, new Set()).get(connection)!).add(chatId);
+  }
+
+  detachConnection(connection: any, chatId?: string): void {
+    if (chatId) {
+      this.subscriptions.get(chatId)?.delete(connection);
+      if (this.subscriptions.get(chatId)?.size === 0) this.subscriptions.delete(chatId);
+      this.connectionChats.get(connection)?.delete(chatId);
+      if (this.connectionChats.get(connection)?.size === 0) this.cleanupConnection(connection);
+      return;
+    }
+    this.cleanupConnection(connection);
+  }
+
+  cleanupConnection(connection: any): void {
+    for (const chatId of this.connectionChats.get(connection) ?? []) {
+      const subs = this.subscriptions.get(chatId);
+      subs?.delete(connection);
+      if (subs?.size === 0) this.subscriptions.delete(chatId);
+    }
+    this.connectionChats.delete(connection);
+    this.connectionDefaultChats.delete(connection);
+    this.connectionSurface.delete(connection);
+  }
+
+  safeCleanupConnection(connection: any): void {
+    try {
+      this.cleanupConnection(connection);
+    } catch {
+      // Cleanup is connection-local and idempotent. A broken connection must
+      // never affect the gateway or another subscriber.
+    }
+  }
+
+  private webuiRequestKey(sessionKey: string, clientRequestId: string): string {
+    return `${sessionKey}\0${clientRequestId}`;
+  }
+
+  private clearSteeredInflightForTurn(sessionKey: string, turnId: string): void {
+    for (const [key, request] of this.inflightWebuiMessageRequests) {
+      if (
+        key.startsWith(`${sessionKey}\0`)
+        && request.steeredTurnId === turnId
+        && !request.queued
+      ) {
+        this.inflightWebuiMessageRequests.delete(key);
+      }
+    }
+  }
+
+  private enqueueQueueProjection<T>(
+    sessionKey: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const previous = this.queueProjectionChains.get(sessionKey) ?? Promise.resolve();
+    const result = previous.catch(() => undefined).then(operation);
+    const tail = result.then(() => undefined, () => undefined);
+    this.queueProjectionChains.set(sessionKey, tail);
+    void tail.then(() => {
+      if (this.queueProjectionChains.get(sessionKey) === tail) {
+        this.queueProjectionChains.delete(sessionKey);
+      }
+    });
+    return result;
+  }
+
+  private toWebuiQueuedMessage(
+    descriptor: WebuiQueueMessageDescriptor,
+  ): WebuiQueuedMessage {
+    return {
+      client_request_id: descriptor.clientRequestId,
+      text: visibleWebuiUserContent(descriptor.content),
+      media_urls: descriptor.media
+        .map((entry) => this.webuiMediaAttachmentForPath(entry, descriptor.sessionKey))
+        .filter((entry): entry is WebuiMediaAttachment => Boolean(entry)),
+      queued_at: new Date(descriptor.queuedAt).toISOString(),
+      source: { ...descriptor.source },
+      queue_surface: descriptor.queueSurface,
+      ...(descriptor.turnAdmission ? { turn_admission: descriptor.turnAdmission } : {}),
+      ...(descriptor.turnId ? { turn_id: descriptor.turnId } : {}),
+      ...(descriptor.turnAdmission === "steer" ? { user_event_on_consume: true } : {}),
+    };
+  }
+
+  private queueEventConnections(chatId: string, inflight?: InflightWebuiMessageRequest | null): Set<any> {
+    return new Set<any>([
+      ...(inflight?.connections ?? []),
+      ...(this.subscriptions.get(chatId) ?? []),
+    ]);
+  }
+
+  private parseWebuiSessionTarget(value: unknown): WebuiSessionTarget | null {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const target = value as Record<string, unknown>;
+    const keys = Object.keys(target);
+    if (target.kind === "standalone" && keys.length === 1) {
+      return { kind: "standalone" };
+    }
+    if (
+      target.kind === "project"
+      && keys.length === 2
+      && keys.includes("projectId")
+      && typeof target.projectId === "string"
+      && UUID_RE.test(target.projectId)
+    ) {
+      return { kind: "project", projectId: target.projectId };
+    }
+    return null;
+  }
+
+  private webuiMessageDigest(input: WebuiMessageDigestInput): string {
+    return computeWebuiMessageDigest(input);
+  }
+
+  private resolveMessageModel(
+    requestedPreset: string | null | undefined,
+    session: Session | null,
+  ): ResolvedModelSelection | null {
+    if (!this.modelSelectionResolver) {
+      const preset = requestedPreset || (
+        typeof session?.metadata?.modelPreset === "string"
+          ? session.metadata.modelPreset
+          : "default"
+      );
+      const model = resolveBootstrapModelName(this.runtimeModelName) ?? "";
+      return {
+        preset,
+        presetId: preset,
+        provider: "unknown",
+        endpointId: "default",
+        protocol: "openai-chat-completions",
+        model,
+        source: "byok",
+        ownerAccountId: null,
+        capability: "agent",
+        capabilities: Object.freeze(["agent"] as const),
+        providerConfig: Object.freeze({
+          provider: "unknown",
+          endpointId: "default",
+          protocol: "openai-chat-completions",
+          apiBase: "",
+          extraHeaders: Object.freeze({}),
+          extraBody: Object.freeze({}),
+        }),
+        snapshot: {
+          provider: null as any,
+          model,
+          contextWindowTokens: 0,
+          signature: [],
+        },
+      };
+    }
+    try {
+      const committedSelection = committedSelectionFromMetadata(session?.metadata);
+      return this.modelSelectionResolver({
+        ...(requestedPreset !== undefined ? { requestedPreset } : {}),
+        ...(requestedPreset === undefined && committedSelection
+          ? { committedSelection }
+          : requestedPreset === undefined
+            ? {
+                sessionPreset: typeof session?.metadata?.modelPreset === "string"
+                  ? session.metadata.modelPreset
+                  : null,
+              }
+            : {}),
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  private acceptedSessionMessage(
+    session: Session,
+    clientRequestId: string,
+  ): Record<string, any> | null {
+    for (let index = session.messages.length - 1; index >= 0; index -= 1) {
+      const message = session.messages[index];
+      if (
+        message?.role === "user"
+        && message?.internal_context !== "goal_continuation"
+        && message?.client_request_id === clientRequestId
+      ) {
+        const recovery = message.webui_queue_steer_recovery;
+        if (recovery && typeof recovery === "object" && !Array.isArray(recovery)) {
+          return {
+            ...message,
+            content: typeof recovery.content === "string" ? recovery.content : message.content,
+            media: Array.isArray(recovery.media) ? [...recovery.media] : message.media,
+            turn_id: firstNonemptyString(recovery.turn_id, message.turn_id, message.turnId),
+            turn_source: parseTurnSource(recovery.source) ?? parseTurnSource(message.turn_source),
+          };
+        }
+        return message;
+      }
+    }
+    return null;
+  }
+
+  private ensureAcceptedTranscript(
+    chatId: string,
+    clientRequestId: string,
+    canonicalSessionKey: string | null = null,
+  ): void {
+    const guiSessionKey = `websocket:${chatId}`;
+    const sessionKey = canonicalSessionKey ?? this.canonicalSessionKeyForChatId(chatId);
+    if (!sessionKey) return;
+    const session = this.sessionManager?.get?.(sessionKey) as Session | null;
+    const message = session ? this.acceptedSessionMessage(session, clientRequestId) : null;
+    if (!message) return;
+    const turnId = firstNonemptyString(message.turn_id, message.turnId);
+    if (readTranscriptLines(guiSessionKey).some(
+      (line) => (
+        line?.event === "user"
+        && line?.client_request_id === clientRequestId
+        && (!turnId || firstNonemptyString(line.turn_id, line.turnId) === turnId)
+      ),
+    )) return;
+    const wire: Record<string, any> = {
+      event: "user",
+      chat_id: chatId,
+      text: typeof message.content === "string" ? visibleWebuiUserContent(message.content) : "",
+      client_request_id: clientRequestId,
+      ...(message.webui_queue_steer_recovery ? { queue_steer_repaired: true } : {}),
+    };
+    const source = parseTurnSource(message.turn_source);
+    if (source) wire.source = source;
+    if (turnId) wire.turn_id = turnId;
+    if (Array.isArray(message.media) && message.media.length) {
+      wire.media_paths = [...message.media];
+    }
+    if (Array.isArray(message.mcp_presets) && message.mcp_presets.length) {
+      wire.mcp_presets = structuredClone(message.mcp_presets);
+    }
+    this.tryAppendWebuiTranscript(chatId, wire);
+  }
+
+  private async sendWebuiRequestError(
+    connection: any,
+    {
+      chatId,
+      clientRequestId = null,
+      detail,
+      reason,
+    }: {
+      chatId: string;
+      clientRequestId?: string | null;
+      detail: string;
+      reason: string;
+    },
+  ): Promise<void> {
+    await this.sendEvent(connection, "error", {
+      chat_id: chatId,
+      ...(clientRequestId ? { client_request_id: clientRequestId } : {}),
+      detail,
+      reason,
+    });
+  }
+
+  private resolveWebuiMessageBinding(
+    sessionKey: string,
+    targetValue: unknown,
+  ): { binding: { projectId: string | null; cwd: string }; created: boolean } {
+    const existing = this.sessionManager?.get?.(sessionKey) as Session | null;
+    if (existing) {
+      const binding = readWebuiSessionBinding(existing);
+      if (binding.projectId !== null) {
+        const registry = this.requireProjectStore().snapshot();
+        if (registry.state === "corrupt") {
+          throw new WebuiProjectError("project_registry_corrupt", 503);
+        }
+        if (this.requireProjectStore().isDeleting(binding.projectId)) {
+          throw new WebuiProjectError("project_removed", 409);
+        }
+      }
+      let canonical: string;
+      try {
+        canonical = assertWebuiWorkspaceAvailable(binding.cwd);
+      } catch {
+        throw new WebuiProjectError("workspace_unavailable", 422);
+      }
+      if (canonical !== binding.cwd) {
+        throw new WebuiProjectError("workspace_unavailable", 422);
+      }
+      return { binding, created: false };
+    }
+
+    const target = this.parseWebuiSessionTarget(targetValue);
+    if (!target) {
+      throw new WebuiProjectError(
+        targetValue == null ? "session_target_required" : "session_target_invalid",
+        400,
+      );
+    }
+    let binding: { projectId: string | null; cwd: string };
+    if (target.kind === "standalone") {
+      const reserved = this.sessionManager.peekWebuiSessionBindingReservation?.(sessionKey) ?? null;
+      binding = {
+        projectId: null,
+        cwd: reserved?.cwd ?? this.createStandaloneTaskCwd(),
+      };
+    } else {
+      const store = this.requireProjectStore();
+      const registry = store.snapshot();
+      if (registry.state === "corrupt") {
+        throw new WebuiProjectError("project_registry_corrupt", 503);
+      }
+      if (store.isDeleting(target.projectId)) {
+        throw new WebuiProjectError("project_removed", 409);
+      }
+      const project = store.getActive(target.projectId);
+      if (!project) throw new WebuiProjectError("project_not_found", 404);
+      let cwd: string;
+      try {
+        cwd = assertWebuiWorkspaceAvailable(project.rootPath);
+      } catch {
+        throw new WebuiProjectError("project_unavailable", 422);
+      }
+      if (cwd !== project.rootPath) {
+        throw new WebuiProjectError("project_unavailable", 422);
+      }
+      binding = { projectId: project.id, cwd };
+    }
+    return {
+      binding: this.sessionManager.reserveWebuiSessionBinding(sessionKey, binding),
+      created: true,
+    };
+  }
+
+  private createStandaloneTaskCwd(): string {
+    const root = this.standaloneTaskRoot ?? getStandaloneTaskWorkspacesDir();
+    try {
+      return assertWebuiWorkspaceAvailable(createStandaloneTaskWorkspace(root));
+    } catch (error) {
+      console.warn("[websocket] task workspace unavailable; using the profile workspace", { root, error });
+      return assertWebuiWorkspaceAvailable(this.workspacePath);
+    }
+  }
+
+  async maybePushActiveGoalState(chatId: string): Promise<void> {
+    if (!this.sessionManager) return;
+    const sessionKey = this.canonicalSessionKeyForChatId(chatId);
+    if (!sessionKey) return;
+    const row = this.readSessionFile(sessionKey);
+    const metadata = row && typeof row.metadata === "object" ? row.metadata : {};
+    const blob = goalStateWsBlob(metadata);
+    await this.sendGoalState(chatId, blob);
+  }
+
+  async maybePushTaskPlanState(chatId: string): Promise<void> {
+    if (!this.sessionManager) return;
+    const sessionKey = this.canonicalSessionKeyForChatId(chatId);
+    if (!sessionKey) return;
+    const row = this.readSessionFile(sessionKey);
+    const metadata = row && typeof row.metadata === "object" ? row.metadata : {};
+    const blob = taskPlanStateWsBlob(metadata);
+    if (!blob.plan_id) return;
+    await this.sendTaskPlanState(chatId, blob);
+  }
+
+  async maybePushTurnRunWallClock(chatId: string): Promise<void> {
+    const terminalRun = this.terminalRunStateForChatId(chatId);
+    const startedAt = websocketTurnWallStartedAt(chatId)
+      ?? (terminalRun ? terminalRun.startedAt / 1000 : null);
+    if (startedAt == null) return;
+    await this.sendRunStatus(chatId, "running", {
+      startedAt,
+      turnId: this.activeTurnIdByChatId.get(chatId) ?? terminalRun?.turnId ?? null,
+    });
+  }
+
+  async sendRunStatusSnapshot(connection: any, chatId: string): Promise<void> {
+    const terminalRun = this.terminalRunStateForChatId(chatId);
+    const startedAt = websocketTurnWallStartedAt(chatId)
+      ?? (terminalRun ? terminalRun.startedAt / 1000 : null);
+    const turnId = this.activeTurnIdByChatId.get(chatId) ?? terminalRun?.turnId ?? null;
+    const source = this.activeTurnSourceByChatId.get(chatId) ?? null;
+    if ((this.connectionSurface.get(connection) ?? "gui") === "tui" && source?.kind !== "tui") {
+      await this.safeSendTo(connection, {
+        event: "run_status_snapshot",
+        chat_id: chatId,
+        status: startedAt == null ? "idle" : "running",
+        busy: startedAt != null,
+        owned_by_tui: false,
+      });
+      return;
+    }
+    const payload = startedAt == null
+      ? {
+          event: "run_status_snapshot",
+          chat_id: chatId,
+          status: "idle",
+          ...(turnId ? { turn_id: turnId } : {}),
+          ...(source ? { source } : {}),
+          ...(source?.kind === "tui" ? { owned_by_tui: true } : {}),
+        }
+      : {
+          event: "run_status_snapshot",
+          chat_id: chatId,
+          status: "running",
+          started_at: startedAt,
+          ...(turnId ? { turn_id: turnId } : {}),
+          ...(source ? { source } : {}),
+          ...(source?.kind === "tui" ? { owned_by_tui: true } : {}),
+        };
+    await this.safeSendTo(connection, payload);
+  }
+
+  async sendWebuiQueueSnapshot(connection: any, chatId: string): Promise<void> {
+    const sessionKey = this.canonicalSessionKeyForChatId(chatId);
+    if (!sessionKey || !this.getWebuiQueueSnapshot) return;
+    try {
+      await this.enqueueQueueProjection(sessionKey, async () => {
+        const snapshot = await this.getWebuiQueueSnapshot!(sessionKey);
+        await this.safeSendTo(connection, {
+          event: "message_queue_snapshot",
+          chat_id: chatId,
+          revision: snapshot.revision,
+          items: snapshot.items.map((item) => this.toWebuiQueuedMessage(item)),
+          started_items: snapshot.startedItems.map((item) => this.toWebuiQueuedMessage(item)),
+        });
+      });
+    } catch (error) {
+      console.warn("[websocket] queue snapshot failed", { sessionKey, error });
+    }
+  }
+
+  async hydrateAfterSubscribe(chatId: string): Promise<void> {
+    await this.maybePushActiveGoalState(chatId);
+    await this.maybePushTaskPlanState(chatId);
+    await this.maybePushTurnRunWallClock(chatId);
+  }
+
+  async safeSendTo(connection: any, payload: string | Record<string, any>): Promise<void> {
+    try {
+      const raw = typeof payload === "string" ? payload : JSON.stringify(payload);
+      if (typeof connection?.send === "function") await connection.send(raw);
+    } catch {
+      // A renderer can close its socket while subscription hydration or a
+      // broadcast is still in flight. Treat that as a per-connection event;
+      // rejecting here would escape the fire-and-forget connection loop and
+      // terminate the packaged Agent gateway process.
+      try {
+        connection?.close?.(1011, "connection send failed");
+      } catch {
+        // The socket can already be gone.
+      }
+      this.safeCleanupConnection(connection);
+    }
+  }
+
+  async sendEvent(connection: any, event: string, fields: Record<string, any> = {}): Promise<void> {
+    await this.safeSendTo(connection, { event, ...fields });
+  }
+
+  expectedPath(): string {
+    return normalizeConfigPath(this.config.path);
+  }
+
+  buildSslContext(): { cert: Buffer; key: Buffer } | null {
+    const cert = this.config.sslCertfile.trim();
+    const key = this.config.sslKeyfile.trim();
+    if (!cert && !key) return null;
+    if (!cert || !key) {
+      throw new Error("sslCertfile and sslKeyfile must both be set for WSS, or both left empty");
+    }
+    return { cert: fs.readFileSync(cert), key: fs.readFileSync(key) };
+  }
+
+  purgeExpiredIssuedTokens(): void {
+    const now = nowSeconds();
+    for (const [token, expiry] of [...this.issuedTokens.entries()]) {
+      if (now > expiry) this.issuedTokens.delete(token);
+    }
+  }
+
+  purgeExpiredApiTokens(): void {
+    const now = nowSeconds();
+    for (const [token, expiry] of [...this.apiTokens.entries()]) {
+      if (now > expiry) this.apiTokens.delete(token);
+    }
+  }
+
+  takeIssuedTokenIfValid(tokenValue: string | null | undefined): boolean {
+    if (!tokenValue) return false;
+    this.purgeExpiredIssuedTokens();
+    const expiry = this.issuedTokens.get(tokenValue);
+    this.issuedTokens.delete(tokenValue);
+    return expiry != null && nowSeconds() <= expiry;
+  }
+
+  handleTokenIssueHttp(connection: any, request: any): HttpLikeResponse {
+    const secret = this.config.tokenIssueSecret.trim();
+    if (secret && !issueRouteSecretMatches(request?.headers, secret)) {
+      return connectionRespond(connection, 401, "Unauthorized");
+    }
+    this.purgeExpiredIssuedTokens();
+    if (this.issuedTokens.size >= MAX_ISSUED_TOKENS) {
+      return httpJsonResponse({ error: "too many outstanding tokens" }, { status: 429 });
+    }
+    const token = issueTokenValue();
+    this.issuedTokens.set(token, nowSeconds() + this.config.tokenTtlS);
+    return httpJsonResponse({ token, expires_in: this.config.tokenTtlS });
+  }
+
+  checkApiToken(request: any): boolean {
+    this.purgeExpiredApiTokens();
+    const token = bearerToken(request?.headers) ?? queryFirst(parseQuery(String(request?.path ?? "/")), "token");
+    if (!token) return false;
+    const expiry = this.apiTokens.get(token);
+    if (expiry == null || nowSeconds() > expiry) {
+      this.apiTokens.delete(token);
+      return false;
+    }
+    return true;
+  }
+
+  private isRuntimeReady(): boolean {
+    // Standalone channels without an AgentLoop keep their existing bootstrap behavior.
+    if (!this.runtimeReady) return true;
+    try { return this.runtimeReady() === true; }
+    catch { return false; }
+  }
+
+  handleBootstrap(connection: any, request: any): HttpLikeResponse {
+    const secret = this.config.tokenIssueSecret.trim() || this.config.token.trim();
+    if (secret) {
+      if (!issueRouteSecretMatches(request?.headers, secret)) return httpError(401, "Unauthorized");
+    } else if (!isLocalhost(connection)) {
+      return httpError(403, "bootstrap is localhost-only");
+    }
+    if (!this.isRuntimeReady()) return httpError(503, "agent_runtime_initializing");
+    this.purgeExpiredIssuedTokens();
+    this.purgeExpiredApiTokens();
+    if (this.issuedTokens.size >= MAX_ISSUED_TOKENS || this.apiTokens.size >= MAX_ISSUED_TOKENS) {
+      return httpResponse(JSON.stringify({ error: "too many outstanding tokens" }), { status: 429, contentType: "application/json; charset=utf-8" });
+    }
+    const token = issueTokenValue();
+    const expiry = nowSeconds() + this.config.tokenTtlS;
+    this.issuedTokens.set(token, expiry);
+    this.apiTokens.set(token, expiry);
+    const modelSelection = this.resolveMessageModel(undefined, null);
+    return httpJsonResponse({
+      token,
+      ws_path: this.expectedPath(),
+      expires_in: this.config.tokenTtlS,
+      model_name: resolveBootstrapModelName(this.runtimeModelName),
+      model_selection: modelSelectionWire(modelSelection),
+      tool_names: this.runtimeToolNames?.() ?? [],
+    });
+  }
+
+  handleSessionsList(request: any): HttpLikeResponse {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    if (!this.sessionManager) return httpError(503, "session manager unavailable");
+    return httpJsonResponse(this.webuiSessionSnapshot());
+  }
+
+  webuiSessionSnapshot(): Record<string, any> {
+    this.schedulePendingProjectDeletionContinuation();
+    const registry = this.projectStore?.snapshot() ?? { state: "ready" as const, projects: [] };
+    const rawSessions = this.guiSessionProjection?.snapshot() ?? [];
+    const sessions = Array.isArray(rawSessions)
+      ? rawSessions.flatMap((session: any) => {
+          const key = session?.key;
+          if (typeof key !== "string" || decodeGuiSessionApiKey(key) == null) return [];
+          if (
+            registry.state === "ready"
+            && typeof session.projectId === "string"
+            && this.projectStore?.isDeleting(session.projectId)
+          ) {
+            return [];
+          }
+          const row = { ...session };
+          delete row.path;
+          const chatId = key.slice("websocket:".length);
+          const startedAt = websocketTurnWallStartedAt(chatId);
+          if (startedAt != null) row.run_started_at = startedAt;
+          else {
+            try {
+              const canonical = this.resolveGuiSession(key).canonicalSessionKey;
+              const terminalRun = canonical.startsWith("cli:")
+                ? this.terminalRunControl?.read(canonical)
+                : null;
+              if (terminalRun) row.run_started_at = terminalRun.startedAt / 1000;
+            } catch {
+              // Invalid records are already filtered by the projection.
+            }
+          }
+          return [row];
+        })
+      : [];
+    sessions.sort((left: any, right: any) => String(right.updatedAt ?? "").localeCompare(String(left.updatedAt ?? "")));
+    return {
+      projectRegistryState: registry.state,
+      projects: registry.projects,
+      sessions,
+    };
+  }
+
+  handleSettings(request: any): HttpLikeResponse {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    return httpJsonResponse(this.withSettingsRestartState(settingsPayload()));
+  }
+
+  withSettingsRestartState(payload: Record<string, any>, { section = null }: { section?: string | null } = {}): Record<string, any> {
+    const out = { ...payload };
+    if (section && out.requires_restart) this.settingsRestartSections.add(section);
+    if (this.settingsRestartSections.size) {
+      out.requires_restart = true;
+      out.restart_required_sections = [...this.settingsRestartSections].sort();
+    } else {
+      out.restart_required_sections = [];
+    }
+    return out;
+  }
+
+  handleCommands(request: any): HttpLikeResponse {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    let sessionDagEnabled = true;
+    try {
+      sessionDagEnabled = loadConfig().sessionDag.enabled;
+    } catch {
+      sessionDagEnabled = true;
+    }
+    return httpJsonResponse({
+      commands: builtinCommandPalette({
+        sessionDagEnabled,
+        fileMemoryEnabled: this.fileMemoryEnabled,
+      }),
+    });
+  }
+
+  handleWebuiSidebarState(request: any): HttpLikeResponse {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    return httpJsonResponse(readWebuiSidebarState());
+  }
+
+  /**
+   * Seeds a finished WebUI chat from an already-generated user/assistant pair
+   * (e.g. onboarding first report) without running the agent again.
+   */
+  handleWebuiSeedChat(request: any): HttpLikeResponse {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    if ((request.method ?? "GET").toUpperCase() !== "POST") return httpError(405, "method not allowed");
+    if (!this.sessionManager) return httpError(503, "session manager unavailable");
+
+    let decoded: any;
+    try {
+      decoded = JSON.parse(requestBodyText(request));
+    } catch {
+      return httpError(400, "body must be JSON");
+    }
+    if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
+      return httpError(400, "body must be an object");
+    }
+
+    const userText = typeof decoded.user_text === "string" ? decoded.user_text.trim() : "";
+    const assistantText = typeof decoded.assistant_text === "string" ? decoded.assistant_text.trim() : "";
+    const title = typeof decoded.title === "string" ? decoded.title.trim() : "";
+    if (!userText || !assistantText) {
+      return httpError(400, "user_text and assistant_text are required");
+    }
+
+    let cwd: string;
+    try {
+      cwd = this.createStandaloneTaskCwd();
+    } catch {
+      return httpError(422, "workspace_unavailable");
+    }
+
+    const chatId = crypto.randomUUID();
+    const sessionKey = `websocket:${chatId}`;
+    const session = new Session({ key: sessionKey });
+    session.metadata.webui = true;
+    session.metadata[WEBUI_PROJECT_ID_METADATA_KEY] = null;
+    session.metadata[WEBUI_WORKSPACE_CWD_METADATA_KEY] = cwd;
+    if (title) {
+      session.metadata.title = title;
+      session.metadata.titleUserEdited = true;
+    }
+    session.addMessage("user", userText);
+    session.addMessage("assistant", assistantText);
+    this.sessionManager.save(session, { fsync: true });
+
+    this.tryAppendWebuiTranscript(chatId, {
+      event: "user",
+      chat_id: chatId,
+      text: userText,
+    });
+    this.tryAppendWebuiTranscript(chatId, {
+      event: "message",
+      chat_id: chatId,
+      text: assistantText,
+      content: assistantText,
+    });
+    this.tryAppendWebuiTranscript(chatId, {
+      event: "turn_end",
+      chat_id: chatId,
+    });
+
+    return httpJsonResponse({
+      chat_id: chatId,
+      session_key: sessionKey,
+    });
+  }
+
+  handleWebuiSidebarStateUpdate(request: any): HttpLikeResponse {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    let decoded: any;
+    try {
+      decoded = JSON.parse(requestBodyText(request));
+    } catch {
+      return httpJsonResponse(
+        { code: "project_request_invalid", message: "body must be JSON" },
+        { status: 400 },
+      );
+    }
+    if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) return httpError(400, "state must be an object");
+    const baseUpdatedAt = decoded.base_updated_at;
+    const state = decoded.state;
+    if ((baseUpdatedAt !== null && typeof baseUpdatedAt !== "string") || !state || typeof state !== "object" || Array.isArray(state)) {
+      return httpError(400, "invalid sidebar state update");
+    }
+    try {
+      return httpJsonResponse(replaceWebuiSidebarState(baseUpdatedAt, state));
+    } catch (error) {
+      if (error instanceof WebuiSidebarStateConflictError) {
+        return httpJsonResponse(
+          {
+            code: error.code,
+            message: error.message,
+            sidebarState: error.sidebarState,
+          },
+          { status: 409 },
+        );
+      }
+      if (error instanceof Error && error.message) return httpError(400, error.message);
+      return httpError(500, "failed to write sidebar state");
+    }
+  }
+
+  projectErrorResponse(error: unknown): HttpLikeResponse {
+    if (error instanceof WebuiProjectError) {
+      return httpJsonResponse(
+        { code: error.code, message: error.message },
+        { status: error.status },
+      );
+    }
+    return httpJsonResponse(
+      { code: "project_operation_failed", message: "project operation failed" },
+      { status: 500 },
+    );
+  }
+
+  private requireProjectStore(): ProjectStore {
+    if (!this.projectStore) {
+      throw new WebuiProjectError("project_operation_failed", 503, "project store unavailable");
+    }
+    return this.projectStore;
+  }
+
+  private parseProjectBody(request: HttpRequestLike): Record<string, any> {
+    let body: unknown;
+    try {
+      body = JSON.parse(requestBodyText(request));
+    } catch {
+      throw new WebuiProjectError("project_request_invalid", 400);
+    }
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      throw new WebuiProjectError("project_request_invalid", 400);
+    }
+    return body as Record<string, any>;
+  }
+
+  private activeProject(id: string): WebuiProject {
+    const store = this.requireProjectStore();
+    if (store.isDeleting(id)) throw new WebuiProjectError("project_deleting", 409);
+    const project = store.getActive(id);
+    if (!project) throw new WebuiProjectError("project_not_found", 404);
+    return project;
+  }
+
+  async handleProjectCreate(request: HttpRequestLike): Promise<HttpLikeResponse> {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    if ((request.method ?? "GET").toUpperCase() !== "POST") return httpError(405, "method not allowed");
+    try {
+      await this.continuePendingProjectDeletes();
+      const body = this.parseProjectBody(request);
+      const keys = Object.keys(body);
+      if (
+        keys.some((key) => !["mode", "path", "name"].includes(key))
+        || typeof body.path !== "string"
+        || (body.mode !== "blank" && body.mode !== "existing")
+        || (body.name != null && typeof body.name !== "string")
+      ) {
+        throw new WebuiProjectError("project_request_invalid", 400);
+      }
+      const before = this.requireProjectStore().snapshot();
+      if (before.state === "corrupt") throw new WebuiProjectError("project_registry_corrupt", 503);
+      const existing = before.projects.find((project) => {
+        try {
+          return project.rootPath === assertWebuiWorkspaceAvailable(body.path);
+        } catch {
+          return false;
+        }
+      });
+      const project = this.requireProjectStore().add(body.path, body.mode, body.name);
+      return httpJsonResponse(
+        { project, snapshot: this.webuiSessionSnapshot() },
+        { status: existing ? 200 : 201 },
+      );
+    } catch (error) {
+      return this.projectErrorResponse(error);
+    }
+  }
+
+  async handleProjectUpdate(request: HttpRequestLike, rawId: string): Promise<HttpLikeResponse> {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    if ((request.method ?? "GET").toUpperCase() !== "PATCH") return httpError(405, "method not allowed");
+    try {
+      await this.continuePendingProjectDeletes();
+      const id = decodeApiKey(rawId);
+      if (!id) throw new WebuiProjectError("project_not_found", 404);
+      const body = this.parseProjectBody(request);
+      const keys = Object.keys(body);
+      if (
+        keys.length !== 1
+        || (keys[0] !== "name" && keys[0] !== "pinned")
+      ) {
+        throw new WebuiProjectError("project_request_invalid", 400);
+      }
+      this.activeProject(id);
+      const project = keys[0] === "name"
+        ? this.requireProjectStore().rename(id, body.name)
+        : this.requireProjectStore().setPinned(id, body.pinned);
+      return httpJsonResponse({ project, snapshot: this.webuiSessionSnapshot() });
+    } catch (error) {
+      return this.projectErrorResponse(error);
+    }
+  }
+
+  async handleProjectReveal(request: HttpRequestLike, rawId: string): Promise<HttpLikeResponse> {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    if ((request.method ?? "GET").toUpperCase() !== "POST") return httpError(405, "method not allowed");
+    try {
+      await this.continuePendingProjectDeletes();
+      const id = decodeApiKey(rawId);
+      if (!id) throw new WebuiProjectError("project_not_found", 404);
+      const project = this.activeProject(id);
+      const canonical = assertWebuiWorkspaceAvailable(project.rootPath);
+      if (canonical !== project.rootPath) {
+        throw new WebuiProjectError("project_directory_unavailable", 422);
+      }
+      try {
+        revealFileInSystemManager(project.rootPath);
+      } catch {
+        throw new WebuiProjectError("project_reveal_unavailable", 500);
+      }
+      return httpJsonResponse({ ok: true });
+    } catch (error) {
+      return this.projectErrorResponse(error);
+    }
+  }
+
+  async handleProjectWorkspaceEnvironment(
+    request: HttpRequestLike,
+    rawId: string,
+    view: "environment" | "diff" | "branch",
+  ): Promise<HttpLikeResponse> {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    const expectedMethod = view === "branch" ? "POST" : "GET";
+    if ((request.method ?? "GET").toUpperCase() !== expectedMethod) return httpError(405, "method not allowed");
+    try {
+      const id = decodeApiKey(rawId);
+      if (!id) throw new WebuiProjectError("project_not_found", 404);
+      const project = this.activeProject(id);
+      const cwd = assertWebuiWorkspaceAvailable(project.rootPath);
+      if (cwd !== project.rootPath) throw new WebuiProjectError("project_directory_unavailable", 422);
+      const context: WorkspaceEnvironmentContext = {
+        scope: { kind: "project", key: id },
+        cwd,
+        metadata: {
+          [WEBUI_PROJECT_ID_METADATA_KEY]: id,
+          [WEBUI_WORKSPACE_CWD_METADATA_KEY]: cwd,
+        },
+      };
+      return await this.workspaceEnvironmentResponse(request, context, view);
+    } catch (error) {
+      return this.projectErrorResponse(error);
+    }
+  }
+
+  private async workspaceEnvironmentResponse(
+    request: HttpRequestLike,
+    context: WorkspaceEnvironmentContext,
+    view: "environment" | "diff" | "branch",
+  ): Promise<HttpLikeResponse> {
+    try {
+      const environment = await readWorkspaceEnvironment(context);
+      if (view === "environment") return httpJsonResponse(environment);
+      if (view === "branch") {
+        let body: unknown;
+        try {
+          body = JSON.parse(requestBodyText(request));
+        } catch {
+          return httpError(400, "workspace_branch_request_invalid");
+        }
+        const bodyRecord = body && typeof body === "object" && !Array.isArray(body)
+          ? body as Record<string, unknown>
+          : null;
+        const branch = bodyRecord?.branch;
+        const expectedRevision = bodyRecord?.expected_revision;
+        const create = bodyRecord?.create;
+        if (
+          !bodyRecord
+          || typeof branch !== "string"
+          || typeof expectedRevision !== "string"
+          || (create !== undefined && typeof create !== "boolean")
+        ) {
+          return httpError(400, "workspace_branch_request_invalid");
+        }
+        const next = create === true
+          ? await createOrCheckoutWorkspaceBranch(
+            context,
+            environment,
+            branch,
+            expectedRevision,
+          )
+          : await switchWorkspaceBranch(
+            context,
+            environment,
+            branch,
+            expectedRevision,
+          );
+        return httpJsonResponse(next);
+      }
+      const [, query] = parseRequestPath(String(request.path ?? ""));
+      const relativePath = queryFirst(query, "path");
+      if (!relativePath) return httpError(400, "missing path");
+      const diff = await readWorkspaceFileDiff(environment, relativePath);
+      return diff ? httpJsonResponse(diff) : httpError(404, "changed file not found");
+    } catch (error) {
+      if (error instanceof WorkspaceEnvironmentError) {
+        return httpJsonResponse({
+          code: error.code,
+          message: error.code,
+          ...(error.worktreePath ? { worktreePath: error.worktreePath } : {}),
+        }, { status: error.status });
+      }
+      throw error;
+    }
+  }
+
+  settingsErrorResponse(error: any): HttpLikeResponse {
+    if (error instanceof WebUISettingsError || typeof error?.status === "number") {
+      return httpError(error.status ?? 400, error.message ?? String(error));
+    }
+    return httpError(500, error instanceof Error ? error.message : String(error));
+  }
+
+  handleSettingsUpdate(request: any): HttpLikeResponse {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    try {
+      return httpJsonResponse(this.withSettingsRestartState(updateAgentSettings(parseQuery(String(request?.path ?? "/"))), { section: "runtime" }));
+    } catch (error) {
+      return this.settingsErrorResponse(error);
+    }
+  }
+
+  handleSettingsModelConfigurationCreate(request: any): HttpLikeResponse {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    try {
+      return httpJsonResponse(this.withSettingsRestartState(createModelConfiguration(parseQuery(String(request?.path ?? "/")))));
+    } catch (error) {
+      return this.settingsErrorResponse(error);
+    }
+  }
+
+  handleSettingsProviderUpdate(request: any): HttpLikeResponse {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    try {
+      return httpJsonResponse(this.withSettingsRestartState(updateProviderSettings(parseQuery(String(request?.path ?? "/"))), { section: "image" }));
+    } catch (error) {
+      return this.settingsErrorResponse(error);
+    }
+  }
+
+  handleSettingsWebSearchUpdate(request: any): HttpLikeResponse {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    try {
+      return httpJsonResponse(this.withSettingsRestartState(updateWebSearchSettings(parseQuery(String(request?.path ?? "/"))), { section: "web" }));
+    } catch (error) {
+      return this.settingsErrorResponse(error);
+    }
+  }
+
+  handleSettingsImageGenerationUpdate(request: any): HttpLikeResponse {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    try {
+      return httpJsonResponse(this.withSettingsRestartState(updateImageGenerationSettings(parseQuery(String(request?.path ?? "/"))), { section: "image" }));
+    } catch (error) {
+      return this.settingsErrorResponse(error);
+    }
+  }
+
+  async handleSettingsMcpPresets(request: any, action: string | null = null): Promise<HttpLikeResponse> {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    try {
+      if (action === "reload") {
+        if (!bearerToken(request?.headers)) return httpError(401, "Unauthorized");
+        if (String(request?.method ?? "GET").toUpperCase() !== "POST") return httpError(405, "Method Not Allowed");
+        return httpJsonResponse(await requestMcpReload(this.bus));
+      }
+      const payload = await mcpPresetsSettingsAction(action, parseMcpSettingsQuery(request), {
+        reloadMcp: () => requestMcpReload(this.bus),
+      });
+      return httpJsonResponse(action == null ? payload : this.withSettingsRestartState(payload, { section: "runtime" }));
+    } catch (error: any) {
+      const message = error?.message ?? String(error);
+      const status = error?.status ?? (message.includes("MCP settings payload") ? 400 : 500);
+      return httpError(status, message);
+    }
+  }
+
+  async handleExcelAddinStatus(request: any): Promise<HttpLikeResponse> {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    const method = String(request?.method ?? "GET").toUpperCase();
+    if (method !== "GET" && method !== "POST") return httpError(405, "Method Not Allowed");
+    let result;
+    if (method === "POST") {
+      // This app-level grant may trigger macOS Automation consent. URL tokens cannot authorize it.
+      if (!bearerToken(request?.headers)) return httpError(401, "Unauthorized");
+      const body = requestBodyText(request).trim();
+      let enabled = true;
+      if (body) {
+        try {
+          const parsed = JSON.parse(body) as { enabled?: unknown; reveal?: unknown };
+          // Retain the old reveal request as a harmless status read during upgrades.
+          if (parsed.reveal === true) return httpJsonResponse(await nativeExcelControl.status());
+          if (typeof parsed.enabled !== "boolean") return httpError(400, "Invalid Excel connection settings payload");
+          enabled = parsed.enabled;
+        } catch { return httpError(400, "Invalid Excel connection settings payload"); }
+      }
+      try { result = await nativeExcelControl.setEnabled(enabled); }
+      catch (error) {
+        const message = String(error instanceof Error ? error.message : error).slice(0, 500);
+        return httpJsonResponse({ error: message }, { status: 503 });
+      }
+    } else result = await nativeExcelControl.status();
+    const response = httpJsonResponse(result);
+    response.headers["cache-control"] = "no-store";
+    return response;
+  }
+
+  handleNativeAppApprovals(request: any): HttpLikeResponse {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    const method = String(request?.method ?? "GET").toUpperCase();
+    try {
+      if (method === "GET") {
+        const response = httpJsonResponse({ apps: nativeAppApprovalStore.list() });
+        response.headers["cache-control"] = "no-store";
+        return response;
+      }
+      if (method !== "POST") return httpError(405, "Method Not Allowed");
+      // A query-string bootstrap token must not be enough to change approvals.
+      if (!bearerToken(request?.headers)) return httpError(401, "Unauthorized");
+      const query = parseQuery(String(request?.path ?? "/"));
+      const platform = queryFirst(query, "platform");
+      const appId = queryFirst(query, "app_id");
+      if ((platform !== "darwin" && platform !== "win32") || !appId) return httpError(400, "Invalid app identity");
+      const response = httpJsonResponse({ apps: nativeAppApprovalStore.remove(platform, appId) });
+      response.headers["cache-control"] = "no-store";
+      return response;
+    } catch {
+      return httpError(400, "Invalid app identity");
+    }
+  }
+
+  async handleExternalBrowserStatus(request: any): Promise<HttpLikeResponse> {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    if (String(request?.method ?? "GET").toUpperCase() !== "GET") return httpError(405, "Method Not Allowed");
+    if (process.env.MEMMY_DESKTOP_MANAGED_GATEWAY !== "1") return httpError(503, "Desktop browser bridge unavailable");
+    try {
+      await externalBrowserBridge.start();
+      const claims = externalBrowserBridge.listClaims();
+      const tabStatuses = externalBrowserBridge.listTabStatuses();
+      const statusesByTab = new Map(tabStatuses.map(tab =>
+        [`${tab.connectionId}:${tab.tabId}`, tab.status]));
+      const response = httpJsonResponse({
+        connected: externalBrowserBridge.listConnected(),
+        connectionDiagnostics: externalBrowserBridge.connectionDiagnostics(),
+        controllableTabCount: claims.filter(tab => {
+          const status = statusesByTab.get(`${tab.connectionId}:${tab.tabId}`);
+          return status === undefined || status === "ready";
+        }).length,
+        claims: claims.map(
+          ({ browser, title, url }) => ({ browser, title, url }),
+        ),
+        tabStatuses: tabStatuses.map(
+          ({ browser, title, url, active, status, reason, updatedAt }) =>
+            ({ browser, title, url, active, status, reason, updatedAt }),
+        ),
+      });
+      response.headers["cache-control"] = "no-store";
+      return response;
+    } catch {
+      return httpError(503, "External browser bridge unavailable");
+    }
+  }
+
+  async handleChannelAdmin(request: any, action: string, value: string | null = null): Promise<HttpLikeResponse> {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    if (!this.channelAdmin) return httpError(503, "channel admin unavailable");
+    try {
+      switch (action) {
+        case "definitions":
+          return httpJsonResponse(this.channelAdmin.definitions());
+        case "status":
+          return httpJsonResponse(this.channelAdmin.status());
+        case "configure":
+          return httpJsonResponse(await this.channelAdmin.configure(String(value ?? "")));
+        case "stop":
+          return httpJsonResponse(await this.channelAdmin.stop(String(value ?? "")));
+        case "weixin-login-start":
+          return httpJsonResponse(await this.channelAdmin.startWeixinLogin());
+        case "weixin-login-poll":
+          return httpJsonResponse(await this.channelAdmin.pollWeixinLogin(String(value ?? "")));
+        case "feishu-login-start":
+          return httpJsonResponse(await this.channelAdmin.startFeishuLogin());
+        case "feishu-login-poll":
+          return httpJsonResponse(await this.channelAdmin.pollFeishuLogin(String(value ?? "")));
+        default:
+          return httpError(404, "Not Found");
+      }
+    } catch (error: any) {
+      return httpError(error?.status ?? 500, error?.message ?? String(error));
+    }
+  }
+
+  isWebsocketChannelSessionKey(key: string): boolean {
+    return key.startsWith("websocket:");
+  }
+
+  private resolveGuiSession(input: string): ResolvedGuiSession {
+    if (!this.guiSessionProjection) {
+      throw new GuiSessionProjectionError("session_manager_unavailable", 503);
+    }
+    return this.guiSessionProjection.resolve(input);
+  }
+
+  private resolveGuiSessionResponse(input: string): ResolvedGuiSession | HttpLikeResponse {
+    try {
+      return this.resolveGuiSession(input);
+    } catch (error) {
+      if (error instanceof GuiSessionProjectionError) {
+        return httpError(error.status, error.code);
+      }
+      return httpError(404, "session not found");
+    }
+  }
+
+  private canonicalSessionKeyForChatId(chatId: string): string | null {
+    if (isExternalGuiChatId(chatId)) {
+      try {
+        return this.resolveGuiSession(chatId).canonicalSessionKey;
+      } catch {
+        return null;
+      }
+    }
+    return isNativeGuiChatId(chatId) ? `websocket:${chatId}` : null;
+  }
+
+  private terminalRunStateForChatId(chatId: string) {
+    const canonicalSessionKey = this.canonicalSessionKeyForChatId(chatId);
+    return canonicalSessionKey?.startsWith("cli:")
+      ? this.terminalRunControl?.read(canonicalSessionKey) ?? null
+      : null;
+  }
+
+  readSessionFile(key: string): Record<string, any> | null {
+    const read = this.sessionManager?.readSessionFile;
+    if (typeof read === "function") return read.call(this.sessionManager, key);
+    const pathFor = this.sessionManager?.pathFor;
+    if (typeof pathFor !== "function") return null;
+    const file = pathFor.call(this.sessionManager, key);
+    try {
+      return JSON.parse(fs.readFileSync(file, "utf8"));
+    } catch {
+      return null;
+    }
+  }
+
+  handleSessionMessages(request: any, key: string): HttpLikeResponse {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    if (!this.sessionManager) return httpError(503, "session manager unavailable");
+    const decodedKey = decodeGuiSessionApiKey(key);
+    if (decodedKey == null) return invalidGuiSessionKeyResponse(key);
+    const resolved = this.resolveGuiSessionResponse(decodedKey);
+    if ("status" in resolved) return resolved;
+    const data = this.readSessionFile(resolved.canonicalSessionKey);
+    if (!data) return httpError(404, "session not found");
+    data.key = resolved.guiSessionKey;
+    if (Array.isArray(data.messages)) {
+      data.messages = data.messages.filter(
+        (message: Record<string, any>) => message?.internal_context !== "goal_continuation",
+      );
+      scrubSubagentMessagesForChannel(data.messages);
+    }
+    this.augmentMediaUrls(data, resolved.canonicalSessionKey);
+    return httpJsonResponse(data);
+  }
+
+  private workspaceEnvironmentSession(key: string): WorkspaceEnvironmentContextResult {
+    if (!this.sessionManager) return { ok: false, response: httpError(503, "session manager unavailable") };
+    const decodedKey = decodeGuiSessionApiKey(key);
+    if (decodedKey == null) return { ok: false, response: invalidGuiSessionKeyResponse(key) };
+    const resolved = this.resolveGuiSessionResponse(decodedKey);
+    if ("status" in resolved) return { ok: false, response: resolved };
+    const session = this.sessionManager.get?.(resolved.canonicalSessionKey) as Session | null;
+    if (!session) return { ok: false, response: httpError(404, "session not found") };
+    let cwd: string | null = null;
+    try {
+      cwd = readWebuiSessionBinding(session).cwd;
+    } catch {
+      // Preserve the session scope so the service can report workspace_unavailable.
+    }
+    return {
+      ok: true,
+      context: {
+        scope: { kind: "session", key: resolved.guiSessionKey },
+        cwd,
+        metadata: session.metadata,
+      },
+    };
+  }
+
+  async handleWorkspaceEnvironment(
+    request: HttpRequestLike,
+    key: string,
+    view: "environment" | "diff" | "branch",
+  ): Promise<HttpLikeResponse> {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    const expectedMethod = view === "branch" ? "POST" : "GET";
+    if ((request.method ?? "GET").toUpperCase() !== expectedMethod) return httpError(405, "method not allowed");
+    const result = this.workspaceEnvironmentSession(key);
+    if (!result.ok) return result.response;
+    return this.workspaceEnvironmentResponse(request, result.context, view);
+  }
+
+  handleWorkspaceFiles(
+    request: HttpRequestLike,
+    key: string,
+    view: "listing" | "file" | "open" | "reveal" = "listing",
+  ): HttpLikeResponse {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    const expectedMethod = view === "open" || view === "reveal" ? "POST" : "GET";
+    if ((request.method ?? "GET").toUpperCase() !== expectedMethod) return httpError(405, "method not allowed");
+    if (!this.sessionManager) return httpError(503, "session manager unavailable");
+
+    try {
+      const decodedKey = decodeGuiSessionApiKey(key);
+      if (decodedKey == null) return invalidGuiSessionKeyResponse(key);
+      let resolved: ResolvedGuiSession;
+      try {
+        resolved = this.resolveGuiSession(decodedKey);
+      } catch (error) {
+        if (error instanceof GuiSessionProjectionError && error.code === "session_binding_invalid") {
+          return httpJsonResponse(
+            { code: "workspace_missing", message: "workspace_missing" },
+            { status: 422 },
+          );
+        }
+        if (error instanceof GuiSessionProjectionError) return httpError(error.status, error.code);
+        return httpError(404, "session not found");
+      }
+      const session = this.sessionManager.get?.(resolved.canonicalSessionKey) as Session | null;
+      if (!session) return httpError(404, "session not found");
+      const binding = readWebuiSessionBinding(session);
+
+      let rootPath = binding.cwd;
+      let rootKind: WorkspaceFilesRootKind = "task";
+      let rootLabel = path.basename(binding.cwd) || "Task files";
+      if (binding.projectId !== null) {
+        const project = this.activeProject(binding.projectId);
+        rootPath = project.rootPath;
+        rootKind = "project";
+        rootLabel = project.name;
+      }
+      return this.workspaceFilesResponse(request, rootPath, rootKind, rootLabel, view);
+    } catch (error) {
+      if (error instanceof WorkspaceFilesError) {
+        return httpJsonResponse(
+          { code: error.code, message: error.message },
+          { status: error.status },
+        );
+      }
+      if (error instanceof WebuiSessionBindingError) {
+        return httpJsonResponse(
+          { code: error.code, message: error.message },
+          { status: 422 },
+        );
+      }
+      if (error instanceof WebuiProjectError) return this.projectErrorResponse(error);
+      return httpJsonResponse(
+        { code: "workspace_files_unavailable", message: "workspace files unavailable" },
+        { status: 500 },
+      );
+    }
+  }
+
+  handleProjectWorkspaceFiles(
+    request: HttpRequestLike,
+    rawId: string,
+    view: "listing" | "file" | "open" | "reveal" = "listing",
+  ): HttpLikeResponse {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    const expectedMethod = view === "open" || view === "reveal" ? "POST" : "GET";
+    if ((request.method ?? "GET").toUpperCase() !== expectedMethod) return httpError(405, "method not allowed");
+    try {
+      const id = decodeApiKey(rawId);
+      if (!id) throw new WebuiProjectError("project_not_found", 404);
+      const project = this.activeProject(id);
+      const rootPath = assertWebuiWorkspaceAvailable(project.rootPath);
+      if (rootPath !== project.rootPath) {
+        throw new WebuiProjectError("project_directory_unavailable", 422);
+      }
+      return this.workspaceFilesResponse(request, rootPath, "project", project.name, view);
+    } catch (error) {
+      if (error instanceof WorkspaceFilesError) {
+        return httpJsonResponse(
+          { code: error.code, message: error.message },
+          { status: error.status },
+        );
+      }
+      if (error instanceof WebuiProjectError) return this.projectErrorResponse(error);
+      return httpJsonResponse(
+        { code: "workspace_files_unavailable", message: "workspace files unavailable" },
+        { status: 500 },
+      );
+    }
+  }
+
+  private workspaceFilesResponse(
+    request: HttpRequestLike,
+    rootPath: string,
+    rootKind: WorkspaceFilesRootKind,
+    rootLabel: string,
+    view: "listing" | "file" | "open" | "reveal",
+  ): HttpLikeResponse {
+    const [, query] = parseRequestPath(String(request.path ?? ""));
+    const relativePath = queryFirst(query, "path") ?? "";
+    if (view === "listing") {
+      return httpJsonResponse(listWorkspaceFiles(rootPath, {
+        rootKind,
+        rootLabel,
+        relativePath,
+      }));
+    }
+
+    if (view === "open") {
+      const file = resolveWorkspaceFile(rootPath, relativePath);
+      const result = openPathWithSystemDefault(file.absolutePath);
+      return result.ok
+        ? httpJsonResponse({ ok: true })
+        : httpJsonResponse({ code: "workspace_file_open_failed", message: result.message }, { status: 500 });
+    }
+    if (view === "reveal") {
+      const file = resolveWorkspaceFile(rootPath, relativePath);
+      try {
+        revealFileInSystemManager(file.absolutePath);
+        return httpJsonResponse({ ok: true });
+      } catch {
+        return httpJsonResponse(
+          { code: "workspace_file_reveal_failed", message: "workspace_file_reveal_failed" },
+          { status: 500 },
+        );
+      }
+    }
+    const file = readWorkspaceFile(rootPath, relativePath);
+    const extension = path.extname(file.name).toLowerCase();
+    const mime = DOCUMENT_MIME_BY_EXTENSION[extension]
+      ?? TEXT_MIME_BY_EXTENSION[extension]
+      ?? (CODE_TEXT_EXTENSIONS.has(extension) ? "text/plain" : String(lookupMime(file.name) || "application/octet-stream"));
+    const contentType = mime.startsWith("text/") || [
+      "application/json",
+      "application/javascript",
+      "application/xml",
+    ].includes(mime)
+      ? `${mime}; charset=utf-8`
+      : mime;
+    return {
+      status: 200,
+      headers: {
+        "content-type": contentType,
+        "content-length": String(file.size),
+        "cache-control": "no-store",
+        "content-security-policy": "default-src 'none'; sandbox",
+        "x-content-type-options": "nosniff",
+      },
+      body: file.body,
+    };
+  }
+
+  handleWebuiThreadGet(request: any, key: string): HttpLikeResponse {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    const [, query] = parseRequestPath(String(request?.path ?? ""));
+    const rawSurface = queryFirst(query, "surface");
+    if (rawSurface != null && rawSurface !== "gui" && rawSurface !== "tui") {
+      return httpError(400, "surface_invalid");
+    }
+    const surface = rawSurface === "tui" ? "tui" as const : "gui" as const;
+    const decodedKey = decodeGuiSessionApiKey(key);
+    if (decodedKey == null) return invalidGuiSessionKeyResponse(key);
+    const resolved = this.resolveGuiSessionResponse(decodedKey);
+    if ("status" in resolved) return resolved;
+    const rawSessionMessages = this.readSessionFile(resolved.canonicalSessionKey)?.messages;
+    const sessionMessages = Array.isArray(rawSessionMessages)
+      ? rawSessionMessages.filter(
+          (message: Record<string, any>) => message?.internal_context !== "goal_continuation",
+        )
+      : null;
+    for (const message of sessionMessages ?? []) {
+      if (
+        message?.role === "user"
+        && typeof message.client_request_id === "string"
+        && message.webui_queue_steer_recovery
+      ) {
+        this.ensureAcceptedTranscript(
+          resolved.guiChatId,
+          message.client_request_id,
+          resolved.canonicalSessionKey,
+        );
+      }
+    }
+    const data = buildWebuiThreadResponse(resolved.guiSessionKey, {
+      surface,
+      isQuestionPending: (requestId) => isAgentQuestionPending(requestId, resolved.guiChatId),
+      sessionMessages,
+      augmentUserMedia: (paths: string[]) => this.augmentTranscriptUserMedia(paths, resolved.canonicalSessionKey),
+      augmentAssistantMedia: (paths: string[]) => paths.flatMap((p) => this.webuiMediaAttachmentForPath(p, resolved.canonicalSessionKey) ?? []),
+      augmentAssistantText: (text: string) => this.rewriteLocalMarkdownImages(text, resolved.canonicalSessionKey),
+    });
+    if (!data) return httpError(404, "webui thread not found");
+    return httpJsonResponse(data);
+  }
+
+  lastCompactionPayload(decodedKey: string, summary: unknown): Record<string, any> {
+    const unavailable = {
+      available: false,
+      sessionKey: decodedKey,
+      mode: null,
+      text: "",
+      lastActive: null,
+    };
+    if (typeof summary === "string") {
+      if (!summary.trim()) return unavailable;
+      return {
+        available: true,
+        sessionKey: decodedKey,
+        mode: "text",
+        text: summary,
+        lastActive: null,
+      };
+    }
+    if (!summary || typeof summary !== "object" || Array.isArray(summary)) return unavailable;
+    const raw = summary as Record<string, unknown>;
+    const text = typeof raw.text === "string" ? raw.text : "";
+    if (!text.trim()) return unavailable;
+    const mode = raw.mode === "dag" ? "dag" : "text";
+    const payload: Record<string, any> = {
+      available: true,
+      sessionKey: decodedKey,
+      mode,
+      text,
+      lastActive: typeof raw.lastActive === "string" ? raw.lastActive : null,
+    };
+    if (mode === "dag" && typeof raw.dagSnapshotId === "string") {
+      payload.dagSnapshotId = raw.dagSnapshotId;
+    }
+    return payload;
+  }
+
+  handleLastCompactionGet(request: any, key: string): HttpLikeResponse {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    const decodedKey = decodeGuiSessionApiKey(key);
+    if (decodedKey == null) return invalidGuiSessionKeyResponse(key);
+    const resolved = this.resolveGuiSessionResponse(decodedKey);
+    if ("status" in resolved) return resolved;
+    const data = this.readSessionFile(resolved.canonicalSessionKey);
+    if (!data) return httpError(404, "session not found");
+    return httpJsonResponse(this.lastCompactionPayload(resolved.guiSessionKey, data.metadata?.lastSummary));
+  }
+
+  handleArtifactResolve(request: HttpRequestLike): HttpLikeResponse {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    if ((request.method ?? "GET").toUpperCase() !== "POST") return httpError(405, "method not allowed");
+    const artifactRequest = artifactRequestFromRequest(request);
+    if (!artifactRequest) return httpError(400, "missing path or sessionKey");
+    const workspace = this.artifactSessionWorkspace(artifactRequest.sessionKey);
+    if (!workspace) return httpError(404, "session not found");
+    const resolved = this.resolveOrStageArtifactPath(artifactRequest.path, workspace);
+    if (!resolved) return httpError(404, "artifact not found");
+    const workspaceRoot = realpathIfExists(workspace);
+    const relativePath = resolved.kind !== "directory" && isPathInside(resolved.path, workspaceRoot)
+      ? path.relative(workspaceRoot, resolved.path).split(path.sep).join("/")
+      : null;
+    return httpJsonResponse({
+      ok: true,
+      path: resolved.path,
+      name: path.basename(expandHomePath(artifactRequest.path)) || path.basename(resolved.path),
+      kind: resolved.kind,
+      ...(relativePath ? { relative_path: relativePath } : {}),
+      ...(resolved.mediaUrl ? { media_url: resolved.mediaUrl } : {}),
+    });
+  }
+
+  /** Renew a saved recording's playback URL without requiring a chat session. */
+  handleWebuiRecordingResolve(request: HttpRequestLike): HttpLikeResponse {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    if ((request.method ?? "GET").toUpperCase() !== "POST") return httpError(405, "method not allowed");
+    let rawPath: unknown;
+    try {
+      rawPath = JSON.parse(requestBodyText(request)).path;
+    } catch {
+      return httpError(400, "missing path");
+    }
+    if (typeof rawPath !== "string" || !rawPath.trim()) return httpError(400, "missing path");
+    const resolved = this.resolveWorkspaceRecordingPath(rawPath);
+    if (!resolved?.mediaUrl) return httpError(404, "recording not found");
+    return httpJsonResponse({ media_url: resolved.mediaUrl });
+  }
+
+  handleArtifactReveal(request: HttpRequestLike): HttpLikeResponse {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    if ((request.method ?? "GET").toUpperCase() !== "POST") return httpError(405, "method not allowed");
+    const artifactRequest = artifactRequestFromRequest(request);
+    if (!artifactRequest) return httpError(400, "missing path or sessionKey");
+    const workspace = this.artifactSessionWorkspace(artifactRequest.sessionKey);
+    if (!workspace) return httpError(404, "session not found");
+    const resolved = this.resolveOrStageArtifactPath(artifactRequest.path, workspace);
+    if (!resolved) return httpError(404, "artifact not found");
+    try {
+      revealFileInSystemManager(resolved.path);
+    } catch (error) {
+      return httpError(500, error instanceof Error ? error.message : "failed to reveal artifact");
+    }
+    return httpJsonResponse({ ok: true, path: resolved.path });
+  }
+
+  handleArtifactOpen(request: HttpRequestLike): HttpLikeResponse {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    if ((request.method ?? "GET").toUpperCase() !== "POST") return httpError(405, "method not allowed");
+    const artifactRequest = artifactRequestFromRequest(request);
+    if (!artifactRequest) return httpError(400, "missing path or sessionKey");
+    const workspace = this.artifactSessionWorkspace(artifactRequest.sessionKey);
+    if (!workspace) return httpError(404, "session not found");
+    const resolved = this.resolveOrStageArtifactPath(artifactRequest.path, workspace);
+    if (!resolved) return httpError(404, "artifact not found");
+    const result = openPathWithSystemDefault(resolved.path);
+    if (!result.ok) return httpError(500, result.message);
+    return httpJsonResponse({ ok: true, path: resolved.path });
+  }
+
+  async handleWebuiMediaUpload(request: HttpRequestLike): Promise<HttpLikeResponse> {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    if ((request.method ?? "GET").toUpperCase() !== "POST") return httpError(405, "method not allowed");
+    const contentType = getHeader(request.headers, "content-type").toLowerCase();
+    if (!contentType.includes("multipart/form-data")) return httpError(415, "multipart/form-data required");
+
+    let form: FormData;
+    try {
+      const headers = new Headers();
+      for (const [key, value] of Object.entries(request.headers ?? {})) {
+        if (Array.isArray(value)) headers.set(key, value.join(", "));
+        else if (value != null) headers.set(key, String(value));
+      }
+      const body = Buffer.isBuffer(request.body) ? request.body : Buffer.from(String(request.body ?? ""), "utf8");
+      form = await new Request("http://memmy.local/api/webui/media/upload", {
+        method: "POST",
+        headers,
+        body,
+      }).formData();
+    } catch {
+      return httpError(400, "invalid multipart body");
+    }
+
+    const files = form.getAll("files");
+    if (!files.length) return httpError(400, "missing files");
+    // Parallel to `files`: a recording asks to be kept in the default
+    // workspace, where the user can find it in the file tree, instead of the
+    // private media cache.
+    const targets = form.getAll("targets").map((value) => typeof value === "string" ? value : "");
+
+    const mediaDir = path.join(getMediaDir("websocket"), "webui");
+    fs.mkdirSync(mediaDir, { recursive: true });
+    const saved: Array<Record<string, any>> = [];
+    const savedPaths: string[] = [];
+    const failUpload = (response: HttpLikeResponse): HttpLikeResponse => {
+      for (const itemPath of savedPaths) fs.rmSync(itemPath, { force: true });
+      return response;
+    };
+
+    try {
+      for (const [index, entry] of files.entries()) {
+        if (typeof entry === "string" || typeof (entry as any).arrayBuffer !== "function") {
+          return failUpload(httpError(400, "invalid file"));
+        }
+        const file = entry as any;
+        const declaredMime = String(file.type ?? "").toLowerCase();
+        const bytes = Buffer.from(await file.arrayBuffer());
+        const originalName = typeof file.name === "string" && file.name.trim() ? file.name : "attachment";
+        const classification = classifyWebuiUploadAttachment(originalName, declaredMime, bytes);
+        if (!classification) {
+          const extension = path.extname(originalName).toLowerCase();
+          const message = TEXT_MIME_BY_EXTENSION[extension] && !looksLikeText(bytes)
+            ? "invalid_text_content: file is binary or uses an unsupported text encoding"
+            : "unsupported attachment mime";
+          return failUpload(httpError(415, message));
+        }
+        const safeOriginalName = safeFilename(originalName).replace(/\.[^.]*$/, "") + classification.extension;
+        const inWorkspace = targets[index] === WEBUI_RECORDINGS_TARGET;
+        let target: string;
+        if (inWorkspace) {
+          const recordingsDir = path.join(this.workspacePath, WEBUI_RECORDINGS_DIR);
+          fs.mkdirSync(recordingsDir, { recursive: true });
+          target = availableFilePath(recordingsDir, safeOriginalName);
+        } else {
+          target = path.join(mediaDir, `${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}-${safeOriginalName}`);
+        }
+        fs.writeFileSync(target, bytes, inWorkspace ? { flag: "wx" } : undefined);
+        const real = fs.realpathSync(target);
+        savedPaths.push(real);
+        const url = inWorkspace ? this.signWorkspaceMediaPath(real) : this.signMediaPath(real);
+        if (!url) return failUpload(httpError(500, "failed to sign attachment"));
+        saved.push({
+          path: real,
+          url,
+          name: safeOriginalName,
+          kind: classification.kind,
+          mime: classification.mime,
+          bytes: bytes.length,
+        });
+      }
+    } catch (error) {
+      for (const itemPath of savedPaths) fs.rmSync(itemPath, { force: true });
+      return httpError(500, error instanceof Error ? error.message : "failed to save attachment");
+    }
+
+    return httpJsonResponse({
+      attachments: saved,
+      images: saved.filter((item) => item.kind === "image"),
+    });
+  }
+
+  /** Delete only files created in the default workspace's recordings folder. */
+  handleWebuiRecordingDelete(request: HttpRequestLike): HttpLikeResponse {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    if ((request.method ?? "GET").toUpperCase() !== "POST") return httpError(405, "method not allowed");
+    let input: unknown;
+    try { input = JSON.parse(requestBodyText(request)); }
+    catch { return httpError(400, "invalid JSON body"); }
+    const paths = input && typeof input === "object" && !Array.isArray(input)
+      ? (input as { paths?: unknown }).paths : null;
+    if (!Array.isArray(paths) || paths.length === 0 || paths.length > 8
+      || paths.some((item) => typeof item !== "string" || !path.isAbsolute(item))) {
+      return httpError(400, "invalid recording paths");
+    }
+    const root = realpathIfExists(path.join(this.workspacePath, WEBUI_RECORDINGS_DIR));
+    const targets = new Set<string>();
+    for (const requested of paths as string[]) {
+      const candidate = path.resolve(requested);
+      if (candidate === root || !isPathInside(candidate, root)) return httpError(403, "path is outside recordings");
+      try {
+        const stat = fs.lstatSync(candidate);
+        if (stat.isSymbolicLink() || !stat.isFile()) return httpError(403, "invalid recording file");
+        const real = fs.realpathSync(candidate);
+        if (!isPathInside(real, root)) return httpError(403, "path is outside recordings");
+        targets.add(real);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          return httpError(500, "could not inspect recording file");
+        }
+      }
+    }
+    try {
+      for (const target of targets) fs.unlinkSync(target);
+    } catch {
+      return httpError(500, "could not delete recording file");
+    }
+    return httpJsonResponse({ ok: true, deleted: targets.size });
+  }
+
+  private discardInflightForProject(projectId: string): void {
+    const sessionKeys = new Set<string>(
+      (this.sessionManager?.listWebuiSessionRecords?.() ?? [])
+        .flatMap((session: Session) => {
+          try {
+            return readWebuiSessionBinding(session).projectId === projectId
+              ? [session.key]
+              : [];
+          } catch {
+            return [];
+          }
+        }),
+    );
+    for (const sessionKey of this.sessionManager?.rejectWebuiSessionBindingReservationsForProject?.(projectId) ?? []) {
+      sessionKeys.add(sessionKey);
+    }
+    for (const [key, inflight] of this.inflightWebuiMessageRequests) {
+      const separator = key.lastIndexOf("\0");
+      const sessionKey = separator >= 0 ? key.slice(0, separator) : key;
+      if (!sessionKeys.has(sessionKey)) continue;
+      const clientRequestId = separator >= 0 ? key.slice(separator + 1) : "";
+      const chatId = sessionKey.startsWith("websocket:")
+        ? sessionKey.slice("websocket:".length)
+        : (() => {
+            try {
+              return toGuiChatId(sessionKey);
+            } catch {
+              return "";
+            }
+          })();
+      this.inflightWebuiMessageRequests.delete(key);
+      for (const connection of inflight.connections) {
+        void this.sendWebuiRequestError(connection, {
+          chatId,
+          clientRequestId,
+          detail: "session_binding_rejected",
+          reason: "project_removed",
+        });
+      }
+    }
+  }
+
+  private async deleteSessionDag(sessionKey: string): Promise<void> {
+    await this.sessionDeletionServices?.sessionDagQueue?.closeSession(sessionKey);
+    removeSessionDagFiles(sessionKey);
+  }
+
+  async hardDeleteWebuiSessions(
+    sessionKeys: Iterable<string>,
+    { cancelRunning }: { cancelRunning: boolean },
+  ): Promise<string[]> {
+    const keys = [...new Set(sessionKeys)]
+      .filter((key) => {
+        const session = this.sessionManager?.get?.(key) as Session | null;
+        if (session?.metadata?.webui !== true) return false;
+        try {
+          toGuiChatId(key);
+          return true;
+        } catch {
+          return false;
+        }
+      })
+      .sort();
+    if (!keys.length) return [];
+    const projectedKeys = keys.map((key) => `websocket:${toGuiChatId(key)}`);
+    for (const key of keys) {
+      const deleteOne = async () => {
+        if (key.startsWith("websocket:")) {
+          await this.closeBrowserChat?.("websocket", key.slice("websocket:".length)).catch(() => undefined);
+        } else {
+          await this.closeBrowserChat?.("projected-session", key).catch(() => undefined);
+        }
+        await this.deleteSessionDag(key);
+        this.webuiTitleService?.discard(key);
+        deleteWebuiThread(`websocket:${toGuiChatId(key)}`);
+        const del = this.sessionManager?.deleteSession
+          ?? this.sessionManager?.delete;
+        if (typeof del === "function") del.call(this.sessionManager, key);
+        const deletedChatId = toGuiChatId(key);
+        for (const pending of this.cronNotificationOutbox().list()) {
+          if (pending.chat_id === deletedChatId) this.cronNotificationOutbox().remove(pending.deliveryId);
+        }
+      };
+      if (this.sessionDeletionBarrier) {
+        await this.sessionDeletionBarrier(key, cancelRunning, deleteOne);
+      } else {
+        if (cancelRunning) await this.cancelActiveTasks?.(key);
+        if (this.sessionTurnBarrier) await this.sessionTurnBarrier(key, deleteOne);
+        else await deleteOne();
+      }
+      this.queueProjectionChains.delete(key);
+    }
+    removeWebuiSidebarSessionKeys(projectedKeys);
+    for (const projectedKey of projectedKeys) {
+      const chatId = projectedKey.slice("websocket:".length);
+      if (isExternalGuiChatId(chatId)) {
+        this.queueGlobalSessionUpdated(chatId, "metadata");
+      }
+    }
+    return projectedKeys;
+  }
+
+  private projectSessionKeys(projectId: string): string[] {
+    return (this.sessionManager?.listWebuiSessionRecords?.() ?? [])
+      .flatMap((session: Session) => {
+        try {
+          return readWebuiSessionBinding(session).projectId === projectId
+            ? [session.key]
+            : [];
+        } catch {
+          return [];
+        }
+      })
+      .sort();
+  }
+
+  private async removeProjectSessions(projectId: string): Promise<string[]> {
+    if (!this.sessionDeletionServices) {
+      throw new WebuiProjectError(
+        "project_operation_failed",
+        503,
+        "session deletion services unavailable",
+      );
+    }
+    const deleted = new Set<string>();
+    while (true) {
+      const keys = this.projectSessionKeys(projectId);
+      if (!keys.length) {
+        if (!this.sessionManager?.hasWebuiSessionBindingReservationForProject?.(projectId)) {
+          return [...deleted].sort();
+        }
+        this.discardInflightForProject(projectId);
+        continue;
+      }
+      for (const key of keys) await this.cancelActiveTasks?.(key);
+      await this.sessionDeletionServices.cronService.removeWebuiJobsForSessionKeys(keys);
+      for (const key of await this.hardDeleteWebuiSessions(keys, { cancelRunning: false })) {
+        deleted.add(key);
+      }
+    }
+  }
+
+  private coordinateProjectSessionDeletion(projectId: string): Promise<string[]> {
+    const existing = this.projectDeletionCoordinators.get(projectId);
+    if (existing) return existing;
+    const coordinator = this.removeProjectSessions(projectId).finally(() => {
+      if (this.projectDeletionCoordinators.get(projectId) === coordinator) {
+        this.projectDeletionCoordinators.delete(projectId);
+      }
+    });
+    this.projectDeletionCoordinators.set(projectId, coordinator);
+    return coordinator;
+  }
+
+  private scheduleProjectDeletionRetry(projectId: string, attempt = 0): void {
+    if (this.projectDeletionRetryTimers.has(projectId)) return;
+    const schedule = [1_000, 5_000, 30_000, 300_000];
+    const delay = schedule[Math.min(attempt, schedule.length - 1)];
+    const timer = setTimeout(() => {
+      this.projectDeletionRetryTimers.delete(projectId);
+      void this.coordinateProjectSessionDeletion(projectId)
+        .then(() => this.projectStore?.finishDeleting(projectId))
+        .catch(() => this.scheduleProjectDeletionRetry(projectId, attempt + 1));
+    }, delay);
+    timer.unref?.();
+    this.projectDeletionRetryTimers.set(projectId, timer);
+  }
+
+  private schedulePendingProjectDeletionContinuation(): void {
+    if (this.pendingProjectDeleteContinuation || !this.projectStore || !this.sessionDeletionServices) {
+      return;
+    }
+    if (this.projectStore.snapshot().state === "corrupt") return;
+    const continuation = this.projectStore.continuePendingDeletes(async (projectId) => {
+      try {
+        await this.coordinateProjectSessionDeletion(projectId);
+      } catch (error) {
+        this.scheduleProjectDeletionRetry(projectId);
+        throw error;
+      }
+    }).finally(() => {
+      if (this.pendingProjectDeleteContinuation === continuation) {
+        this.pendingProjectDeleteContinuation = null;
+      }
+    });
+    this.pendingProjectDeleteContinuation = continuation;
+    void continuation.catch(() => undefined);
+  }
+
+  private async continuePendingProjectDeletes(): Promise<void> {
+    this.schedulePendingProjectDeletionContinuation();
+    await this.pendingProjectDeleteContinuation;
+  }
+
+  async handleProjectDelete(
+    request: HttpRequestLike,
+    rawId: string,
+  ): Promise<HttpLikeResponse> {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    if ((request.method ?? "GET").toUpperCase() !== "DELETE") return httpError(405, "method not allowed");
+    try {
+      const id = decodeApiKey(rawId);
+      if (!id) throw new WebuiProjectError("project_not_found", 404);
+      const store = this.requireProjectStore();
+      const snapshot = store.snapshot();
+      if (snapshot.state === "corrupt") {
+        throw new WebuiProjectError("project_registry_corrupt", 503);
+      }
+      const active = snapshot.projects.some((project) => project.id === id);
+      if (!active && !store.isDeleting(id)) {
+        throw new WebuiProjectError("project_not_found", 404);
+      }
+      if (active) {
+        store.beginDeleting(id, (projectId) => {
+          this.discardInflightForProject(projectId);
+        });
+      }
+      let deletedSessionKeys: string[];
+      try {
+        deletedSessionKeys = await this.coordinateProjectSessionDeletion(id);
+        store.finishDeleting(id);
+      } catch (error) {
+        this.scheduleProjectDeletionRetry(id);
+        throw error;
+      }
+      return httpJsonResponse({
+        deletedId: id,
+        deletedSessionKeys,
+        snapshot: this.webuiSessionSnapshot(),
+      });
+    } catch (error) {
+      return this.projectErrorResponse(error);
+    }
+  }
+
+  async handleSessionDelete(request: any, key: string): Promise<HttpLikeResponse> {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    if (!this.sessionManager) return httpError(503, "session manager unavailable");
+    const decodedKey = decodeGuiSessionApiKey(key);
+    if (decodedKey == null) return invalidGuiSessionKeyResponse(key);
+    const resolved = this.resolveGuiSessionResponse(decodedKey);
+    if ("status" in resolved) return resolved;
+    const existed = Boolean(this.sessionManager?.has?.(resolved.canonicalSessionKey));
+    await this.hardDeleteWebuiSessions([resolved.canonicalSessionKey], { cancelRunning: true });
+    return httpJsonResponse({ deleted: existed, key: resolved.guiSessionKey });
+  }
+
+  async handleSessionTitleUpdate(request: any, key: string): Promise<HttpLikeResponse> {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    if ((request.method ?? "GET").toUpperCase() !== "POST") return httpError(405, "method not allowed");
+    if (!this.sessionManager) return httpError(503, "session manager unavailable");
+    const decodedKey = decodeGuiSessionApiKey(key);
+    if (decodedKey == null) return invalidGuiSessionKeyResponse(key);
+    const resolved = this.resolveGuiSessionResponse(decodedKey);
+    if ("status" in resolved) return resolved;
+    let decoded: any;
+    try {
+      decoded = JSON.parse(requestBodyText(request));
+    } catch {
+      return httpError(400, "body must be JSON");
+    }
+    if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) return httpError(400, "body must be an object");
+    const title = typeof decoded.title === "string" ? decoded.title : null;
+    if (title == null) return httpError(400, "missing title");
+    const baseTitle = stripGuiDisplayTitleSuffix(title, resolved.source);
+    const rename = async (): Promise<HttpLikeResponse> => {
+      this.sessionManager.invalidate?.(resolved.canonicalSessionKey);
+      const renameSession = this.sessionManager.renameSession;
+      const canonicalSummary = typeof renameSession === "function"
+        ? renameSession.call(this.sessionManager, resolved.canonicalSessionKey, baseTitle)
+        : null;
+      if (!canonicalSummary) return httpError(404, "session not found");
+      const current = this.sessionManager.get(resolved.canonicalSessionKey) as Session | null;
+      const session = current ? this.guiSessionProjection?.projectSession(current) : null;
+      if (!session) return httpError(404, "session not found");
+      if (isExternalGuiChatId(resolved.guiChatId)) {
+        this.queueGlobalSessionUpdated(resolved.guiChatId, "metadata");
+      }
+      return httpJsonResponse({ session });
+    };
+    if (this.sessionTurnBarrier) {
+      return this.sessionTurnBarrier(resolved.canonicalSessionKey, rename);
+    }
+    return rename();
+  }
+
+  augmentMediaUrls(payload: Record<string, any>, sessionKey?: string | null): void {
+    const messages = payload.messages;
+    if (!Array.isArray(messages)) return;
+    for (const msg of messages) {
+      if (!msg || typeof msg !== "object") continue;
+      const media = msg.media;
+      if (!Array.isArray(media) || !media.length) continue;
+      const attachments = media
+        .filter((entry: any): entry is string => typeof entry === "string" && Boolean(entry))
+        .map((entry) => this.webuiMediaAttachmentForPath(entry, sessionKey))
+        .filter((entry): entry is WebuiMediaAttachment => Boolean(entry));
+      if (attachments.length) msg.media_urls = attachments;
+      delete msg.media;
+    }
+  }
+
+  artifactSessionWorkspace(sessionKey: string): string | null {
+    try {
+      if (!sessionKey.startsWith("websocket:")) {
+        const canonical = this.sessionManager?.get?.(sessionKey) as Session | null;
+        return canonical?.metadata?.webui === true
+          ? readWebuiSessionBinding(canonical).cwd
+          : null;
+      }
+      return this.resolveGuiSession(sessionKey).binding.cwd;
+    } catch {
+      return null;
+    }
+  }
+
+  resolveAllowedArtifactPath(
+    rawPath: string,
+    sessionWorkspace: string,
+  ): AllowedArtifactPath | null {
+    const expanded = normalizeLocalPath(expandHomePath(rawPath));
+    const isAbsoluteRequest = path.isAbsolute(expanded) || rawPath.startsWith("~/");
+    const candidate = path.isAbsolute(expanded)
+      ? path.resolve(expanded)
+      : path.resolve(sessionWorkspace, expanded);
+    let resolved: string;
+    let stat: fs.Stats;
+    try {
+      resolved = fs.realpathSync(candidate);
+      stat = fs.statSync(resolved);
+    } catch {
+      return null;
+    }
+    const workspaceRoot = realpathIfExists(sessionWorkspace);
+    if (stat.isDirectory()) {
+      if (isAbsoluteRequest || isPathInside(resolved, workspaceRoot)) {
+        return { path: resolved, kind: "directory" };
+      }
+      return null;
+    }
+    if (!stat.isFile()) return null;
+
+    const allowedRoots = [workspaceRoot, realpathIfExists(getMediaDir())];
+    return allowedRoots.some((root) => isPathInside(resolved, root))
+      ? { path: resolved, kind: "file" }
+      : null;
+  }
+
+  resolveOrStageArtifactPath(
+    rawPath: string,
+    sessionWorkspace: string,
+  ): ResolvedArtifactPath | null {
+    const recording = this.resolveWorkspaceRecordingPath(rawPath);
+    if (recording) return recording;
+    const allowed = this.resolveAllowedArtifactPath(rawPath, sessionWorkspace);
+    if (allowed) {
+      if (allowed.kind === "directory") {
+        return { path: allowed.path, kind: "directory" };
+      }
+      const signed = this.signOrStageMediaPath(allowed.path);
+      return {
+        path: allowed.path,
+        kind: artifactKindForFile(allowed.path),
+        ...(signed?.url ? { mediaUrl: signed.url } : {})
+      };
+    }
+
+    const expanded = expandHomePath(rawPath);
+    if (!path.isAbsolute(expanded) && !rawPath.startsWith("~/")) {
+      return null;
+    }
+    const staged = this.stageArtifactPath(expanded);
+    return staged ? { path: staged.path, kind: artifactKindForFile(staged.path), mediaUrl: staged.url } : null;
+  }
+
+  /**
+   * A saved recording is served from the workspace in place.
+   *
+   * Staging would copy the audio into the media cache every time the
+   * recording is reopened after a restart.
+   */
+  private resolveWorkspaceRecordingPath(rawPath: string): ResolvedArtifactPath | null {
+    const expanded = expandHomePath(rawPath);
+    if (!path.isAbsolute(expanded)) return null;
+    let resolved: string;
+    try {
+      resolved = fs.realpathSync(expanded);
+      if (!fs.statSync(resolved).isFile()) return null;
+    } catch {
+      return null;
+    }
+    if (!isPathInside(resolved, realpathIfExists(path.join(this.workspacePath, WEBUI_RECORDINGS_DIR)))) return null;
+    const mediaUrl = this.signWorkspaceMediaPath(resolved);
+    return mediaUrl ? { path: resolved, kind: artifactKindForFile(resolved), mediaUrl } : null;
+  }
+
+  stageArtifactPath(rawPath: string): SignedMediaPath | null {
+    let resolved: string;
+    let stat: fs.Stats;
+    try {
+      resolved = fs.realpathSync(path.resolve(normalizeLocalPath(expandHomePath(rawPath))));
+      stat = fs.statSync(resolved);
+    } catch {
+      return null;
+    }
+    if (!stat.isFile() || stat.size > MAX_ARTIFACT_STAGING_BYTES) {
+      return null;
+    }
+
+    try {
+      const mediaDir = getMediaDir("websocket");
+      fs.mkdirSync(mediaDir, { recursive: true });
+      const fingerprint = crypto.createHash("sha256")
+        .update(`${resolved}\0${stat.size}\0${stat.mtimeMs}`)
+        .digest("hex")
+        .slice(0, 12);
+      const staged = path.join(mediaDir, `${fingerprint}-${safeFilename(path.basename(resolved)) || "artifact"}`);
+      if (!isStagedCopyCurrent(staged, stat.size)) {
+        try {
+          copyFileAtomically(resolved, staged);
+        } catch (error) {
+          if (!isStagedCopyCurrent(staged, stat.size)) throw error;
+        }
+      }
+      const stagedReal = fs.realpathSync(staged);
+      const url = this.signMediaPath(stagedReal);
+      return url ? { url, name: path.basename(resolved), path: stagedReal } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  augmentTranscriptUserMedia(
+    paths: string[],
+    sessionKey?: string | null,
+  ): Array<Record<string, any>> {
+    const out: Array<Record<string, any>> = [];
+    for (const p of paths) {
+      const att = this.webuiMediaAttachmentForPath(p, sessionKey);
+      if (!att) continue;
+      out.push(att);
+    }
+    return out;
+  }
+
+  tryAppendWebuiTranscript(chatId: string, wire: Record<string, any>): void {
+    try {
+      const key = `websocket:${chatId}`;
+      const record = structuredClone(wire);
+      const suppliedCreatedAt = record.createdAt ?? record.created_at ?? record.timestamp;
+      if (!(
+        (typeof suppliedCreatedAt === "number" && Number.isFinite(suppliedCreatedAt))
+        || (typeof suppliedCreatedAt === "string" && suppliedCreatedAt.trim())
+      )) {
+        const createdAt = Math.max(Date.now(), this.lastWebuiTranscriptCreatedAt + 1);
+        this.lastWebuiTranscriptCreatedAt = createdAt;
+        record.createdAt = createdAt;
+      }
+      const offset = appendTranscriptObject(key, record);
+      // appendTranscriptObject stamps this record's own starting offset onto the
+      // object it wrote. Mirror that onto `wire` so the broadcast payload and the
+      // persisted record carry one shared identity. Note `offset` is the return
+      // value — the position the *next* record starts at — so it must not be used
+      // here. A failed write leaves the field absent and the client skips dedup.
+      wire.transcript_offset = record.transcript_offset;
+      this.transcriptMonitor?.noteConsumed(key, offset);
+    } catch {
+      // Transcript persistence is best-effort for live WebSocket delivery.
+    }
+  }
+
+  turnIdFromMetadata(metadata?: Record<string, any> | null): string | null {
+    return firstNonemptyString(metadata?.turn_id, metadata?.turnId);
+  }
+
+  payloadIsTerminal(payload: Record<string, any>): boolean {
+    return (
+      payload.event === "turn_end" ||
+      payload.event === "stop_result" ||
+      (payload.event === "run_status" && payload.status === "idle") ||
+      (payload.event === "file_edit" && payload.cancellation_terminal === true)
+    );
+  }
+
+  shouldSendTurnPayload(chatId: string, payload: Record<string, any>): boolean {
+    const turnId = firstNonemptyString(payload.turn_id, payload.turnId);
+    if (!turnId || this.payloadIsTerminal(payload)) return true;
+    return this.activeTurnIdByChatId.get(chatId) === turnId;
+  }
+
+  private turnSourceForPayload(chatId: string, payload: Record<string, any>): TurnSource | null {
+    return parseTurnSource(payload.source)
+      ?? parseTurnSource(payload.metadata?.turn_source)
+      ?? this.activeTurnSourceByChatId.get(chatId)
+      ?? null;
+  }
+
+  private payloadForConnection(
+    connection: any,
+    chatId: string,
+    payload: Record<string, any>,
+    source: TurnSource | null,
+  ): Record<string, any> | null {
+    if ((this.connectionSurface.get(connection) ?? "gui") === "gui") return payload;
+    if (source?.kind === "tui") {
+      return payload.event === "run_status"
+        ? { ...payload, owned_by_tui: true }
+        : payload;
+    }
+    if (payload.event === "run_status") {
+      return {
+        event: "run_status",
+        chat_id: chatId,
+        status: payload.status,
+        busy: payload.status === "running",
+        owned_by_tui: false,
+      };
+    }
+    if (TURN_CONTENT_EVENTS.has(String(payload.event ?? ""))) return null;
+    return payload;
+  }
+
+  async sendTurnPayload(
+    chatId: string,
+    payload: Record<string, any>,
+    {
+      appendTranscript = true,
+      targets = null,
+    }: {
+      appendTranscript?: boolean;
+      targets?: any[] | null;
+    } = {},
+  ): Promise<void> {
+    if (!this.shouldSendTurnPayload(chatId, payload)) return;
+    const source = this.turnSourceForPayload(chatId, payload);
+    // Always a copy: tryAppendWebuiTranscript stamps transcript_offset in place,
+    // and the caller's payload object must not be mutated.
+    const enrichedPayload = { ...payload, ...(source ? { source } : {}) };
+    if (appendTranscript) this.tryAppendWebuiTranscript(chatId, enrichedPayload);
+    for (const connection of targets ?? [...(this.subscriptions.get(chatId) ?? [])]) {
+      const projected = this.payloadForConnection(connection, chatId, enrichedPayload, source);
+      if (projected) await this.safeSendTo(connection, projected);
+    }
+  }
+
+  rewriteLocalMarkdownImages(text: string, sessionKey?: string | null): string {
+    const workspacePath = sessionKey
+      ? this.artifactSessionWorkspace(sessionKey) ?? this.workspacePath
+      : this.workspacePath;
+    return rewriteLocalMarkdownImages(text, {
+      workspacePath,
+      signPath: (filePath: string) => this.signOrStageMediaPath(filePath, workspacePath),
+    });
+  }
+
+  serveStatic(requestPath: string): HttpLikeResponse | null {
+    if (!this.staticDistPath) return null;
+    let rel = requestPath.replace(/^\/+/, "") || "index.html";
+    if (rel.split("/").includes("..") || path.isAbsolute(rel)) return httpError(403, "Forbidden");
+    let candidate = path.resolve(this.staticDistPath, rel);
+    const rootRel = path.relative(this.staticDistPath, candidate);
+    if (rootRel.startsWith("..") || path.isAbsolute(rootRel)) return httpError(403, "Forbidden");
+    if (!fs.existsSync(candidate) || !fs.statSync(candidate).isFile()) {
+      const index = path.join(this.staticDistPath, "index.html");
+      if (!fs.existsSync(index) || !fs.statSync(index).isFile()) return null;
+      candidate = index;
+      rel = "index.html";
+    }
+    const mime = String(lookupMime(candidate) || "application/octet-stream");
+    const contentType = mime.startsWith("text/") || ["application/javascript", "application/json"].includes(mime) ? `${mime}; charset=utf-8` : mime;
+    return httpResponse(fs.readFileSync(candidate), {
+      contentType,
+      extraHeaders: { "cache-control": path.basename(rel) === "index.html" ? "no-cache" : "public, max-age=31536000, immutable" },
+    });
+  }
+
+  authorizeWebsocketHandshake(connection: any, query: Query): HttpLikeResponse | null {
+    // Do not consume one-use tokens while the message loop is still starting or stopping.
+    if (!this.isRuntimeReady()) return connectionRespond(connection, 503, "agent_runtime_initializing");
+    const supplied = queryFirst(query, "token");
+    const staticToken = this.config.token.trim();
+    if (staticToken) {
+      if (supplied && safeCompare(supplied, staticToken)) return null;
+      if (supplied && this.takeIssuedTokenIfValid(supplied)) return null;
+      return connectionRespond(connection, 401, "Unauthorized");
+    }
+    if (this.config.websocketRequiresToken) {
+      if (supplied && this.takeIssuedTokenIfValid(supplied)) return null;
+      return connectionRespond(connection, 401, "Unauthorized");
+    }
+    if (supplied) this.takeIssuedTokenIfValid(supplied);
+    return null;
+  }
+
+  async dispatchHttp(connection: any, request: any): Promise<HttpLikeResponse | null> {
+    const [got, query] = parseRequestPath(String(request?.path ?? "/"));
+    if (this.config.tokenIssuePath && got === normalizeConfigPath(this.config.tokenIssuePath)) {
+      return this.handleTokenIssueHttp(connection, request);
+    }
+    if (got === "/webui/bootstrap") return this.handleBootstrap(connection, request);
+    if (got === "/api/channels/definitions") return this.handleChannelAdmin(request, "definitions");
+    if (got === "/api/channels/status") return this.handleChannelAdmin(request, "status");
+    let channelAdminMatch = got.match(/^\/api\/channels\/([^/]+)\/configure$/);
+    if (channelAdminMatch) return this.handleChannelAdmin(request, "configure", decodeURIComponent(channelAdminMatch[1]));
+    channelAdminMatch = got.match(/^\/api\/channels\/([^/]+)\/stop$/);
+    if (channelAdminMatch) return this.handleChannelAdmin(request, "stop", decodeURIComponent(channelAdminMatch[1]));
+    if (got === "/api/channels/weixin/login/start") return this.handleChannelAdmin(request, "weixin-login-start");
+    channelAdminMatch = got.match(/^\/api\/channels\/weixin\/login\/([^/]+)$/);
+    if (channelAdminMatch) return this.handleChannelAdmin(request, "weixin-login-poll", decodeURIComponent(channelAdminMatch[1]));
+    if (got === "/api/channels/feishu/login/start") return this.handleChannelAdmin(request, "feishu-login-start");
+    channelAdminMatch = got.match(/^\/api\/channels\/feishu\/login\/([^/]+)$/);
+    if (channelAdminMatch) return this.handleChannelAdmin(request, "feishu-login-poll", decodeURIComponent(channelAdminMatch[1]));
+    if (got === "/api/runtime/task-activity") {
+      if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+      return httpJsonResponse({ busy: agentTaskActivity.busy || Boolean(this.terminalRunControl?.hasActiveRuns()) });
+    }
+    if (got === "/api/sessions") return this.handleSessionsList(request);
+    if (got === "/api/projects") return this.handleProjectCreate(request);
+    if (got === "/api/settings") return this.handleSettings(request);
+    if (got === "/api/commands") return this.handleCommands(request);
+    if (got === "/api/computer-history") return this.handleComputerHistory(request, "snapshot");
+    if (got === "/api/computer-history/observation/status") return this.handleComputerHistory(request, "observation-status");
+    if (got === "/api/computer-history/settings") return this.handleComputerHistory(request, "settings");
+    if (got === "/api/computer-history/apps") return this.handleComputerHistory(request, "apps");
+    if (got === "/api/computer-history/permissions/check") return this.handleComputerHistory(request, "permissions-check");
+    if (got === "/api/computer-history/permissions/open") return this.handleComputerHistory(request, "permissions-open");
+    if (got === "/api/computer-history/wechat/consent") return this.handleComputerHistory(request, "wechat-consent");
+    if (got === "/api/computer-history/wechat/prepare") return this.handleComputerHistory(request, "wechat-prepare");
+    if (got === "/api/computer-history/wechat/connect") return this.handleComputerHistory(request, "wechat-connect");
+    if (got === "/api/computer-history/delete") return this.handleComputerHistory(request, "history-delete");
+    if (got === "/api/computer-history/model") return this.handleComputerHistory(request, "model-select");
+    if (got === "/api/computer-history/clear") return this.handleComputerHistory(request, "history-clear");
+    if (got === "/api/computer-history/pin") return this.handleComputerHistory(request, "history-pin");
+    if (got === "/api/computer-history/import") return this.handleComputerHistory(request, "import");
+    if (got === "/api/computer-history/observation/start") return this.handleComputerHistory(request, "observation-start");
+    if (got === "/api/computer-history/observation/pause") return this.handleComputerHistory(request, "observation-pause");
+    if (got === "/api/computer-history/observation/resume") return this.handleComputerHistory(request, "observation-resume");
+    if (got === "/api/computer-history/observation/stop") return this.handleComputerHistory(request, "observation-stop");
+    if (got === "/api/computer-history/workflows/create") return this.handleComputerHistory(request, "workflow-create");
+    if (got === "/api/computer-history/app-icon") return this.handleComputerHistoryAppIcon(request);
+    if (got === "/api/webui/sidebar-state") return this.handleWebuiSidebarState(request);
+    if (got === "/api/webui/sidebar-state/update") return this.handleWebuiSidebarStateUpdate(request);
+    if (got === "/api/webui/seed-chat") return this.handleWebuiSeedChat(request);
+    if (got === "/api/webui/artifacts/resolve") return this.handleArtifactResolve(request);
+    if (got === "/api/webui/recordings/resolve") return this.handleWebuiRecordingResolve(request);
+    if (got === "/api/webui/artifacts/reveal") return this.handleArtifactReveal(request);
+    if (got === "/api/webui/artifacts/open") return this.handleArtifactOpen(request);
+    if (got === "/api/webui/media/upload") return this.handleWebuiMediaUpload(request);
+    if (got === "/api/webui/recordings/delete") return this.handleWebuiRecordingDelete(request);
+    if (got === "/api/settings/update") return this.handleSettingsUpdate(request);
+    if (got === "/api/settings/model-configurations/create") return this.handleSettingsModelConfigurationCreate(request);
+    if (got === "/api/settings/provider/update") return this.handleSettingsProviderUpdate(request);
+    if (got === "/api/settings/web-search/update") return this.handleSettingsWebSearchUpdate(request);
+    if (got === "/api/settings/image-generation/update") return this.handleSettingsImageGenerationUpdate(request);
+    if (got === "/api/settings/mcp-presets") return this.handleSettingsMcpPresets(request);
+    if (got === "/api/settings/computer-use/excel") return this.handleExcelAddinStatus(request);
+    if (got === "/api/settings/computer-use/apps") return this.handleNativeAppApprovals(request);
+    if (got === "/api/settings/computer-use/browsers") return this.handleExternalBrowserStatus(request);
+    if (MCP_PRESET_ACTIONS_BY_PATH[got]) return this.handleSettingsMcpPresets(request, MCP_PRESET_ACTIONS_BY_PATH[got]);
+    let match = got.match(/^\/api\/sessions\/([^/]+)\/messages$/);
+    if (match) return this.handleSessionMessages(request, match[1]);
+    match = got.match(/^\/api\/sessions\/([^/]+)\/environment$/);
+    if (match) return this.handleWorkspaceEnvironment(request, match[1], "environment");
+    match = got.match(/^\/api\/sessions\/([^/]+)\/environment\/diff$/);
+    if (match) return this.handleWorkspaceEnvironment(request, match[1], "diff");
+    match = got.match(/^\/api\/sessions\/([^/]+)\/environment\/branch$/);
+    if (match) return this.handleWorkspaceEnvironment(request, match[1], "branch");
+    match = got.match(/^\/api\/sessions\/([^/]+)\/workspace\/file\/open$/);
+    if (match) return this.handleWorkspaceFiles(request, match[1], "open");
+    match = got.match(/^\/api\/sessions\/([^/]+)\/workspace\/file\/reveal$/);
+    if (match) return this.handleWorkspaceFiles(request, match[1], "reveal");
+    match = got.match(/^\/api\/sessions\/([^/]+)\/workspace\/file$/);
+    if (match) return this.handleWorkspaceFiles(request, match[1], "file");
+    match = got.match(/^\/api\/sessions\/([^/]+)\/workspace\/files$/);
+    if (match) return this.handleWorkspaceFiles(request, match[1]);
+    match = got.match(/^\/api\/sessions\/([^/]+)\/webui-thread$/);
+    if (match) return this.handleWebuiThreadGet(request, match[1]);
+    match = got.match(/^\/api\/sessions\/([^/]+)\/last-compaction$/);
+    if (match) return this.handleLastCompactionGet(request, match[1]);
+    match = got.match(/^\/api\/sessions\/([^/]+)\/delete$/);
+    if (match) return this.handleSessionDelete(request, match[1]);
+    match = got.match(/^\/api\/sessions\/([^/]+)\/title$/);
+    if (match) return this.handleSessionTitleUpdate(request, match[1]);
+    match = got.match(/^\/api\/projects\/([^/]+)\/environment$/);
+    if (match) return this.handleProjectWorkspaceEnvironment(request, match[1], "environment");
+    match = got.match(/^\/api\/projects\/([^/]+)\/environment\/diff$/);
+    if (match) return this.handleProjectWorkspaceEnvironment(request, match[1], "diff");
+    match = got.match(/^\/api\/projects\/([^/]+)\/environment\/branch$/);
+    if (match) return this.handleProjectWorkspaceEnvironment(request, match[1], "branch");
+    match = got.match(/^\/api\/projects\/([^/]+)\/workspace\/file\/open$/);
+    if (match) return this.handleProjectWorkspaceFiles(request, match[1], "open");
+    match = got.match(/^\/api\/projects\/([^/]+)\/workspace\/file\/reveal$/);
+    if (match) return this.handleProjectWorkspaceFiles(request, match[1], "reveal");
+    match = got.match(/^\/api\/projects\/([^/]+)\/workspace\/file$/);
+    if (match) return this.handleProjectWorkspaceFiles(request, match[1], "file");
+    match = got.match(/^\/api\/projects\/([^/]+)\/workspace\/files$/);
+    if (match) return this.handleProjectWorkspaceFiles(request, match[1]);
+    match = got.match(/^\/api\/projects\/([^/]+)\/reveal$/);
+    if (match) return this.handleProjectReveal(request, match[1]);
+    match = got.match(/^\/api\/projects\/([^/]+)$/);
+    if (match) {
+      if ((request.method ?? "GET").toUpperCase() === "PATCH") {
+        return this.handleProjectUpdate(request, match[1]);
+      }
+      if ((request.method ?? "GET").toUpperCase() === "DELETE") {
+        return this.handleProjectDelete(request, match[1]);
+      }
+    }
+    match = got.match(/^\/api\/media\/ws\/([A-Za-z0-9_-]+)\/([A-Za-z0-9_-]+)$/);
+    if (match) return this.handleWorkspaceMediaFetch(match[1], match[2], request);
+    match = got.match(/^\/api\/media\/([A-Za-z0-9_-]+)\/([A-Za-z0-9_-]+)$/);
+    if (match) return this.handleMediaFetch(match[1], match[2], request);
+    if (got === this.expectedPath() && isWebsocketUpgrade(request)) {
+      const clientId = (queryFirst(query, "client_id") ?? "").slice(0, 128);
+      if (!this.isAllowed(clientId)) return connectionRespond(connection, 403, "Forbidden");
+      return this.authorizeWebsocketHandshake(connection, query);
+    }
+    const staticResponse = this.serveStatic(got);
+    if (staticResponse) return staticResponse;
+    return connectionRespond(connection, 404, "Not Found");
+  }
+
+  override async start(): Promise<void> {
+    this.running = true;
+    this.startComputerHistoryModelSync();
+    await nativeExcelControl.start();
+    if (process.env.MEMMY_DESKTOP_MANAGED_GATEWAY === "1") {
+      try { await externalBrowserBridge.start(); }
+      catch (error) {
+        console.warn("[websocket] Chrome/Edge extension bridge could not start; check whether another Memmy gateway is using its local ports. Gateway startup will continue.",
+          { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    const factory = this.config.serverFactory;
+    if (factory) {
+      this.server = await factory(this);
+      return;
+    }
+    if (this.server) return;
+    const tls = this.buildSslContext();
+    const handler = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
+      let request = requestFromIncoming(req);
+      try {
+        if (request.method !== "GET" && request.method !== "HEAD" && request.method !== "OPTIONS") {
+          const bodyLimit = normalizeHttpPath(request.path) === "/api/webui/media/upload"
+            ? MAX_WEBUI_UPLOAD_BODY_BYTES
+            : MAX_HTTP_JSON_BODY_BYTES;
+          request = { ...request, body: await readIncomingBody(req, bodyLimit) };
+        }
+        const response = request.method === "OPTIONS"
+          ? corsPreflightResponse(this.config, request)
+          : await this.dispatchHttp(httpConnectionFromRequest(req), request);
+        writeNodeResponse(res, withCorsHeaders(response ?? httpError(404, "Not Found"), this.config, request));
+      } catch (error) {
+        const status = error instanceof HttpBodyTooLargeError ? 413 : 400;
+        writeNodeResponse(res, withCorsHeaders(httpError(status, error instanceof Error ? error.message : "invalid request"), this.config, request));
+      }
+    };
+    const server = tls ? https.createServer(tls, handler) : http.createServer(handler);
+    server.on("upgrade", async (req, socket, head) => {
+      const request = requestFromIncoming(req);
+      const connection = new MinimalWebSocketConnection(socket, request, this.config.maxMessageBytes);
+      try {
+        const gate = await this.dispatchHttp(connection, request);
+        if (gate) {
+          rejectUpgrade(socket, gate);
+          return;
+        }
+        connection.accept(head);
+        void this.connectionLoop(connection).catch((error) => this.handleConnectionLoopFailure(connection, error));
+      } catch (error) {
+        rejectUpgrade(socket, httpError(500, error instanceof Error ? error.message : "Internal Server Error"));
+      }
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(this.config.port, this.config.host, () => resolve());
+    });
+    this.server = server;
+  }
+
+  override async stop(): Promise<void> {
+    if (this.computerHistoryModelTimer) clearInterval(this.computerHistoryModelTimer);
+    this.computerHistoryModelTimer = null;
+    if (!this.running && !this.server) return;
+    this.running = false;
+    nativeExcelControl.stop();
+    // Recording is scoped to the app: closing it finalizes the open segment
+    // rather than leaving a recorder running behind the user's back.
+    await this.computerHistory.shutdown();
+    if (typeof this.server?.close === "function") {
+      await new Promise<void>((resolve) => this.server.close(() => resolve()));
+    }
+    this.server = null;
+    this.subscriptions.clear();
+    this.connectionChats.clear();
+    this.connectionDefaultChats.clear();
+    this.issuedTokens.clear();
+    this.apiTokens.clear();
+    this.streamTextBuffers.clear();
+    this.activeTurnIdByChatId.clear();
+    this.activeTurnSourceByChatId.clear();
+    this.connectionSurface.clear();
+    this.inflightWebuiMessageRequests.clear();
+    this.queueProjectionChains.clear();
+    this.sessionManager?.clearWebuiSessionBindingReservations?.();
+    for (const timer of this.projectDeletionRetryTimers.values()) clearTimeout(timer);
+    this.projectDeletionRetryTimers.clear();
+    for (const timer of this.sessionUpdateTimers.values()) clearTimeout(timer);
+    this.sessionUpdateTimers.clear();
+    this.sessionUpdateScopes.clear();
+  }
+
+  /**
+   * An application icon, apart from the snapshot routes: it answers with one
+   * image rather than the whole timeline, and the timeline asks for a dozen of
+   * them at once.
+   */
+  async handleComputerHistoryAppIcon(request: any): Promise<HttpLikeResponse> {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    if (!isComputerHistorySupported()) return httpError(400, "Computer History requires macOS or Windows 11");
+    if ((request.method ?? "GET").toUpperCase() !== "GET") return httpError(405, "method not allowed");
+    // The router carries the path, query and all, on `request.path`; there is
+    // no `request.url` here, and reading one silently loses every parameter.
+    const bundleId = queryFirst(parseQuery(String(request?.path ?? "/")), "bundle_id");
+    if (!bundleId) return httpError(400, "bundle_id is required");
+    try {
+      return httpJsonResponse({ icon: await this.computerHistory.applicationIcon(bundleId) });
+    } catch (error) {
+      if (error instanceof ComputerHistoryApiError) return httpError(error.status, error.message);
+      return httpError(500, error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async handleComputerHistory(
+    request: any,
+    action: "snapshot" | "observation-status" | "settings" | "apps" | "model-select" | "permissions-check" | "permissions-open" | "wechat-consent" | "wechat-connect" | "wechat-prepare" | "history-delete" | "history-clear" | "history-pin" | "import" | "observation-start" | "observation-pause" | "observation-resume" | "observation-stop" | "workflow-create",
+  ): Promise<HttpLikeResponse> {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    if (!isComputerHistorySupported()) return httpError(400, "Computer History requires macOS or Windows 11");
+    const method = (request.method ?? "GET").toUpperCase();
+    if (action === "snapshot") {
+      return method === "GET"
+        ? httpJsonResponse(clientSnapshot(this.computerHistory.snapshot()) as unknown as Record<string, any>)
+        : httpError(405, "method not allowed");
+    }
+    if (action === "observation-status") {
+      return method === "GET"
+        ? httpJsonResponse(this.computerHistory.observationStatus())
+        : httpError(405, "method not allowed");
+    }
+    if (action === "apps") {
+      if (method !== "GET") return httpError(405, "method not allowed");
+      try {
+        return httpJsonResponse({ applications: await this.computerHistory.listApplications() });
+      } catch (error) {
+        return httpError(500, error instanceof Error ? error.message : String(error));
+      }
+    }
+    if (action === "settings" && method === "GET") {
+      return httpJsonResponse(this.computerHistory.getObservationSettings() as unknown as Record<string, any>);
+    }
+    if (method !== "POST") return httpError(405, "method not allowed");
+
+    let body: Record<string, any> = {};
+    if (requestBodyText(request).trim()) {
+      try {
+        const parsed = JSON.parse(requestBodyText(request));
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          return httpError(400, "body must be an object");
+        }
+        body = parsed;
+      } catch {
+        return httpError(400, "body must be JSON");
+      }
+    }
+
+    try {
+      let snapshot;
+      switch (action) {
+        case "wechat-consent":
+          if (typeof body.enabled !== "boolean") {
+            throw new ComputerHistoryApiError(422, "enabled must be a boolean");
+          }
+          snapshot = this.computerHistory.setWeChatChatAccess(body.enabled);
+          break;
+        case "wechat-prepare":
+          return httpJsonResponse(await this.computerHistory.prepareWeChatReader());
+        case "wechat-connect":
+          snapshot = this.computerHistory.connectWeChat();
+          break;
+        case "settings":
+          return httpJsonResponse(this.computerHistory.updateObservationSettings(body.settings) as unknown as Record<string, any>);
+        case "model-select": {
+          if (body.model_preset !== undefined && body.model_preset !== null
+            && (typeof body.model_preset !== "string" || !body.model_preset.trim())) {
+            throw new ComputerHistoryApiError(422, "model_preset must be a preset ID or null");
+          }
+          // Legacy clients send their task preset. Accept it for compatibility,
+          // but only the saved memory_summary assignment participates in routing.
+          if (!this.refreshComputerHistorySummaryModel()) {
+            throw new ComputerHistoryApiError(422, "summary_model_selection_unavailable");
+          }
+          snapshot = this.computerHistory.snapshot();
+          break;
+        }
+        case "history-delete":
+          snapshot = this.computerHistory.deleteHistory(String(body.history_id ?? ""));
+          break;
+        case "history-clear":
+          if (body.scope !== "today" && body.scope !== "all") {
+            throw new ComputerHistoryApiError(400, "scope must be today or all");
+          }
+          snapshot = await this.computerHistory.clearHistories(body.scope);
+          break;
+        case "history-pin":
+          snapshot = this.computerHistory.pinSegment(
+            String(body.history_id ?? ""),
+            body.pinned !== false,
+          );
+          break;
+        case "import":
+          snapshot = this.computerHistory.importMarkdown({
+            title: typeof body.title === "string" ? body.title : undefined,
+            markdown: typeof body.markdown === "string" ? body.markdown : "",
+          });
+          break;
+        case "observation-start":
+          snapshot = await this.computerHistory.startObservationWithPermissions();
+          break;
+        case "observation-pause":
+          snapshot = await this.computerHistory.pauseObservation();
+          break;
+        case "observation-resume":
+          snapshot = await this.computerHistory.startObservationWithPermissions(true);
+          break;
+        case "observation-stop":
+          snapshot = await this.computerHistory.stopObservation();
+          break;
+        case "permissions-check":
+          return httpJsonResponse(await this.computerHistory.checkPermissions());
+        case "permissions-open":
+          if (body.permission !== "accessibility" && body.permission !== "inputMonitoring") return httpError(422, "invalid Computer History permission");
+          if (body.mode !== undefined && body.mode !== "request" && body.mode !== "settings") return httpError(422, "invalid Computer History permission mode");
+          return httpJsonResponse(await this.computerHistory.openPermission(body.permission, body.mode ?? "settings"));
+        case "workflow-create":
+          snapshot = this.computerHistory.createWorkflow(
+            String(body.history_id ?? ""),
+            typeof body.user_request === "string" ? body.user_request : "",
+          );
+          break;
+      }
+      return httpJsonResponse(clientSnapshot(snapshot!) as unknown as Record<string, any>);
+    } catch (error) {
+      if (error instanceof ComputerHistoryApiError) return httpError(error.status, error.message);
+      return httpError(500, error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async connectionLoop(connection: any): Promise<void> {
+    const [, query] = parseRequestPath(String(connection?.request?.path ?? "/"));
+    const rawClientId = queryFirst(query, "client_id");
+    let clientId = rawClientId?.trim() || "";
+    if (!clientId) clientId = `anon-${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
+    if (clientId.length > 128) clientId = clientId.slice(0, 128);
+    const requestedSurface = queryFirst(query, "client_surface");
+    const surface: ClientSurface = requestedSurface === "tui" ? "tui" : "gui";
+    this.connectionSurface.set(connection, surface);
+    const defaultChatId = crypto.randomUUID();
+
+    try {
+      await connection.send(JSON.stringify({ event: "ready", chat_id: defaultChatId, client_id: clientId }));
+      this.connectionDefaultChats.set(connection, defaultChatId);
+      this.attachConnection(connection, defaultChatId);
+      await this.hydrateAfterSubscribe(defaultChatId);
+      if (surface === "gui") {
+        try { await this.flushPendingCronNotifications(); }
+        catch {
+          // Preserve an unreadable queue without making every GUI connection
+          // fail its ready handshake. The original file remains available.
+          console.warn("[websocket] pending cron notifications could not be recovered; queue preserved");
+        }
+      }
+
+      for await (let raw of connection) {
+        if (Buffer.isBuffer(raw)) {
+          try {
+            raw = raw.toString("utf8");
+          } catch {
+            continue;
+          }
+        }
+        const envelope = parseEnvelope(String(raw));
+        if (envelope) {
+          await this.dispatchEnvelope(connection, clientId, envelope);
+          continue;
+        }
+        if (looksLikeEnvelopeJson(String(raw))) {
+          await this.sendEvent(connection, "error", { detail: "malformed envelope" });
+          continue;
+        }
+        const content = parseInboundPayload(String(raw));
+        if (content == null) continue;
+        await this.handleMessage({
+          senderId: clientId,
+          chatId: defaultChatId,
+          content,
+          metadata: { remote: connection?.remoteAddress ?? null },
+          isDm: false,
+          turnSource: { kind: surface, channel: "websocket" },
+        });
+      }
+    } finally {
+      this.safeCleanupConnection(connection);
+    }
+  }
+
+  handleConnectionLoopFailure(connection: any, error: unknown): void {
+    const errorType = error instanceof Error ? error.name : typeof error;
+    const remote = Array.isArray(connection?.remoteAddress)
+      ? String(connection.remoteAddress[0] ?? "unknown")
+      : String(connection?.remoteAddress ?? "unknown");
+    console.warn(`[websocket] connection loop failed (${errorType}, remote=${remote})`);
+    try {
+      connection?.close?.(1011, "connection loop failed");
+    } catch {
+      // The socket can already be gone.
+    }
+    this.safeCleanupConnection(connection);
+  }
+
+  override async handleMessage(
+    senderIdOrOptions: string | ChannelHandleMessageOptions,
+    chatId?: string,
+    content?: string,
+    media?: string[],
+    metadata?: Record<string, any>,
+    sessionKey?: string | null,
+    isDm = false,
+  ): Promise<void> {
+    const opts =
+      typeof senderIdOrOptions === "object"
+        ? senderIdOrOptions
+        : {
+            senderId: senderIdOrOptions,
+            chatId,
+            content: content ?? "",
+            media,
+            metadata,
+            sessionKey,
+            isDm,
+          };
+    const messageMetadata = opts.metadata ?? {};
+    if (messageMetadata.webui && !messageMetadata.client_request_id) {
+      const chatId = String(opts.chatId ?? "");
+      const userObj: Record<string, any> = {
+        event: "user",
+        chat_id: chatId,
+        text: opts.content,
+      };
+      const media = opts.media ?? [];
+      if (media.length) userObj.media_paths = [...media];
+      if (Array.isArray(messageMetadata.mcp_presets) && messageMetadata.mcp_presets.length) userObj.mcp_presets = messageMetadata.mcp_presets;
+      this.tryAppendWebuiTranscript(chatId, userObj);
+    }
+    await super.handleMessage(opts);
+  }
+
+  resolveEnvelopeMediaPaths(value: any): [string[], string | null] {
+    if (value == null) return [[], null];
+    if (!Array.isArray(value)) return [[], "malformed"];
+    const allowedRoots = this.webuiMediaInputRoots();
+    const out: string[] = [];
+    for (const item of value) {
+      if (typeof item !== "string" || !item.trim()) return [[], "malformed"];
+      let resolved: string;
+      let stat: fs.Stats;
+      try {
+        resolved = fs.realpathSync(path.resolve(expandHomePath(item)));
+        stat = fs.statSync(resolved);
+      } catch {
+        return [[], "missing"];
+      }
+      if (!stat.isFile() || !allowedRoots.some((root) => isPathInside(resolved, root))) return [[], "path"];
+      const bytes = fs.readFileSync(resolved);
+      const classification = classifySavedWebuiAttachment(resolved, bytes);
+      if (!classification) return [[], "mime"];
+      out.push(resolved);
+    }
+    return [out, null];
+  }
+
+  /**
+   * Reads a small UTF-8 excerpt for attachment-only automatic titles.
+   *
+   * The path must remain inside the same roots accepted by message envelopes,
+   * and only known text extensions are eligible. Binary documents, audio, and
+   * arbitrary workspace paths are never opened for title generation.
+   */
+  readWebuiTitleText(filePath: string): string | null {
+    let resolved: string;
+    let size: number;
+    try {
+      resolved = fs.realpathSync(path.resolve(expandHomePath(filePath)));
+      const stat = fs.statSync(resolved);
+      if (!stat.isFile()) return null;
+      size = stat.size;
+    } catch {
+      return null;
+    }
+    if (!this.webuiMediaInputRoots().some((root) => isPathInside(resolved, root))) return null;
+    if (!TEXT_MIME_BY_EXTENSION[path.extname(resolved).toLowerCase()]) return null;
+
+    const length = Math.min(size, MAX_TITLE_ATTACHMENT_TEXT_BYTES);
+    if (length <= 0) return null;
+    const bytes = Buffer.alloc(length);
+    let descriptor: number | null = null;
+    let read = 0;
+    try {
+      descriptor = fs.openSync(resolved, "r");
+      read = fs.readSync(descriptor, bytes, 0, length, 0);
+    } catch {
+      return null;
+    } finally {
+      if (descriptor != null) fs.closeSync(descriptor);
+    }
+    const sample = bytes.subarray(0, read);
+    if (!looksLikeText(sample)) return null;
+    const text = sample.toString("utf8").replace(/^\uFEFF/u, "").trim();
+    return text || null;
+  }
+
+  private webuiMediaInputRoots(): string[] {
+    return [
+      realpathIfExists(getMediaDir("websocket")),
+      realpathIfExists(path.join(this.workspacePath, WEBUI_RECORDINGS_DIR)),
+    ];
+  }
+
+  deprecatedEnvelopeMediaReason(value: any): string {
+    if (!Array.isArray(value)) return "malformed";
+    for (const item of value) {
+      if (!item || typeof item !== "object" || typeof item.data_url !== "string") return "malformed";
+      const mime = extractDataUrlMime(item.data_url);
+      if (!mime) return "decode";
+      if (IMAGE_MIME_ALLOWED.has(mime)) return "deprecated_payload";
+      return "mime";
+    }
+    return "deprecated_payload";
+  }
+
+  private webuiBindingErrorReason(error: unknown): string {
+    if (error instanceof WebuiProjectError) return error.code;
+    const code = typeof (error as any)?.code === "string"
+      ? String((error as any).code)
+      : "";
+    if ([
+      "project_removed",
+      "workspace_missing",
+      "workspace_unavailable",
+      "workspace_conflict",
+    ].includes(code)) {
+      return code;
+    }
+    return "workspace_unavailable";
+  }
+
+  private async dispatchWebuiMessage(
+    connection: any,
+    clientId: string,
+    envelope: Record<string, any>,
+    chatId: string,
+    content: string,
+    mediaPaths: string[],
+  ): Promise<void> {
+    const externalProjection = isExternalGuiChatId(chatId);
+    let sessionKey = `websocket:${chatId}`;
+    if (externalProjection) {
+      try {
+        sessionKey = this.resolveGuiSession(chatId).canonicalSessionKey;
+      } catch (error) {
+        await this.sendWebuiRequestError(connection, {
+          chatId,
+          detail: "message_request_rejected",
+          reason: error instanceof GuiSessionProjectionError
+            ? error.code
+            : "session_not_found",
+        });
+        return;
+      }
+      if (envelope.target != null) {
+        await this.sendWebuiRequestError(connection, {
+          chatId,
+          detail: "session_binding_rejected",
+          reason: "session_target_invalid",
+        });
+        return;
+      }
+    }
+    if (envelope.webui !== true) {
+      if (externalProjection) {
+        await this.sendWebuiRequestError(connection, {
+          chatId,
+          detail: "message_request_rejected",
+          reason: "webui_required",
+        });
+        return;
+      }
+      const legacyMetadata: Record<string, any> = {
+        remote: connection?.remoteAddress ?? null,
+        // This accepted user-message boundary owns the identity. Never import
+        // message IDs or interactive flags from arbitrary envelope metadata.
+        message_id: crypto.randomUUID(),
+      };
+      const language = normalizeWebuiLanguage(envelope.language);
+      if (language) legacyMetadata.webui_language = language;
+      const mcpPresets = normalizeMcpPresetMentions(envelope.mcp_presets);
+      if (mcpPresets.length) legacyMetadata.mcp_presets = mcpPresets;
+      await this.handleMessage({
+        senderId: clientId,
+        chatId,
+        content,
+        media: mediaPaths.length ? mediaPaths : undefined,
+        metadata: legacyMetadata,
+        isDm: false,
+        turnSource: {
+          kind: this.connectionSurface.get(connection) ?? "gui",
+          channel: "websocket",
+        },
+      });
+      return;
+    }
+    const rawClientRequestId = envelope.client_request_id;
+    const clientRequestId = typeof rawClientRequestId === "string" && UUID_RE.test(rawClientRequestId)
+      ? rawClientRequestId
+      : null;
+    const queueSurface = envelope.queue_surface == null
+      ? null
+      : envelope.queue_surface === "chat_composer"
+        ? "chat_composer" as const
+        : undefined;
+    if (queueSurface === undefined) {
+      await this.sendWebuiRequestError(connection, {
+        chatId,
+        clientRequestId,
+        detail: "message_request_rejected",
+        reason: "queue_surface_invalid",
+      });
+      return;
+    }
+    const turnAdmission = envelope.turn_admission == null
+      ? "queue" as const
+      : envelope.turn_admission === "queue" || envelope.turn_admission === "steer"
+        ? envelope.turn_admission
+        : null;
+    const expectedTurnId = envelope.expected_turn_id == null
+      ? null
+      : typeof envelope.expected_turn_id === "string"
+        && envelope.expected_turn_id.trim().length > 0
+        && envelope.expected_turn_id.length <= 128
+        ? envelope.expected_turn_id.trim()
+        : undefined;
+    const interruptPendingTurnId = envelope.interrupt_pending_turn_id == null
+      ? null
+      : typeof envelope.interrupt_pending_turn_id === "string"
+        && envelope.interrupt_pending_turn_id.trim().length > 0
+        && envelope.interrupt_pending_turn_id.length <= 128
+        ? envelope.interrupt_pending_turn_id.trim()
+        : undefined;
+    if (!turnAdmission || expectedTurnId === undefined || interruptPendingTurnId === undefined) {
+      await this.sendWebuiRequestError(connection, {
+        chatId,
+        clientRequestId,
+        detail: "message_request_rejected",
+        reason: !turnAdmission ? "turn_admission_invalid"
+          : expectedTurnId === undefined ? "expected_turn_id_invalid" : "interrupt_pending_turn_id_invalid",
+      });
+      return;
+    }
+    const existing = this.sessionManager?.get?.(sessionKey) as Session | null;
+    if (!clientRequestId && (!existing || rawClientRequestId != null || envelope.target != null)) {
+      await this.sendWebuiRequestError(connection, {
+        chatId,
+        detail: "message_request_rejected",
+        reason: "message_request_id_required",
+      });
+      return;
+    }
+    const hasRequestedPreset = Object.prototype.hasOwnProperty.call(
+      envelope,
+      "model_preset",
+    );
+    if (
+      hasRequestedPreset
+      && envelope.model_preset !== null
+      && typeof envelope.model_preset !== "string"
+    ) {
+      await this.sendWebuiRequestError(connection, {
+        chatId,
+        clientRequestId,
+        detail: "message_request_rejected",
+        reason: "model_selection_unavailable",
+      });
+      return;
+    }
+    const requestedPreset = hasRequestedPreset
+      ? (typeof envelope.model_preset === "string"
+        ? envelope.model_preset
+        : null)
+      : undefined;
+    const modelSelection = this.resolveMessageModel(requestedPreset, existing);
+    if (!modelSelection) {
+      await this.sendWebuiRequestError(connection, {
+        chatId,
+        clientRequestId,
+        detail: "message_request_rejected",
+        reason: "model_selection_unavailable",
+      });
+      return;
+    }
+
+    const language = normalizeWebuiLanguage(envelope.language);
+    const normalizedTarget = envelope.target == null
+      ? null
+      : this.parseWebuiSessionTarget(envelope.target);
+    if (envelope.target != null && !normalizedTarget) {
+      await this.sendWebuiRequestError(connection, {
+        chatId,
+        clientRequestId,
+        detail: "session_binding_rejected",
+        reason: "session_target_invalid",
+      });
+      return;
+    }
+    const digest = clientRequestId
+      ? this.webuiMessageDigest({
+          chatId,
+          content,
+          mediaPaths,
+          language,
+          target: normalizedTarget,
+          modelPreset: requestedPreset,
+          queueSurface,
+          turnAdmission,
+          expectedTurnId,
+          thinkingEnabled: typeof envelope.thinking_enabled === "boolean" ? envelope.thinking_enabled : undefined,
+          thinkingLevel: typeof envelope.thinking_level === "string" ? envelope.thinking_level : undefined,
+          interruptPendingTurnId,
+        })
+      : null;
+    if (existing && clientRequestId) {
+      const accepted = this.acceptedSessionMessage(existing, clientRequestId);
+      if (accepted) {
+        if (accepted.webui_request_digest !== digest) {
+          await this.sendWebuiRequestError(connection, {
+            chatId,
+            clientRequestId,
+            detail: "message_request_rejected",
+            reason: "message_request_conflict",
+          });
+          return;
+        }
+        this.ensureAcceptedTranscript(chatId, clientRequestId, sessionKey);
+        const key = this.webuiRequestKey(sessionKey, clientRequestId);
+        const inflight = this.inflightWebuiMessageRequests.get(key);
+        this.inflightWebuiMessageRequests.delete(key);
+        const payload = {
+          event: "message_accepted",
+          chat_id: chatId,
+          client_request_id: clientRequestId,
+          model_preset: accepted.model_preset ?? null,
+          model_provider: accepted.model_provider ?? null,
+          model: accepted.model ?? null,
+          model_selection: accepted.model_selection ?? null,
+        };
+        const connections = new Set([connection, ...(inflight?.connections ?? [])]);
+        for (const target of connections) await this.safeSendTo(target, payload);
+        return;
+      }
+    }
+    if (existing && envelope.target != null) {
+      await this.sendWebuiRequestError(connection, {
+        chatId,
+        clientRequestId,
+        detail: "session_binding_rejected",
+        reason: "session_target_invalid",
+      });
+      return;
+    }
+
+    const requestKey = clientRequestId
+      ? this.webuiRequestKey(sessionKey, clientRequestId)
+      : null;
+    if (requestKey && digest) {
+      const inflight = this.inflightWebuiMessageRequests.get(requestKey);
+      if (inflight) {
+        if (inflight.digest !== digest) {
+          await this.sendWebuiRequestError(connection, {
+            chatId,
+            clientRequestId,
+            detail: "message_request_rejected",
+            reason: "message_request_conflict",
+          });
+        } else {
+          inflight.connections.add(connection);
+          if (inflight.queued) {
+            await this.sendEvent(connection, "message_queued", {
+              chat_id: chatId,
+              client_request_id: clientRequestId,
+              revision: inflight.queuedRevision,
+              ...(inflight.queuedItem ? { item: inflight.queuedItem } : {}),
+            });
+          } else if (inflight.steeredTurnId) {
+            await this.sendEvent(connection, "message_steered", {
+              chat_id: chatId,
+              client_request_id: clientRequestId,
+              turn_id: inflight.steeredTurnId,
+            });
+          }
+        }
+        return;
+      }
+    }
+
+    let createdReservation = false;
+    try {
+      const resolved = this.resolveWebuiMessageBinding(sessionKey, envelope.target);
+      createdReservation = resolved.created;
+    } catch (error) {
+      await this.sendWebuiRequestError(connection, {
+        chatId,
+        clientRequestId,
+        detail: "session_binding_rejected",
+        reason: this.webuiBindingErrorReason(error),
+      });
+      return;
+    }
+
+    if (requestKey && digest) {
+      this.inflightWebuiMessageRequests.set(requestKey, {
+        digest,
+        connections: new Set([connection]),
+        queued: false,
+        queuedItem: null,
+        queuedRevision: 0,
+        steeredTurnId: null,
+      });
+    }
+    const metadata: Record<string, any> = {
+      remote: connection?.remoteAddress ?? null,
+      message_id: clientRequestId ?? crypto.randomUUID(),
+      webui: envelope.webui === true,
+      model_preset: modelSelection.preset,
+      model_provider: modelSelection.provider,
+      model: modelSelection.model,
+      model_selection: modelSelectionWire(modelSelection),
+    };
+    if (typeof envelope.thinking_enabled === "boolean") metadata.thinking_enabled = envelope.thinking_enabled;
+    if (typeof envelope.thinking_level === "string") metadata.thinking_level = envelope.thinking_level;
+    if (clientRequestId && digest) {
+      metadata.client_request_id = clientRequestId;
+      metadata.webui_request_digest = digest;
+    }
+    if (queueSurface) metadata.webui_queue_surface = queueSurface;
+    if (interruptPendingTurnId && queueSurface && this.connectionSurface.get(connection) !== "tui") {
+      metadata.webui_interrupt_pending_turn_id = interruptPendingTurnId;
+    }
+    if (language) metadata.webui_language = language;
+    const mcpPresets: any[] = normalizeMcpPresetMentions(envelope.mcp_presets);
+    if (!mcpPresets.length) mcpPresets.push(...normalizeMentionList(envelope.mcp_presets));
+    if (mcpPresets.length) metadata.mcp_presets = mcpPresets;
+    if (envelope.image_generation && typeof envelope.image_generation === "object" && envelope.image_generation.enabled === true) {
+      metadata.image_generation = {
+        enabled: true,
+        aspect_ratio: typeof envelope.image_generation.aspect_ratio === "string"
+          ? envelope.image_generation.aspect_ratio
+          : null,
+      };
+    }
+    try {
+      if (!externalProjection) {
+        this.webuiTitleService?.trackUserMessage({
+          chatId,
+          sessionKey,
+          content,
+          metadata,
+          mediaPaths,
+        });
+      }
+      await this.handleMessage({
+        senderId: clientId,
+        chatId,
+        content,
+        media: mediaPaths.length ? mediaPaths : undefined,
+        metadata,
+        sessionKey,
+        isDm: false,
+        turnAdmission,
+        expectedTurnId,
+        turnSource: {
+          kind: this.connectionSurface.get(connection) ?? "gui",
+          channel: "websocket",
+        },
+      });
+    } catch (error) {
+      if (createdReservation) {
+        this.sessionManager?.releaseWebuiSessionBindingReservation?.(sessionKey);
+        this.webuiTitleService?.discard(sessionKey);
+      }
+      if (requestKey) this.inflightWebuiMessageRequests.delete(requestKey);
+      await this.sendWebuiRequestError(connection, {
+        chatId,
+        clientRequestId,
+        detail: "session_binding_rejected",
+        reason: this.webuiBindingErrorReason(error),
+      });
+    }
+  }
+
+  async dispatchEnvelope(connection: any, clientId: string, envelope: Record<string, any>): Promise<void> {
+    const type = envelope.type;
+    if (type === "agent_question_response") {
+      const chatId = typeof envelope.chat_id === "string" && isValidGuiChatId(envelope.chat_id)
+        ? envelope.chat_id
+        : "";
+      const response = normalizeAgentQuestionResponse(envelope.request_id, envelope.answers, envelope.cancelled);
+      if (
+        !chatId
+        || !response
+        || !this.connectionChats.get(connection)?.has(chatId)
+      ) {
+        await this.safeSendTo(connection, {
+          event: "agent_question_response_result",
+          chat_id: chatId,
+          request_id: typeof envelope.request_id === "string" ? envelope.request_id : "",
+          ok: false,
+          error: "invalid_request",
+        });
+        return;
+      }
+      const result = respondToAgentQuestion({ chatId, response });
+      if (result.ok) {
+        await this.sendTurnPayload(chatId, {
+          event: "agent_question_response",
+          chat_id: chatId,
+          request_id: response.requestId,
+          answers: response.answers,
+          ...(response.cancelled === true ? { cancelled: true } : {}),
+        });
+      }
+      await this.safeSendTo(connection, {
+        event: "agent_question_response_result",
+        chat_id: chatId,
+        request_id: response.requestId,
+        ok: result.ok,
+        ...(!result.ok ? { error: result.error } : {}),
+      });
+      return;
+    }
+    if (type === "cron_delivery_ack") {
+      const deliveryId = envelope.delivery_id;
+      if ((this.connectionSurface.get(connection) ?? "gui") !== "gui"
+        || !this.connectionChats.has(connection)
+        || typeof deliveryId !== "string" || !deliveryId.trim() || deliveryId.length > 256) return;
+      try { this.cronNotificationOutbox().remove(deliveryId); }
+      catch { console.warn("[websocket] cron notification acknowledgement could not be saved; queue preserved"); }
+      return;
+    }
+    if (type === "queue_snapshot_request") {
+      const chatId = typeof envelope.chat_id === "string" && isValidGuiChatId(envelope.chat_id)
+        ? envelope.chat_id
+        : "";
+      if (!chatId || !this.connectionChats.get(connection)?.has(chatId)) {
+        await this.sendEvent(connection, "error", {
+          chat_id: chatId,
+          detail: "queue_snapshot_request_invalid",
+        });
+        return;
+      }
+      await this.sendWebuiQueueSnapshot(connection, chatId);
+      return;
+    }
+    if (type === "queue_reorder") {
+      const chatId = typeof envelope.chat_id === "string" && isValidGuiChatId(envelope.chat_id)
+        ? envelope.chat_id : "";
+      const requestId = typeof envelope.request_id === "string" && UUID_RE.test(envelope.request_id)
+        ? envelope.request_id : "";
+      const orderedIds = Array.isArray(envelope.ordered_ids) ? envelope.ordered_ids : [];
+      const expectedRevision = envelope.expected_revision;
+      const sessionKey = chatId ? this.canonicalSessionKeyForChatId(chatId) : null;
+      if (!chatId || !requestId || !sessionKey || !this.connectionChats.get(connection)?.has(chatId)
+        || !this.reorderQueuedWebuiMessages
+        || orderedIds.length < 2 || orderedIds.length > 100
+        || !orderedIds.every((id: unknown) => typeof id === "string" && UUID_RE.test(id))
+        || typeof expectedRevision !== "number" || !Number.isSafeInteger(expectedRevision)
+        || expectedRevision < 0) {
+        await this.safeSendTo(connection, {
+          event: "queue_reorder_result", chat_id: chatId, request_id: requestId,
+          ok: false, outcome: "invalid_request",
+        });
+        return;
+      }
+      let outcome: ReorderQueuedMessageResult["outcome"] = "stale";
+      try {
+        outcome = (await this.reorderQueuedWebuiMessages(sessionKey, orderedIds, expectedRevision)).outcome;
+      } catch (error) {
+        console.warn("[websocket] queue reorder failed", { sessionKey, error });
+      }
+      for (const target of this.queueEventConnections(chatId)) {
+        await this.sendWebuiQueueSnapshot(target, chatId);
+      }
+      await this.safeSendTo(connection, {
+        event: "queue_reorder_result", chat_id: chatId, request_id: requestId,
+        ok: outcome === "reordered", outcome,
+      });
+      return;
+    }
+    if (type === "queue_remove") {
+      const chatId = typeof envelope.chat_id === "string" && isValidGuiChatId(envelope.chat_id)
+        ? envelope.chat_id
+        : "";
+      const requestId = typeof envelope.request_id === "string" && UUID_RE.test(envelope.request_id)
+        ? envelope.request_id
+        : "";
+      const clientRequestId = typeof envelope.client_request_id === "string"
+        && UUID_RE.test(envelope.client_request_id)
+        ? envelope.client_request_id
+        : "";
+      const sessionKey = chatId ? this.canonicalSessionKeyForChatId(chatId) : null;
+      if (
+        !chatId
+        || !requestId
+        || !clientRequestId
+        || !sessionKey
+        || !this.connectionChats.get(connection)?.has(chatId)
+        || !this.removeQueuedWebuiMessage
+      ) {
+        await this.safeSendTo(connection, {
+          event: "queue_remove_result",
+          chat_id: chatId,
+          request_id: requestId,
+          client_request_id: clientRequestId,
+          ok: false,
+          error: "invalid_request",
+        });
+        return;
+      }
+
+      let result: RemoveQueuedWebuiMessageResult;
+      try {
+        result = await this.removeQueuedWebuiMessage(sessionKey, clientRequestId);
+      } catch {
+        await this.safeSendTo(connection, {
+          event: "queue_remove_result",
+          chat_id: chatId,
+          request_id: requestId,
+          client_request_id: clientRequestId,
+          ok: false,
+          error: "remove_failed",
+        });
+        return;
+      }
+
+      const outcome = result.outcome;
+      if (outcome === "removed") {
+        const key = this.webuiRequestKey(sessionKey, clientRequestId);
+        const inflight = this.inflightWebuiMessageRequests.get(key);
+        this.inflightWebuiMessageRequests.delete(key);
+        await this.enqueueQueueProjection(sessionKey, async () => {
+          const payload = {
+            event: "message_queue_removed",
+            chat_id: chatId,
+            client_request_id: clientRequestId,
+            revision: result.revision,
+          };
+          const connections = new Set<any>([
+            connection,
+            ...this.queueEventConnections(chatId, inflight),
+          ]);
+          for (const target of connections) await this.safeSendTo(target, payload);
+        });
+      }
+      await this.safeSendTo(connection, {
+        event: "queue_remove_result",
+        chat_id: chatId,
+        request_id: requestId,
+        client_request_id: clientRequestId,
+        ok: true,
+        outcome,
+        revision: result.revision,
+      });
+      return;
+    }
+    if (type === "queue_steer") {
+      const chatId = typeof envelope.chat_id === "string" && isValidGuiChatId(envelope.chat_id)
+        ? envelope.chat_id
+        : "";
+      const requestId = typeof envelope.request_id === "string" && UUID_RE.test(envelope.request_id)
+        ? envelope.request_id
+        : "";
+      const clientRequestId = typeof envelope.client_request_id === "string"
+        && UUID_RE.test(envelope.client_request_id)
+        ? envelope.client_request_id
+        : "";
+      const expectedTurnId = typeof envelope.expected_turn_id === "string"
+        && envelope.expected_turn_id.trim().length > 0
+        && envelope.expected_turn_id.length <= 128
+        ? envelope.expected_turn_id.trim()
+        : "";
+      const sessionKey = chatId ? this.canonicalSessionKeyForChatId(chatId) : null;
+      if (
+        !chatId
+        || !requestId
+        || !clientRequestId
+        || !expectedTurnId
+        || !sessionKey
+        || !this.connectionChats.get(connection)?.has(chatId)
+        || (this.connectionSurface.get(connection) ?? "gui") !== "gui"
+        || !this.steerQueuedWebuiMessage
+      ) {
+        await this.safeSendTo(connection, {
+          event: "queue_steer_result",
+          chat_id: chatId,
+          request_id: requestId,
+          client_request_id: clientRequestId,
+          ok: false,
+          error: "invalid_request",
+        });
+        return;
+      }
+
+      let result: SteerQueuedMessageResult;
+      try {
+        result = await this.steerQueuedWebuiMessage(
+          sessionKey,
+          clientRequestId,
+          expectedTurnId,
+        );
+      } catch {
+        await this.safeSendTo(connection, {
+          event: "queue_steer_result",
+          chat_id: chatId,
+          request_id: requestId,
+          client_request_id: clientRequestId,
+          ok: false,
+          error: "steer_failed",
+        });
+        return;
+      }
+
+      if (
+        result.outcome === "steered"
+        && result.turnId
+        && result.descriptor
+      ) {
+        const key = this.webuiRequestKey(sessionKey, clientRequestId);
+        const inflight = this.inflightWebuiMessageRequests.get(key);
+        if (inflight) {
+          inflight.queued = false;
+          inflight.queuedItem = null;
+          inflight.queuedRevision = result.revision;
+          inflight.steeredTurnId = result.turnId;
+          inflight.connections.add(connection);
+        }
+        await this.enqueueQueueProjection(sessionKey, async () => {
+          const item = this.toWebuiQueuedMessage(result.descriptor!);
+          const dequeued = {
+            event: "message_dequeued",
+            chat_id: chatId,
+            client_request_id: clientRequestId,
+            item,
+            revision: result.revision,
+            turn_admission: "steer",
+            turn_id: result.turnId,
+          };
+          for (const target of this.queueEventConnections(chatId, inflight)) {
+            await this.safeSendTo(target, dequeued);
+          }
+          const steered = {
+            event: "message_steered",
+            chat_id: chatId,
+            client_request_id: clientRequestId,
+            turn_id: result.turnId,
+            user_event_on_consume: true,
+          };
+          for (const target of new Set([connection, ...(inflight?.connections ?? [])])) {
+            await this.safeSendTo(target, steered);
+          }
+        });
+      }
+      await this.safeSendTo(connection, {
+        event: "queue_steer_result",
+        chat_id: chatId,
+        request_id: requestId,
+        client_request_id: clientRequestId,
+        ok: true,
+        outcome: result.outcome,
+        revision: result.revision,
+        ...(result.outcome === "steered" && result.turnId
+          ? { turn_id: result.turnId }
+          : {}),
+      });
+      return;
+    }
+    if (type === "goal_control") {
+      const chatId = typeof envelope.chat_id === "string" && isValidGuiChatId(envelope.chat_id)
+        ? envelope.chat_id
+        : "";
+      const requestId = typeof envelope.request_id === "string" && UUID_RE.test(envelope.request_id)
+        ? envelope.request_id
+        : "";
+      const goalId = typeof envelope.goal_id === "string" && UUID_RE.test(envelope.goal_id)
+        ? envelope.goal_id
+        : "";
+      const action = envelope.action;
+      const validAction = action === "pause"
+        || action === "resume"
+        || action === "edit"
+        || action === "set_budget"
+        || action === "clear";
+      const hasObjective = Object.prototype.hasOwnProperty.call(envelope, "objective");
+      const hasTokenBudget = Object.prototype.hasOwnProperty.call(envelope, "token_budget");
+      const objectiveValid = action === "edit"
+        ? typeof envelope.objective === "string"
+          && envelope.objective.trim().length > 0
+          && envelope.objective.length <= 12_000
+          && !hasTokenBudget
+        : !hasObjective;
+      const tokenBudgetValid = action === "set_budget"
+        ? hasTokenBudget
+          && (envelope.token_budget === null
+            || (Number.isSafeInteger(envelope.token_budget) && envelope.token_budget > 0))
+          && !hasObjective
+        : !hasTokenBudget;
+      const sessionKey = chatId ? this.canonicalSessionKeyForChatId(chatId) : null;
+      if (
+        !chatId
+        || !requestId
+        || !goalId
+        || !validAction
+        || !objectiveValid
+        || !tokenBudgetValid
+        || !sessionKey
+        || !this.goalControlHandler
+      ) {
+        await this.safeSendTo(connection, {
+          event: "goal_control_result",
+          chat_id: chatId,
+          request_id: requestId,
+          ok: false,
+          error: action === "edit" && !objectiveValid
+            ? "invalid_objective"
+            : action === "set_budget" && !tokenBudgetValid
+              ? "invalid_token_budget"
+              : "invalid_transition",
+        });
+        return;
+      }
+      const key = `${sessionKey}\0${requestId}`;
+      const summary = JSON.stringify({
+        goalId,
+        action,
+        ...(action === "edit" ? { objective: envelope.objective.trim() } : {}),
+        ...(action === "set_budget" ? { tokenBudget: envelope.token_budget } : {}),
+      });
+      const dispatchingSummary = this.dispatchingGoalControls.get(key);
+      if (dispatchingSummary !== undefined && dispatchingSummary !== summary) {
+        await this.safeSendTo(connection, {
+          event: "goal_control_result",
+          chat_id: chatId,
+          request_id: requestId,
+          ok: false,
+          error: "request_id_conflict",
+        });
+        return;
+      }
+      const connections = this.goalControlConnections.get(key) ?? new Set<any>();
+      connections.add(connection);
+      this.goalControlConnections.set(key, connections);
+      if (dispatchingSummary !== undefined) return;
+      this.dispatchingGoalControls.set(key, summary);
+      let result: GoalControlResult;
+      try {
+        result = await this.goalControlHandler({
+          sessionKey,
+          requestId,
+          goalId,
+          action,
+          ...(action === "edit" ? { objective: envelope.objective.trim() } : {}),
+          ...(action === "set_budget" ? { tokenBudget: envelope.token_budget } : {}),
+        });
+      } catch {
+        result = { ok: false, error: "invalid_transition" };
+      }
+      await this.bus.publishOutbound(new OutboundMessage({
+        channel: "websocket",
+        chatId,
+        content: "",
+        metadata: {
+          goalControlResult: true,
+          requestId,
+          result,
+        },
+      }));
+      return;
+    }
+    if (type === "new_chat") {
+      const clientRequestId = typeof envelope.client_request_id === "string"
+        && UUID_RE.test(envelope.client_request_id)
+        ? envelope.client_request_id
+        : null;
+      if (!clientRequestId) {
+        await this.sendEvent(connection, "error", {
+          detail: "new_chat_rejected",
+          reason: "message_request_id_required",
+        });
+        return;
+      }
+      const hasRequestedPreset = Object.prototype.hasOwnProperty.call(
+        envelope,
+        "model_preset",
+      );
+      if (
+        hasRequestedPreset
+        && envelope.model_preset !== null
+        && typeof envelope.model_preset !== "string"
+      ) {
+        await this.sendEvent(connection, "error", {
+          client_request_id: clientRequestId,
+          detail: "new_chat_rejected",
+          reason: "model_selection_unavailable",
+        });
+        return;
+      }
+      const modelSelection = this.resolveMessageModel(
+        hasRequestedPreset
+          ? (typeof envelope.model_preset === "string"
+            ? envelope.model_preset
+            : null)
+          : undefined,
+        null,
+      );
+      if (!modelSelection) {
+        await this.sendEvent(connection, "error", {
+          client_request_id: clientRequestId,
+          detail: "new_chat_rejected",
+          reason: "model_selection_unavailable",
+        });
+        return;
+      }
+      const chatId = crypto.randomUUID();
+      this.attachConnection(connection, chatId);
+      await this.sendEvent(connection, "attached", {
+        chat_id: chatId,
+        client_request_id: clientRequestId,
+        model_preset: modelSelection.preset,
+        model_provider: modelSelection.provider,
+        model: modelSelection.model,
+        model_selection: modelSelectionWire(modelSelection),
+      });
+      await this.hydrateAfterSubscribe(chatId);
+      return;
+    }
+    if (type === "attach") {
+      const chatId = envelope.chat_id;
+      if (!isValidGuiChatId(chatId)) return this.sendEvent(connection, "error", { detail: "invalid chat_id" });
+      if (isExternalGuiChatId(chatId) && !this.canonicalSessionKeyForChatId(chatId)) {
+        return this.sendEvent(connection, "error", { chat_id: chatId, detail: "session_not_found" });
+      }
+      this.attachConnection(connection, chatId);
+      const sessionKey = this.canonicalSessionKeyForChatId(chatId);
+      const session = sessionKey && typeof this.sessionManager?.get === "function"
+        ? this.sessionManager.get(sessionKey) as Session | null
+        : null;
+      const committedSelection = modelSelectionWire(session?.metadata?.modelSelection);
+      const resolvedSelection = committedSelection
+        ?? modelSelectionWire(this.resolveMessageModel(undefined, session));
+      const modelSelection = resolvedSelection?.model.trim() ? resolvedSelection : null;
+      await this.sendEvent(connection, "attached", {
+        chat_id: chatId,
+        model_preset: modelSelection?.preset_id ?? null,
+        model_provider: modelSelection?.provider ?? null,
+        model: modelSelection?.model ?? null,
+        model_selection: modelSelection,
+      });
+      await this.sendRunStatusSnapshot(connection, chatId);
+      await this.sendWebuiQueueSnapshot(connection, chatId);
+      await this.maybePushActiveGoalState(chatId);
+    await this.maybePushTaskPlanState(chatId);
+      return;
+    }
+    if (type === "status") {
+      const chatId = envelope.chat_id;
+      if (!isValidGuiChatId(chatId)) return this.sendEvent(connection, "error", { detail: "invalid chat_id" });
+      const sessionKey = this.canonicalSessionKeyForChatId(chatId);
+      if (!sessionKey) return this.sendEvent(connection, "error", { chat_id: chatId, detail: "session_not_found" });
+      this.attachConnection(connection, chatId);
+      await this.hydrateAfterSubscribe(chatId);
+      await this.handleMessage({
+        senderId: clientId,
+        chatId,
+        content: "/status",
+        metadata: {
+          remote: connection?.remoteAddress ?? null,
+          webui_ephemeral_command: "status",
+        },
+        sessionKey,
+        isDm: false,
+      });
+      return;
+    }
+    if (type === "history_dag") {
+      const chatId = envelope.chat_id;
+      if (!isValidGuiChatId(chatId)) return this.sendEvent(connection, "error", { detail: "invalid chat_id" });
+      const sessionKey = this.canonicalSessionKeyForChatId(chatId);
+      if (!sessionKey) return this.sendEvent(connection, "error", { chat_id: chatId, detail: "session_not_found" });
+      this.attachConnection(connection, chatId);
+      await this.hydrateAfterSubscribe(chatId);
+      await this.handleMessage({
+        senderId: clientId,
+        chatId,
+        content: "/history-dag",
+        metadata: {
+          remote: connection?.remoteAddress ?? null,
+          webui_ephemeral_command: "historyDag",
+        },
+        sessionKey,
+        isDm: false,
+      });
+      return;
+    }
+    if (type === "stop") {
+      const chatId = envelope.chat_id;
+      if (!isValidGuiChatId(chatId)) return this.sendEvent(connection, "error", { detail: "invalid chat_id" });
+      const sessionKey = this.canonicalSessionKeyForChatId(chatId);
+      if (!sessionKey) return this.sendEvent(connection, "error", { chat_id: chatId, detail: "session_not_found" });
+      if (this.connectionSurface.get(connection) === "tui") {
+        if (!this.connectionChats.get(connection)?.has(chatId)) {
+          await this.sendEvent(connection, "error", {
+            chat_id: chatId,
+            detail: "stop_failed",
+            reason: "session_not_attached",
+          });
+          return;
+        }
+        const expectedTurnId = typeof envelope.expected_turn_id === "string"
+          && envelope.expected_turn_id.trim().length > 0
+          && envelope.expected_turn_id.length <= 128
+          ? envelope.expected_turn_id.trim()
+          : null;
+        if (!expectedTurnId || !this.stopExpectedTurn) {
+          await this.sendEvent(connection, "error", {
+            chat_id: chatId,
+            detail: "stop_failed",
+            reason: "expected_turn_id_required",
+          });
+          return;
+        }
+        let outcome: StopExpectedTurnResult;
+        try {
+          outcome = await this.stopExpectedTurn(sessionKey, expectedTurnId);
+        } catch {
+          await this.sendEvent(connection, "error", { chat_id: chatId, detail: "stop_failed" });
+          return;
+        }
+        await this.sendEvent(connection, "stop_result", {
+          chat_id: chatId,
+          turn_id: expectedTurnId,
+          stopped: outcome === "stopped" ? 1 : 0,
+          outcome,
+        });
+        return;
+      }
+      this.attachConnection(connection, chatId);
+      const turnId = this.activeTurnIdByChatId.get(chatId) ?? null;
+      let stopped = 0;
+      try {
+        if (this.stopCurrentTurn) {
+          stopped = await this.stopCurrentTurn(sessionKey, turnId);
+        } else {
+          const goalHandled = await (this.activeGoalStopHandler?.(sessionKey) ?? Promise.resolve(false));
+          stopped = goalHandled
+            ? 1
+            : await (this.cancelActiveTasks?.(sessionKey) ?? Promise.resolve(0));
+        }
+      } catch {
+        await this.sendEvent(connection, "error", { chat_id: chatId, detail: "stop_failed" });
+        return;
+      }
+      await this.transcriptMonitor?.drain();
+      if (turnId && this.activeTurnIdByChatId.get(chatId) === turnId) {
+        this.activeTurnIdByChatId.delete(chatId);
+        this.activeTurnSourceByChatId.delete(chatId);
+      }
+      await this.sendTurnPayload(chatId, {
+        event: "stop_result",
+        chat_id: chatId,
+        stopped,
+        ...(turnId ? { turn_id: turnId } : {}),
+      });
+      if (isExternalGuiChatId(chatId)) {
+        this.queueGlobalSessionUpdated(chatId, "metadata");
+      }
+      return;
+    }
+    if (type === "message") {
+      const chatId = envelope.chat_id;
+      const content = envelope.content;
+      if (!isValidGuiChatId(chatId)) return this.sendEvent(connection, "error", { detail: "invalid chat_id" });
+      if (typeof content !== "string") return this.sendEvent(connection, "error", { chat_id: chatId, detail: "missing content" });
+      let mediaPaths: string[] = [];
+      if (envelope.media != null) {
+        await this.sendEvent(connection, "error", { chat_id: chatId, detail: "attachment_rejected", reason: this.deprecatedEnvelopeMediaReason(envelope.media) });
+        return;
+      }
+      if (envelope.media_paths != null) {
+        const [resolved, reason] = this.resolveEnvelopeMediaPaths(envelope.media_paths);
+        if (reason) {
+          await this.sendEvent(connection, "error", { chat_id: chatId, detail: "attachment_rejected", reason });
+          return;
+        }
+        mediaPaths = resolved;
+      }
+      if (!content.trim() && !mediaPaths.length) return this.sendEvent(connection, "error", { chat_id: chatId, detail: "missing content" });
+      this.attachConnection(connection, chatId);
+      await this.hydrateAfterSubscribe(chatId);
+      await this.dispatchWebuiMessage(
+        connection,
+        clientId,
+        envelope,
+        chatId,
+        content,
+        mediaPaths,
+      );
+      return;
+    }
+    await this.sendEvent(connection, "error", { detail: `unknown type: ${JSON.stringify(type)}` });
+  }
+
+  signMediaPath(absPath: string): string | null {
+    let rel: string;
+    try {
+      const mediaDir = getMediaDir();
+      const mediaRoot = comparablePath(mediaDir);
+      const candidate = path.resolve(normalizeLocalPath(expandHomePath(absPath)));
+      let resolved = comparablePath(candidate);
+      if (!pathIsInside(resolved, mediaRoot) && pathIsInside(candidate, path.resolve(mediaDir))) {
+        resolved = path.resolve(mediaRoot, path.relative(path.resolve(mediaDir), candidate));
+      }
+      rel = path.relative(mediaRoot, resolved);
+      if (!rel || !pathIsInside(resolved, mediaRoot)) return null;
+    } catch {
+      return null;
+    }
+    const payload = b64urlEncode(rel.split(path.sep).join("/"));
+    const mac = crypto.createHmac("sha256", this.mediaSecret).update(payload).digest().subarray(0, 16);
+    return `/api/media/${b64urlEncode(mac)}/${payload}`;
+  }
+
+  signOrStageMediaPath(
+    filePath: string,
+    workspacePath: string = this.workspacePath,
+  ): SignedMediaPath | null {
+    const expanded = normalizeLocalPath(expandHomePath(filePath));
+    const candidate = path.isAbsolute(expanded)
+      ? path.resolve(expanded)
+      : path.resolve(workspacePath, expanded);
+    const direct = this.signMediaPath(candidate);
+    if (direct) {
+      return { url: direct, name: path.basename(candidate), path: realpathIfExists(candidate) };
+    }
+
+    let resolved: string;
+    try {
+      resolved = fs.realpathSync(candidate);
+      if (!fs.statSync(resolved).isFile()) return null;
+    } catch {
+      return null;
+    }
+
+    return this.stageArtifactPath(resolved);
+  }
+
+  webuiMediaAttachmentForPath(
+    filePath: string,
+    sessionKey?: string | null,
+  ): WebuiMediaAttachment | null {
+    const name = path.basename(filePath) || "attachment";
+    const workspace = sessionKey
+      ? this.artifactSessionWorkspace(sessionKey) ?? this.workspacePath
+      : this.workspacePath;
+    const resolved = this.resolveAllowedArtifactPath(filePath, workspace);
+    if (resolved?.kind === "directory") return null;
+    const signed = this.signOrStageMediaPath(filePath, workspace);
+    const resolvedFilePath = resolved?.path ?? null;
+    if (!signed && !resolvedFilePath) return null;
+    const kind = mediaKindForPath(resolvedFilePath ?? signed!.path);
+    return {
+      kind,
+      name: signed?.name ?? name,
+      ...(signed?.url ? { url: signed.url } : {}),
+      ...(resolvedFilePath ?? signed?.path ? { path: resolvedFilePath ?? signed?.path } : {}),
+    };
+  }
+
+  handleMediaFetch(sig: string, payload: string, request?: Pick<HttpRequestLike, "headers">): HttpLikeResponse {
+    const expected = crypto.createHmac("sha256", this.mediaSecret).update(payload).digest().subarray(0, 16);
+    let provided: Buffer;
+    try {
+      provided = b64urlDecode(sig);
+    } catch {
+      return httpError(401, "invalid signature");
+    }
+    if (provided.length !== expected.length || !crypto.timingSafeEqual(provided, expected)) {
+      return httpError(401, "invalid signature");
+    }
+    let rel: string;
+    try {
+      rel = b64urlDecode(payload).toString("utf8");
+    } catch {
+      return httpError(400, "invalid payload");
+    }
+    const mediaRoot = comparablePath(getMediaDir());
+    const candidate = path.resolve(mediaRoot, normalizeLocalPath(rel));
+    if (!pathIsInside(candidate, mediaRoot)) return httpError(404, "not found");
+    if (!fs.existsSync(candidate) || !fs.statSync(candidate).isFile()) return httpError(404, "not found");
+    const mime = mediaMimeForPath(candidate);
+    const size = fs.statSync(candidate).size;
+    const range = getHeader(request?.headers, "range");
+    if (range) {
+      const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+      const suffix = match && !match[1];
+      const start = match ? (suffix ? Math.max(0, size - Number(match[2])) : Number(match[1])) : NaN;
+      const requestedEnd = match ? (suffix || !match[2] ? size - 1 : Number(match[2])) : NaN;
+      if (!match || (!match[1] && !match[2]) || !Number.isSafeInteger(start) || !Number.isSafeInteger(requestedEnd)
+        || start < 0 || start >= size || requestedEnd < start) {
+        return { status: 416, headers: { "content-range": `bytes */${size}` }, body: Buffer.alloc(0) };
+      }
+      const end = Math.min(size - 1, requestedEnd, start + 2 * 1024 * 1024 - 1);
+      const body = Buffer.alloc(end - start + 1);
+      const descriptor = fs.openSync(candidate, "r");
+      try { fs.readSync(descriptor, body, 0, body.length, start); }
+      finally { fs.closeSync(descriptor); }
+      return { status: 206, headers: {
+        "content-type": DISPLAY_MEDIA_RESPONSE_MIMES.has(mime) || mime.startsWith("audio/") ? mime : "application/octet-stream",
+        "accept-ranges": "bytes", "content-range": `bytes ${start}-${end}/${size}`,
+        "cache-control": "private, no-store", "x-content-type-options": "nosniff",
+      }, body };
+    }
+
+    const body = fs.readFileSync(candidate);
+    return {
+      status: 200,
+      headers: {
+        "content-type": DISPLAY_MEDIA_RESPONSE_MIMES.has(mime) || mime.startsWith("audio/") ? mime : "application/octet-stream",
+        "cache-control": "private, max-age=31536000, immutable",
+        "x-content-type-options": "nosniff",
+      },
+      body,
+    };
+  }
+
+  /** Signs a file kept in the default workspace, such as a saved recording. */
+  signWorkspaceMediaPath(absPath: string): string | null {
+    let rel: string;
+    try {
+      const workspaceRoot = comparablePath(this.workspacePath);
+      const candidate = comparablePath(absPath);
+      if (!pathIsInside(candidate, workspaceRoot) || candidate === workspaceRoot) return null;
+      rel = path.relative(workspaceRoot, candidate);
+    } catch {
+      return null;
+    }
+    const payload = b64urlEncode(rel.split(path.sep).join("/"));
+    return `/api/media/ws/${b64urlEncode(this.workspaceMediaMac(payload))}/${payload}`;
+  }
+
+  handleWorkspaceMediaFetch(sig: string, payload: string, request?: Pick<HttpRequestLike, "headers">): HttpLikeResponse {
+    const expected = this.workspaceMediaMac(payload);
+    let provided: Buffer;
+    try {
+      provided = b64urlDecode(sig);
+    } catch {
+      return httpError(401, "invalid signature");
+    }
+    if (provided.length !== expected.length || !crypto.timingSafeEqual(provided, expected)) {
+      return httpError(401, "invalid signature");
+    }
+    let rel: string;
+    try {
+      rel = b64urlDecode(payload).toString("utf8");
+    } catch {
+      return httpError(400, "invalid payload");
+    }
+    const workspaceRoot = comparablePath(this.workspacePath);
+    const candidate = path.resolve(workspaceRoot, normalizeLocalPath(rel));
+    if (!pathIsInside(candidate, workspaceRoot)) return httpError(404, "not found");
+    return mediaFileResponse(candidate, "private, no-cache", request);
+  }
+
+  private workspaceMediaMac(payload: string): Buffer {
+    return crypto.createHmac("sha256", this.mediaSecret).update(`workspace:${payload}`).digest().subarray(0, 16);
+  }
+
+  override async send(message: OutboundMessage): Promise<void> {
+    if (message.metadata?.webuiSessionWorkspaceLost) {
+      const clientRequestId = String(message.metadata.clientRequestId ?? "");
+      const requestSessionKey = typeof message.metadata.webuiRequestSessionKey === "string"
+        ? message.metadata.webuiRequestSessionKey
+        : this.canonicalSessionKeyForChatId(message.chatId);
+      const key = clientRequestId && requestSessionKey
+        ? this.webuiRequestKey(requestSessionKey, clientRequestId)
+        : null;
+      const inflight = key ? this.inflightWebuiMessageRequests.get(key) : null;
+      if (key) this.inflightWebuiMessageRequests.delete(key);
+      const payload = {
+        event: "error",
+        chat_id: message.chatId,
+        client_request_id: clientRequestId,
+        detail: "session_workspace_lost",
+        reason: String(message.metadata.reason ?? "workspace_unavailable"),
+      };
+      if (inflight) {
+        for (const connection of inflight.connections) await this.safeSendTo(connection, payload);
+      } else {
+        await this.broadcast(message.chatId, payload);
+      }
+      return;
+    }
+    if (message.metadata?.webuiMessageQueued) {
+      const clientRequestId = String(message.metadata.clientRequestId ?? "");
+      const requestSessionKey = typeof message.metadata.webuiRequestSessionKey === "string"
+        ? message.metadata.webuiRequestSessionKey
+        : null;
+      if (!clientRequestId || !requestSessionKey) return;
+      const key = this.webuiRequestKey(requestSessionKey, clientRequestId);
+      const inflight = this.inflightWebuiMessageRequests.get(key);
+      if (inflight) inflight.queued = true;
+      const descriptor = message.metadata.webuiQueueItem as WebuiQueueMessageDescriptor | undefined;
+      const item = descriptor ? this.toWebuiQueuedMessage(descriptor) : null;
+      if (inflight) inflight.queuedItem = item;
+      if (inflight) inflight.queuedRevision = Number(message.metadata.queueRevision ?? 0);
+      let chatId: string;
+      try {
+        chatId = toGuiChatId(requestSessionKey);
+      } catch {
+        return;
+      }
+      const payload = {
+        event: "message_queued",
+        chat_id: chatId,
+        client_request_id: clientRequestId,
+        revision: Number(message.metadata.queueRevision ?? 0),
+        ...(item ? { item } : {}),
+      };
+      if (!item) {
+        for (const connection of inflight?.connections ?? []) await this.safeSendTo(connection, payload);
+        return;
+      }
+      await this.enqueueQueueProjection(requestSessionKey, async () => {
+        for (const connection of this.queueEventConnections(chatId, inflight)) {
+          await this.safeSendTo(connection, payload);
+        }
+      });
+      return;
+    }
+    if (message.metadata?.webuiMessageDequeued) {
+      const clientRequestId = String(message.metadata.clientRequestId ?? "");
+      const requestSessionKey = typeof message.metadata.webuiRequestSessionKey === "string"
+        ? message.metadata.webuiRequestSessionKey
+        : this.canonicalSessionKeyForChatId(message.chatId);
+      const descriptor = message.metadata.webuiQueueItem as WebuiQueueMessageDescriptor | undefined;
+      if (!clientRequestId || !requestSessionKey || !descriptor) return;
+      let chatId: string;
+      try {
+        chatId = toGuiChatId(requestSessionKey);
+      } catch {
+        return;
+      }
+      const key = this.webuiRequestKey(requestSessionKey, clientRequestId);
+      const inflight = this.inflightWebuiMessageRequests.get(key);
+      const payload = {
+        event: "message_dequeued",
+        chat_id: chatId,
+        client_request_id: clientRequestId,
+        item: this.toWebuiQueuedMessage(descriptor),
+        revision: Number(message.metadata.queueRevision ?? 0),
+        ...(message.metadata.turnAdmission === "steer"
+          ? { turn_admission: "steer", turn_id: String(message.metadata.turnId ?? "") }
+          : {}),
+      };
+      await this.enqueueQueueProjection(requestSessionKey, async () => {
+        for (const connection of this.queueEventConnections(chatId, inflight)) {
+          await this.safeSendTo(connection, payload);
+        }
+      });
+      return;
+    }
+    if (message.metadata?.webuiMessageQueueRemoved) {
+      const clientRequestId = String(message.metadata.clientRequestId ?? "");
+      const requestSessionKey = typeof message.metadata.webuiRequestSessionKey === "string"
+        ? message.metadata.webuiRequestSessionKey
+        : null;
+      if (!clientRequestId || !requestSessionKey) return;
+      let chatId: string;
+      try {
+        chatId = toGuiChatId(requestSessionKey);
+      } catch {
+        return;
+      }
+      const inflight = this.inflightWebuiMessageRequests.get(
+        this.webuiRequestKey(requestSessionKey, clientRequestId),
+      );
+      const payload = {
+        event: "message_queue_removed",
+        chat_id: chatId,
+        client_request_id: clientRequestId,
+        revision: Number(message.metadata.queueRevision ?? 0),
+      };
+      await this.enqueueQueueProjection(requestSessionKey, async () => {
+        for (const connection of this.queueEventConnections(chatId, inflight)) {
+          await this.safeSendTo(connection, payload);
+        }
+      });
+      return;
+    }
+    if (message.metadata?.webuiMessageSteered) {
+      const clientRequestId = String(message.metadata.clientRequestId ?? "");
+      const requestSessionKey = typeof message.metadata.webuiRequestSessionKey === "string"
+        ? message.metadata.webuiRequestSessionKey
+        : null;
+      if (!clientRequestId || !requestSessionKey) return;
+      const key = this.webuiRequestKey(requestSessionKey, clientRequestId);
+      const inflight = this.inflightWebuiMessageRequests.get(key);
+      const turnId = String(message.metadata.turnId ?? "");
+      const source = parseTurnSource(message.metadata.turnSource);
+      const queueOrigin = message.metadata.queueOrigin === true;
+      if (
+        !turnId
+        || (queueOrigin ? source?.kind !== "gui" : source?.kind !== "tui")
+      ) return;
+      if (inflight) inflight.steeredTurnId = turnId;
+      let chatId: string;
+      try {
+        chatId = toGuiChatId(requestSessionKey);
+      } catch {
+        return;
+      }
+      const content = typeof message.metadata.steeredContent === "string"
+        ? visibleWebuiUserContent(message.metadata.steeredContent)
+        : "";
+      const mediaPaths = Array.isArray(message.metadata.steeredMedia)
+        ? message.metadata.steeredMedia.filter(
+            (entry: unknown): entry is string => typeof entry === "string" && Boolean(entry.trim()),
+          )
+        : [];
+      if (!queueOrigin) {
+        await this.sendTurnPayload(chatId, {
+          event: "user",
+          chat_id: chatId,
+          text: content,
+          client_request_id: clientRequestId,
+          turn_id: turnId,
+          source,
+          ...(mediaPaths.length ? { media_paths: mediaPaths } : {}),
+        });
+      }
+      const payload = {
+        event: "message_steered",
+        chat_id: chatId,
+        client_request_id: clientRequestId,
+        turn_id: turnId,
+      };
+      const targets = queueOrigin
+        ? this.queueEventConnections(chatId, inflight)
+        : inflight?.connections ?? [];
+      for (const connection of targets) await this.safeSendTo(connection, payload);
+      return;
+    }
+    if (message.metadata?.webuiMessageAccepted) {
+      const clientRequestId = String(message.metadata.clientRequestId ?? "");
+      if (!clientRequestId) return;
+      const requestSessionKey = typeof message.metadata.webuiRequestSessionKey === "string"
+        ? message.metadata.webuiRequestSessionKey
+        : this.canonicalSessionKeyForChatId(message.chatId);
+      if (!requestSessionKey) return;
+      this.ensureAcceptedTranscript(message.chatId, clientRequestId, requestSessionKey);
+      const key = this.webuiRequestKey(requestSessionKey, clientRequestId);
+      const inflight = this.inflightWebuiMessageRequests.get(key);
+      this.inflightWebuiMessageRequests.delete(key);
+      const payload = {
+        event: "message_accepted",
+        chat_id: message.chatId,
+        client_request_id: clientRequestId,
+        model_preset: message.metadata.modelPreset ?? null,
+        model_provider: message.metadata.modelProvider ?? null,
+        model: message.metadata.model ?? null,
+        model_selection: message.metadata.modelSelection ?? null,
+      };
+      for (const connection of inflight?.connections ?? this.subscriptions.get(message.chatId) ?? []) {
+        await this.safeSendTo(connection, payload);
+      }
+      return;
+    }
+    if (message.metadata?.webuiMessageRejected) {
+      const clientRequestId = String(message.metadata.clientRequestId ?? "");
+      if (!clientRequestId) return;
+      const requestSessionKey = typeof message.metadata.webuiRequestSessionKey === "string"
+        ? message.metadata.webuiRequestSessionKey
+        : this.canonicalSessionKeyForChatId(message.chatId);
+      if (!requestSessionKey) return;
+      const key = this.webuiRequestKey(requestSessionKey, clientRequestId);
+      const inflight = this.inflightWebuiMessageRequests.get(key);
+      this.inflightWebuiMessageRequests.delete(key);
+      const payload = {
+        event: "error",
+        chat_id: message.chatId,
+        client_request_id: clientRequestId,
+        detail: "message_request_rejected",
+        reason: String(message.metadata.reason ?? "goal_inbox_unavailable"),
+      };
+      for (const connection of inflight?.connections ?? this.subscriptions.get(message.chatId) ?? []) {
+        await this.safeSendTo(connection, payload);
+      }
+      return;
+    }
+    if (message.metadata?.goalControlResult) {
+      const requestId = String(message.metadata.requestId ?? "");
+      const canonicalSessionKey = this.canonicalSessionKeyForChatId(message.chatId);
+      if (!requestId || !canonicalSessionKey) return;
+      const key = `${canonicalSessionKey}\0${requestId}`;
+      const result = message.metadata.result && typeof message.metadata.result === "object"
+        ? message.metadata.result
+        : { ok: false, error: "invalid_transition" };
+      const payload = {
+        event: "goal_control_result",
+        chat_id: message.chatId,
+        request_id: requestId,
+        ok: result.ok === true,
+        ...(typeof result.warning === "string" ? { warning: result.warning } : {}),
+        ...(typeof result.error === "string" ? { error: result.error } : {}),
+      };
+      const connections = this.goalControlConnections.get(key) ?? new Set<any>();
+      this.goalControlConnections.delete(key);
+      this.dispatchingGoalControls.delete(key);
+      for (const connection of connections) await this.safeSendTo(connection, payload);
+      return;
+    }
+    if (message.metadata?.runtimeModelUpdated) {
+      await this.sendRuntimeModelUpdated({
+        chatId: message.chatId,
+        clientRequestId: message.metadata.clientRequestId,
+        modelSelection: message.metadata.modelSelection,
+      });
+      return;
+    }
+    if (message.metadata?.modelCatalogUpdated) {
+      await this.broadcastAll({
+        event: "model_catalog_updated",
+        status: message.metadata.modelCatalogStatus === "invalid" ? "invalid" : "ready",
+        fingerprint: String(message.metadata.fingerprint ?? ""),
+      });
+      return;
+    }
+    if (message.metadata?.goalStateSync) {
+      await this.sendGoalState(
+        message.chatId,
+        typeof message.metadata.goalState === "object"
+          ? message.metadata.goalState
+          : goalStateWsBlob(),
+      );
+      return;
+    }
+    if (message.metadata?.taskPlanStateSync) {
+      await this.sendTaskPlanState(
+        message.chatId,
+        typeof message.metadata.taskPlanState === "object"
+          ? message.metadata.taskPlanState
+          : taskPlanStateWsBlob(),
+      );
+      return;
+    }
+    if (message.metadata?.runStatusEvent) {
+      await this.sendRunStatus(message.chatId, String(message.metadata.runStatus), {
+        startedAt: numberOrNull(message.metadata.startedAt),
+        turnId: this.turnIdFromMetadata(message.metadata),
+        source: parseTurnSource(message.metadata.turn_source),
+      });
+      return;
+    }
+    if (message.metadata?.turnEnd) {
+      await this.sendTurnEnd(message.chatId, {
+        latencyMs: numberOrNull(message.metadata.latencyMs),
+        goalId: firstNonemptyString(message.metadata.goalId),
+        goalOutcome: firstNonemptyString(message.metadata.goalOutcome) as GoalStatus | null,
+        turnId: this.turnIdFromMetadata(message.metadata),
+      });
+      return;
+    }
+    if (message.metadata?.sessionUpdated) {
+      const scope = typeof message.metadata.sessionUpdateScope === "string" ? message.metadata.sessionUpdateScope : null;
+      await this.sendSessionUpdated(message.chatId, scope);
+      if (scope === "thread") this.webuiTitleService?.onUserMessagePersisted(message.chatId);
+      return;
+    }
+    if (message.metadata?.fileEditEvents) {
+      const turnId = this.turnIdFromMetadata(message.metadata);
+      const edits = Array.isArray(message.metadata.fileEditEvents) ? message.metadata.fileEditEvents : [];
+      const cancellationTerminal = edits.length > 0 && edits.every((event: any) => event?.cancellation_terminal === true);
+      const payload = {
+        event: "file_edit",
+        chat_id: message.chatId,
+        edits,
+        ...(turnId ? { turn_id: turnId } : {}),
+        ...(cancellationTerminal ? { cancellation_terminal: true } : {}),
+      };
+      await this.sendTurnPayload(message.chatId, payload);
+      return;
+    }
+    if (message.metadata?.contextCompaction) {
+      const wireText = this.rewriteLocalMarkdownImages(message.content, `websocket:${message.chatId}`);
+      const turnId = this.turnIdFromMetadata(message.metadata);
+      const payload = {
+        event: "context_compaction",
+        chat_id: message.chatId,
+        compaction_id: String(message.metadata.compactionId ?? ""),
+        status: normalizeContextCompactionStatus(message.metadata.compactionStatus),
+        text: wireText,
+        content: wireText,
+        ...(turnId ? { turn_id: turnId } : {}),
+      };
+      await this.sendTurnPayload(message.chatId, payload);
+      return;
+    }
+    if (message.metadata?.retryWait) {
+      const wireText = this.rewriteLocalMarkdownImages(message.content, `websocket:${message.chatId}`);
+      const turnId = this.turnIdFromMetadata(message.metadata);
+      const payload = {
+        event: "retry_wait",
+        chat_id: message.chatId,
+        text: wireText,
+        ...(turnId ? { turn_id: turnId } : {}),
+      };
+      await this.sendTurnPayload(message.chatId, payload, { appendTranscript: false });
+      return;
+    }
+    if (message.metadata?.webui_ephemeral_command === "status") {
+      const wireText = this.rewriteLocalMarkdownImages(message.content, `websocket:${message.chatId}`);
+      await this.broadcast(message.chatId, {
+        event: "status_result",
+        chat_id: message.chatId,
+        text: wireText,
+        content: wireText,
+        metadata: message.metadata ?? {},
+      });
+      return;
+    }
+    if (message.metadata?.webui_ephemeral_command === "historyDag") {
+      const wireText = this.rewriteLocalMarkdownImages(message.content, `websocket:${message.chatId}`);
+      await this.broadcast(message.chatId, {
+        event: "history_dag_result",
+        chat_id: message.chatId,
+        text: wireText,
+        content: wireText,
+        metadata: message.metadata ?? {},
+        ...(message.metadata?.[OUTBOUND_META_AGENT_UI] != null
+          ? { agent_ui: message.metadata[OUTBOUND_META_AGENT_UI] }
+          : {}),
+      });
+      return;
+    }
+    if (message.metadata?.webuiGoalCreateAck === true) return;
+
+    const proactiveCron = message.metadata?.proactiveDelivery === "cron";
+    const targets = proactiveCron
+      ? this.guiNotificationConnections()
+      : message.chatId === "*" ? [...this.connectionChats.keys()] : [...(this.subscriptions.get(message.chatId) ?? [])];
+    const wireText = this.rewriteLocalMarkdownImages(message.content, `websocket:${message.chatId}`);
+    const turnId = this.turnIdFromMetadata(message.metadata);
+    const publicMetadata = { ...(message.metadata ?? {}) };
+    const modelErrorCategory = publicMetadata.modelErrorCategory;
+    const modelErrorDetail = typeof publicMetadata.modelErrorDetail === "string"
+      ? publicMetadata.modelErrorDetail
+      : undefined;
+    const modelErrorContext = publicModelErrorContext(publicMetadata.modelErrorContext);
+    delete publicMetadata.modelErrorCategory;
+    delete publicMetadata.modelErrorDetail;
+    delete publicMetadata.modelErrorContext;
+    const payload: Record<string, any> = {
+      event: "message",
+      chat_id: message.chatId,
+      text: wireText,
+      content: wireText,
+      metadata: publicMetadata,
+      media: message.media ?? [],
+      ...(turnId ? { turn_id: turnId } : {}),
+      ...(modelErrorCategory === "quota_exhausted"
+        || modelErrorCategory === "image_input_unsupported"
+        || modelErrorCategory === "image_analysis_failed"
+        || modelErrorCategory === "model_failed"
+        ? {
+            model_error: {
+              category: modelErrorCategory,
+              ...(modelErrorDetail !== undefined ? { detail: modelErrorDetail } : {}),
+              ...modelErrorContext,
+            }
+          }
+        : {}),
+    };
+    const mediaUrls = (message.media ?? [])
+      .map((entry) => this.webuiMediaAttachmentForPath(entry, `websocket:${message.chatId}`))
+      .filter((entry): entry is WebuiMediaAttachment => Boolean(entry));
+    if (mediaUrls.length) payload.media_urls = mediaUrls;
+    if (message.metadata?.toolHint) payload.kind = "tool_hint";
+    else if (message.metadata?.agentProgress) payload.kind = "progress";
+    if (typeof message.replyTo === "string") payload.reply_to = message.replyTo;
+    if (typeof (message as any).reply_to === "string") payload.reply_to = (message as any).reply_to;
+    if (typeof message.metadata?.latencyMs === "number") payload.latency_ms = Math.trunc(message.metadata.latencyMs);
+    if (message.metadata?.toolEvents) payload.tool_events = message.metadata.toolEvents;
+    if (message.metadata?.[OUTBOUND_META_AGENT_UI] != null) payload.agent_ui = message.metadata[OUTBOUND_META_AGENT_UI];
+    if (!this.shouldSendTurnPayload(message.chatId, payload)) return;
+    const source = parseTurnSource(message.metadata?.turn_source)
+      ?? this.activeTurnSourceByChatId.get(message.chatId)
+      ?? null;
+    this.tryAppendWebuiTranscript(message.chatId, {
+      ...payload,
+      text: message.content,
+      content: message.content,
+      ...(source ? { source } : {}),
+    });
+    if (proactiveCron) {
+      await this.sendCronNotification(payload, {
+        ...payload, text: message.content, content: message.content,
+        ...(message.media?.length ? { media_paths: [...message.media] } : {}),
+      });
+    } else {
+      await this.sendTurnPayload(message.chatId, payload, { appendTranscript: false, targets });
+    }
+    if (proactiveCron) this.queueGlobalSessionUpdated(message.chatId, "thread");
+  }
+
+  async sendDelta(chatId: string, delta: string, metadata: Record<string, any> = {}): Promise<void> {
+    const targets = [...(this.subscriptions.get(chatId) ?? [])];
+    const streamId = metadata.streamId == null ? "" : String(metadata.streamId);
+    const key = `${chatId}\0${streamId}`;
+    const turnId = this.turnIdFromMetadata(metadata);
+    let payload: Record<string, any>;
+    if (metadata.streamEnd) {
+      const buffered = this.streamTextBuffers.get(key) ?? [];
+      this.streamTextBuffers.delete(key);
+      if (delta) buffered.push(delta);
+      payload = { event: "stream_end", chat_id: chatId };
+      if (metadata.resuming === true) payload.resuming = true;
+      if (buffered.length) {
+        payload.text = this.rewriteLocalMarkdownImages(
+          buffered.join(""),
+          `websocket:${chatId}`,
+        );
+      }
+    } else {
+      if (turnId && this.activeTurnIdByChatId.get(chatId) !== turnId) return;
+      (this.streamTextBuffers.get(key) ?? this.streamTextBuffers.set(key, []).get(key)!).push(delta);
+      payload = { event: "delta", chat_id: chatId, text: delta };
+    }
+    if (metadata.streamId != null) payload.stream_id = metadata.streamId;
+    if (turnId) payload.turn_id = turnId;
+    await this.sendTurnPayload(chatId, payload, { targets });
+  }
+
+  override async sendReasoningDelta(chatId: string, delta: string, metadata: Record<string, any> = {}): Promise<void> {
+    if (!delta) return;
+    const turnId = this.turnIdFromMetadata(metadata);
+    const payload = { event: "reasoning_delta", chat_id: chatId, text: delta, ...(metadata.streamId != null ? { stream_id: metadata.streamId } : {}), ...(turnId ? { turn_id: turnId } : {}) };
+    await this.sendTurnPayload(chatId, payload);
+  }
+
+  override async sendReasoningEnd(chatId: string, metadata: Record<string, any> = {}): Promise<void> {
+    const turnId = this.turnIdFromMetadata(metadata);
+    const payload = { event: "reasoning_end", chat_id: chatId, ...(metadata.streamId != null ? { stream_id: metadata.streamId } : {}), ...(turnId ? { turn_id: turnId } : {}) };
+    await this.sendTurnPayload(chatId, payload);
+  }
+
+  async sendTurnEnd(chatId: string, {
+    latencyMs = null,
+    goalId = null,
+    goalOutcome = null,
+    turnId = null,
+  }: {
+    latencyMs?: number | null;
+    goalId?: string | null;
+    goalOutcome?: GoalStatus | null;
+    turnId?: string | null;
+  } = {}): Promise<void> {
+    const payload = {
+      event: "turn_end",
+      chat_id: chatId,
+      ...(latencyMs != null ? { latency_ms: latencyMs } : {}),
+      ...(goalId && goalOutcome ? { goal_id: goalId, goal_outcome: goalOutcome } : {}),
+      ...(turnId ? { turn_id: turnId } : {}),
+    };
+    await this.sendTurnPayload(chatId, payload);
+    const sessionKey = this.canonicalSessionKeyForChatId(chatId);
+    if (sessionKey && turnId) this.clearSteeredInflightForTurn(sessionKey, turnId);
+    if (turnId && this.activeTurnIdByChatId.get(chatId) === turnId) {
+      this.activeTurnIdByChatId.delete(chatId);
+      this.activeTurnSourceByChatId.delete(chatId);
+    }
+    if (isExternalGuiChatId(chatId)) {
+      this.queueGlobalSessionUpdated(chatId, "metadata");
+    }
+  }
+
+  async sendGoalState(chatId: string, blob: Record<string, any>): Promise<void> {
+    await this.broadcast(chatId, { event: "goal_state", chat_id: chatId, goal_state: blob });
+  }
+
+  async sendTaskPlanState(chatId: string, blob: Record<string, any>): Promise<void> {
+    await this.broadcast(chatId, {
+      event: "task_plan_state",
+      chat_id: chatId,
+      task_plan_state: blob,
+    });
+  }
+
+  async sendRunStatus(chatId: string, status: string, {
+    startedAt = null,
+    turnId = null,
+    source = null,
+  }: {
+    startedAt?: number | null;
+    turnId?: string | null;
+    source?: TurnSource | null;
+  } = {}): Promise<void> {
+    if (status === "running" && startedAt != null) {
+      websocketTurnWallStartTimes.set(chatId, startedAt);
+      if (turnId) this.activeTurnIdByChatId.set(chatId, turnId);
+      if (source) this.activeTurnSourceByChatId.set(chatId, source);
+    } else if (status === "idle") {
+      websocketTurnWallStartTimes.delete(chatId);
+    }
+    await this.sendTurnPayload(chatId, {
+      event: "run_status",
+      chat_id: chatId,
+      status,
+      ...(status === "running" && startedAt != null ? { started_at: startedAt } : {}),
+      ...(turnId ? { turn_id: turnId } : {}),
+      ...(source ? { source } : {}),
+    }, { appendTranscript: false });
+    if (status === "idle" && turnId && this.activeTurnIdByChatId.get(chatId) === turnId) {
+      this.activeTurnIdByChatId.delete(chatId);
+      this.activeTurnSourceByChatId.delete(chatId);
+    }
+  }
+
+  async sendSessionUpdated(chatId: string, scope: string | null = null): Promise<void> {
+    if (isExternalGuiChatId(chatId)) {
+      this.queueGlobalSessionUpdated(chatId, scope ?? "metadata");
+      return;
+    }
+    await this.broadcast(chatId, { event: "session_updated", chat_id: chatId, ...(scope ? { scope } : {}) });
+  }
+
+  async consumeTranscriptRecord(
+    record: Record<string, any>,
+    canonicalSessionKey: string | null = null,
+  ): Promise<void> {
+    const chatId = String(record.chat_id ?? "");
+    if (!isValidGuiChatId(chatId)) return;
+    if (record.event === "session_updated") {
+      this.queueGlobalSessionUpdated(chatId, String(record.scope ?? "metadata"));
+      return;
+    }
+    if (record.event === "run_status") {
+      await this.sendRunStatus(chatId, String(record.status ?? ""), {
+        startedAt: numberOrNull(record.started_at),
+        turnId: firstNonemptyString(record.turn_id, record.turnId),
+        source: parseTurnSource(record.source ?? record.metadata?.turn_source),
+      });
+      return;
+    }
+    const turnId = firstNonemptyString(record.turn_id, record.turnId);
+    if (record.event === "turn_end" && turnId && this.activeTurnIdByChatId.get(chatId) === turnId) {
+      this.activeTurnIdByChatId.delete(chatId);
+      this.activeTurnSourceByChatId.delete(chatId);
+    }
+    const payload = { ...record };
+    if (canonicalSessionKey) {
+      const originalText = typeof payload.text === "string" ? payload.text : null;
+      const rewrittenText = originalText == null
+        ? null
+        : this.rewriteLocalMarkdownImages(originalText, canonicalSessionKey);
+      if (rewrittenText != null) payload.text = rewrittenText;
+      if (typeof payload.content === "string") {
+        payload.content = payload.content === originalText && rewrittenText != null
+          ? rewrittenText
+          : this.rewriteLocalMarkdownImages(payload.content, canonicalSessionKey);
+      }
+      const mediaPaths = Array.isArray(payload.media_paths)
+        ? payload.media_paths.filter(
+          (entry: unknown): entry is string => typeof entry === "string" && Boolean(entry.trim()),
+        )
+        : [];
+      if (mediaPaths.length && !Array.isArray(payload.media_urls)) {
+        const mediaUrls = this.augmentTranscriptUserMedia(mediaPaths, canonicalSessionKey);
+        if (mediaUrls.length) payload.media_urls = mediaUrls;
+      }
+    }
+    const proactiveCron = payload.metadata?.proactiveDelivery === "cron";
+    if (proactiveCron) await this.sendCronNotification(payload, record);
+    else await this.sendTurnPayload(chatId, payload, { appendTranscript: false });
+    if (proactiveCron) this.queueGlobalSessionUpdated(chatId, "thread");
+  }
+
+  private guiNotificationConnections(): any[] {
+    // A scheduled result belongs to its chat, but must also reach GUI windows
+    // that have only subscribed to another chat since connecting or restarting.
+    return [...this.connectionChats.keys()].filter(
+      (connection) => (this.connectionSurface.get(connection) ?? "gui") === "gui",
+    );
+  }
+
+  private cronNotificationOutbox(): CronNotificationOutbox {
+    return this.pendingCronOutbox ??= new CronNotificationOutbox(
+      path.join(getDataDir(), "webui", "pending-cron-notifications.json"),
+    );
+  }
+
+  private async sendCronNotification(payload: Record<string, any>, persisted = payload): Promise<void> {
+    const deliveryId = payload.metadata?.deliveryId;
+    const outbox = typeof deliveryId === "string" && deliveryId
+      ? this.cronNotificationOutbox() : null;
+    // Persist before broadcasting. Restart recovery can finish before the GUI
+    // connects; failed/disconnected sockets must not turn that into a silent replay.
+    outbox?.enqueue({ ...persisted, deliveryId, chat_id: String(payload.chat_id) });
+    for (const connection of this.guiNotificationConnections()) {
+      await this.safeSendTo(connection, payload);
+    }
+  }
+
+  async flushPendingCronNotifications(): Promise<void> {
+    if (this.flushingPendingCron || !this.guiNotificationConnections().length) return;
+    this.flushingPendingCron = true;
+    try {
+      for (const record of this.cronNotificationOutbox().list()) {
+        const { deliveryId, ...payload } = record;
+        const sessionKey = this.canonicalSessionKeyForChatId(record.chat_id) ?? `websocket:${record.chat_id}`;
+        const text = String(payload.text ?? payload.content ?? "");
+        payload.text = this.rewriteLocalMarkdownImages(text, sessionKey);
+        payload.content = payload.text;
+        if (Array.isArray(payload.media_paths)) {
+          payload.media_urls = this.augmentTranscriptUserMedia(payload.media_paths, sessionKey);
+        }
+        payload.metadata = { ...(payload.metadata ?? {}), deliveryId, replayed: false };
+        for (const connection of this.guiNotificationConnections()) {
+          await this.safeSendTo(connection, payload);
+        }
+      }
+    } finally {
+      this.flushingPendingCron = false;
+    }
+  }
+
+  private queueGlobalSessionUpdated(chatId: string, scope: string): void {
+    const currentScope = this.sessionUpdateScopes.get(chatId);
+    this.sessionUpdateScopes.set(
+      chatId,
+      currentScope === "thread" || scope === "thread" ? "thread" : scope,
+    );
+    if (this.sessionUpdateTimers.has(chatId)) return;
+    const timer = setTimeout(() => {
+      this.sessionUpdateTimers.delete(chatId);
+      const pendingScope = this.sessionUpdateScopes.get(chatId) ?? "metadata";
+      this.sessionUpdateScopes.delete(chatId);
+      const payload = {
+        event: "session_updated",
+        chat_id: chatId,
+        scope: pendingScope,
+      };
+      void Promise.all(
+        [...this.connectionChats.keys()].map((connection) => (
+          this.safeSendTo(connection, payload)
+        )),
+      ).catch(() => undefined);
+    }, 100);
+    this.sessionUpdateTimers.set(chatId, timer);
+  }
+
+  async sendRuntimeModelUpdated({
+    chatId,
+    clientRequestId,
+    modelSelection,
+  }: {
+    chatId?: any;
+    clientRequestId?: any;
+    modelSelection?: any;
+  }): Promise<void> {
+    const scopedSelection = isSafeModelSelectionWire(modelSelection)
+      ? modelSelection
+      : modelSelectionWire(modelSelection);
+    if (
+      isValidGuiChatId(chatId)
+      && typeof clientRequestId === "string"
+      && clientRequestId.trim()
+      && scopedSelection
+    ) {
+      await this.broadcast(chatId, {
+        event: "runtime_model_updated",
+        chat_id: chatId,
+        client_request_id: clientRequestId,
+        model_name: scopedSelection.model,
+        model_preset: scopedSelection.preset_id,
+        model_selection: scopedSelection,
+      });
+    }
+  }
+
+  private async broadcast(chatId: string, payload: Record<string, any>): Promise<void> {
+    for (const connection of this.subscriptions.get(chatId) ?? []) await this.safeSendTo(connection, payload);
+  }
+
+  private async broadcastAll(payload: Record<string, any>): Promise<void> {
+    for (const connection of this.connectionChats.keys()) {
+      await this.safeSendTo(connection, payload);
+    }
+  }
+}
+
+function isSafeModelSelectionWire(value: unknown): ReturnType<typeof modelSelectionWire> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const input = value as Record<string, unknown>;
+  const protocol = ModelEndpointProtocolSchema.safeParse(input.protocol);
+  const capabilities = Array.isArray(input.capabilities)
+    ? input.capabilities.map((capability) => ModelCapabilitySchema.safeParse(capability))
+    : [];
+  if (
+    typeof input.preset_id !== "string"
+    || typeof input.provider !== "string"
+    || typeof input.endpoint_id !== "string"
+    || !protocol.success
+    || typeof input.model !== "string"
+    || (input.source !== "account" && input.source !== "byok")
+    || (input.owner_account_id !== null && typeof input.owner_account_id !== "string")
+    || capabilities.length === 0
+    || capabilities.some((capability) => !capability.success)
+  ) return null;
+  return Object.freeze({
+    preset_id: input.preset_id,
+    provider: input.provider,
+    endpoint_id: input.endpoint_id,
+    protocol: protocol.data,
+    model: input.model,
+    source: input.source,
+    owner_account_id: input.owner_account_id,
+    capabilities: Object.freeze(capabilities.flatMap((capability) => (
+      capability.success ? [capability.data] : []
+    ))),
+  });
+}
+
+function getHeader(headers: any, name: string): string {
+  if (!headers) return "";
+  if (typeof headers.get === "function") return headers.get(name) ?? headers.get(name.toLowerCase()) ?? "";
+  const direct = headers[name] ?? headers[name.toLowerCase()];
+  const value = direct ?? Object.entries(headers).find(([key]) => key.toLowerCase() === name.toLowerCase())?.[1] ?? "";
+  return Array.isArray(value) ? String(value[0] ?? "") : String(value ?? "");
+}
+
+function nowSeconds(): number {
+  return Date.now() / 1000;
+}
+
+function issueTokenValue(): string {
+  return `nbwt_${crypto.randomBytes(32).toString("base64url")}`;
+}
+
+function safeCompare(left: string, right: string): boolean {
+  const a = Buffer.from(left);
+  const b = Buffer.from(right);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+function requestBodyText(request: HttpRequestLike): string {
+  if (Buffer.isBuffer(request.body)) return request.body.toString("utf8");
+  return typeof request.body === "string" ? request.body : "";
+}
+
+function artifactRequestFromRequest(
+  request: HttpRequestLike,
+): { path: string; sessionKey: string } | null {
+  const body = requestBodyText(request).trim();
+  if (!body) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const raw = parsed as Record<string, unknown>;
+  const rawPath = raw.path;
+  const sessionKey = raw.sessionKey;
+  if (
+    typeof rawPath !== "string"
+    || !rawPath.trim()
+    || typeof sessionKey !== "string"
+    || decodeGuiSessionApiKey(sessionKey) == null
+  ) {
+    return null;
+  }
+  return { path: rawPath.trim(), sessionKey };
+}
+
+function expandHomePath(value: string): string {
+  return value === "~" || value.startsWith("~/") ? path.join(os.homedir(), value.slice(2)) : value;
+}
+
+function realpathIfExists(value: string): string {
+  const normalized = normalizeLocalPath(value);
+  try {
+    return fs.realpathSync(normalized);
+  } catch {
+    return path.resolve(normalized);
+  }
+}
+
+export function normalizeLocalPath(value: string, platform: NodeJS.Platform = process.platform): string {
+  const trimmed = value.trim();
+  if (platform !== "win32" && !/^(?:[a-z]:[\\/]|\\\\|\/\/)/iu.test(trimmed)) return trimmed;
+  const slashed = trimmed.replace(/\\/gu, "/").replace(/^\/([a-z]:\/)/iu, "$1");
+  if (/^\/\/\?\/unc\//iu.test(slashed)) return `//${slashed.slice("//?/UNC/".length)}`;
+  if (/^\/\/\?\//iu.test(slashed)) {
+    const rest = slashed.slice(4);
+    if (/^[a-z]:\//iu.test(rest)) return rest;
+    if (/^unc\//iu.test(rest)) return `//${rest.slice(4)}`;
+  }
+  return slashed;
+}
+
+export function pathIsInside(
+  child: string,
+  parent: string,
+  pathApi: Pick<typeof path, "resolve" | "relative" | "isAbsolute" | "sep"> = path,
+): boolean {
+  const parentPath = pathApi.resolve(normalizeLocalPath(parent, pathApi.sep === "\\" ? "win32" : "linux"));
+  const childPath = pathApi.resolve(normalizeLocalPath(child, pathApi.sep === "\\" ? "win32" : "linux"));
+  const relative = pathApi.relative(parentPath, childPath);
+  if (!relative) return true;
+  if (pathApi.isAbsolute(relative)) return false;
+  return relative !== ".." && !relative.startsWith(`..${pathApi.sep}`) && !relative.startsWith("../");
+}
+
+function comparablePath(value: string): string {
+  return path.resolve(normalizeLocalPath(realpathIfExists(value)));
+}
+
+function isPathInside(child: string, parent: string): boolean {
+  return pathIsInside(comparablePath(child), comparablePath(parent));
+}
+
+function openPathWithSystemDefault(filePath: string): { ok: true } | { ok: false; message: string } {
+  const command = process.platform === "darwin"
+    ? "open"
+    : process.platform === "win32"
+      ? "cmd.exe"
+      : "xdg-open";
+  const args = process.platform === "darwin"
+    ? [filePath]
+    : process.platform === "win32"
+      ? ["/c", "start", "", filePath]
+      : [filePath];
+  const result = childProcess.spawnSync(command, args, {
+    encoding: "utf8",
+    timeout: 5_000,
+    windowsHide: true,
+  });
+  if (result.error) return { ok: false, message: result.error.message };
+  if (typeof result.status === "number" && result.status !== 0) {
+    return { ok: false, message: result.stderr || `open command exited with ${result.status}` };
+  }
+  return { ok: true };
+}
+
+function revealFileInSystemManager(filePath: string): void {
+  const command = process.platform === "darwin"
+    ? "open"
+    : process.platform === "win32"
+      ? "explorer.exe"
+      : "xdg-open";
+  const args = process.platform === "darwin"
+    ? ["-R", filePath]
+    : process.platform === "win32"
+      ? ["/select,", filePath]
+      : [path.dirname(filePath)];
+  const child = childProcess.spawn(command, args, {
+    detached: true,
+    stdio: "ignore",
+  });
+  child.unref();
+}
+
+function connectionRespond(connection: any, status: number, body: string): HttpLikeResponse {
+  if (connection && typeof connection.respond === "function") return connection.respond(status, body);
+  return httpError(status, body);
+}
+
+class HttpBodyTooLargeError extends Error {}
+
+function requestFromIncoming(req: http.IncomingMessage): HttpRequestLike & { method: string; headers: http.IncomingHttpHeaders } {
+  return { path: req.url || "/", method: req.method ?? "GET", headers: req.headers };
+}
+
+async function readIncomingBody(req: http.IncomingMessage, maxBytes: number): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of req) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += buffer.length;
+    if (total > maxBytes) {
+      throw new HttpBodyTooLargeError("request body too large");
+    }
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks);
+}
+
+function httpConnectionFromRequest(req: http.IncomingMessage): any {
+  const host = req.socket.remoteAddress ?? "";
+  return {
+    remoteAddress: [host],
+    respond: (status: number, body: string) => httpError(status, body),
+  };
+}
+
+function writeNodeResponse(res: http.ServerResponse, response: HttpLikeResponse): void {
+  const body = typeof response.body === "string" ? Buffer.from(response.body, "utf8") : response.body;
+  const headers = { ...response.headers, "content-length": String(body.length) };
+  res.writeHead(response.status, headers);
+  res.end(body);
+}
+
+function corsPreflightResponse(config: WebSocketConfig, request: { headers?: http.IncomingHttpHeaders }): HttpLikeResponse {
+  return httpResponse("", {
+    status: 204,
+    contentType: "text/plain; charset=utf-8",
+    extraHeaders: corsHeadersForRequest(config, request),
+  });
+}
+
+function withCorsHeaders(
+  response: HttpLikeResponse,
+  config: WebSocketConfig,
+  request: { headers?: http.IncomingHttpHeaders },
+): HttpLikeResponse {
+  const corsHeaders = corsHeadersForRequest(config, request);
+  if (!Object.keys(corsHeaders).length) return response;
+  return {
+    ...response,
+    headers: {
+      ...response.headers,
+      ...corsHeaders,
+      vary: appendVary(response.headers.vary, "Origin"),
+    },
+  };
+}
+
+function corsHeadersForRequest(config: WebSocketConfig, request: { headers?: http.IncomingHttpHeaders }): Record<string, string> {
+  const origin = getHeader(request.headers, "origin").trim();
+  if (!isAllowedCorsOrigin(origin, config)) return {};
+  return {
+    "access-control-allow-origin": origin,
+    "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS",
+    "access-control-allow-headers": [
+      "authorization",
+      "content-type",
+      "x-memmy-agent-auth",
+      MCP_VALUES_HEADER,
+    ].join(", "),
+    "access-control-expose-headers": "Content-Range, Accept-Ranges",
+    "access-control-max-age": "600",
+  };
+}
+
+function isAllowedCorsOrigin(origin: string, config: WebSocketConfig): boolean {
+  if (!origin) return false;
+  if (origin === "null") return Boolean(config.tokenIssueSecret.trim() || config.token.trim());
+  try {
+    const url = new URL(origin);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+    const hostname = url.hostname.replace(/^\[|\]$/g, "");
+    return LOCALHOSTS.has(hostname);
+  } catch {
+    return false;
+  }
+}
+
+function appendVary(existing: string | undefined, value: string): string {
+  if (!existing) return value;
+  const parts = existing.split(",").map((part) => part.trim().toLowerCase()).filter(Boolean);
+  return parts.includes(value.toLowerCase()) ? existing : `${existing}, ${value}`;
+}
+
+function rejectUpgrade(socket: any, response: HttpLikeResponse): void {
+  const body = typeof response.body === "string" ? Buffer.from(response.body, "utf8") : response.body;
+  const reason = response.status === 401 ? "Unauthorized" : response.status === 403 ? "Forbidden" : response.status === 404 ? "Not Found" : "Error";
+  socket.write(`HTTP/1.1 ${response.status} ${reason}\r\nConnection: close\r\nContent-Length: ${body.length}\r\nContent-Type: ${response.headers["content-type"] ?? "text/plain"}\r\n\r\n`);
+  socket.write(body);
+  socket.destroy();
+}
+
+function normalizeRequiredPath(value: string, field: string): string {
+  if (!value.startsWith("/")) throw new Error(`${field} must start with "/"`);
+  return normalizeConfigPath(value);
+}
+
+function normalizeOptionalPath(value: string, field: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  return normalizeRequiredPath(trimmed, field);
+}
+
+function boundedNumber(value: any, min: number, max: number, field: string): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < min || parsed > max) {
+    throw new Error(`${field} must be between ${min} and ${max}`);
+  }
+  return parsed;
+}
+
+/** Serves a resolved media file with the headers every media route shares. */
+function mediaFileResponse(
+  filePath: string,
+  cacheControl = "private, max-age=31536000, immutable",
+  request?: Pick<HttpRequestLike, "headers">
+): HttpLikeResponse {
+  if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return httpError(404, "not found");
+  const size = fs.statSync(filePath).size;
+  const mime = mediaMimeForPath(filePath);
+  const contentType = DISPLAY_MEDIA_RESPONSE_MIMES.has(mime) || mime.startsWith("audio/") ? mime : "application/octet-stream";
+  const range = getHeader(request?.headers, "range");
+  if (range) {
+    const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+    const suffix = match && !match[1];
+    const start = match ? (suffix ? Math.max(0, size - Number(match[2])) : Number(match[1])) : NaN;
+    const requestedEnd = match ? (suffix || !match[2] ? size - 1 : Number(match[2])) : NaN;
+    if (!match || (!match[1] && !match[2]) || !Number.isSafeInteger(start) || !Number.isSafeInteger(requestedEnd)
+      || start < 0 || start >= size || requestedEnd < start) {
+      return { status: 416, headers: { "content-range": `bytes */${size}` }, body: Buffer.alloc(0) };
+    }
+    const end = Math.min(size - 1, requestedEnd, start + 2 * 1024 * 1024 - 1);
+    const body = Buffer.alloc(end - start + 1);
+    const descriptor = fs.openSync(filePath, "r");
+    try { fs.readSync(descriptor, body, 0, body.length, start); }
+    finally { fs.closeSync(descriptor); }
+    return {
+      status: 206,
+      headers: {
+        "content-type": contentType,
+        "accept-ranges": "bytes",
+        "content-range": `bytes ${start}-${end}/${size}`,
+        "cache-control": "private, no-store",
+        "x-content-type-options": "nosniff",
+      },
+      body,
+    };
+  }
+
+  const body = fs.readFileSync(filePath);
+  return {
+    status: 200,
+    headers: {
+      "content-type": contentType,
+      "accept-ranges": "bytes",
+      "cache-control": cacheControl,
+      "x-content-type-options": "nosniff",
+    },
+    body,
+  };
+}
+
+/**
+ * A path in `dir` for `name` that does not overwrite an existing file.
+ *
+ * Saved files keep the name the user will look for; a clash gets ` (2)`,
+ * ` (3)` and so on before the extension.
+ */
+function availableFilePath(dir: string, name: string): string {
+  const extension = path.extname(name);
+  const stem = name.slice(0, name.length - extension.length) || "attachment";
+  let candidate = path.join(dir, name);
+  for (let copy = 2; fs.existsSync(candidate); copy += 1) {
+    candidate = path.join(dir, `${stem} (${copy})${extension}`);
+  }
+  return candidate;
+}
+
+function safeFilename(name: string): string {
+  const base = path.basename(name || "attachment").replace(UNSAFE_FILENAME_CHARS, "_").trim();
+  return base && base !== "." && base !== ".." ? base : "attachment";
+}
+
+function isStagedCopyCurrent(stagedPath: string, size: number): boolean {
+  try {
+    const stat = fs.statSync(stagedPath);
+    return stat.isFile() && stat.size === size;
+  } catch {
+    return false;
+  }
+}
+
+function copyFileAtomically(source: string, target: string): void {
+  const temporary = `${target}.${crypto.randomUUID()}.tmp`;
+  fs.copyFileSync(source, temporary);
+  try {
+    try {
+      fs.renameSync(temporary, target);
+    } catch (error) {
+      // Windows refuses to rename onto an existing file, and a shared-folder
+      // source can also make the rename cross volumes. The bytes are already
+      // in the temp file, so copy them onto the destination instead.
+      try {
+        fs.copyFileSync(temporary, target);
+      } catch {
+        throw error;
+      }
+    }
+  } finally {
+    fs.rmSync(temporary, { force: true });
+  }
+}
+
+function extensionForImageMime(mime: string): string {
+  switch (mime) {
+    case "image/jpeg":
+      return ".jpg";
+    case "image/webp":
+      return ".webp";
+    case "image/gif":
+      return ".gif";
+    case "image/png":
+    default:
+      return ".png";
+  }
+}
+
+function classifyWebuiUploadAttachment(name: string, declaredMime: string, bytes: Buffer): WebuiUploadClassification | null {
+  const sniffedImage = sniffImageMime(bytes.subarray(0, 16));
+  if (sniffedImage) {
+    if (declaredMime && declaredMime !== sniffedImage) return null;
+    return {
+      kind: "image",
+      mime: sniffedImage,
+      extension: extensionForImageMime(sniffedImage),
+    };
+  }
+
+  const fileClassification = classifyFileAttachmentByName(name);
+  if (!fileClassification) return null;
+  if (fileClassification.kind === "audio") {
+    // Browsers disagree on the media type of the same recording and file
+    // pickers often report none at all, so the extension and the container
+    // signature decide; the declared type only has to not contradict them.
+    if (declaredMime && !declaredMime.startsWith("audio/") && declaredMime !== "application/octet-stream") return null;
+    return fileBytesMatchClassification(fileClassification, bytes) ? fileClassification : null;
+  }
+  const isDocument = Boolean(DOCUMENT_MIME_BY_EXTENSION[fileClassification.extension]);
+  if (declaredMime && isDocument && declaredMime !== fileClassification.mime) return null;
+  if (declaredMime && !isDocument && !FILE_MIME_ALLOWED.has(declaredMime) && !declaredMime.startsWith("text/")) return null;
+  if (!fileBytesMatchClassification(fileClassification, bytes)) return null;
+  return fileClassification;
+}
+
+function classifySavedWebuiAttachment(filePath: string, bytes: Buffer): WebuiUploadClassification | null {
+  const sniffedImage = sniffImageMime(bytes.subarray(0, 16));
+  if (sniffedImage) {
+    return {
+      kind: "image",
+      mime: sniffedImage,
+      extension: extensionForImageMime(sniffedImage),
+    };
+  }
+
+  const classification = classifyFileAttachmentByName(filePath);
+  if (!classification) return null;
+  return fileBytesMatchClassification(classification, bytes) ? classification : null;
+}
+
+function classifyFileAttachmentByName(name: string): WebuiUploadClassification | null {
+  const extension = path.extname(name).toLowerCase();
+  const audioMime = AUDIO_MIME_BY_EXTENSION[extension];
+  if (audioMime) {
+    return {
+      kind: "audio",
+      mime: audioMime,
+      extension,
+    };
+  }
+  const mime = DOCUMENT_MIME_BY_EXTENSION[extension] ?? TEXT_MIME_BY_EXTENSION[extension];
+  if (!mime) return null;
+  return {
+    kind: "file",
+    mime,
+    extension,
+  };
+}
+
+function fileBytesMatchClassification(classification: WebuiUploadClassification, bytes: Buffer): boolean {
+  if (classification.kind === "audio") return looksLikeAudio(classification.extension, bytes);
+  if (classification.kind !== "file") return true;
+  if (classification.extension === ".pdf") return looksLikePdf(bytes);
+  if (DOCUMENT_MIME_BY_EXTENSION[classification.extension]) return looksLikeZip(bytes);
+  return looksLikeText(bytes);
+}
+
+/**
+ * Checks the container signature of an audio upload.
+ *
+ * The extension picks the media type, so without this an attacker could hand
+ * any payload an audio name and have it stored under a media type the rest of
+ * the pipeline trusts.
+ */
+function looksLikeAudio(extension: string, bytes: Buffer): boolean {
+  const tag = (offset: number, value: string): boolean =>
+    bytes.length >= offset + value.length && bytes.subarray(offset, offset + value.length).toString("ascii") === value;
+
+  switch (extension) {
+    case ".wav":
+      return tag(0, "RIFF") && tag(8, "WAVE");
+    case ".flac":
+      return tag(0, "fLaC");
+    case ".ogg":
+    case ".opus":
+      return tag(0, "OggS");
+    case ".m4a":
+      return tag(4, "ftyp");
+    case ".webm":
+      return bytes.length >= 4 && bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3;
+    case ".mp3":
+      // ID3-tagged, or a bare MPEG frame sync.
+      return tag(0, "ID3") || (bytes.length >= 2 && bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0);
+    case ".aac":
+      return tag(0, "ADIF") || (bytes.length >= 2 && bytes[0] === 0xff && (bytes[1] & 0xf6) === 0xf0);
+    default:
+      return false;
+  }
+}
+
+function looksLikePdf(bytes: Buffer): boolean {
+  return bytes.length >= 5 && bytes.subarray(0, 5).toString("ascii") === "%PDF-";
+}
+
+function looksLikeZip(bytes: Buffer): boolean {
+  return bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && (
+    (bytes[2] === 0x03 && bytes[3] === 0x04)
+    || (bytes[2] === 0x05 && bytes[3] === 0x06)
+    || (bytes[2] === 0x07 && bytes[3] === 0x08)
+  );
+}
+
+function looksLikeText(bytes: Buffer): boolean {
+  const sample = bytes.subarray(0, Math.min(bytes.length, 64 * 1024));
+  // UTF-16 text legitimately contains zero bytes; validate BOM-marked text
+  // after decoding rather than treating it as a binary payload.
+  const encoding = sample[0] === 0xff && sample[1] === 0xfe ? "utf-16le"
+    : sample[0] === 0xfe && sample[1] === 0xff ? "utf-16be" : null;
+  if (encoding) {
+    try {
+      const text = new TextDecoder(encoding, { fatal: true }).decode(bytes);
+      return !/[\u0000-\u0008\u000e-\u001f]/u.test(text);
+    } catch { return false; }
+  }
+  return !sample.includes(0);
+}
+
+function normalizeMentionList(value: any): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item).trim()).filter(Boolean);
+}
+
+function numberOrNull(value: any): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function firstNonemptyString(...values: any[]): string | null {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+function normalizeContextCompactionStatus(value: any): "running" | "done" | "error" {
+  return value === "running" || value === "done" || value === "error" ? value : "done";
+}
+
+class MinimalWebSocketConnection implements AsyncIterable<string | Buffer> {
+  request: { path: string; headers: http.IncomingHttpHeaders };
+  remoteAddress: [string];
+  private buffer = Buffer.alloc(0);
+  private queue: Array<string | Buffer> = [];
+  private waiters: Array<(value: IteratorResult<string | Buffer>) => void> = [];
+  private closed = false;
+
+  constructor(
+    private socket: any,
+    request: { path: string; headers: http.IncomingHttpHeaders },
+    private maxMessageBytes: number,
+  ) {
+    this.request = request;
+    this.remoteAddress = [socket.remoteAddress ?? ""];
+  }
+
+  respond(status: number, body: string): HttpLikeResponse {
+    return httpError(status, body);
+  }
+
+  accept(head: Buffer): void {
+    const key = getHeader(this.request.headers, "sec-websocket-key");
+    const accept = crypto.createHash("sha1").update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
+    this.socket.write([
+      "HTTP/1.1 101 Switching Protocols",
+      "Upgrade: websocket",
+      "Connection: Upgrade",
+      `Sec-WebSocket-Accept: ${accept}`,
+      "\r\n",
+    ].join("\r\n"));
+    this.socket.on("data", (chunk: any) => this.onData(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    this.socket.on("close", () => this.closeQueue());
+    this.socket.on("end", () => this.closeQueue());
+    this.socket.on("error", () => this.closeQueue());
+    if (head.length) this.onData(head);
+  }
+
+  async send(raw: string): Promise<void> {
+    if (this.closed) throw new Error("connection closed");
+    this.socket.write(encodeServerFrame(Buffer.from(raw, "utf8"), 0x1));
+  }
+
+  close(code = 1000, reason = "connection closed"): void {
+    this.closeWithCode(code, reason);
+  }
+
+  [Symbol.asyncIterator](): AsyncIterator<string | Buffer> {
+    return {
+      next: () => this.next(),
+    };
+  }
+
+  private next(): Promise<IteratorResult<string | Buffer>> {
+    const value = this.queue.shift();
+    if (value !== undefined) return Promise.resolve({ done: false, value });
+    if (this.closed) return Promise.resolve({ done: true, value: undefined });
+    return new Promise((resolve) => this.waiters.push(resolve));
+  }
+
+  private push(value: string | Buffer): void {
+    const waiter = this.waiters.shift();
+    if (waiter) waiter({ done: false, value });
+    else this.queue.push(value);
+  }
+
+  private closeQueue(): void {
+    if (this.closed) return;
+    this.closed = true;
+    for (const waiter of this.waiters.splice(0)) waiter({ done: true, value: undefined });
+  }
+
+  private onData(chunk: Buffer): void {
+    this.buffer = Buffer.concat([this.buffer, chunk]);
+    while (this.buffer.length >= 2) {
+      const first = this.buffer[0];
+      const second = this.buffer[1];
+      const opcode = first & 0x0f;
+      const masked = (second & 0x80) !== 0;
+      let length = second & 0x7f;
+      let offset = 2;
+      if (length === 126) {
+        if (this.buffer.length < offset + 2) return;
+        length = this.buffer.readUInt16BE(offset);
+        offset += 2;
+      } else if (length === 127) {
+        if (this.buffer.length < offset + 8) return;
+        const long = this.buffer.readBigUInt64BE(offset);
+        if (long > BigInt(Number.MAX_SAFE_INTEGER)) {
+          this.closeWithCode(1009, "message too big");
+          return;
+        }
+        length = Number(long);
+        offset += 8;
+      }
+      const mask = masked ? this.buffer.subarray(offset, offset + 4) : null;
+      if (masked) offset += 4;
+      if (this.buffer.length < offset + length) return;
+      if (length > this.maxMessageBytes) {
+        this.closeWithCode(1009, "message too big");
+        return;
+      }
+      let payload = this.buffer.subarray(offset, offset + length);
+      this.buffer = this.buffer.subarray(offset + length);
+      if (masked) {
+        payload = Buffer.from(payload.map((byte, index) => byte ^ mask![index % 4]));
+      }
+      if (opcode === 0x8) {
+        this.socket.write(encodeServerFrame(Buffer.alloc(0), 0x8));
+        this.socket.end();
+        this.closeQueue();
+        return;
+      }
+      if (opcode === 0x9) {
+        this.socket.write(encodeServerFrame(payload, 0xA));
+        continue;
+      }
+      if (opcode === 0x1) this.push(payload.toString("utf8"));
+      else if (opcode === 0x2) this.push(payload);
+    }
+  }
+
+  private closeWithCode(code: number, reason: string): void {
+    if (this.closed) return;
+    const reasonBuffer = Buffer.from(reason, "utf8");
+    const payload = Buffer.alloc(2 + reasonBuffer.length);
+    payload.writeUInt16BE(code, 0);
+    reasonBuffer.copy(payload, 2);
+    try {
+      this.socket.write(encodeServerFrame(payload, 0x8));
+      this.socket.end();
+    } finally {
+      this.closeQueue();
+    }
+  }
+
+}
+
+function encodeServerFrame(payload: Buffer, opcode: number): Buffer {
+  const length = payload.length;
+  if (length < 126) return Buffer.concat([Buffer.from([0x80 | opcode, length]), payload]);
+  if (length <= 0xffff) {
+    const header = Buffer.alloc(4);
+    header[0] = 0x80 | opcode;
+    header[1] = 126;
+    header.writeUInt16BE(length, 2);
+    return Buffer.concat([header, payload]);
+  }
+  const header = Buffer.alloc(10);
+  header[0] = 0x80 | opcode;
+  header[1] = 127;
+  header.writeBigUInt64BE(BigInt(length), 2);
+  return Buffer.concat([header, payload]);
+}
