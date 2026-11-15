@@ -78,8 +78,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node tools/release/package-windows-preview.mjs --check-release
-      - name: Verify staging and release guards
-        run: node --test tools/release/tests/*.test.mjs
       - name: Install locked build dependencies
         id: npm_install
         run: |
@@ -91,6 +89,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Dashboard dependency installation failed' }
           npm ci --prefix wanx/apps/personal-client --registry=https://registry.npmjs.org --replace-registry-host=registry.npmmirror.com --no-audit --no-fund
           if ($LASTEXITCODE -ne 0) { throw 'Client dependency installation failed' }
+      - name: Verify staging, native rebuild options and release guards
+        run: node --test tools/release/tests/*.test.mjs
       - name: Validate branding on Windows and POSIX paths
         run: |
           node --test wanx/apps/builder/tests/memobox-branding.test.mjs

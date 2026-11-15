@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import test from 'node:test';
 import { stageLocalMemory } from '../stage-local-memory.mjs';
-import { assertReleaseTargetFree, previewVersion } from '../package-windows-preview.mjs';
+import { assertReleaseTargetFree, nodeGypRebuildArgs, previewVersion } from '../package-windows-preview.mjs';
 
 async function fixture(t) {
   const root = await mkdtemp(path.join(tmpdir(), 'memobox-release-stage-'));
@@ -80,4 +81,23 @@ test('preview versions are constrained and never silently replace an existing re
   let calls=0; await assertReleaseTargetFree({repository:'owner/repo',version:'1.0.6-windows-preview.2',token:'fixture',request:async(url,init)=>{calls++;assert.equal(init.headers.authorization,'Bearer fixture');return {status:404,ok:false};}}); assert.equal(calls,2);
   await assert.rejects(assertReleaseTargetFree({repository:'owner/repo',version:'1.0.6-windows-preview.2',token:'fixture',request:async()=>({status:200,ok:true})}),/TARGET_ALREADY_EXISTS/);
   await assert.rejects(assertReleaseTargetFree({repository:'owner/repo',version:'1.0.6-windows-preview.2',token:'fixture',request:async()=>({status:403,ok:false})}),/PREFLIGHT_FAILED:403/);
+});
+
+
+test('real node-gyp parser keeps the Electron target out of positional gyp inputs', () => {
+  const require = createRequire(new URL('../../../wanx/apps/personal-client/package.json', import.meta.url));
+  const createGyp = require(process.env.MEMOBOX_TEST_NODE_GYP || 'node-gyp');
+  const directory = 'D:\\a\\fixture module\\better-sqlite3', version = '37.10.3';
+  const script = path.join(directory, 'node-gyp.js');
+  const old = createGyp();
+  old.parseArgv([process.execPath, script, 'rebuild', '--target', version]);
+  assert.notEqual(old.opts.target, version);
+  assert.ok(old.todo[0].args.includes(version), 'legacy separated value becomes an unwanted Python .gyp input');
+  const current = createGyp();
+  current.parseArgv([process.execPath, ...nodeGypRebuildArgs(script, directory, version)]);
+  assert.equal(current.opts.target, version);
+  assert.equal(current.opts.directory, directory);
+  assert.equal(current.opts.arch, 'x64');
+  assert.equal(current.opts['dist-url'], 'https://electronjs.org/headers');
+  assert.deepEqual(current.todo, [{ name: 'rebuild', args: [] }]);
 });

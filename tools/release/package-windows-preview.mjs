@@ -28,6 +28,11 @@ export async function assertReleaseTargetFree({ repository, version, token, requ
     throw new Error('GITHUB_RELEASE_PREFLIGHT_FAILED:' + response.status);
   }
 }
+// node-gyp 12 treats untyped --target as a boolean when the value is a
+// separate token, forwarding that value to Python as an extra .gyp input.
+export function nodeGypRebuildArgs(gyp, directory, electronVersion) {
+  return [gyp, 'rebuild', `--directory=${directory}`, `--target=${electronVersion}`, '--arch=x64', '--dist-url=https://electronjs.org/headers'];
+}
 function run(command, args, cwd, env = process.env) {
   const result = spawnSync(command, args, { cwd, env, stdio: 'inherit', windowsHide: true });
   if (result.error) throw result.error;
@@ -54,8 +59,7 @@ export async function packageWindowsPreview({ version, out, repo = repositoryRoo
   // Every physical version, including the readers' older dependency, must match
   // Electron's ABI. Never reuse the build host's plain-Node binding in a release.
   const gyp = require.resolve('node-gyp/bin/node-gyp.js');
-  for (const relative of runtime.nativeModules) run(process.execPath, [gyp, 'rebuild', '--directory', path.join(staged, relative), '--target', electronVersion,
-    '--arch', 'x64', '--dist-url', 'https://electronjs.org/headers'], client);
+  for (const relative of runtime.nativeModules) run(process.execPath, nodeGypRebuildArgs(gyp, path.join(staged, relative), electronVersion), client);
   const output = path.join(out, 'artifacts');
   const buildIdentity = { schemaVersion: 1, buildId: `${process.env.GITHUB_RUN_ID || Date.now()}-${sourceCommit.slice(0,12)}`, sourceCommit,
     channel: 'internal', securityEpoch: 0, installationScope: 'per-user', distributionClass: 'unsigned-internal-only' };
