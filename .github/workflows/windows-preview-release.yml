@@ -39,16 +39,41 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
-          cache-dependency-path: |
-            memory/package-lock.json
-            wanx/apps/personal-client/package-lock.json
-            wanx/apps/builder/package-lock.json
-            wanx/octop/dashboard/package-lock.json
       - uses: actions/setup-go@v5
+        id: setup_go
         with:
           go-version-file: wanx/apps/personal-client/native/go.mod
-          cache-dependency-path: wanx/apps/personal-client/native/go.sum
+          cache: false
+      - name: Resolve native cache paths
+        id: cache_paths
+        run: |
+          $npmCache = (npm config get cache).Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve npm cache directory' }
+          $goModCache = (go env GOMODCACHE).Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve Go module cache directory' }
+          $goBuildCache = (go env GOCACHE).Trim()
+          if ($LASTEXITCODE -ne 0 -or $goBuildCache -eq 'off') { throw 'Cannot resolve Go build cache directory' }
+          "npm=$npmCache" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "go_mod=$goModCache" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "go_build=$goBuildCache" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+      - name: Restore npm tarballs
+        id: npm_cache_restore
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ steps.cache_paths.outputs.npm }}
+          key: ${{ runner.os }}-${{ runner.arch }}-memobox-npm-node22-v1-${{ hashFiles('memory/package-lock.json', 'wanx/apps/builder/package-lock.json', 'wanx/octop/dashboard/package-lock.json', 'wanx/apps/personal-client/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-memobox-npm-node22-v1-
+      - name: Restore Go modules and build cache
+        id: go_cache_restore
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ${{ steps.cache_paths.outputs.go_mod }}
+            ${{ steps.cache_paths.outputs.go_build }}
+          key: ${{ runner.os }}-${{ runner.arch }}-memobox-go-${{ steps.setup_go.outputs.go-version }}-v1-${{ hashFiles('wanx/apps/personal-client/native/go.mod', 'wanx/apps/personal-client/native/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-memobox-go-${{ steps.setup_go.outputs.go-version }}-v1-
       - name: Validate a new preview target
         env:
           GH_TOKEN: ${{ github.token }}
@@ -56,6 +81,7 @@ jobs:
       - name: Verify staging and release guards
         run: node --test tools/release/tests/*.test.mjs
       - name: Install locked build dependencies
+        id: npm_install
         run: |
           npm ci --prefix memory --registry=https://registry.npmjs.org --replace-registry-host=registry.npmmirror.com --no-audit --no-fund
           if ($LASTEXITCODE -ne 0) { throw 'Memory dependency installation failed' }
@@ -65,6 +91,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Dashboard dependency installation failed' }
           npm ci --prefix wanx/apps/personal-client --registry=https://registry.npmjs.org --replace-registry-host=registry.npmmirror.com --no-audit --no-fund
           if ($LASTEXITCODE -ne 0) { throw 'Client dependency installation failed' }
+      - name: Validate branding on Windows and POSIX paths
+        run: |
+          node --test wanx/apps/builder/tests/memobox-branding.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Branding path regression validation failed' }
       - name: Build the real local memory and backend
         run: |
           npm --prefix memory run build -w @memmy/memory
@@ -134,3 +164,23 @@ jobs:
           $assets = @($installer, (Join-Path $artifacts 'SHA256SUMS.txt'), (Join-Path $artifacts 'verification-windows-preview.json'))
           gh release create $tag @assets --target $env:GITHUB_SHA --prerelease --title "半人马AI记忆盒子 $env:MEMOBOX_RELEASE_VERSION · Windows x64" --notes-file (Join-Path $artifacts 'release-notes.md')
           if ($LASTEXITCODE -ne 0) { throw 'GitHub Release creation failed' }
+      - name: Detect completed native cache population
+        id: cache_ready
+        if: ${{ always() && steps.cache_paths.outcome == 'success' && steps.go_cache_restore.outcome == 'success' }}
+        run: |
+          $ready = Test-Path -LiteralPath 'wanx/apps/personal-client/native/bin/wanx-netbird-win32-x64.exe' -PathType Leaf
+          "go_ready=$($ready.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+      - name: Save npm tarballs even if a later gate failed
+        if: ${{ always() && steps.npm_cache_restore.outcome == 'success' && steps.npm_cache_restore.outputs.cache-hit != 'true' && steps.npm_install.outcome == 'success' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ steps.cache_paths.outputs.npm }}
+          key: ${{ steps.npm_cache_restore.outputs.cache-primary-key }}
+      - name: Save Go caches even if a later gate failed
+        if: ${{ always() && steps.go_cache_restore.outcome == 'success' && steps.go_cache_restore.outputs.cache-hit != 'true' && steps.cache_ready.outputs.go_ready == 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ steps.cache_paths.outputs.go_mod }}
+            ${{ steps.cache_paths.outputs.go_build }}
+          key: ${{ steps.go_cache_restore.outputs.cache-primary-key }}

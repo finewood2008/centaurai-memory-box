@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
-import {memoboxSource,memoboxCopy} from '../tools/memobox-branding.mjs';
+import {memoboxSource,memoboxCopy,memoboxBuildPlugin} from '../tools/memobox-branding.mjs';
 test('personal copy transform decodes escaped labels without changing identifiers, paths or dynamic user text',()=>{
  const source='const WANX_HOST_TOKEN="opaque"; const config={"wanx-account":"login",path:"万象记忆库",id:"ai.centuarai.wanx.client"}; const title="\\u4e07\\u8c61\\u661f\\u56fe"; const text=`万象空间：${user.filename}`; const literal=`示例 \\${WANX_EXPERT_READY}`; result={config,title,text,literal,WANX_HOST_TOKEN};';
  const context={user:{filename:'万象研究.txt'},result:null};vm.runInNewContext(memoboxSource(source),context);
@@ -29,4 +29,25 @@ test('bundled template copy has a matching hash and keeps permissions and IDs',a
  assert.equal(JSON.parse(branded.files['miniapp.manifest.json']).capabilities[0],'files');
  assert.equal(source.sourceHash,'old');assert.match(source.files['miniapp.manifest.json'],/万象/);
  assert.doesNotMatch(branded.files['src/app.js'],/万象/);
+});
+
+test('personal build brands both bundled templates on Windows and POSIX paths',()=>{
+ const hooks=[];memoboxBuildPlugin().setup({onLoad(options,load){hooks.push({...options,load});}});
+ for(const name of ['knowledge-qa','zhike']) {
+  for(const root of ['/repo/templates/', 'D:\\repo\\templates\\']) {
+   const separator=root.includes('\\')?'\\':'/';
+   assert.equal(hooks.filter(hook=>hook.filter.test(`${root}${name}${separator}wanx.editable.json`)).length,1);
+  }
+ }
+ for(const filename of ['/repo/templates/custom/wanx.editable.json','D:\\repo\\templates\\custom\\wanx.editable.json']) {
+  assert.equal(hooks.some(hook=>hook.filter.test(filename)),false,'unrelated imported templates stay unchanged');
+ }
+});
+
+test('personal build leaves third-party scripts untouched on Windows and POSIX',async()=>{
+ const hooks=[];memoboxBuildPlugin().setup({onLoad(options,load){hooks.push({...options,load});}});
+ for(const filename of ['/missing/node_modules/vendor/index.js','D:\\missing\\node_modules\\vendor\\index.js']) {
+  const hook=hooks.find(hook=>hook.filter.test(filename));
+  assert.ok(hook);assert.equal(await hook.load({path:filename}),undefined);
+ }
 });
