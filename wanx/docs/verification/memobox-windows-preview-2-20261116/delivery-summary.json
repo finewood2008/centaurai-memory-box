@@ -1,0 +1,46 @@
+{
+  "url": "https://github.com/finewood2008/centaurai-memory-box/releases/tag/v1.0.6-windows-preview.2",
+  "tag": "v1.0.6-windows-preview.2",
+  "publishedAt": "2026-11-15T21:50:36Z",
+  "sourceCommit": "e8c2ec0916b2b5cd96fe4137cef8af4fd7ce01d6",
+  "assets": [
+    {
+      "name": "CentaurAI-MemoBox-1.0.6-windows-preview.2-windows-x64.exe",
+      "bytes": 434166846,
+      "url": "https://github.com/finewood2008/centaurai-memory-box/releases/download/v1.0.6-windows-preview.2/CentaurAI-MemoBox-1.0.6-windows-preview.2-windows-x64.exe",
+      "digest": "sha256:f46c71edd75ba36fc05e606360fbd71256560469e0fde500a33970ecdf15d768"
+    },
+    {
+      "name": "SHA256SUMS.txt",
+      "bytes": 224,
+      "url": "https://github.com/finewood2008/centaurai-memory-box/releases/download/v1.0.6-windows-preview.2/SHA256SUMS.txt",
+      "digest": "sha256:630b8f8aa20fbb27a04461adba8634acaa60de59b76f56dbafadf745d244f4f0"
+    },
+    {
+      "name": "verification-windows-preview.json",
+      "bytes": 34080,
+      "url": "https://github.com/finewood2008/centaurai-memory-box/releases/download/v1.0.6-windows-preview.2/verification-windows-preview.json",
+      "digest": "sha256:2bd884c9524c13504e5d31d1b03d2d6cc9112369b6eec461df5050b946af56af"
+    }
+  ],
+  "nativeSmoke": {
+    "nativeAbi": "136",
+    "nativeModules": 3
+  },
+  "sqliteVersions": [
+    "12.11.1",
+    "13.0.3"
+  ],
+  "smoke": {
+    "ok": true,
+    "platform": "win32",
+    "arch": "x64",
+    "bootstrap": true,
+    "memoryStorageReady": true,
+    "agentSources": true,
+    "unauthorizedRequestRejected": true,
+    "syntheticProfile": true
+  },
+  "checksumsVerifiedAgainstGithubAssetDigest": true,
+  "verificationFileSha256": "2bd884c9524c13504e5d31d1b03d2d6cc9112369b6eec461df5050b946af56af"
+}

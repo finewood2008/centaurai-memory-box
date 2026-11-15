@@ -1,0 +1,2 @@
+f46c71edd75ba36fc05e606360fbd71256560469e0fde500a33970ecdf15d768  CentaurAI-MemoBox-1.0.6-windows-preview.2-windows-x64.exe
+2bd884c9524c13504e5d31d1b03d2d6cc9112369b6eec461df5050b946af56af  verification-windows-preview.json
