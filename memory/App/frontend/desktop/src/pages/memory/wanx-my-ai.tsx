@@ -19,6 +19,7 @@ interface AppFeedback { section: "catalog" | "agent" | "list"; text: string; err
 interface OptimizedPrompt { agentId: string; text: string }
 interface TaskSource { id: string; name: string }
 interface CodexSourceStatus { connected: boolean; available: boolean }
+interface AgentAccessStatus extends CodexSourceStatus { boxReady?: boolean }
 interface CodexSourceCatalog { folders?: TaskSource[]; warehouses?: TaskSource[] }
 interface CodexTaskSources { folder?: TaskSource; warehouse?: TaskSource }
 type CodexSourceKind = "space" | "starlink";
@@ -36,6 +37,7 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
   const [installed, setInstalled] = useState<Agent[] | null>(null);
   const [apps, setApps] = useState<AppCatalogEntry[]>([]);
   const [hiddenAgents, setHiddenAgents] = useState<string[]>([]);
+  const [agentAccess, setAgentAccess] = useState<Record<string, AgentAccessStatus>>({});
   const [chooserOpen, setChooserOpen] = useState(false);
   const [appActionsAgent, setAppActionsAgent] = useState<string | null>(null);
   const [appBusy, setAppBusy] = useState<string | null>(null);
@@ -65,11 +67,12 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
   }, [sessionToken]);
 
   async function loadAgents(signal: AbortSignal) {
-    const info = await request<{ agents: Agent[]; apps?: AppCatalogEntry[]; hiddenAgents?: string[] }>("status", signal);
+    const info = await request<{ agents: Agent[]; apps?: AppCatalogEntry[]; hiddenAgents?: string[]; agentAccess?: Record<string, AgentAccessStatus> }>("status", signal);
     if (!signal.aborted) {
       setInstalled(info.agents);
       setApps(info.apps ?? []);
       setHiddenAgents(info.hiddenAgents ?? []);
+      setAgentAccess(info.agentAccess ?? {});
     }
   }
 
@@ -140,6 +143,7 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
     chooserApps.set(id, { id: agent?.id ?? hiddenId, name: agent?.name ?? agentSourceDisplayName(id), installed: agent?.installed ?? false });
   }
   const active = (target && catalog.get(normalizeAgentSourceId(target))) || catalog.get("codex") || catalog.values().next().value;
+  const activeAccess = active && agentAccess[normalizeAgentSourceId(active.id)];
   const result = optimizedPrompt?.agentId === active?.id ? optimizedPrompt?.text ?? null : null;
   const appActionsOpen = Boolean(active && appActionsAgent === active.id);
   const pending = Boolean(busy);
@@ -148,6 +152,45 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
     warehouseId: codexSources.warehouse?.id,
   } : undefined;
   const invalidateResult = () => { setOptimizedPrompt(null); setMessage(""); setError(""); };
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let reading = false;
+    const refreshAccess = async () => {
+      if (reading || currentAppAction.current || document.hidden) return;
+      reading = true;
+      try {
+        const connections = await request<Record<string, AgentAccessStatus>>("agent-access/status", controller.signal);
+        if (!controller.signal.aborted && !currentAppAction.current) setAgentAccess(connections);
+      } catch { /* Show the last known state until the client reconnects. */ }
+      finally { reading = false; }
+    };
+    const timer = window.setInterval(() => void refreshAccess(), 5000);
+    return () => { window.clearInterval(timer); controller.abort(); };
+  }, [request]);
+
+  async function updateAgentAccess(agent: Agent, connect: boolean) {
+    const signal = lifecycle.current?.signal;
+    if (!signal || signal.aborted || currentAppAction.current || currentAction.current) return;
+    const id = normalizeAgentSourceId(agent.id);
+    currentAppAction.current = true;
+    setAppBusy(agent.id);
+    setError("");
+    setMessage("");
+    try {
+      const access = await request<AgentAccessStatus>(connect ? "agent-access/connect" : "agent-access/disconnect", signal, { agent: id });
+      if (signal.aborted) return;
+      setAgentAccess(previous => ({ ...previous, [id]: access }));
+      setSourceRefresh(value => value + 1);
+      if (!connect && id === "codex") updateSources({});
+      setMessage(connect ? agent.name + " 的资料工具已配置。重新打开应用或新会话即可加载。" : agent.name + " 的资料访问已断开。");
+    } catch (cause) {
+      if (!signal.aborted) setError(cause instanceof Error ? cause.message : "资料连接操作未完成，请重试。");
+    } finally {
+      currentAppAction.current = false;
+      if (!signal.aborted) setAppBusy(null);
+    }
+  }
 
   function openAppChooser() {
     setAppFeedback(null);
@@ -175,6 +218,7 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
         setHiddenAgents(reply.hiddenAgents);
         setSourceRefresh(value => value + 1);
         if (action === "hide-agent") {
+          setAgentAccess(previous => ({ ...previous, [normalizeAgentSourceId(agent.id)]: { connected: false, available: false } }));
           setTarget(null);
           setAppActionsAgent(null);
           invalidateResult();
@@ -256,8 +300,9 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
           const source = sources.get(normalizeAgentSourceId(agent.id));
           const connected = source?.status === "plugin_installed" || source?.status === "skill_installed";
           const logo = agentSourceLogoUrl(agent.id);
-          const hint = connected ? "已接入记忆" : agent.installed ? "已检测到安装" : "发现本机会话";
-          const Icon = connected ? CircleCheck : agent.installed ? Monitor : History;
+          const hasAccess = agentAccess[normalizeAgentSourceId(agent.id)]?.available;
+          const hint = hasAccess ? "记忆、星图、空间已连接" : connected ? "已接入记忆同步" : agent.installed ? "已检测到安装" : "发现本机会话";
+          const Icon = hasAccess || connected ? CircleCheck : agent.installed ? Monitor : History;
           const isActive = active?.id === agent.id;
           return <div key={agent.id} className="my-ai-agent-row">
             <button type="button" className="my-ai-agent" disabled={pending || Boolean(appBusy)}
@@ -270,7 +315,7 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
               }}>
               <span className="my-ai-agent-logo">{logo ? <img src={logo} alt="" /> : <Bot size={20} aria-hidden="true" />}</span>
               <strong title={agent.name}>{agent.name}</strong>
-              <span className={"my-ai-agent-state" + (connected ? " connected" : "")} title={hint} aria-label={hint}><Icon size={15} /></span>
+              <span className={"my-ai-agent-state" + (hasAccess || connected ? " connected" : "")} title={hint} aria-label={hint}><Icon size={15} /></span>
             </button>
             {isActive && <button type="button" className="my-ai-icon-button my-ai-agent-more" title="应用操作" aria-label="应用操作"
               aria-expanded={appActionsOpen} aria-controls={appActionsOpen ? "my-ai-agent-actions" : undefined}
@@ -302,6 +347,18 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
           <div><h2 id="my-ai-task-title">发起对话</h2><p>写下任务，补全目标、限制和验收要求。</p></div>
           {active && <span className="my-ai-target"><Bot size={14} aria-hidden="true" />{active.name}</span>}
         </div>
+        {active && <div className="my-ai-source-connection" aria-label={active.name + "资料连接"}>
+          <span aria-live="polite">{activeAccess
+            ? activeAccess.available ? "记忆、星图、空间已连接" : activeAccess.connected ? "等待已授权的盒子连接" : "允许读取本机记忆、星图仓库和个人空间"
+            : active.installed ? "此应用暂不支持自动配置资料工具" : "安装应用后可检测资料连接"}</span>
+          {activeAccess && active.installed && <>
+            {(!activeAccess.connected || (!activeAccess.available && activeAccess.boxReady)) &&
+              <button type="button" className="my-ai-button" disabled={pending || Boolean(appBusy)}
+                onClick={() => void updateAgentAccess(active, true)}><Link2 size={14} aria-hidden="true" />{appBusy === active.id ? "正在配置…" : "连接资料"}</button>}
+            {activeAccess.connected && <button type="button" className="my-ai-button" disabled={pending || Boolean(appBusy)}
+              onClick={() => void updateAgentAccess(active, false)}><Unlink2 size={14} aria-hidden="true" />断开资料</button>}
+          </>}
+        </div>}
         <label className="my-ai-text-field">
           <span className="sr-only">任务草稿</span>
           <textarea value={draft} maxLength={12000} rows={5} disabled={pending}
@@ -316,7 +373,6 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
         <div className="my-ai-actions my-ai-composer-actions">
           {active?.id === "codex" && <CodexSources request={request} refresh={sourceRefresh} sources={codexSources}
             onSourcesChange={updateSources} disabled={pending || Boolean(appBusy)} />}
-          {active && active.id !== "codex" && <p className="my-ai-help">星图和空间检索目前支持 Codex。</p>}
           <button type="button" className="my-ai-button primary" disabled={pending || Boolean(appBusy) || !installed || !active || !draft.trim()} onClick={() => void optimize()}>
             {busy === "optimize" ? <LoaderCircle className="animate-spin" size={16} /> : <Sparkles size={16} aria-hidden="true" />}
             {busy === "optimize" ? "正在优化…" : "优化提示词"}
@@ -394,22 +450,18 @@ function CodexSources({ request, refresh, sources, onSourcesChange, disabled }: 
   const [catalog, setCatalog] = useState<CodexSourceCatalog | null>(null);
   const [catalogError, setCatalogError] = useState("");
   const [attempt, setAttempt] = useState(0);
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState("");
-  const [connectionMessage, setConnectionMessage] = useState("");
   const statusRequest = useRef<AbortController | null>(null);
-  const mutation = useRef<AbortController | null>(null);
   const folderTrigger = useRef<HTMLButtonElement>(null);
   const warehouseTrigger = useRef<HTMLButtonElement>(null);
   const currentFolder = trail.at(-1);
   const parent = currentFolder?.id;
   const configured = status?.connected === true;
-  const pickerDisabled = disabled || saving || !configured || !status?.available;
+  const pickerDisabled = disabled || !configured || !status?.available;
   const choosingSpace = picker === "space";
   const PickerIcon = choosingSpace ? Folder : Orbit;
 
   const refreshStatus = useCallback(async () => {
-    if (mutation.current || statusRequest.current) return;
+    if (statusRequest.current) return;
     const controller = new AbortController();
     statusRequest.current = controller;
     try {
@@ -425,7 +477,6 @@ function CodexSources({ request, refresh, sources, onSourcesChange, disabled }: 
   useEffect(() => () => {
     statusRequest.current?.abort();
     statusRequest.current = null;
-    mutation.current?.abort();
   }, [request]);
 
   useEffect(() => { void refreshStatus(); }, [refreshStatus, refresh]);
@@ -476,32 +527,6 @@ function CodexSources({ request, refresh, sources, onSourcesChange, disabled }: 
     setTrail(next);
   }
 
-  async function updateConnection(connect: boolean) {
-    if (disabled || mutation.current) return;
-    const controller = new AbortController();
-    mutation.current = controller;
-    statusRequest.current?.abort();
-    setSaving(true);
-    setSaveError("");
-    setConnectionMessage("");
-    try {
-      const value = await request<CodexSourceStatus>(connect ? "codex-context/connect" : "codex-context/disconnect", controller.signal, {});
-      if (!controller.signal.aborted) {
-        setStatus(value);
-        if (connect && value.connected) {
-          setConnectionMessage("Codex 已连接。若已打开 Codex，请重新启动它以加载资料工具。");
-        } else if (!connect) {
-          onSourcesChange({});
-        }
-      }
-    } catch (cause) {
-      if (!controller.signal.aborted) setSaveError(cause instanceof Error ? cause.message : "资料连接操作未完成，请重试。");
-    } finally {
-      mutation.current = null;
-      if (!controller.signal.aborted) setSaving(false);
-    }
-  }
-
   return <div className="my-ai-codex-sources">
     <div className="my-ai-source-actions" role="group" aria-label="本次任务的检索范围">
       <div className="my-ai-source-choice">
@@ -512,7 +537,7 @@ function CodexSources({ request, refresh, sources, onSourcesChange, disabled }: 
           <span>参考星图{sources.warehouse && <small>{sources.warehouse.name}</small>}</span>
         </button>
         {sources.warehouse && <button type="button" className="my-ai-icon-button" data-action="clear-codex-warehouse"
-          disabled={disabled || saving} aria-label="移除星图仓库" title="移除星图仓库"
+          disabled={disabled} aria-label="移除星图仓库" title="移除星图仓库"
           onClick={() => onSourcesChange({ ...sources, warehouse: undefined })}><X size={15} aria-hidden="true" /></button>}
       </div>
       <div className="my-ai-source-choice">
@@ -523,20 +548,10 @@ function CodexSources({ request, refresh, sources, onSourcesChange, disabled }: 
           <span>空间文件{sources.folder && <small>{sources.folder.name}</small>}</span>
         </button>
         {sources.folder && <button type="button" className="my-ai-icon-button" data-action="clear-codex-folder"
-          disabled={disabled || saving} aria-label="移除空间文件夹" title="移除空间文件夹"
+          disabled={disabled} aria-label="移除空间文件夹" title="移除空间文件夹"
           onClick={() => onSourcesChange({ ...sources, folder: undefined })}><X size={15} aria-hidden="true" /></button>}
       </div>
     </div>
-    <div className="my-ai-source-connection">
-      <span aria-live="polite">{configured ? status?.available ? "Codex 资料工具已连接" : "Codex 已连接，等待万象盒子上线"
-        : status ? "连接 Codex 后可以选择检索范围" : "正在检查 Codex 连接…"}</span>
-      <button type="button" className="my-ai-button" data-action={configured ? "disconnect-codex" : "connect-codex"}
-        disabled={disabled || saving || !status} onClick={() => void updateConnection(!configured)}>
-        <Link2 size={14} aria-hidden="true" />{saving ? "正在更新…" : configured ? "断开连接" : "连接 Codex"}
-      </button>
-    </div>
-    {saveError && <p className="my-ai-feedback error" role="alert">{saveError}</p>}
-    {connectionMessage && <p className="my-ai-feedback" role="status">{connectionMessage}</p>}
     <Modal open={picker !== null} title={choosingSpace ? "空间文件" : "参考星图"}
       subtitle={choosingSpace ? "选择一个文件夹，Codex 可以检索其中的文件和子文件夹。" : "选择一个仓库，Codex 可以检索其中的资料。"}
       className="my-ai-app-chooser my-ai-codex-picker" closeLabel={choosingSpace ? "关闭空间文件选择" : "关闭星图选择"}

@@ -4,7 +4,8 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 
 const NEW_CODEX_CHAT = "codex://threads/new";
-const MAX_EXTERNAL_URL_LENGTH = process.platform === "win32" ? 2081 : 7000;
+const WINDOWS_EXTERNAL_URL_LIMIT = 2081;
+const OTHER_EXTERNAL_URL_LIMIT = 7000;
 const warehouseId = value => typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 const agents = [
   ["codex", "Codex", NEW_CODEX_CHAT, "codex"],
@@ -70,7 +71,8 @@ async function installedCommand(command) {
 
 export function createMyAiTask({
   protocolRegistered, applicationForProtocol, openExternal, openApplication, revealApplication,
-  copyText, starlink, polish, boxScope, codexContext, commandInstalled = installedCommand, platform = process.platform,
+  copyText, starlink, polish, boxScope, codexContext, agentAccess, openLongWindowsDraft,
+  commandInstalled = installedCommand, platform = process.platform,
 }) {
   async function detect([id, name, protocol, command]) {
     const desktop = protocol ? await protocolRegistered(protocol) : false;
@@ -100,13 +102,22 @@ export function createMyAiTask({
   }
 
   return async function task(action, input, assertScope, signal) {
+    if (action === "agent-access/status" && agentAccess) return agentAccess.status(assertScope);
     if (action.startsWith("codex-context/") && codexContext)
       return codexContext.manage(action.slice("codex-context/".length), input, assertScope);
+    if (action === "agent-access/connect" && agentAccess) {
+      const agent = agents.find(([id]) => id === input.agent);
+      if (!agent || !agentAccess.supports(input.agent)) throw inputError("此 Agent 暂不支持自动连接资料。");
+      if (!(await detect(agent)).public.installed) throw inputError("请先安装或启动该 Agent，再重新检测。");
+      assertScope();
+      return agentAccess.connect(input.agent, assertScope);
+    }
     if (action === "status") {
       const catalog = (await Promise.all(agents.map(detect))).map(item => item.public);
       assertScope();
       return {
         agents: catalog.filter(agent => agent.installed),
+        ...(agentAccess && { agentAccess: await agentAccess.status(assertScope) }),
         apps: catalog.map(({ id, name, installed }) => ({
           id, name, installed, downloadLabel: installGuides.has(id) ? "安装说明" : "官方下载",
         })),
@@ -170,10 +181,16 @@ export function createMyAiTask({
       const url = new URL(NEW_CODEX_CHAT);
       if (!prompt.isWellFormed()) { revoke(); throw inputError("提示词包含无法导入的字符，请编辑后重试。"); }
       url.search = `?prompt=${encodeURIComponent(prompt)}`;
-      if (url.href.length > MAX_EXTERNAL_URL_LENGTH) { revoke(); return { opened: false, reason: "too-long" }; }
+      const limit = platform === "win32" ? WINDOWS_EXTERNAL_URL_LIMIT : OTHER_EXTERNAL_URL_LIMIT;
+      const overLimit = url.href.length > limit;
+      if (overLimit && (platform !== "win32" || !openLongWindowsDraft)) {
+        revoke();
+        return { opened: false, reason: "too-long" };
+      }
       try {
         assertScope();
-        await openExternal(url.href);
+        if (overLimit) await openLongWindowsDraft(prompt);
+        else await openExternal(url.href);
         assertScope();
         return { opened: true };
       } catch {

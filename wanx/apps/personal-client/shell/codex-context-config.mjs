@@ -123,6 +123,10 @@ export function createCodexContextConfig({executable = process.execPath, stdioPa
     ensure() {
       current ??= register().finally(() => { current = null; });
       return current;
-    }
+    },
+    async remove() {
+      const cli = await discover({env});
+      if (cli && matches(await get(cli))) await invoke(cli, ['mcp', 'remove', id]);
+    },
   };
 }

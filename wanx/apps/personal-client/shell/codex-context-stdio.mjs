@@ -96,7 +96,7 @@ async function handle(filename, line) {
     }
     process.stdout.write(`${JSON.stringify(result)}\n`);
   } catch {
-    if (!notification) writeError(value.id, -32000, '无法连接记忆盒子。请打开客户端并检查「我的 AI」中的 Codex 连接。');
+    if (!notification) writeError(value.id, -32000, '无法连接记忆盒子。请打开客户端并检查「我的 AI」中的资料连接。');
   }
 }
 

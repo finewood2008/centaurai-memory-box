@@ -1224,7 +1224,7 @@ function memoryView(section) {
     <button class="button small" data-action="show-settings">返回设置</button>
     ${memorySettingsSections.map(([id, label]) => `<button class="button small" data-action="memory-settings" data-section="${id}" ${id === memorySettingsSection ? 'aria-current="page"' : ""}>${label}</button>`).join("")}</nav>` : "";
   const banner = section === "my-ai" ? `<header class="wanx-section-banner my-ai-banner" data-section="my-ai">
-    ${personalModuleHeading("my-ai", "我的 AI", "选择智能体，把任务草稿整理成清晰的提示词。")}
+    ${personalModuleHeading("my-ai", "我的 AI", "连接智能体，让它读取记忆、星图和个人空间。")}
   </header>` : "";
   return `<div class="app-layout memory-layout">${shellHeader(title)}${navigation}${banner}
     <div class="memory-host" data-memory-section="${section}"></div></div>`;

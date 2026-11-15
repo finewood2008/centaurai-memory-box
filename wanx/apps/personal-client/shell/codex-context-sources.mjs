@@ -1,6 +1,7 @@
 import { extname } from "node:path";
 
 const personalSpace = "personal";
+const managedBackupFolder = "半人马AI记忆备份";
 const textTypes = new Set([".txt", ".md", ".csv", ".json", ".log"]);
 const searchLimit = { folders: 64, entries: 1200, depth: 12, textFiles: 32, matches: 10 };
 const maxTextBytes = 128 * 1024;
@@ -123,6 +124,13 @@ export function createCodexContextSources({ space, starlink }) {
 
   async function folderWithin(root, folderId, check) {
     const page = await listing(folderId, check);
+    if (root === "") {
+      if (page.crumbs[0]?.name === managedBackupFolder) throw error(403, "此目录由记忆备份管理。");
+      const items = page.parent === page.root
+        ? page.items.filter(item => item.kind !== "folder" || item.name !== managedBackupFolder)
+        : page.items;
+      return { ...page, items, relative: page.crumbs.map(row => row.name) };
+    }
     const location = page.crumbs.findIndex(row => row.id === root);
     if (location < 0) throw error(403, "目标不在本次选定的空间目录内。");
     return { ...page, relative: page.crumbs.slice(location + 1).map(row => row.name) };
@@ -225,8 +233,13 @@ export function createCodexContextSources({ space, starlink }) {
   async function spaceRead(root, args, check) {
     const start = args.start ?? 0;
     if (!spaceId(args.fileId) || !Number.isSafeInteger(start) || start < 0) throw error(400, "文件标识或读取位置无效。");
-    const { file } = await collect(root, check, args.fileId);
+    const file = root === ""
+      ? await checked(check, () => space.operation("stat", { id: args.fileId, space_id: personalSpace }))
+      : (await collect(root, check, args.fileId)).file;
     if (!file) throw error(403, "无法在本次选定的空间目录内找到该文件。");
+    if (file.id !== args.fileId || file.kind !== "file" || file.trashed ||
+        (file.space_id && file.space_id !== personalSpace) ||
+        (file.parent !== "" && !spaceId(file.parent))) throw error(403, "无法验证文件所属的空间目录。");
     const source = await readText(root, file, check);
     check();
     if (!source) throw error(400, "这份文件暂不支持正文读取。");
@@ -267,5 +280,22 @@ export function createCodexContextSources({ space, starlink }) {
     throw error(400, "不支持此资料工具。");
   }
 
-  return { catalog, validate, call };
+  async function direct(tool, args, check) {
+    if (tool === "space_list") {
+      const page = await folderWithin("", args.folderId ?? "", check);
+      return {
+        path: page.relative.join("/"),
+        items: page.items.slice(0, searchLimit.entries).map(({ id, name, kind, size }) => ({ id, name, kind, size })),
+        truncated: page.items.length > searchLimit.entries,
+      };
+    }
+    if (tool === "space_search") return spaceSearch("", args, check);
+    if (tool === "space_read") return spaceRead("", args, check);
+    const available = await warehouses(check);
+    if (tool === "starlink_warehouses") return { warehouses: available };
+    if (!available.some(row => row.id === args.warehouseId)) throw error(400, "无法访问所选星图仓库。");
+    return call({ warehouseId: args.warehouseId }, tool, args, check);
+  }
+
+  return { catalog, validate, call, direct };
 }

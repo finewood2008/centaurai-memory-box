@@ -63,7 +63,7 @@ import { createUIState } from "./ui-state.mjs";
 import { createUIBroadcast } from "./ui-broadcast.mjs";
 import { createNotificationCenter } from "./notification-center.mjs";
 import { createAIDialogue } from "./ai-dialogue.mjs";
-import { dataInteractionKey } from "../device-trust/data-context.mjs";
+import { dataInteractionKey, dataOwnerKey } from "../device-trust/data-context.mjs";
 import { createStartupSettings } from "./startup.mjs";
 import { createSpaceLinkBridge } from "./space-links.mjs";
 import {createSuperClipboard} from "./super-clipboard.mjs";
@@ -88,9 +88,12 @@ import { registerDeviceTrustLifecycle } from "./device-trust-lifecycle.mjs";
 import { createMemoryWorkspace, MEMORY_SCHEME, resolveMemoryRuntimeFile } from "./memory-workspace.mjs";
 import { createMemoryRuntimeSupervisor, resolveManagedMemorySource } from "./local-memory-runtime.mjs";
 import { createMyAiTask } from "./my-ai-task.mjs";
+import { openWindowsCodexDraft } from "./windows-codex-draft.mjs";
 import { createCodexContext } from "./codex-context.mjs";
 import { createCodexContextConfig } from "./codex-context-config.mjs";
 import { createCodexContextSources } from "./codex-context-sources.mjs";
+import { createMyAiAccess, createMyAiMemoryAccess } from "./my-ai-access.mjs";
+import { configurableAgents, createMyAiMcpConfig } from "./my-ai-mcp-config.mjs";
 
 import { testPackageIdentity, TEST_APP_ID, TEST_PRODUCT_NAME } from "../updates/test-build.mjs";
 import { createTestUpdateRuntime } from "../updates/test-runtime.mjs";
@@ -623,19 +626,30 @@ if (process.argv.includes("--wanx-managed-app")) {
       const memoryRuntime = createMemoryRuntimeSupervisor({
         runtimeFile: memoryRuntimeFile, source: memorySource, appPath: app.getAppPath(), appData: app.getPath("appData"),
       });
-      const codexDescriptor = path.join(userData, "codex-context", "endpoint.json");
-      const codexContext = createCodexContext({
-        sources: createCodexContextSources({
-          space: personalSpace, starlink: (action, input) => personalDataService.action(action, input),
-        }),
-        scope: () => dataInteractionKey(client.snapshot()),
-        configure: createCodexContextConfig({
-          stdioPath: fileURLToPath(new URL("./codex-context-stdio.mjs", import.meta.url)), descriptorPath: codexDescriptor,
-        }),
-        descriptor: codexDescriptor,
-        protectFile: file => protectPrivateFile(file, { packaged: app.isPackaged }),
+      const serviceURL = process.env.WANX_CONSUMER_URL || DEFAULT_CONSUMER_URL;
+      const boxScope = () => dataInteractionKey(client.snapshot(), serviceURL);
+      const sources = createCodexContextSources({
+        space: personalSpace, starlink: (action, input) => personalDataService.action(action, input),
       });
-      if (!testRuntime) void codexContext.restore().catch(reportError);
+      const agentAccess = createMyAiAccess({
+        agents: ["codex", ...configurableAgents],
+        sources, memory: createMyAiMemoryAccess({ runtimeFile: memoryRuntimeFile }),
+        store: createSecureAccountStore({ filePath: path.join(userData, "my-ai-access.enc"), safeStorage }),
+        owner: () => dataOwnerKey(client.snapshot(), serviceURL),
+        box: () => client.snapshot().connection?.deviceId,
+        scope: boxScope,
+        makeContext(agent, direct) {
+          const descriptor = agent === "codex" ? path.join(userData, "codex-context", "endpoint.json")
+            : path.join(userData, "my-ai-access", agent, "endpoint.json");
+          const paths = { stdioPath: fileURLToPath(new URL("./codex-context-stdio.mjs", import.meta.url)), descriptorPath: descriptor };
+          const configure = agent === "codex" ? createCodexContextConfig(paths) : createMyAiMcpConfig(agent, paths);
+          return createCodexContext({
+            sources, scope: boxScope, configure, descriptor, direct,
+            protectFile: file => protectPrivateFile(file, { packaged: app.isPackaged }),
+          });
+        },
+      });
+      if (!testRuntime) void agentAccess.restore(reportError).catch(reportError);
       const memoryWorkspace = createMemoryWorkspace({
         assets: path.join(app.getAppPath(), "local-ui", "memory"),
         runtimeFile: memoryRuntimeFile, runtime: memoryRuntime,
@@ -647,6 +661,7 @@ if (process.argv.includes("--wanx-managed-app")) {
         },
         agentVisibilityStore: createSecureAccountStore({ filePath: path.join(userData, "my-ai-visibility.enc"), safeStorage }),
         getState: () => client.snapshot(),
+        agentAccess,
         fetchAsset: url => net.fetch(url),
         client, serviceURL: process.env.WANX_CONSUMER_URL || DEFAULT_CONSUMER_URL,
         preferenceFile: path.join(userData, "memory-model-source"),
@@ -654,11 +669,13 @@ if (process.argv.includes("--wanx-managed-app")) {
           protocolRegistered: url => Boolean(app.getApplicationNameForProtocol(url).trim()),
           applicationForProtocol: url => app.getApplicationInfoForProtocol(url),
           openExternal: url => shell.openExternal(url),
+          openLongWindowsDraft: openWindowsCodexDraft,
           openApplication: file => shell.openPath(file),
           revealApplication: file => shell.showItemInFolder(file),
           copyText: text => clipboard.writeText(text),
-          boxScope: () => dataInteractionKey(client.snapshot()),
-          codexContext,
+          boxScope,
+          codexContext: agentAccess.codex,
+          agentAccess,
           starlink: (action, input) => personalDataService.action(action, input),
           polish: (text, signal, assertSource) => aiDialogue.polishTask(text, signal, assertSource),
         }),
@@ -752,7 +769,7 @@ if (process.argv.includes("--wanx-managed-app")) {
       });
       unsubscribe = client.subscribe(() => {
         memoryWorkspace.sync();
-        codexContext.sync();
+        agentAccess.sync();
         timings.state("platform", client.snapshot().platform);
         dashboards.sync(client.snapshot());
         desktop.sync(client.snapshot());
@@ -771,7 +788,7 @@ if (process.argv.includes("--wanx-managed-app")) {
           deviceTrust.lock("shutdown");
           uiState.invalidateOpen();
           personalWorkshop?.close();
-          await codexContext.close();
+          await agentAccess.close();
           personalDataService?.close();
           aiDialogue?.close();
           panelDialogue?.close();

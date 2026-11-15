@@ -63,7 +63,7 @@ export function resolveMemoryRuntimeFile(env = process.env, home = homedir(), ma
 
 export function createMemoryWorkspace({
   assets, getState, fetchAsset, request = fetch, client, serviceURL, preferenceFile, protectFile,
-  localStorage, backup, myAiTask, runtime, agentVisibilityStore, manageAgentSync = Boolean(runtime),
+  localStorage, backup, myAiTask, runtime, agentVisibilityStore, agentAccess, manageAgentSync = Boolean(runtime),
   runtimeFile = resolveMemoryRuntimeFile(),
 }) {
   const models = client && createMemoryModelBridge({ client, serviceURL, runtimeFile, preferenceFile, protectFile });
@@ -197,8 +197,8 @@ export function createMemoryWorkspace({
       ["GET", "PUT"].includes(method);
     const backupRoute = memoryBackup && url.pathname === "/api/wanx-memory/backup" && ["GET", "POST"].includes(method);
     const reconnect = runtime && url.pathname === "/api/wanx-memory/reconnect" && method === "POST";
-    const taskAction = myAiTask && (/^\/api\/wanx-memory\/my-ai\/(status|warehouses|optimize|handoff|copy|launch|download|uninstall|hide-agent|show-agent|codex-context\/(?:status|catalog|connect|disconnect))$/.exec(url.pathname)?.[1]);
-    const taskRoute = taskAction && method === (["status", "warehouses", "codex-context/status"].includes(taskAction) ? "GET" : "POST");
+    const taskAction = myAiTask && (/^\/api\/wanx-memory\/my-ai\/(status|warehouses|optimize|handoff|copy|launch|download|uninstall|hide-agent|show-agent|agent-access\/(?:status|connect|disconnect)|codex-context\/(?:status|catalog|connect|disconnect))$/.exec(url.pathname)?.[1]);
+    const taskRoute = taskAction && method === (["status", "warehouses", "agent-access/status", "codex-context/status"].includes(taskAction) ? "GET" : "POST");
     if ((!backupRoute && !reconnect && !taskRoute && !modelSettings && !routes[method]?.some(rule => rule.test(url.pathname))) ||
         /%(?:2f|5c|00)/i.test(url.pathname)) return status("forbidden", "此记忆服务操作不可用。");
     const header = input.headers.get("x-memmy-local-token") || "";
@@ -250,8 +250,17 @@ export function createMemoryWorkspace({
         let result;
         if (taskAction === "hide-agent" || taskAction === "show-agent") {
           if (!isAgentPreferenceId(data.agent)) return status("invalid_request", "智能体标识无效。");
+          if (taskAction === "hide-agent") await agentAccess?.disconnect(data.agent, assertScope);
           result = await updateVisibility(visibilityKey(), data.agent, taskAction === "hide-agent", assertScope);
+        } else if (agentAccess && taskAction === "agent-access/disconnect") {
+          if (!agentAccess.supports(data.agent)) return status("invalid_request", "智能体标识无效。");
+          result = await agentAccess.disconnect(data.agent, assertScope);
         } else {
+          if (agentAccess && taskAction === "agent-access/connect") {
+            await visibilityWrites;
+            const hidden = (await readVisibility())[visibilityKey()] ?? [];
+            if (hidden.includes(data.agent)) return status("invalid_request", "请先在「添加应用」中重新接入该智能体。");
+          }
           result = await myAiTask(taskAction, data, assertScope, input.signal);
           if (taskAction === "status") {
             assertScope();
