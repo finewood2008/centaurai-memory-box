@@ -11,9 +11,9 @@ SetFont "Microsoft YaHei UI" 9
 !define MUI_HEADER_TRANSPARENT_TEXT
 !define MUI_INSTFILESPAGE_PROGRESSBAR "colored"
 !define MUI_INSTFILESPAGE_COLORS "A35D40 FCF9F5"
-!define MUI_FINISHPAGE_TITLE "万象已准备就绪"
-!define MUI_FINISHPAGE_TEXT "应用 · 空间 · 盒子$\r$\n$\r$\n发现需要的 AI 应用，整理自己的文件，连接并管理万象盒子。$\r$\n$\r$\n升级安装会保留现有账号与应用数据。"
-!define MUI_FINISHPAGE_RUN_TEXT "立即打开万象"
+!define MUI_FINISHPAGE_TITLE "记忆盒子已准备就绪"
+!define MUI_FINISHPAGE_TEXT "记忆 · 空间 · 我的 AI$\r$\n$\r$\n连接你的 AI，整理记忆与资料。$\r$\n$\r$\n升级安装会保留现有账号与应用数据。"
+!define MUI_FINISHPAGE_RUN_TEXT "打开记忆盒子"
 !define MUI_CUSTOMFUNCTION_GUIINIT WanxInstallerGuiInit
 
 Var wxWelcomeDialog
@@ -62,7 +62,7 @@ Function WanxWelcomePage
   ${If} ${isUpdated}
     Abort
   ${EndIf}
-  !insertmacro MUI_HEADER_TEXT "欢迎使用万象" "应用 · 空间 · 盒子"
+  !insertmacro MUI_HEADER_TEXT "欢迎使用半人马AI记忆盒子" "记忆 · 空间 · 我的 AI"
   Call WanxExtractArtwork
   ; Relative coordinates keep the artwork and controls inside the page when
   ; Windows text scaling changes the dialog-unit size.
@@ -116,19 +116,19 @@ Function WanxRenderSlide
   ${NSD_SetStretchedImage} $wxArtwork "$PLUGINSDIR\wanx-feature-$wxSlide.bmp" $wxBitmap
   ${Switch} $wxSlide
     ${Case} 1
-      ${NSD_SetText} $wxSlideIndex "万象 ${WANX_BUILD_LABEL} · 1 / 3"
-      ${NSD_SetText} $wxSlideTitle "应用，让 AI 融入日常"
-      ${NSD_SetText} $wxSlideText "发现、安装和使用适合你的 AI 应用。"
+      ${NSD_SetText} $wxSlideIndex "记忆盒子 ${WANX_BUILD_LABEL} · 1 / 3"
+      ${NSD_SetText} $wxSlideTitle "记忆，留下值得记住的协作"
+      ${NSD_SetText} $wxSlideText "整理支持来源中的记忆，让下一次任务有据可循。"
       ${Break}
     ${Case} 2
-      ${NSD_SetText} $wxSlideIndex "万象 ${WANX_BUILD_LABEL} · 2 / 3"
-      ${NSD_SetText} $wxSlideTitle "空间，安放你的文件与资料"
-      ${NSD_SetText} $wxSlideText "集中管理文件，自主决定 AI 可以访问的内容。"
+      ${NSD_SetText} $wxSlideIndex "记忆盒子 ${WANX_BUILD_LABEL} · 2 / 3"
+      ${NSD_SetText} $wxSlideTitle "空间，资料有条理，查找更方便"
+      ${NSD_SetText} $wxSlideText "管理空间文件，批量填写标签与说明。"
       ${Break}
     ${Case} 3
-      ${NSD_SetText} $wxSlideIndex "万象 ${WANX_BUILD_LABEL} · 3 / 3"
-      ${NSD_SetText} $wxSlideTitle "盒子，连接你的 AI 底座"
-      ${NSD_SetText} $wxSlideText "连接万象盒子，查看设备状态，管理运行服务。"
+      ${NSD_SetText} $wxSlideIndex "记忆盒子 ${WANX_BUILD_LABEL} · 3 / 3"
+      ${NSD_SetText} $wxSlideTitle "我的 AI，带着资料开始协作"
+      ${NSD_SetText} $wxSlideText "选择智能体与资料范围，按授权连接记忆和文件。"
       ${Break}
   ${EndSwitch}
 FunctionEnd
@@ -187,7 +187,7 @@ FunctionEnd
 Function WanxInstallShow
   StrCpy $wxProgressAnimation 0
   Call WanxExtractArtwork
-  !insertmacro MUI_HEADER_TEXT "正在安装万象" "正在复制应用与配套组件，请稍候。"
+  !insertmacro MUI_HEADER_TEXT "正在安装记忆盒子" "正在复制应用与配套组件，请稍候。"
   ; NSIS alone drives the real progress bar. The independent native animation
   ; control rotates posters while files are copied on the installer thread.
   System::Call '*(i 0, i 0, i 0, i 0) p.r0'

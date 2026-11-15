@@ -1,0 +1,136 @@
+name: Memory Box Windows Preview Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Preview version matching client base, e.g. 1.0.6-windows-preview.2'
+        required: true
+        default: 1.0.6-windows-preview.2
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: memobox-windows-preview-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 120
+    env:
+      MEMOBOX_RELEASE_VERSION: ${{ inputs.version }}
+      WANX_MEMORY_BOX_ROOT: ${{ github.workspace }}/memory
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Enable Git long paths on the disposable runner
+        run: |
+          git config --global core.longpaths true
+          $destination = Join-Path $env:RUNNER_TEMP "memobox-preview-${env:GITHUB_RUN_ID}-${env:GITHUB_RUN_ATTEMPT}"
+          "MEMOBOX_PREVIEW_OUT=$destination" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            memory/package-lock.json
+            wanx/apps/personal-client/package-lock.json
+            wanx/apps/builder/package-lock.json
+            wanx/octop/dashboard/package-lock.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: wanx/apps/personal-client/native/go.mod
+          cache-dependency-path: wanx/apps/personal-client/native/go.sum
+      - name: Validate a new preview target
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node tools/release/package-windows-preview.mjs --check-release
+      - name: Verify staging and release guards
+        run: node --test tools/release/tests/*.test.mjs
+      - name: Install locked build dependencies
+        run: |
+          npm ci --prefix memory --registry=https://registry.npmjs.org --replace-registry-host=always --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'Memory dependency installation failed' }
+          npm ci --prefix wanx/apps/builder --registry=https://registry.npmjs.org --replace-registry-host=always --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'Builder dependency installation failed' }
+          npm ci --prefix wanx/octop/dashboard --registry=https://registry.npmjs.org --replace-registry-host=always --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'Dashboard dependency installation failed' }
+          npm ci --prefix wanx/apps/personal-client --registry=https://registry.npmjs.org --replace-registry-host=always --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'Client dependency installation failed' }
+      - name: Build the real local memory and backend
+        run: |
+          npm --prefix memory run build -w @memmy/memory
+          if ($LASTEXITCODE -ne 0) { throw 'Memory build failed' }
+          npm --prefix memory run build -w @memmy/backend
+          if ($LASTEXITCODE -ne 0) { throw 'Local API build failed' }
+          npm --prefix memory run build -w @memmy/desktop-interface
+          if ($LASTEXITCODE -ne 0) { throw 'Desktop interface build failed' }
+      - name: Build branded client workspaces and native helpers
+        run: |
+          npm --prefix wanx/apps/personal-client run build:memory
+          if ($LASTEXITCODE -ne 0) { throw 'My AI frontend build failed' }
+          npm --prefix wanx/apps/personal-client run build:renderer
+          if ($LASTEXITCODE -ne 0) { throw 'Client renderer build failed' }
+          npm --prefix wanx/apps/personal-client run build:maintenance
+          if ($LASTEXITCODE -ne 0) { throw 'Maintenance build failed' }
+          node wanx/apps/personal-client/tools/build-network.mjs win32-x64
+          if ($LASTEXITCODE -ne 0) { throw 'Network helper build failed' }
+          node wanx/apps/personal-client/tools/build-discovery.mjs win32-x64
+          if ($LASTEXITCODE -ne 0) { throw 'Discovery helper build failed' }
+          node wanx/apps/personal-client/tools/check-brand-copy.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Visible copy policy failed' }
+      - name: Validate manual annotation and MCP contracts
+        working-directory: wanx/apps/personal-client
+        run: |
+          node --test tests/space-annotation-workbench-ui.test.mjs tests/space-annotations-batch.test.mjs tests/annotation-workbench-integration.test.mjs tests/space-annotations-preload.test.mjs tests/codex-context-config.test.mjs tests/codex-context-repair.test.mjs tests/my-ai-scoped-access.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Client contract validation failed' }
+      - name: Validate mixed local collection and per-device backups
+        working-directory: wanx/apps/personal-client
+        run: |
+          node --test tests/memory-source-profile.test.mjs tests/local-memory-runtime.test.mjs tests/local-memory-unified.test.mjs tests/local-memory-unified-worker.test.mjs tests/memory-backup.test.mjs tests/memory-workspace.test.mjs tests/my-ai-workspace-routing.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Mixed collection runtime validation failed' }
+      - name: Validate source-profile upgrade and rollback
+        working-directory: memory
+        run: |
+          node node_modules/vitest/vitest.mjs run Memory/tests/wanx-unified-memory.test.ts Memory/tests/server-entrypoint.test.ts --cache=false --testTimeout=30000 --maxWorkers=2 --reporter=dot --silent=true
+          if ($LASTEXITCODE -ne 0) { throw 'Mixed collection upgrade validation failed' }
+      - name: Type-check the shipped memory frontend
+        run: node memory/node_modules/typescript/bin/tsc -p memory/App/frontend/desktop/tsconfig.json --noEmit
+      - name: Validate My AI interaction
+        working-directory: memory/App/frontend/desktop
+        run: |
+          node ../../../node_modules/vitest/vitest.mjs run src/pages/memory/tests/wanx-my-ai.interaction.test.tsx src/pages/memory/tests/wanx-memory-backup.interaction.test.tsx src/pages/memory/tests/source-collection-profile.interaction.test.tsx --cache=false --reporter=dot --silent=true
+          if ($LASTEXITCODE -ne 0) { throw 'My AI interaction validation failed' }
+      - name: Package and verify unpacked Windows runtime
+        run: node tools/release/package-windows-preview.mjs --out "$env:MEMOBOX_PREVIEW_OUT"
+      - name: Upload verified build outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: memobox-windows-x64-${{ inputs.version }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            ${{ env.MEMOBOX_PREVIEW_OUT }}/artifacts/*.exe
+            ${{ env.MEMOBOX_PREVIEW_OUT }}/artifacts/SHA256SUMS.txt
+            ${{ env.MEMOBOX_PREVIEW_OUT }}/artifacts/verification-windows-preview.json
+            ${{ env.MEMOBOX_PREVIEW_OUT }}/artifacts/release-notes.md
+      - name: Publish a new Windows prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node tools/release/package-windows-preview.mjs --check-release
+          if ($LASTEXITCODE -ne 0) { throw 'Release target is no longer free' }
+          $tag = "v$env:MEMOBOX_RELEASE_VERSION"
+          $artifacts = Join-Path $env:MEMOBOX_PREVIEW_OUT 'artifacts'
+          $installer = Join-Path $artifacts "CentaurAI-MemoBox-${env:MEMOBOX_RELEASE_VERSION}-windows-x64.exe"
+          $assets = @($installer, (Join-Path $artifacts 'SHA256SUMS.txt'), (Join-Path $artifacts 'verification-windows-preview.json'))
+          gh release create $tag @assets --target $env:GITHUB_SHA --prerelease --title "半人马AI记忆盒子 $env:MEMOBOX_RELEASE_VERSION · Windows x64" --notes-file (Join-Path $artifacts 'release-notes.md')
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub Release creation failed' }

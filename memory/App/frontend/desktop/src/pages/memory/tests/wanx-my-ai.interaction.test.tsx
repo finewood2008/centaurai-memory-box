@@ -97,6 +97,10 @@ it("shows configured separately from verified and uses the selected Claude mode 
   agents[0].capabilities!.autoMemory = "explicit";
   agents[0].modes = [{ id: "chat", autoMemory: "explicit" }, { id: "code", autoMemory: "hook" }, { id: "cowork", configuration: "unsupported", autoMemory: "unverified" }];
   await render();
+  expect(host.textContent).toContain("等待客户端加载");
+  expect(host.textContent).not.toContain("配置已保存，等待客户端加载");
+  expect(host.querySelector(".my-ai-connection-details")).toBeNull();
+  await act(async () => button("连接详情").click());
   expect(host.textContent).toContain("配置已保存，等待客户端加载");
   expect(host.textContent).not.toContain("资料检索已验证");
   await optimize();
@@ -106,6 +110,8 @@ it("shows configured separately from verified and uses the selected Claude mode 
     select.value = "code"; select.dispatchEvent(new Event("change", { bubbles: true }));
   });
   expect(host.textContent).not.toContain("优化后的提示词");
+  expect(host.querySelector(".my-ai-connection-details")).toBeNull();
+  await act(async () => button("连接详情").click());
   expect(host.textContent).toContain("支持配置逐轮采集");
   await act(async () => button("优化提示词").click());
   expect(posts.filter(item => item.action === "optimize").at(-1)?.body.mode).toBe("code");
@@ -161,9 +167,9 @@ it("persists source selections and leaves the previous value when saving fails",
   await act(async () => button("测试星图").click());
   expect(posts.find(item => item.action === "agent-context/selection" && item.body.selection)?.body).toMatchObject({ agent: "gemini", selection: { warehouseId: "warehouse-one", memoryEnabled: false } });
   saveFails = true;
-  const toggle = host.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+  const toggle = button("允许检索记忆");
   await act(async () => toggle.click());
-  expect(toggle.checked).toBe(false);
+  expect(toggle.getAttribute("aria-pressed")).toBe("false");
   expect(host.textContent).toContain("范围保存失败");
   expect(host.textContent).toContain("测试星图");
 });
@@ -185,7 +191,7 @@ it("ignores the previous agent's delayed selection after the target changes", as
     selection: { warehouseId: "old-warehouse", memoryEnabled: true }, resources: { warehouse: { id: "old-warehouse", name: "过期 Codex 范围" } },
   })));
   expect(host.textContent).not.toContain("过期 Codex 范围");
-  expect(host.querySelector<HTMLInputElement>('input[type="checkbox"]')!.checked).toBe(false);
+  expect(button("允许检索记忆").getAttribute("aria-pressed")).toBe("false");
 });
 
 it("clears session-bound drafts and pending state when the account session changes", async () => {
@@ -215,4 +221,41 @@ it("requires confirmation to manage uninstall and never labels opening an entry 
   expect(posts.filter(item => item.action === "uninstall")).toHaveLength(1);
   expect(host.textContent).toContain("已打开官方卸载入口");
   expect(host.textContent).not.toContain("已完成卸载");
+});
+
+it("uses brand icons for every supported entry and omits the duplicate memory-transfer card", async () => {
+  const entries = [
+    ["codex", "Codex 客户端"], ["codex_cli", "Codex CLI"], ["claude_code", "Claude Code CLI"],
+    ["claude_desktop", "Claude 客户端"], ["gemini", "Gemini CLI"], ["workbuddy", "WorkBuddy"],
+    ["qwenwork", "QwenWork"], ["deepseek_harness", "DeepSeek Harness"],
+  ];
+  agents = entries.map(([id, name]) => agent(id!, name!));
+  await render();
+  for (const [, name] of entries) {
+    const row = [...host.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")].find(item => item.textContent?.includes(name!));
+    expect(row?.querySelector(".my-ai-agent-logo img"), name).toBeTruthy();
+  }
+  await act(async () => button("添加应用").click());
+  expect(document.querySelectorAll(".my-ai-app-catalog .my-ai-agent-logo img")).toHaveLength(8);
+  expect(host.textContent).not.toContain("统一记忆导入导出");
+  expect(host.textContent).not.toContain("记忆包导入导出");
+});
+
+
+it("uses matching source buttons and persists memory toggle independently without expanding the selected scope", async () => {
+  await render();
+  const toggle = button("允许检索记忆");
+  expect(toggle.classList.contains("my-ai-source-trigger")).toBe(true);
+  expect(toggle.querySelector("svg")).toBeTruthy();
+  expect(toggle.getAttribute("aria-pressed")).toBe("false");
+  expect(host.querySelector('input[type="checkbox"]')).toBeNull();
+  await act(async () => toggle.click());
+  expect(toggle.getAttribute("aria-pressed")).toBe("true");
+  expect(posts.filter(item => item.action === "agent-context/selection" && item.body.selection).at(-1)?.body)
+    .toEqual({ agent: "codex", selection: { memoryEnabled: true } });
+  await act(async () => toggle.click());
+  expect(toggle.getAttribute("aria-pressed")).toBe("false");
+  expect(posts.filter(item => item.action === "agent-context/selection" && item.body.selection).at(-1)?.body)
+    .toEqual({ agent: "codex", selection: { memoryEnabled: false } });
+  expect(host.textContent).not.toContain("启动任务时重新校验权限");
 });

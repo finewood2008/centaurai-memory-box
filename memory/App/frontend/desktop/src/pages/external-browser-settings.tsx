@@ -179,19 +179,19 @@ function BrowserInstallDemo({ browser, labels, onClose }: {
       <span>{labels.demoTitle ?? "Installation demo"}</span>
     </div>
     <p className={styles.installDemoTitle}>{withBrowser(labels.demoInstruction
-      ?? "Drag the 半人马AI 私人记忆盒子 icon to an empty area of the {browser} extensions page")}</p>
+      ?? "Drag the 半人马AI记忆盒子 icon to an empty area of the {browser} extensions page")}</p>
     <div className={`${styles.installDemoDesktop} ${playing ? styles.installDemoPlaying : ""}`} ref={desktop}
       role="img" aria-label={withBrowser(labels.demoDescription
-        ?? "Demo: drag the 半人马AI 私人记忆盒子 icon out of the 半人马AI 私人记忆盒子 window and release it on an empty area of the {browser} extensions page.")}
+        ?? "Demo: drag the 半人马AI记忆盒子 icon out of the 半人马AI记忆盒子 window and release it on an empty area of the {browser} extensions page.")}
       onDragStart={event => event.preventDefault()}>
       <div className={styles.installDemoWindow} aria-hidden="true">
-        <div className={styles.installDemoWindowTitle}><img src={memmyIcon} alt="" draggable={false} />半人马AI 私人记忆盒子</div>
+        <div className={styles.installDemoWindowTitle}><img src={memmyIcon} alt="" draggable={false} />半人马AI记忆盒子</div>
         <div className={styles.installDemoMemmyBody}>
           <span className={styles.installDemoSourceIcon} ref={source}>
             <img src={memmyIcon} alt="" draggable={false} />
             <MousePointer2 size={19} className={styles.installDemoPointer} />
           </span>
-          <span>{labels.dragCardTitle ?? "半人马AI 私人记忆盒子 browser extension"}</span>
+          <span>{labels.dragCardTitle ?? "半人马AI记忆盒子 browser extension"}</span>
         </div>
       </div>
       <div className={styles.installDemoWindow} aria-hidden="true">
@@ -208,7 +208,7 @@ function BrowserInstallDemo({ browser, labels, onClose }: {
     </div>
     <div className={styles.installDemoFooter}>
       <span role="status" aria-live="polite">{playing
-        ? labels.demoDragging ?? "Hold the icon and drag it out of 半人马AI 私人记忆盒子"
+        ? labels.demoDragging ?? "Hold the icon and drag it out of 半人马AI记忆盒子"
         : labels.demoRelease ?? "Release it on an empty area of the browser extensions page"}</span>
       <button type="button" onClick={() => setReplay(value => value + 1)} disabled={playing}>
         <Play size={13} aria-hidden="true" />{labels.demoReplay ?? "Replay"}
@@ -397,8 +397,8 @@ export function ExternalBrowserSettings({ getStatus, getInstallation, getRunning
         const connectionFailed = enabled && !browserClosed && !ready
           && since !== undefined && checkedAt - since >= connectionGraceMs;
         const showSetup = !ready || managementBrowser === browser;
-        const connectionText = disabled ? labels.disabled ?? "半人马AI 私人记忆盒子 extension is disabled. Enable it in the browser."
-          : installationUnavailable ? labels.installationUnavailable ?? "Unable to read 半人马AI 私人记忆盒子 extension status. Open Manage to view it in the browser."
+        const connectionText = disabled ? labels.disabled ?? "半人马AI记忆盒子 extension is disabled. Enable it in the browser."
+          : installationUnavailable ? labels.installationUnavailable ?? "Unable to read 半人马AI记忆盒子 extension status. Open Manage to view it in the browser."
           : notInstalled ? labels.notInstalled
           : statusError ? labels.statusUnavailable ?? "Connection status is unavailable."
           : browserClosed ? labels.browserClosed ?? "Installed. Open the browser to connect."
@@ -464,7 +464,7 @@ export function ExternalBrowserSettings({ getStatus, getInstallation, getRunning
                 }}>
                 <img src={memmyIcon} alt="" draggable={false} aria-hidden="true" />
                 <div className={styles.dragCardCopy}>
-                  <strong>{labels.dragCardTitle ?? "半人马AI 私人记忆盒子"}</strong>
+                  <strong>{labels.dragCardTitle ?? "半人马AI记忆盒子"}</strong>
                   <small>{labels.dragCardHint ?? labels.dragFolderStep}</small>
                 </div>
               </div>

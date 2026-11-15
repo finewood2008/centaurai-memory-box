@@ -23,7 +23,7 @@ const healthIntervalMs = 5_000;
 if (isMyAi) document.body.dataset.memorySurface = "my-ai";
 
 function wanxMemoryWording(message: string) {
-  return message.replace(/半人马AI\s*私人记忆盒子(?:\s+Platform)?|\bMemmy\b/gi, "半人马AI-记忆盒子");
+  return message.replace(/半人马AI\s*私人记忆盒子(?:\s+Platform)?|\bMemmy\b/gi, "半人马AI记忆盒子");
 }
 
 function WanxMemorySurface() {

@@ -1,6 +1,6 @@
 export const TEST_APP_ID = "ai.centuarai.wanx.client.ota-test";
 export const TEST_PACKAGE_NAME = "centuarai-wanx-client-ota-test";
-export const TEST_PRODUCT_NAME = "万象升级测试";
+export const TEST_PRODUCT_NAME = "记忆盒子升级测试";
 export const TEST_EXTENSION = "wanx.client-test.v1";
 
 export function validTestRunId(value) {

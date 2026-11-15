@@ -54,7 +54,7 @@ export async function collectStarlinkNotifications({ request, dataScope, isCurre
           collect({...common, key: `starlink-model:${deviceId}:${dataScope}:${warehouse.id}:${signature}:${stored.modelGeneration || 0}`,
             title: confirmation ? '星图在线模型待确认' : automatic ? '星图默认模型不可用' : '星图处理模型不可用',
             body: confirmation ? '处理资料前需要确认在线模型的使用。请打开星图的“模型与处理”检查并确认；现有材料已保留。'
-              : automatic ? 'WANX 默认模型当前无法使用，星图材料处理受到影响。请检查万象模型配置；现有材料已保留。'
+              : automatic ? "默认模型当前无法使用，星图材料处理受到影响。请检查模型配置；现有材料已保留。"
               : '星图所选模型已失效或配置发生变化。请打开星图的“模型与处理”检查；现有材料已保留。'});
           stored.modelFailure = signature;
         }

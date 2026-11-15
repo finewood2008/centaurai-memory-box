@@ -61,7 +61,7 @@ test('storage settings use a directory picker for the selected space without a p
 test('remote folder picker navigates the host tree and only saves after explicit selection',async()=>{
  const h=setup();await h.click('storage',{space:'personal'});
  h.select(({path})=>({browse:true,path:path||'/',root:'/',parent:'/',entries:path?[{path:'/data/projects',name:'projects'}]:[{path:'/data',name:'data'}]}));
- await h.click('storage-choose');assert.match(h.w.dialogView(),/万象主机文件夹/);
+ await h.click('storage-choose');assert.match(h.w.dialogView(),/设备文件夹/);
  await h.click('storage-browse',{path:'/data'});assert.match(h.w.dialogView(),/projects/);
  await h.click('storage-select');assert.match(h.w.dialogView(),/title="\/data"/);
  assert.ok(!h.calls.some(([m])=>m==='links-storage-set'));

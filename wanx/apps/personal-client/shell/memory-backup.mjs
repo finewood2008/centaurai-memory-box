@@ -226,7 +226,8 @@ export function createMemoryBackup({ client, space, sourceBinding, store, stagin
       });
       backups.push(...previous.backups.filter(item => item.source.id.startsWith("legacy-")));
     }
-    return backups.filter(entry => entry.source.profile === library.id)
+    return backups.filter(entry => entry.source.profile === library.id ||
+      (library.id === "legacy" && ["codex-desktop", "codex-cli"].includes(entry.source.profile)))
       .sort((a, b) => b.modified - a.modified || b.id.localeCompare(a.id));
   }
 
@@ -420,7 +421,7 @@ export function createMemoryBackup({ client, space, sourceBinding, store, stagin
       const record = data[recordKey(current)];
       if (action === "status") return {
         connected: Boolean(current), context: ticket, enabled: enabled(data, current), busy: Boolean(running),
-        ...(libraries ? { library, libraries } : {}),
+        library: { id: library.id, name: library.id === "legacy" ? "本机记忆库" : library.name },
         lastBackup: knownInstallation && record?.v2?.sourceId === knownInstallation.id ? record.v2.lastBackup : undefined,
         intervalMinutes: scheduleMs(data) / 60_000,
         ...(statusFor && (statusFor === current?.key || statusFor === setting) ? { phase, progress, lastError } : {}),

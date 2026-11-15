@@ -6,7 +6,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { registerControlActions } from "../shell/control.mjs";
 import { createUIState } from "../shell/ui-state.mjs";
 
-const denied = /此页面无权操作万象连接/;
+const denied = /此页面无权操作记忆盒子连接/;
 const ready = {
   account: { phase: "authenticated", accountId: "alice", clientId: "client-a" },
   phase: "ready", network: { phase: "ready", enabled: true }, platform: { phase: "ready" },

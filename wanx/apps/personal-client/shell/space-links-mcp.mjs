@@ -11,7 +11,7 @@ const actions = ["describe", "stat", "list", "read", "mkdir", "move", "trash", "
 export const schema = {
   type: "object", additionalProperties: false, required: ["link", "action"],
   properties: {
-    link: { type: "string", description: "Exact localhost access link copied from WANX. Never a public URL." },
+    link: { type: "string", description: "Exact localhost access link copied from MemoBox. Never a public URL." },
     action: { type: "string", enum: actions },
     target: { type: "string", description: "Resource ID within the authorized scope; omitted means its root. For mkdir and new writes, the destination folder. stat returns metadata for a known recycled item too, but read cannot read recycled content." },
     parent: { type: "string", description: "For mkdir, alias of target for the destination folder; if both are provided they must match. For move, the destination folder ID within the same scope." }, name: { type: "string" },
@@ -47,7 +47,7 @@ export async function spaceRequest(input, fetchImpl = fetch) {
   return response.json();
 }
 const tools = [
-  { name: "space", description: "Operate on an explicitly provided WANX resource link. Read describe first for scope. mkdir creates inside target (or parent alias). Deletes go to recycle bin and return updated metadata; stat can inspect a known recycled item. restore requires its observed current version. Chunked writes support files of any size.", inputSchema: schema },
+  { name: "space", description: "Operate on an explicitly provided MemoBox resource link. Read describe first for scope. mkdir creates inside target (or parent alias). Deletes go to recycle bin and return updated metadata; stat can inspect a known recycled item. restore requires its observed current version. Chunked writes support files of any size.", inputSchema: schema },
   { name: "space_write_text", description: "Create or update a UTF-8 text file, up to 1 MiB. target is a folder for creation or a file for overwrite; overwrite requires expected version.", inputSchema: {
     type: "object", additionalProperties: false, required: ["link", "target", "text"],
     properties: { link: schema.properties.link, target: { type: "string" }, name: { type: "string" }, expected: { type: "integer", minimum: 1 }, text: { type: "string" } },
@@ -164,6 +164,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const flag = name => { const i=process.argv.indexOf(name); return i<0 ? undefined : process.argv[i+1]; };
   if(flag("--profile")) {
     try { const transport=await createAgentTransport({profileFile:flag("--profile"),endpoint:flag("--endpoint")}); serve(transport); }
-    catch { process.stderr.write("WANX Agent profile unavailable. Check the configuration and restart.\n"); process.exitCode=1; }
+    catch { process.stderr.write("MemoBox Agent profile unavailable. Check the configuration and restart.\n"); process.exitCode=1; }
   } else serve();
 }

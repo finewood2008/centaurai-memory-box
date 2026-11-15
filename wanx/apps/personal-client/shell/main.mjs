@@ -88,7 +88,7 @@ import { registerDeviceTrustLifecycle } from "./device-trust-lifecycle.mjs";
 import { createMemoryWorkspace, MEMORY_SCHEME, resolveMemoryRuntimeFile } from "./memory-workspace.mjs";
 import { createMemoryRuntimeSupervisor, resolveManagedMemorySource } from "./local-memory-runtime.mjs";
 import { readBackupSourceBinding } from "./memory-backup-identity.mjs";
-import { memoryLibraries, memoryLibraryRuntime, readMemoryLibrary, saveMemoryLibrary } from "./memory-source-profile.mjs";
+import { memoryLibraryRuntime, readMemoryLibrary } from "./memory-source-profile.mjs";
 import { createMyAiTask } from "./my-ai-task.mjs";
 import { createMyAiLauncher } from "./my-ai-launch.mjs";
 import { createMyAiInstallations } from "./my-ai-install.mjs";
@@ -413,7 +413,7 @@ if (process.argv.includes("--wanx-managed-app")) {
           installationDirectory: path.dirname(app.getPath("exe")),
           windowsPublisherNames: updateTrust.windowsPublisherNames }),
         requestInstall: finalize => shutdown.requestInstall(finalize).catch(error => {
-          dialog.showErrorBox("客户端更新未完成", "安装未完成。请重新启动万象查看更新诊断，必要时使用正式修复安装包；账号和应用数据会保留。");
+          dialog.showErrorBox("客户端更新未完成", "安装未完成。请重新启动记忆盒子查看更新诊断，必要时使用正式修复安装包；账号和应用数据会保留。");
           throw error;
         }),
       });
@@ -513,9 +513,9 @@ if (process.argv.includes("--wanx-managed-app")) {
         // Only an explicit user action opens this confirmation. Background state
         // changes never bring either window to the front.
         quitPrompt = dialog.showMessageBox({
-          type: "question", title: "退出万象", message: "退出万象？",
-          detail: "这会关闭万象所承载的应用，并断开盒子连接。收起窗口可以继续在后台运行。",
-          buttons: ["继续运行", "退出万象"], defaultId: 0, cancelId: 0,
+          type: "question", title: "退出记忆盒子", message: "退出记忆盒子？",
+          detail: "这会关闭记忆盒子所承载的应用，并断开盒子连接。收起窗口可以继续在后台运行。",
+          buttons: ["继续运行", "退出记忆盒子"], defaultId: 0, cancelId: 0,
         }).then(result => { if (result.response === 1) app.quit(); })
           .finally(() => { quitPrompt = null; });
         return quitPrompt;
@@ -632,16 +632,17 @@ if (process.argv.includes("--wanx-managed-app")) {
         if (panel && !panel.isDestroyed()) panel.webContents.send("wanx-client:panel-ai-dialogue", event);
       } });
       const memoryLibrary = await readMemoryLibrary(userData);
-      const isolatedMemory = memoryLibraryRuntime(memoryLibrary, userData);
-      const memoryEnv = isolatedMemory?.env ?? process.env;
+      const memoryRuntimeLayout = memoryLibraryRuntime(memoryLibrary, userData);
+      const memoryEnv = memoryRuntimeLayout?.env ?? process.env;
+      delete process.env.MEMMY_ISOLATED_CODEX_PROFILE;
       const memorySource = testRuntime || memoryEnv.MEMMY_RUNTIME_CONFIG_PATH?.trim() ? null : await resolveManagedMemorySource({
         appPath: app.getAppPath(), packaged: app.isPackaged, resourcesPath: process.resourcesPath,
         env: memoryEnv,
       });
-      const memoryRuntimeFile = resolveMemoryRuntimeFile(memoryEnv, os.homedir(), Boolean(memorySource) || Boolean(isolatedMemory));
+      const memoryRuntimeFile = resolveMemoryRuntimeFile(memoryEnv, os.homedir(), Boolean(memorySource) || Boolean(memoryRuntimeLayout));
       const memoryRuntime = createMemoryRuntimeSupervisor({
         runtimeFile: memoryRuntimeFile, source: memorySource, appPath: app.getAppPath(),
-        appData: isolatedMemory?.root ?? app.getPath("appData"), env: memoryEnv,
+        appData: memoryRuntimeLayout?.root ?? app.getPath("appData"), env: memoryEnv,
       });
       annotationModels = createAnnotationModelClient({ runtimeFile: memoryRuntimeFile, ensureReady: () => memoryRuntime.ensure(),
         getScope: () => dataInteractionKey(client.snapshot(), process.env.WANX_CONSUMER_URL || DEFAULT_CONSUMER_URL),
@@ -650,13 +651,13 @@ if (process.argv.includes("--wanx-managed-app")) {
       const boxScope = () => dataInteractionKey(client.snapshot(), serviceURL);
       const agentInstallations = createMyAiInstallations({ directory: path.join(userData, "my-ai-programs") });
       const agentLauncher = createMyAiLauncher({
-        directory: path.join(isolatedMemory?.root ?? userData, "my-ai-launch"),
+        directory: path.join(memoryRuntimeLayout?.root ?? userData, "my-ai-launch"),
         openFile: file => shell.openPath(file),
         getScope: () => boxScope() || dataOwnerKey(client.snapshot(), serviceURL),
       });
       const memoryTransfer = createMyAiMemoryTransfer({
         runtimeFile: memoryRuntimeFile,
-        directory: path.join(isolatedMemory?.root ?? userData, "my-ai-import-recovery"),
+        directory: path.join(memoryRuntimeLayout?.root ?? userData, "my-ai-import-recovery"),
         scope: () => boxScope() || dataOwnerKey(client.snapshot(), serviceURL),
         identity: () => {
           const owner = dataOwnerKey(client.snapshot(), serviceURL);
@@ -675,7 +676,7 @@ if (process.argv.includes("--wanx-managed-app")) {
         space: personalSpace, starlink: (action, input) => personalDataService.action(action, input),
       });
       const agentAccess = createMyAiAccess({
-        agents: isolatedMemory ? [] : ["codex", ...configurableAgents],
+        agents: ["codex", ...configurableAgents],
         sources, memory: createMyAiMemoryAccess({ runtimeFile: memoryRuntimeFile }),
         store: createSecureAccountStore({ filePath: path.join(userData, "my-ai-access.enc"), safeStorage }),
         owner: () => dataOwnerKey(client.snapshot(), serviceURL),
@@ -687,6 +688,11 @@ if (process.argv.includes("--wanx-managed-app")) {
           const paths = { stdioPath: fileURLToPath(new URL("./codex-context-stdio.mjs", import.meta.url)), descriptorPath: descriptor };
           const configure = agent === "codex" ? createCodexContextConfig({ ...paths,
             discover: async options => (await agentInstallations.inspect("codex_cli"))?.executable ?? findCodexCli(options),
+            confirmReplace: async ({ previous, next }) => (await dialog.showMessageBox(control, {
+              type: "warning", title: "更新 Codex 资料连接", message: "检测到旧版记忆盒子的资料连接",
+              detail: `更新后，Codex 将使用当前客户端中选择的资料范围。\n\n原客户端：${previous.command}\n原连接：${previous.args[1]}\n\n当前客户端：${next.command}\n当前连接：${next.args[1]}`,
+              buttons: ["取消", "更新连接"], defaultId: 0, cancelId: 0, noLink: true,
+            })).response === 1,
           }) : createMyAiMcpConfig(agent, paths);
           return createCodexContext({
             sources, scope: boxScope, configure, descriptor, direct,
@@ -701,24 +707,13 @@ if (process.argv.includes("--wanx-managed-app")) {
         backup: {
           space: personalSpace,
           library: memoryLibrary,
-          libraries: memoryLibraries,
-          async chooseLibrary(id) {
-            if (id === memoryLibrary.id) return;
-            const available = await resolveManagedMemorySource({ appPath: app.getAppPath(), packaged: app.isPackaged,
-              resourcesPath: process.resourcesPath });
-            if (id !== "legacy" && !available) throw new Error("请先安装独立记忆库所需的本机服务。");
-            await saveMemoryLibrary(userData, id);
-            const args = app.isPackaged ? process.argv.slice(1) : process.argv.slice(2);
-            app.relaunch({ args: app.isPackaged ? args : [app.getAppPath(), ...args] });
-            setTimeout(() => app.quit(), 200);
-          },
           sourceBinding: () => readBackupSourceBinding(userData),
           store: createSecureAccountStore({ filePath: path.join(userData, "memory-backup.enc"), safeStorage }),
           stagingRoot: path.join(userData, "memory-backup-staging"),
           protect: directory => protectPrivateDirectory(directory, { packaged: app.isPackaged, rootOnly: true }),
         },
         agentVisibilityStore: createSecureAccountStore({
-          filePath: path.join(isolatedMemory?.root ?? userData, "my-ai-visibility.enc"), safeStorage,
+          filePath: path.join(memoryRuntimeLayout?.root ?? userData, "my-ai-visibility.enc"), safeStorage,
         }),
         getState: () => client.snapshot(),
         agentAccess,
@@ -728,8 +723,6 @@ if (process.argv.includes("--wanx-managed-app")) {
         preferenceFile: path.join(userData, "memory-model-source"),
         myAiTask: createMyAiTask({
           launcher: agentLauncher, installations: agentInstallations,
-          integrationUnavailable: isolatedMemory
-            ? "当前为独立来源记忆库，资料接入未启用。统一接入请切换到旧版混合库。" : undefined,
           protocolRegistered: url => Boolean(app.getApplicationNameForProtocol(url).trim()),
           applicationForProtocol: url => app.getApplicationInfoForProtocol(url),
           openExternal: url => shell.openExternal(url),
@@ -748,7 +741,7 @@ if (process.argv.includes("--wanx-managed-app")) {
         }),
         protectFile: file => protectPrivateFile(file, { packaged: app.isPackaged }),
         localStorage: {
-          defaultDirectory: path.join(isolatedMemory?.root ?? userData, "空间", "本机", "万象记忆库"),
+          defaultDirectory: path.join(memoryRuntimeLayout?.root ?? userData, "空间", "本机", "万象记忆库"),
           protectDirectory: directory => protectPrivateDirectory(directory, { packaged: app.isPackaged, rootOnly: true }),
           async chooseDirectory(defaultPath) {
             const chosen = await dialog.showOpenDialog(control, {
@@ -891,7 +884,7 @@ if (process.argv.includes("--wanx-managed-app")) {
         },
         onError(error) {
           reportError(error);
-          dialog.showErrorBox("无法退出万象", "应用尚未完全退出。请关闭应用后再次退出万象。");
+          dialog.showErrorBox("无法退出记忆盒子", "应用尚未完全退出。请关闭应用后再次退出记忆盒子。");
         },
       });
       app.on("window-all-closed", () => app.quit());

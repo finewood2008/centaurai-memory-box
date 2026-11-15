@@ -172,7 +172,7 @@ export function createCodexContext({ sources, scope, configure, descriptor, prot
     const check = () => {
       if (!grant || !enabled || !bound || sync() !== bound ||
         grant.generation !== generation || grants.get(args.task_id) !== grant || grant.expires <= now())
-        throw inputError("任务授权已失效。请从半人马AI-记忆盒子的「我的 AI」重新交接任务。");
+        throw inputError("任务授权已失效。请从半人马AI记忆盒子的「我的 AI」重新交接任务。");
     };
     check();
     if (name.startsWith("memory_")) {
@@ -279,10 +279,10 @@ export function createCodexContext({ sources, scope, configure, descriptor, prot
   function connectedScope(assertScope) {
     const bound = sync();
     const epoch = generation;
-    if (!bound) throw inputError("请先在「盒子」里连接万象盒子。");
+    if (!bound) throw inputError("请先在「盒子」里连接盒子。");
     return () => {
       assertScope();
-      if (sync() !== bound || generation !== epoch) throw inputError("万象连接已切换，请重新选择任务资料。");
+      if (sync() !== bound || generation !== epoch) throw inputError("记忆盒子连接已切换，请重新选择任务资料。");
     };
   }
 
@@ -352,7 +352,7 @@ export function createCodexContext({ sources, scope, configure, descriptor, prot
           starting = undefined;
           await configure.remove?.();
         } else if (action === "connect") {
-          if (!configure.guided) await configure.ensure();
+          if (!configure.guided) await configure.ensure(assertScope);
           assertScope();
           await startServer();
           assertScope();

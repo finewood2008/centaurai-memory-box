@@ -224,7 +224,7 @@ function content(model) {
 
 export function renderDeviceTrust(model) {
   const unlocked = profileOpen(model.snapshot);
-  return `<header><div><div class="eyebrow">万象 · 本地安全</div><h1>本地身份与设备权限</h1></div><span class="badge">${model.snapshot?.error ? '身份不可读取' : unlocked ? '已解锁' : model.snapshot?.profile ? '已锁定' : '尚未建立身份'}</span></header>
+  return `<header><div><div class="eyebrow">本地身份与设备权限</div><h1>本地身份与设备权限</h1></div><span class="badge">${model.snapshot?.error ? '身份不可读取' : unlocked ? '已解锁' : model.snapshot?.profile ? '已锁定' : '尚未建立身份'}</span></header>
     <aside class="protection"><strong>软件口令保护</strong><p>密钥由本地口令加密保存，批准新设备需再次输入。身份恢复需另行配置并保存独立材料，请妥善保管口令。本地绑定与现有数据访问权限分别管理。</p></aside>
     <nav aria-label="本地权限管理">${Object.entries(labels).map(([view, label]) => `<button data-view="${view}" ${model.view === view ? 'aria-current="page"' : ''} ${model.busy || model.review || !unlocked ? 'disabled' : ''}>${label}</button>`).join('')}<button class="lock" data-action="lock" ${!unlocked ? 'disabled' : ''}>锁定</button></nav>
     ${model.notice ? `<p class="notice" role="alert">${escape(model.notice)}</p>` : ''}${model.busy ? '<p class="working" role="status">正在处理，请稍候…</p>' : ''}

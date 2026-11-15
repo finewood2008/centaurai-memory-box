@@ -56,7 +56,15 @@ export function createMemoryRuntimeSupervisor({
       const health = await response.json();
       // Aggregate `ok` also includes model-provider errors. A reachable, ready
       // database must stay connected while those providers are degraded.
-      return health?.storage?.ready === true;
+      if (health?.storage?.ready !== true) return false;
+      if (env.MEMMY_UNIFY_AGENT_SOURCES === "1") {
+        const storage = await request(new URL("/api/local-data/wanx-storage", base), {
+          headers: { "x-memmy-local-token": token }, redirect: "error", signal: AbortSignal.timeout(1500),
+        });
+        if (!storage.ok) return false;
+        return !(await storage.json()).sourceProfile;
+      }
+      return true;
     } catch { return false; }
   }
 

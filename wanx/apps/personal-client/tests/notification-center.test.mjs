@@ -45,7 +45,7 @@ for (const [edition, create] of Object.entries({ personal, team, builder })) {
     f.center.update({ phase: 'available', candidate: { releaseId: 'wanx-release' } });
     assert.equal(f.center.snapshot().items.length, 2);
     assert.equal(f.center.snapshot().unreadCount, 2);
-    assert(f.center.snapshot().items.some(row => row.title === '万象有新版本'));
+    assert(f.center.snapshot().items.some(row => row.title === (edition === 'personal' ? '记忆盒子有新版本' : '万象有新版本')));
     await f.center.markRead({ all: true });
     assert.equal(f.center.snapshot().unreadCount, 0);
     f.account('b');

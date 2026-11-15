@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowUpRight, BookOpen, Bot, Check, CircleCheck, Clipboard, Download, Ellipsis, History, Link2, LoaderCircle, Monitor, Plus, RefreshCw, Settings2, Sparkles, Unlink2, X } from "lucide-react";
+import { ArrowUpRight, BookOpen, Bot, Check, CircleCheck, ChevronDown, Clipboard, Download, Ellipsis, History, Link2, LoaderCircle, Monitor, Plus, RefreshCw, Settings2, Sparkles, Unlink2, X } from "lucide-react";
 import { AgentSourceScanReconciler } from "../../app/agent-source-scan-reconciler.js";
 import { useApiClients } from "../../app/providers.js";
 import { useScanCompletions } from "../../app/use-scan-completions.js";
@@ -11,7 +11,6 @@ import { agentSourceDisplayName, agentSourceLogoUrl, normalizeAgentSourceId } fr
 import { MemorySourcesContent, visibleAgentSources } from "../memory-sources-page.js";
 
 import { MemorySyncSummary } from "./wanx-memory-backup.js";
-import { MemoryTransfer } from "./wanx-memory-transfer.js";
 import { AgentSources } from "./wanx-agent-sources.js";
 import { accessStatusText, contextAgentId, managedAgentIds, modeCapabilities, type Agent, type AgentAccessStatus, type MyAiRequest, type TaskSources } from "./wanx-my-ai-model.js";
 
@@ -42,6 +41,7 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
   const [workspacePath, setWorkspacePath] = useState("");
   const [uninstallTarget, setUninstallTarget] = useState<Agent | null>(null);
   const [configuration, setConfiguration] = useState<string | null>(null);
+  const [connectionDetails, setConnectionDetails] = useState(false);
   const [draft, setDraft] = useState("");
   const [optimizedPrompt, setOptimizedPrompt] = useState<OptimizedPrompt | null>(null);
   const [taskSources, setTaskSources] = useState<TaskSources>({ memoryEnabled: false });
@@ -114,6 +114,7 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
     setBusy(null);
     setAppBusy(null);
     setConfiguration(null);
+    setConnectionDetails(false);
     setUninstallTarget(null);
     setMessage("");
     setError("");
@@ -171,6 +172,9 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
   const taskMode = active?.id === "claude_desktop" ? mode : undefined;
   const activeAccess = activeContextId ? agentAccess[activeContextId] : undefined;
   const activeKey = active ? active.id + ":" + (active.id === "claude_desktop" ? mode : "default") : "";
+  const connectionLabel = activeAccess?.retrievalVerified ? "检索已验证" : activeAccess?.loaded ? "工具已加载"
+    : activeAccess?.configured || activeAccess?.connected ? "等待客户端加载" : "未接入资料";
+  useEffect(() => setConnectionDetails(false), [activeKey]);
   const capabilities = modeCapabilities(active, mode);
   const delivery = capabilities?.delivery ?? (active?.prefill ? "draft" : "copy-open");
   const result = optimizedPrompt?.agentId === activeKey ? optimizedPrompt?.text ?? null : null;
@@ -210,7 +214,7 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
       if (signal.aborted) return;
       setAgentAccess(previous => ({ ...previous, [id]: access }));
       setSourceRefresh(value => value + 1);
-      setMessage(connect ? agent.name + " 的资料授权已保存；需在客户端加载并完成检索验证。" : agent.name + " 的资料访问已断开。");
+      setMessage(connect ? "资料连接已保存。" : "资料连接已断开。");
     } catch (cause) {
       if (!signal.aborted) setError(cause instanceof Error ? cause.message : "资料连接操作未完成，请重试。");
     } finally {
@@ -386,7 +390,7 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
 
       <section className="my-ai-task" aria-labelledby="my-ai-task-title">
         <div className="my-ai-section-heading my-ai-task-heading">
-          <div><h2 id="my-ai-task-title">发起对话</h2><p>写下任务，补全目标、限制和验收要求。</p></div>
+          <div><h2 id="my-ai-task-title">发起对话</h2><p>描述任务，选择参考资料。</p></div>
           {active && <span className="my-ai-target"><Bot size={14} aria-hidden="true" />{active.name}</span>}
         </div>
         {active?.id === "claude_desktop" && <label className="my-ai-target">Claude 运行模式
@@ -394,30 +398,40 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
             setMode(event.target.value); setConfiguration(null); invalidateResult();
           }}><option value="chat">Chat</option><option value="code">Code</option><option value="cowork">Cowork</option></select>
         </label>}
-        {active && <div className="my-ai-source-connection" aria-label={active.name + "资料连接"}>
-          <span aria-live="polite">{integrationUnavailable || accessStatusText(activeAccess)}</span>
-          {activeAccess?.memorySaved && <span>记忆已保存</span>}
-          {!integrationUnavailable && active.installed && capabilities?.configuration !== "unsupported" && !(active.id === "claude_desktop" && mode === "cowork") && <>
-            {(!activeAccess?.configured && !activeAccess?.connected) &&
-              <button type="button" className="my-ai-button" disabled={pending || Boolean(appBusy)}
+        {active && <>
+          <div className="my-ai-connection-bar" aria-label={active.name + "资料连接"}>
+            {integrationUnavailable ? <span className="my-ai-help">{integrationUnavailable}</span>
+              : <span className={"my-ai-connection-status" + (activeAccess?.retrievalVerified ? " verified" : "")}
+                aria-live="polite" title={accessStatusText(activeAccess)}>
+                <span className="my-ai-status-dot" aria-hidden="true" />{connectionLabel}
+              </span>}
+            {!integrationUnavailable && active.installed && capabilities?.configuration !== "unsupported"
+              && !(active.id === "claude_desktop" && mode === "cowork") && !activeAccess?.configured && !activeAccess?.connected &&
+              <button type="button" className="my-ai-button my-ai-connect-button" disabled={pending || Boolean(appBusy)}
                 onClick={() => void updateAgentAccess(active, true)}><Link2 size={14} aria-hidden="true" />{appBusy === active.id ? "正在配置…" : capabilities?.configuration === "guided" ? "授权资料接入" : "配置资料工具"}</button>}
-            {(activeAccess?.configured || activeAccess?.connected) && <button type="button" className="my-ai-button" disabled={pending || Boolean(appBusy)}
-              onClick={() => void updateAgentAccess(active, false)}><Unlink2 size={14} aria-hidden="true" />断开资料</button>}
-            {capabilities?.configuration === "guided" && <button type="button" className="my-ai-button" disabled={pending || Boolean(appBusy)}
-              onClick={() => void run("configuration", async signal => {
-                const reply = await request<{ config?: object; configuration?: object }>("agent-context/configuration", signal, { agent: active.id, mode: taskMode });
-                if (!signal.aborted) setConfiguration(JSON.stringify(reply.configuration ?? reply.config ?? reply, null, 2));
-              })}>查看接入配置</button>}
-          </>}
-        </div>}
-        {active && <div className="my-ai-help" aria-label="当前入口能力">
-          <p>{delivery === "draft" ? "支持预填草稿，在客户端核对后发送。" : delivery === "terminal-confirm" ? "终端先展示任务，按回车确认后才开始执行。" : "通过复制并打开交付提示词，需要在应用中粘贴发送。"}</p>
-          <p>{capabilities?.autoMemory === "hook" ? "支持配置逐轮采集，实际启用以客户端验证为准。"
-            : capabilities?.autoMemory === "scan" ? "支持本机会话采集，采集结果在下方单独显示。"
-            : capabilities?.autoMemory === "explicit" ? "记忆通过显式保存写入 MemoBox。" : "自动采集尚未验证。"}</p>
-          {capabilities?.limitations?.map(note => <p key={note}>{note}</p>)}
-          {active.id === "claude_desktop" && mode === "cowork" && <p>Cowork 的资料工具与自动采集尚未验证；此入口先提供草稿预填。</p>}
-        </div>}
+            <button type="button" className="my-ai-connection-toggle" aria-expanded={connectionDetails} aria-controls="my-ai-connection-details"
+              onClick={() => setConnectionDetails(value => !value)}>连接详情<ChevronDown size={14} aria-hidden="true" /></button>
+          </div>
+          {connectionDetails && <div id="my-ai-connection-details" className="my-ai-connection-details" aria-label="当前入口能力">
+            {!integrationUnavailable && <p>{accessStatusText(activeAccess)}{activeAccess?.memorySaved ? " · 记忆已保存" : ""}</p>}
+            <p>{delivery === "draft" ? "任务将带入客户端，核对后发送。" : delivery === "terminal-confirm" ? "任务将在终端展示，按回车开始执行。" : "复制提示词后，在应用中粘贴发送。"}</p>
+            <p>{capabilities?.autoMemory === "hook" ? "支持配置逐轮采集，启用后需在客户端验证。"
+              : capabilities?.autoMemory === "scan" ? "支持本机会话采集，结果见下方。"
+              : capabilities?.autoMemory === "explicit" ? "可通过显式保存写入记忆。" : "自动采集尚未验证。"}</p>
+            {capabilities?.limitations?.map(note => <p key={note}>{note}</p>)}
+            {active.id === "claude_desktop" && mode === "cowork" && <p>Cowork 暂支持草稿预填，资料工具与自动采集尚未验证。</p>}
+            {!integrationUnavailable && active.installed && capabilities?.configuration !== "unsupported" && !(active.id === "claude_desktop" && mode === "cowork") &&
+              <div className="my-ai-actions">
+                {(activeAccess?.configured || activeAccess?.connected) && <button type="button" className="my-ai-button" disabled={pending || Boolean(appBusy)}
+                  onClick={() => void updateAgentAccess(active, false)}><Unlink2 size={14} aria-hidden="true" />断开资料</button>}
+                {capabilities?.configuration === "guided" && <button type="button" className="my-ai-button" disabled={pending || Boolean(appBusy)}
+                  onClick={() => void run("configuration", async signal => {
+                    const reply = await request<{ config?: object; configuration?: object }>("agent-context/configuration", signal, { agent: active.id, mode: taskMode });
+                    if (!signal.aborted) setConfiguration(JSON.stringify(reply.configuration ?? reply.config ?? reply, null, 2));
+                  })}>查看接入配置</button>}
+              </div>}
+          </div>}
+        </>}
         {(delivery === "terminal-confirm" || (active?.id === "claude_desktop" && mode === "code")) && <label className="my-ai-text-field">
           <span>工作目录（绝对路径）</span><input aria-label="工作目录" value={workspacePath} disabled={pending || Boolean(appBusy)}
             placeholder="/Users/你的用户名/项目" onChange={event => { setWorkspacePath(event.target.value); invalidateResult(); }} />
@@ -425,7 +439,7 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
         <label className="my-ai-text-field">
           <span className="sr-only">任务草稿</span>
           <textarea value={draft} maxLength={12000} rows={5} disabled={pending}
-            placeholder="例如：修复查询页的重复请求，只改客户端。补充修改范围和验收步骤。"
+            placeholder="例如：整理项目资料，列出待办事项。"
             onChange={event => {
               const text = event.target.value;
               setDraft(text);
@@ -506,7 +520,6 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
         <textarea aria-label="接入配置" readOnly rows={12} value={configuration ?? ""} onFocus={event => event.currentTarget.select()} />
       </label>
     </Modal>
-    <MemoryTransfer sessionToken={sessionToken} />
     <MemorySyncSummary sessionToken={sessionToken} count={catalog.size} automatic={state.agentSources.scanPreferences.watchFileChanges}>
     {collectionProfile => clients ? <MemorySourcesContent embedded surface="my-ai" sourceRefresh={sourceRefresh} collectionProfile={collectionProfile}
       localAgents={[...catalog.values()]} disconnectedLocalAgentIds={new Set([

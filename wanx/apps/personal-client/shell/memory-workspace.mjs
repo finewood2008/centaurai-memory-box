@@ -220,7 +220,7 @@ export function createMemoryWorkspace({
         if (Buffer.byteLength(raw) > 4096) return status("invalid_request", "备份请求过长。");
         const data = raw ? JSON.parse(raw) : {};
         if (!data || typeof data !== "object" || Array.isArray(data) ||
-          (method === "POST" && !["enable", "disable", "backup", "catalog", "restore", "rollback", "configure", "select-library"].includes(data.action)))
+          (method === "POST" && !["enable", "disable", "backup", "catalog", "restore", "rollback", "configure"].includes(data.action)))
           return status("invalid_request", "备份请求无效。");
         if (currentScope() !== selected.scope || session !== selected) return status("forbidden", "记忆会话已结束。");
         const result = await memoryBackup.action(method === "GET" ? "status" : data.action, data);
@@ -295,8 +295,8 @@ export function createMemoryWorkspace({
         if (error.status === 403) return status("forbidden", error.message);
         if (error.status === 400) return status("invalid_request", error.message);
         if (["BOX_CONNECTION_REQUIRED", "DIALOGUE_CONTEXT_CHANGED", "HOST_SESSION_EXPIRED"].includes(error.code))
-          return status("unavailable", "请确认万象盒子已连接后重试。");
-        if (error.code === "APPLICATION_MODEL_UNAVAILABLE") return status("unavailable", "万象默认对话模型不可用，请检查盒子配置。");
+          return status("unavailable", "请确认盒子已连接后重试。");
+        if (error.code === "APPLICATION_MODEL_UNAVAILABLE") return status("unavailable", "盒子默认模型暂不可用，请检查模型配置后重试。");
         const message = {
           warehouses: "暂时无法读取星图仓库，请检查盒子连接。",
           launch: "暂时无法打开应用，请重新检测。",
@@ -308,7 +308,7 @@ export function createMemoryWorkspace({
           "codex-context/catalog": "暂时无法读取空间或星图，请检查盒子连接。",
           "codex-context/connect": "暂时无法连接 Codex 的资料工具，请检查 Codex 安装后重试。",
           "codex-context/disconnect": "暂时无法清除 Codex 连接，请重试。",
-        }[taskAction] || "任务操作未完成，请检查万象盒子连接或稍后重试。";
+        }[taskAction] || "任务操作未完成，请检查盒子连接或稍后重试。";
         return status("unavailable", message);
       }
     }
@@ -374,7 +374,7 @@ export function createMemoryWorkspace({
   async function handle(input) {
     const url = new URL(input.url);
     if (url.protocol !== `${MEMORY_SCHEME}:` || url.host !== "local" || url.username || url.password || !currentScope())
-      return status("forbidden", "请先登录万象。");
+      return status("forbidden", "请先登录记忆盒子。");
     if (url.pathname.startsWith("/api/")) return proxy(input, url);
     if (input.method !== "GET") return new Response(null, { status: 405 });
     try {

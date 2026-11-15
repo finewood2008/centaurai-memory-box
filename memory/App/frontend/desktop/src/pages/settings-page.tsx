@@ -3306,7 +3306,7 @@ function buildRendererDiagnosticsReport(input: RendererDiagnosticsReportInput): 
   const hasModelConfig = Boolean(input.state.modelConfig.configured);
 
   const lines = [
-    "半人马AI 私人记忆盒子 · 界面诊断报告",
+    "半人马AI记忆盒子 · 界面诊断报告",
     "=================================",
     "",
     "Generated At",

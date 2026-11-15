@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { chmod, lstat, open, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { constants, copyFileSync } from "node:fs";
+import { chmod, lstat, mkdir, open, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, join } from "node:path";
 import { MemoryDb } from "../storage/db.js";
 import { SCHEMA_VERSION } from "../storage/schema.js";
@@ -38,6 +39,45 @@ export function bindWanxSourceProfile(database: MemoryDb, profile: string | unde
     database.db.exec("CREATE TABLE wanx_memory_source (id INTEGER PRIMARY KEY CHECK(id=1), profile TEXT NOT NULL)");
     database.db.prepare("INSERT INTO wanx_memory_source (id, profile) VALUES (1, ?)").run(profile);
   })();
+}
+
+// Called before constructing the service, while the server/database lease is
+// exclusive. On APFS a verified COW clone avoids another full-size allocation.
+async function copyWanxUpgradeSnapshot(database: MemoryDb, directory: string): Promise<string> {
+  const checkpoint = database.db.pragma("wal_checkpoint(TRUNCATE)") as { busy: number }[];
+  if (checkpoint[0]?.busy !== 0) return copyWanxDatabase(database, directory);
+  const target = join(directory, `memory-${randomUUID()}.sqlite`);
+  try {
+    copyFileSync(database.path, target, constants.COPYFILE_FICLONE_FORCE | constants.COPYFILE_EXCL);
+  } catch (error) {
+    await rm(target, { force: true }).catch(() => {});
+    const code = (error as NodeJS.ErrnoException).code;
+    if (["ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EXDEV", "EINVAL"].includes(code ?? "")) return copyWanxDatabase(database, directory);
+    throw error;
+  }
+  await chmod(target, 0o600);
+  const snapshot = new MemoryDb({ path: target, readonly: true });
+  try {
+    if (snapshot.db.pragma("quick_check", { simple: true }) !== "ok" || snapshot.schemaVersion().version !== SCHEMA_VERSION) {
+      throw new Error("The pre-upgrade memory snapshot did not pass verification");
+    }
+  } finally { snapshot.close(); }
+  const completed = await open(target, "r+");
+  try { await completed.sync(); } finally { await completed.close(); }
+  return target;
+}
+
+/** Upgrade one existing local store; retain a verified pre-upgrade snapshot. */
+export async function unifyWanxSourceProfile(database: MemoryDb, directory: string): Promise<string | undefined> {
+  const actual = databaseSourceProfile(database);
+  if (!actual) return undefined;
+  if (!["codex-desktop", "codex-cli"].includes(actual)) throw new Error("Unknown memory source profile");
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const previous = await copyWanxUpgradeSnapshot(database, directory);
+  database.db.transaction(() => {
+    database.db.prepare("DELETE FROM wanx_memory_source WHERE id=1").run();
+  })();
+  return previous;
 }
 
 export function readWanxStorageSelection(serviceHome: string): Promise<WanxStorageSelection | undefined> {
@@ -96,7 +136,7 @@ export async function copyWanxDatabase(database: MemoryDb, directory: string, al
   }
 }
 
-export async function prepareWanxRestore(source: unknown, directory: string, profile?: string): Promise<string> {
+export async function prepareWanxRestore(source: unknown, directory: string, profile?: string, allowUnified = false): Promise<string> {
   if (typeof source !== "string" || !isAbsolute(source) || source.length > 4096) {
     throw new MemoryServiceError("invalid_argument", "备份文件路径无效。");
   }
@@ -107,8 +147,17 @@ export async function prepareWanxRestore(source: unknown, directory: string, pro
   try {
     const backup = new MemoryDb({ path: source, readonly: true });
     try {
-      if (databaseSourceProfile(backup) !== profile) throw new Error("Source profile mismatch");
-      return await copyWanxDatabase(backup, directory, true);
+      const actual = databaseSourceProfile(backup);
+      const upgrade = allowUnified && profile === undefined && actual !== undefined
+        && ["codex-desktop", "codex-cli"].includes(actual);
+      if (actual !== profile && !upgrade) throw new Error("Source profile mismatch");
+      const candidate = await copyWanxDatabase(backup, directory, true);
+      if (upgrade) {
+        const writable = new MemoryDb({ path: candidate });
+        try { writable.db.prepare("DELETE FROM wanx_memory_source WHERE id=1").run(); }
+        finally { writable.close(); }
+      }
+      return candidate;
     }
     finally { backup.close(); }
   } catch {

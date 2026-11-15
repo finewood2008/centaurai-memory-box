@@ -57,12 +57,12 @@
       SPACE_REQUEST_FAILED: "暂未确认操作结果，请在空间传输列表中核对。",
       SECURE_STORAGE_READ_FAILED: "无法读取上传记录，请在文件空间查看。",
       SECURE_STORAGE_WRITE_FAILED: "无法保存上传记录，请在文件空间查看。",
-    BOX_APPLICATION_PLATFORM_SESSION_REQUIRED: "请登录万象并选择已关联的盒子后打开此应用。",
-    BOX_APPLICATION_RUNTIME_UPDATE_REQUIRED: "盒子需要更新万象服务后才能打开此应用，请联系管理员。",
+    BOX_APPLICATION_PLATFORM_SESSION_REQUIRED: "请登录记忆盒子并选择已关联的盒子后打开此应用。",
+    BOX_APPLICATION_RUNTIME_UPDATE_REQUIRED: "盒子需要更新记忆盒子服务后才能打开此应用，请联系管理员。",
     BOX_APPLICATION_ACCESS_DENIED: "此账号尚未获得应用使用权限，请联系管理员启用并授权。",
-    BOX_APPLICATION_SCOPE_FORBIDDEN: "此应用的连接权限不匹配，请更新万象后重试。",
-    BOX_APPLICATION_SESSION_INVALID: "无法建立应用会话，请更新万象和盒端服务后重试。",
-      ACCOUNT_LOGIN_REQUIRED: "请先登录万象", ACCOUNT_SESSION_CHANGED: "账号已变化，请重新打开应用",
+    BOX_APPLICATION_SCOPE_FORBIDDEN: "此应用的连接权限不匹配，请更新记忆盒子后重试。",
+    BOX_APPLICATION_SESSION_INVALID: "无法建立应用会话，请更新记忆盒子和盒端服务后重试。",
+      ACCOUNT_LOGIN_REQUIRED: "请先登录记忆盒子", ACCOUNT_SESSION_CHANGED: "账号已变化，请重新打开应用",
       APPLICATION_OPEN_CANCELLED: "已取消打开", NETWORK_CHANGED: "盒子连接已变化，请重试",
       NETWORK_DEVICE_ACCESS_DENIED: "没有此盒子的访问权限", APPLICATION_OPEN_BUSY: "另一个应用正在打开，请稍候",
       NETWORK_NOT_READY: "网络尚未就绪，请稍后重试", BOX_CONNECTION_REQUIRED: "请先连接盒子",
@@ -105,7 +105,7 @@
     : space.accountId === state.account?.accountId && space.boxId === state.connection?.deviceId);
   function dropProblem() {
     if (dragInvalid) return "盒子或账号已变化，请重新拖入";
-    if (!signedIn()) return "请先登录万象";
+    if (!signedIn()) return "请先登录记忆盒子";
     if (!ready()) return "请先连接盒子";
     if (!sameSpace()) return "正在准备文件空间，请稍后重试";
     if (space.phase === "unsupported") return "当前盒子需要升级空间服务";
@@ -176,9 +176,9 @@
     if (dragDepth || interacting) { pendingRender = true; return; }
     pendingRender = false;
     const connection = state.connection || {};
-    root.innerHTML = `<header><div class="brand"><img src="../renderer/assets/centaurai-mark.png" alt="半人马"><span class="brand-copy"><strong>半人马AI-记忆盒子</strong><small>CentaurAI-MemoBox</small></span></div><div class="panel-header-actions"><button class="box-button" data-page="boxes" aria-label="打开盒子"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m12 3 9 5v8l-9 5-9-5V8Z"/><path d="m3 8 9 5 9-5M12 13v8M7.5 5.5l9 5"/></svg><span>盒子</span></button><button class="panel-notification-button" data-page="notifications" aria-label="通知中心，${signedIn() ? state.notifications?.unreadCount || 0 : 0} 条未读" title="通知中心" ${signedIn() ? "" : "disabled"}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 9v6h4l8 4V5L7 9H3Z" stroke-linejoin="round"/><path d="m7 15 1 5h3l-1-4M18 8c2 2 2 6 0 8" stroke-linecap="round" stroke-linejoin="round"/></svg>${signedIn() && state.notifications?.unreadCount > 0 ? `<span class="panel-notification-badge" aria-hidden="true">${state.notifications.unreadCount > 99 ? "99+" : state.notifications.unreadCount}</span>` : ""}</button></div></header>
-      <section class="summary" aria-label="万象概览"><div class="box-status" aria-label="当前盒子"><span class="card-label">当前盒子<span class="dot ${ready() ? "ready" : ""}" aria-hidden="true"></span></span><strong class="box-name" title="${escape(connection.name || "我的盒子")}">${escape(connection.name || "我的盒子")}</strong><span class="card-caption">${boxStatus()}</span></div>${renderBalance()}</section>
-      <section class="my-apps" aria-label="记忆"><div class="apps-heading"><h2>记忆</h2><div class="apps-heading-actions"><button class="apps-link" data-page="memory" aria-label="${signedIn() ? "打开记忆" : "登录万象"}">${signedIn() ? "打开记忆" : "登录万象"}<span aria-hidden="true">↗</span></button></div></div></section>
+    root.innerHTML = `<header><div class="brand"><img src="../renderer/assets/centaurai-mark.png" alt="半人马"><span class="brand-copy"><strong>半人马AI记忆盒子</strong><small>CentaurAI MemoBox</small></span></div><div class="panel-header-actions"><button class="box-button" data-page="boxes" aria-label="打开盒子"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m12 3 9 5v8l-9 5-9-5V8Z"/><path d="m3 8 9 5 9-5M12 13v8M7.5 5.5l9 5"/></svg><span>盒子</span></button><button class="panel-notification-button" data-page="notifications" aria-label="通知中心，${signedIn() ? state.notifications?.unreadCount || 0 : 0} 条未读" title="通知中心" ${signedIn() ? "" : "disabled"}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 9v6h4l8 4V5L7 9H3Z" stroke-linejoin="round"/><path d="m7 15 1 5h3l-1-4M18 8c2 2 2 6 0 8" stroke-linecap="round" stroke-linejoin="round"/></svg>${signedIn() && state.notifications?.unreadCount > 0 ? `<span class="panel-notification-badge" aria-hidden="true">${state.notifications.unreadCount > 99 ? "99+" : state.notifications.unreadCount}</span>` : ""}</button></div></header>
+      <section class="summary" aria-label="记忆盒子概览"><div class="box-status" aria-label="当前盒子"><span class="card-label">当前盒子<span class="dot ${ready() ? "ready" : ""}" aria-hidden="true"></span></span><strong class="box-name" title="${escape(connection.name || "我的盒子")}">${escape(connection.name || "我的盒子")}</strong><span class="card-caption">${boxStatus()}</span></div>${renderBalance()}</section>
+      <section class="my-apps" aria-label="记忆"><div class="apps-heading"><h2>记忆</h2><div class="apps-heading-actions"><button class="apps-link" data-page="memory" aria-label="${signedIn() ? "打开记忆" : "登录记忆盒子"}">${signedIn() ? "打开记忆" : "登录记忆盒子"}<span aria-hidden="true">↗</span></button></div></div></section>
       ${notice ? `<p class="notice error" role="status">${escape(notice)}</p>` : ""}${renderSpace()}`;
     resize();
   }

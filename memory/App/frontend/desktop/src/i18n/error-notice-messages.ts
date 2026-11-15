@@ -96,7 +96,7 @@ export const enUSErrorNoticeMessages = {
   "memory.memories.processing.retryFailed": "Processing still failed after retry",
   "memory.memories.processing.retryTimeout": "Retry timed out. Try again later.",
   "memory.memories.processing.retryError": "This retry did not succeed: {message}",
-  "memory.memories.processing.retryEndpointUnavailable": "The local memory service has not loaded retry support. Quit and reopen 半人马AI 私人记忆盒子, then try again.",
+  "memory.memories.processing.retryEndpointUnavailable": "The local memory service has not loaded retry support. Quit and reopen 半人马AI记忆盒子, then try again.",
   "memory.memories.processing.missing": "Processing status is unavailable for this memory",
   "memory.memories.processing.failureTitle": "This memory could not be processed",
   "memory.memories.processing.quotaExhaustedTitle": "The current model has insufficient tokens. Memory processing failed. Switch models and try again.",

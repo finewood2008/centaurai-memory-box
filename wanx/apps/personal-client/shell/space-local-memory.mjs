@@ -11,7 +11,7 @@ export function createLocalMemorySpace({ defaultDirectory, scope, request, choos
   let attemptedDefaultScope;
   let defaultRetryAt = 0;
   const assertScope = owner => {
-    if (!owner || owner !== scope()) throw failure("万象账号或本机身份已切换，请重新打开「空间」。");
+    if (!owner || owner !== scope()) throw failure("云账号或本机身份已切换，请重新打开「空间」。");
   };
 
   async function storage(owner) {

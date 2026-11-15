@@ -86,7 +86,7 @@ window.createSupportView = function ({ request, changed, now = Date.now }) {
       if (action === "support-open") {
         const next = devices.find(row => row.deviceId === data.deviceId && owner(row));
         if (!identity || !next || pending) return;
-        clear(); device = { deviceId: next.deviceId, name: next.name || next.displayName || "万象盒子", ownershipEpoch: epoch(next) }; visible = true;
+        clear(); device = { deviceId: next.deviceId, name: next.name || next.displayName || "盒子", ownershipEpoch: epoch(next) }; visible = true;
         await refresh(); return;
       }
       if (action === "support-close") { if (!pending) { clear(); changed(); } return; }
@@ -107,7 +107,7 @@ window.createSupportView = function ({ request, changed, now = Date.now }) {
         ${row ? `<dl class="credits-fields">${pair("维护人员", row.operatorName)}${pair("操作账号", row.operatorId)}${pair("协助原因", row.reason)}${pair("许可范围", "查看并控制盒子桌面（VNC）")}${pair("授权时长", `${row.durationMinutes} 分钟，从批准时开始`)}${pair("请求有效至（北京时间）", date(row.requestExpiresAt))}${row.expiresAt ? pair("授权截止（北京时间）", date(row.expiresAt)) : ""}${pair("请求编号", row.requestId)}</dl>` : loaded ? '<p class="muted">维护人员发起请求后，可在这里查看。没有请求不代表旧会话已完成清理。</p>' : ""}
         ${confirmation ? `<div class="notice" role="group" aria-label="确认远程协助"><p>${confirmation === "approved" ? `确认允许 ${esc(row.operatorName)} 在 ${row.durationMinutes} 分钟内查看并操作这台盒子的桌面？桌面上的内容将对维护人员可见。` : confirmation === "rejected" ? "确认拒绝这次远程桌面请求？" : "确认撤销本次桌面授权？撤销后仍需等待设备报告会话和临时资源已清理。"}</p><button class="button primary" data-action="support-confirm" ${disabled}>${confirmation === "approved" ? "同意本次协助" : confirmation === "rejected" ? "确认拒绝" : "确认撤销授权"}</button><button class="text-button" data-action="support-cancel" ${disabled}>返回</button></div>` :
           `<div class="settings-actions"><button class="button small" data-action="support-refresh" ${disabled}>刷新状态</button>${pendingRequest() ? `<button class="button primary small" data-action="support-approve" ${disabled}>同意</button><button class="button small" data-action="support-reject" ${disabled}>拒绝</button>` : ""}${active() ? `<button class="button small" data-action="support-revoke" ${disabled}>撤销授权</button>` : ""}</div>`}
-        <p class="muted">收起或关闭万象不会撤销已批准的授权；需要结束时请点击“撤销授权”。设备离线时，结束状态保持待确认。</p></section>`;
+        <p class="muted">关闭客户端不会自动撤销远程支持授权。需要结束时，请点击“撤销授权”；设备离线时，结束状态仍需确认。</p></section>`;
     },
   };
 };

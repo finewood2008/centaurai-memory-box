@@ -1,3 +1,4 @@
+import { brandMemoboxTree } from "../../builder/tools/memobox-branding.mjs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -8,3 +9,5 @@ const result = spawnSync(process.platform === "win32" ? "npm.cmd" : "npm", ["run
 });
 if (result.error) throw result.error;
 process.exitCode = result.status ?? 1;
+
+if (result.status === 0) await brandMemoboxTree(fileURLToPath(new URL("../local-ui/maintenance/", import.meta.url)));

@@ -1,4 +1,5 @@
 import claudeCodeLogoUrl from "../assets/agent-logos/claude-code.svg";
+import geminiLogoUrl from "../assets/model-logos/gemini.svg";
 import codexLogoUrl from "../assets/agent-logos/codex.svg";
 import cursorLogoUrl from "../assets/agent-logos/cursor.svg";
 import deepseekHarnessLogoUrl from "../assets/agent-logos/deepseek-harness.svg";
@@ -25,12 +26,15 @@ export const MEMORY_AGENT_SOURCE_VALUES = [
 ] as const;
 
 const AGENT_SOURCE_DISPLAY_NAMES: Record<string, string> = {
-  memmy: "半人马AI 私人记忆盒子",
-  memmy_agent: "半人马AI 私人记忆盒子",
-  computer_history: "半人马AI 私人记忆盒子",
+  memmy: "半人马AI记忆盒子",
+  memmy_agent: "半人马AI记忆盒子",
+  computer_history: "半人马AI记忆盒子",
   cursor: "Cursor",
   claude_code: "Claude Code",
   codex: "Codex",
+  codex_cli: "Codex CLI",
+  claude_desktop: "Claude 客户端",
+  gemini: "Gemini CLI",
   opencode: "OpenCode",
   openclaw: "OpenClaw",
   hermes: "Hermes",
@@ -44,6 +48,9 @@ export const AGENT_SOURCE_LOGOS: Partial<Record<string, string>> = {
   cursor: cursorLogoUrl,
   claude_code: claudeCodeLogoUrl,
   codex: codexLogoUrl,
+  codex_cli: codexLogoUrl,
+  claude_desktop: claudeCodeLogoUrl,
+  gemini: geminiLogoUrl,
   opencode: opencodeLogoUrl,
   openclaw: openclawLogoUrl,
   hermes: hermesLogoUrl,

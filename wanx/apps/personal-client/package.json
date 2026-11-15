@@ -59,7 +59,7 @@
   "build": {
     "appId": "ai.centuarai.wanx.client",
     "afterPack": "tools/package-client-native.mjs",
-    "productName": "半人马AI-记忆盒子",
+    "productName": "半人马AI记忆盒子",
     "directories": {
       "output": "release"
     },
@@ -79,6 +79,7 @@
       "workshop/**",
       "updates/**",
       "resources/**",
+      "!resources/installer/**",
       "package.json",
       "README.md",
       "!**/.env",
@@ -120,8 +121,8 @@
         }
       ],
       "extendInfo": {
-        "NSBluetoothAlwaysUsageDescription": "万象使用蓝牙发现附近的盒子并配置 Wi-Fi。",
-        "NSBluetoothPeripheralUsageDescription": "万象使用蓝牙发现附近的盒子并配置 Wi-Fi。"
+        "NSBluetoothAlwaysUsageDescription": "记忆盒子需要使用蓝牙来发现附近设备并配置 Wi-Fi。",
+        "NSBluetoothPeripheralUsageDescription": "记忆盒子使用蓝牙发现附近的盒子并配置 Wi-Fi。"
       }
     },
     "win": {

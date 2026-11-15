@@ -208,7 +208,20 @@ export function createMyAiAccess({ makeContext, agents, sources, memory, store, 
       } catch (error) {
         check();
         if (error.code === "EACCES" || error.code === "EPERM") throw failure("无法写入 Agent 配置，请检查本机配置权限。");
-        if (error.message === "MCP_CONFIG_NAME_CONFLICT") throw failure("Agent 中的 wanx-memobox 名称已被占用，请检查原配置。");
+        const code = error.code ?? error.message;
+        const messages = {
+          MCP_CONFIG_NAME_CONFLICT: "Agent 中已存在不同的 wanx-memobox 连接。请在 Agent 设置中核对原连接后重试。",
+          CODEX_CLI_NOT_FOUND: "未找到 Codex CLI，请先安装 Codex CLI 后重新配置资料工具。",
+          CODEX_MCP_DISABLED: "Codex 已禁用记忆盒子资料连接，请在 Codex 的 MCP 设置中启用 wanx-memobox 后重试。",
+          CODEX_MCP_REPAIR_CANCELLED: "已取消更新，原来的 Codex 资料连接已保留。",
+          CODEX_MCP_READ_FAILED: "无法读取 Codex 的 MCP 配置，请检查 Codex CLI 和配置文件格式后重试。",
+          CODEX_MCP_CLI_FAILED: "Codex CLI 未能更新 MCP 配置，请检查配置文件格式和本机 Codex CLI 后重试。",
+          MCP_CONFIG_INVALID: "Agent 的 MCP 配置格式或文件类型不受支持，请检查配置文件后重试。",
+          MCP_CONFIG_AMBIGUOUS: "检测到多份 Agent MCP 配置，请先在 Agent 中确认使用的配置文件。",
+          MCP_CONFIG_CHANGED: "Agent 配置刚被其他程序修改，未覆盖该修改，请重新配置资料工具。",
+          MCP_CONFIG_VERIFY_FAILED: "Agent 的 MCP 配置写入后校验未通过，请检查配置后重试。",
+        };
+        if (messages[code]) throw failure(messages[code]);
         throw failure("无法自动写入 Agent 的 MCP 配置，请检查安装和配置文件后重试。");
       }
       check();

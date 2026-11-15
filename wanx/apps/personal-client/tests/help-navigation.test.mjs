@@ -9,7 +9,7 @@ const html = await readFile(index, "utf8");
 const source = (await Promise.all([...html.matchAll(/<script src="([^"]+)"><\/script>/g)]
   .map(match => match[1]).filter(src => src !== "./device-setup.bundle.js")
   .map(src => readFile(new URL(src, index), "utf8")))).join("\n");
-const data = { version: "faq-v1", updatedAt: null, categories: [{ id: 1, name: "测试分类", items: [{ id: 1, question: "测试问题", answer: "来自 API 的测试答案" }] }] };
+const data = { product: "memobox", version: "faq-v1", updatedAt: null, categories: [{ id: 1, name: "测试分类", items: [{ id: 1, question: "测试问题", answer: "来自 API 的测试答案" }] }] };
 const signedOut = () => ({ route: "auth", phase: "signed_out", account: { phase: "signed_out" }, devices: [], applications: [] });
 const signedIn = () => ({ route: "applications", phase: "idle", account: { phase: "authenticated", accountId: "test-account" }, devices: [], applications: [], network: { enabled: false } });
 const flush = () => new Promise(resolve => setImmediate(resolve));
@@ -28,7 +28,7 @@ async function harness(initial) {
     },
   } };
   vm.runInNewContext(source, { window, document: {
-    body: { dataset: {}, append() {} }, createElement: () => ({ dataset: {}, setAttribute() {} }),
+    body: { dataset: {}, classList: { toggle() {} }, append() {} }, createElement: () => ({ dataset: {}, setAttribute() {} }),
     addEventListener() {}, querySelector: selector => selector === "#app" ? app : null,
   }, Date, TextEncoder, setTimeout, clearTimeout, setInterval: () => null, clearInterval() {} });
   await flush();

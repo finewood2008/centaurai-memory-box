@@ -56,7 +56,7 @@ for (const [label, override, code] of [
 test("console is unavailable to management IPC while its terminal owner uses only the current gateway", () => {
   const h = control(connected);
   assert.throws(() => h.invoke("dashboard-open", { url: "https://untrusted.example/" }), /DASHBOARD_TERMINAL_ONLY/);
-  assert.throws(() => h.invoke("dashboard-open", {}, { sender: {}, senderFrame: {} }), /此页面无权操作万象连接/);
+  assert.throws(() => h.invoke("dashboard-open", {}, { sender: {}, senderFrame: {} }), /此页面无权操作记忆盒子连接/);
   const opened = [];
   openConnectedDashboard({ snapshot: () => connected }, { open: state => opened.push(state.connection) });
   assert.deepEqual(opened, [connected.connection]);
@@ -84,7 +84,7 @@ test("ZIP selection installs the chosen file, cancellation does nothing, and unt
   chosen = null;
   assert.deepEqual(await h.invoke("applications-install"), { canceled: true });
   assert.equal(h.installed.length, 1);
-  assert.throws(() => h.invoke("applications-install", {}, { sender: {}, senderFrame: {} }), /此页面无权操作万象连接/);
+  assert.throws(() => h.invoke("applications-install", {}, { sender: {}, senderFrame: {} }), /此页面无权操作记忆盒子连接/);
   assert.equal(selections, 2);
   assert.throws(() => h.invoke("applications-install", { sourceDir: "source", archivePath: "app.zip" }), /APPLICATION_SOURCE_REQUIRED/);
 });

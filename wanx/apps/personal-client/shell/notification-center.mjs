@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { collectStarlinkNotifications } from './starlink-notifications.mjs';
 
-const APP_NAMES = { 'centaurai.wanx.centaurloop': '半人马环', 'centaurai.wanx.zhijun': '知君', 'centaurai.wanx.dialogue': '众见', 'centaurai.wanx.semantica': '万象·星图', 'ai.wanx.studio': '万象·开物', 'centaurai.wanx.superadvisors': '个人议事厅', 'centaurai.wanx.ai-browser': '万象 AI 浏览器', 'centaurai.wanx.new-media-toolkit': '火花' };
+const APP_NAMES = { 'centaurai.wanx.centaurloop': '半人马环', 'centaurai.wanx.zhijun': '知君', 'centaurai.wanx.dialogue': '众见', 'centaurai.wanx.semantica': "知识星图", 'ai.wanx.studio': "应用工坊", 'centaurai.wanx.superadvisors': '个人议事厅', 'centaurai.wanx.ai-browser': "记忆盒子 AI 浏览器", 'centaurai.wanx.new-media-toolkit': '火花' };
 const clean = (value, max = 4000) => typeof value === 'string' ? value.trim().slice(0, max) : '';
 const digest = value => createHash('sha256').update(value).digest('hex');
 // Only WANX application feeds and trusted main-process events create notices.
@@ -133,7 +133,7 @@ export async function createNotificationCenter({ client, store, serviceURL, data
       emit();
     }
     if (lost) add({ key: `disconnect:${randomUUID()}`, category: 'system', title: '盒子连接中断',
-      body: `${previous.connection.name || '盒子'}暂时失去连接，万象正在尝试恢复。`, deviceId: previous.connection.deviceId, deviceName: previous.connection.name });
+      body: `${previous.connection.name || '盒子'}连接暂时中断，正在重新连接。`, deviceId: previous.connection.deviceId, deviceName: previous.connection.name });
     previous = structuredClone(state);
   }
   if (pruned) await persist();
@@ -171,7 +171,7 @@ export async function createNotificationCenter({ client, store, serviceURL, data
     },
     update(value) {
       if (!['available', 'downloaded'].includes(value?.phase) || !clean(value.candidate?.releaseId)) return;
-      add({ key: `client-update:${value.candidate.releaseId}:${value.phase}`, category: 'system', title: value.phase === 'downloaded' ? '万象更新已下载' : '万象有新版本', body: '请在个人菜单的设置中查看客户端更新。' });
+      add({ key: `client-update:${value.candidate.releaseId}:${value.phase}`, category: 'system', title: value.phase === 'downloaded' ? '记忆盒子更新已下载' : "记忆盒子有新版本", body: '请在个人菜单的设置中查看客户端更新。' });
     },
     async close() { if (closed) return; closed = true; epoch++; stopSources(); unsubscribe(); await writes; },
   };

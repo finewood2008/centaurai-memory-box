@@ -63,7 +63,7 @@ function projectState(raw) {
         : "idle",
     account: {
       ...account,
-      displayName: account.profile?.displayName || "万象用户",
+      displayName: account.profile?.displayName || "用户",
     },
     devices,
     networkReady: localMode ? localUnlocked : networkReady,

@@ -90,18 +90,27 @@ it("passes an unknown profile until server state arrives and fails closed after 
   vi.stubGlobal("fetch", vi.fn(async () => {
     if (calls++ === 0) return new Promise<Response>(resolve => { finish = resolve; });
     if (calls === 2) throw new Error("status unavailable");
-    return Response.json({ enabled: true, connected: false, context: "profile-context", library: { id: "codex-desktop", name: "Codex Desktop" } });
+    return Response.json({ enabled: true, connected: false, context: "profile-context", library: { id: "legacy", name: "本机记忆库" } });
   }));
   await act(async () => root.render(<MemorySyncSummary sessionToken="session" count={8} automatic>
     {profile => <div data-testid="collection-profile">{profile?.id ?? "unknown"}</div>}
   </MemorySyncSummary>));
   expect(container.querySelector('[data-testid="collection-profile"]')?.textContent).toBe("unknown");
   expect(container.querySelector('.my-ai-sync-title')?.textContent).not.toContain("自动采集");
-  await act(async () => finish!(Response.json({ enabled: true, connected: false, context: "profile-context", library: { id: "codex-desktop", name: "Codex Desktop" } })));
-  expect(container.querySelector('[data-testid="collection-profile"]')?.textContent).toBe("codex-desktop");
-  expect(container.querySelector('.my-ai-sync-title')?.textContent).toContain("Codex Desktop · 自动本机扫描");
+  await act(async () => finish!(Response.json({ enabled: true, connected: false, context: "profile-context", library: { id: "legacy", name: "本机记忆库" } })));
+  expect(container.querySelector('[data-testid="collection-profile"]')?.textContent).toBe("legacy");
+  expect(container.querySelector('.my-ai-sync-title')?.textContent).toContain("8 个来源 · 自动采集");
   await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
   expect(container.querySelector('[data-testid="collection-profile"]')?.textContent).toBe("unknown");
   await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
-  expect(container.querySelector('[data-testid="collection-profile"]')?.textContent).toBe("codex-desktop");
+  expect(container.querySelector('[data-testid="collection-profile"]')?.textContent).toBe("legacy");
+});
+
+it("has one unified local collection mode without a per-agent library selector", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ enabled: true, connected: false, context: "local", library: { id: "legacy", name: "本机记忆库" } })));
+  await act(async () => root.render(<MemorySyncSummary sessionToken="session" count={6} automatic><div /></MemorySyncSummary>));
+  expect(container.textContent).toContain("统一采集到本机记忆库");
+  expect(container.textContent).toContain("6 个来源 · 自动采集");
+  expect(container.textContent).not.toContain("旧版混合库");
+  expect([...container.querySelectorAll("select")].map(item => item.id)).toEqual(["space-backup-interval"]);
 });

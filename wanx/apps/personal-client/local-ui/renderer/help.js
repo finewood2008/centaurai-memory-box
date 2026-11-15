@@ -1,7 +1,7 @@
 // Main process owns public cache persistence and scheduling; this is only its renderer view.
-window.createHelpView = function ({ request, changed, now = Date.now }) {
+window.createHelpView = function ({ request, changed, now = Date.now, productContent = window.memoboxHelpContent }) {
   const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-  let data = null, etag = null, visible = false, pending = null, generation = 0;
+  let data = productContent || null, etag = null, visible = false, pending = null, generation = 0;
   let loading = false;
   let error = "", category = "all", query = "", expanded = new Set();
   // Match published names, never deployment-specific database IDs.
@@ -59,6 +59,9 @@ window.createHelpView = function ({ request, changed, now = Date.now }) {
         if (result?.notModified && data) {
           etag = result.etag || etag;
         } else if (result?.data) {
+          if (productContent && result.data.product !== productContent.product) {
+            data = productContent; etag = null; loading = false; error = ""; selectScene(); return;
+          }
           if (!result?.data || !Array.isArray(result.data.categories) ||
               result.data.categories.some(row => !row || typeof row.name !== "string" || !Array.isArray(row.items) ||
                 row.items.some(item => !item || typeof item.question !== "string" || typeof item.answer !== "string")))
@@ -69,10 +72,14 @@ window.createHelpView = function ({ request, changed, now = Date.now }) {
           if (firstLoad && !scene && data.categories[0]?.items[0]) expanded.add(String(data.categories[0].items[0].id));
         }
         selectScene();
-        if (result?.errorCode) error = message({ code: result.errorCode });
+        if (productContent && data?.source === "bundled") { loading = false; error = ""; }
+        else if (result?.errorCode) error = message({ code: result.errorCode });
         else if (!data && !loading) error = message({ code: "FAQ_UNAVAILABLE" });
       } catch (reason) {
-        if (revision === generation) error = message(reason);
+        if (revision === generation) {
+          if (productContent) { data ||= productContent; loading = false; error = ""; }
+          else error = message(reason);
+        }
       } finally {
         if (revision === generation) { pending = null; changed(); }
       }
@@ -120,7 +127,7 @@ window.createHelpView = function ({ request, changed, now = Date.now }) {
   }
   function feedbackMarkup() {
     return `<section class="faq-feedback" aria-label="问题反馈">
-      <div class="faq-feedback-heading"><div><h3>没找到答案？</h3><p class="muted">告诉我们你遇到的问题，帮助我们改进万象。</p></div>${!feedbackOpen ? `<button class="button" data-action="help-feedback-open">${draft.content || draft.contact ? "继续填写反馈" : "告诉我们"}</button>` : ""}</div>
+      <div class="faq-feedback-heading"><div><h3>没找到答案？</h3><p class="muted">告诉我们你遇到的问题，帮助我们改进记忆盒子。</p></div>${!feedbackOpen ? `<button class="button" data-action="help-feedback-open">${draft.content || draft.contact ? "继续填写反馈" : "告诉我们"}</button>` : ""}</div>
       ${feedbackNotice ? `<p class="notice success" role="status">${esc(feedbackNotice)}</p>` : ""}
       ${feedbackOpen ? `<form data-form="help-feedback" class="faq-feedback-form" novalidate>
         <p class="faq-feedback-privacy" id="faq-feedback-privacy">请勿填写密码、密钥、验证码。我们只用于改进帮助内容。</p>
@@ -154,7 +161,7 @@ window.createHelpView = function ({ request, changed, now = Date.now }) {
         feedbackOpen = true; feedbackError = ""; feedbackNotice = ""; countdown();
         for (const row of data?.categories || []) {
           const item = row.items.find(item => String(item.id) === String(input.id));
-          if (item) { draft.categoryId = row.id; draft.itemId = item.id; draftQuestion = item.question; break; }
+          if (item) { draft.categoryId = data.source === "bundled" ? null : row.id; draft.itemId = data.source === "bundled" ? null : item.id; draftQuestion = item.question; break; }
         }
         changed(); return;
       }
@@ -186,13 +193,13 @@ window.createHelpView = function ({ request, changed, now = Date.now }) {
       const count = groups.reduce((sum, row) => sum + row.items.length, 0);
       const categoryButton = (id, name, count) => `<button class="faq-category ${category === String(id) ? "active" : ""}" data-action="help-category" data-id="${esc(id)}" aria-pressed="${category === String(id)}"><span>${esc(name)}</span><span class="faq-count">${count}</span></button>`;
       return `<section class="page-content faq-page" aria-label="常见问题">
-        <header class="faq-heading"><div><span class="faq-eyebrow">WANX HELP</span><h2 id="faq-title">常见问题</h2><p class="muted">关于万象的使用，这里有一些答案。</p></div><div class="settings-actions"><button class="button small" data-action="help-back">${drawer ? "关闭帮助" : esc(backLabel)}</button></div></header>
+        <header class="faq-heading"><div><span class="faq-eyebrow">帮助中心</span><h2 id="faq-title">常见问题</h2><p class="muted">查找记忆盒子的使用方法与常见问题。</p></div><div class="settings-actions"><button class="button small" data-action="help-back">${drawer ? "关闭帮助" : esc(backLabel)}</button></div></header>
         <form class="faq-search" data-form="help-search" role="search"><label for="faq-query">搜索问题</label><input id="faq-query" name="query" type="search" maxlength="200" value="${esc(query)}" placeholder="输入问题关键词，例如：登录、盒子、积分" autocomplete="off" /><button class="button" type="submit">搜索</button></form>
         ${error ? `<div class="notice error faq-notice" role="status">${esc(error)}${data ? " 当前保留上次获取的内容。" : ""}</div>` : ""}
         ${sceneNotice ? `<p class="notice faq-notice" role="status">${esc(sceneNotice)}</p>` : ""}
         ${!data ? `<div class="faq-empty" role="status"><span class="faq-empty-icon" aria-hidden="true">?</span><h3>${pending || loading ? "正在获取帮助内容" : "暂时无法获取帮助内容"}</h3><p>${pending || loading ? "请稍候，正在为你查找答案。" : "正在等待自动重试，请稍后再来查看。"}</p></div>` : !total ? `<div class="faq-empty" role="status"><span class="faq-empty-icon" aria-hidden="true">?</span><h3>帮助内容正在整理中</h3><p>你可以稍后再来看看。</p></div>` : `<div class="faq-layout"><aside class="faq-sidebar" aria-label="问题分类"><h3>问题分类</h3>${categoryButton("all", "全部问题", total)}${categories.map(row => categoryButton(row.id, row.name, row.items.length)).join("")}</aside><div class="faq-results"><p class="faq-result-count" role="status">${query ? `“${esc(query)}” · ` : ""}共 ${count} 个问题</p>${groups.length ? groups.map(row => `<section class="faq-group" aria-label="${esc(row.name)}"><h3>${esc(row.name)}</h3>${row.items.map(item => { const id = String(item.id), open = expanded.has(id); return `<article class="faq-item"><h4><button class="faq-question" data-action="help-question" data-id="${esc(id)}" aria-expanded="${open}" aria-controls="faq-answer-${esc(id)}"><span>${esc(item.question)}</span><span class="faq-chevron" aria-hidden="true">${open ? "−" : "+"}</span></button></h4><div class="faq-answer" id="faq-answer-${esc(id)}" ${open ? "" : "hidden"}>${esc(item.answer)}<div class="faq-feedback-link"><button class="button small" data-action="help-feedback-open" data-id="${esc(item.id)}">仍没解决？反馈问题</button></div></div></article>`; }).join("")}</section>`).join("") : `<div class="faq-empty"><h3>没有找到相关问题</h3><p>试试更简短的关键词，或查看其他分类。</p><button class="button small" data-action="help-clear">查看全部问题</button></div>`}</div></div>`}
         ${feedbackMarkup()}
-        <p class="faq-footer">${data ? "内容由万象帮助中心维护，将在后台自动更新。" : "查看常见问题无需登录，也无需连接盒子。"}</p>
+        <p class="faq-footer">${data?.source === "bundled" ? "记忆盒子内置帮助 · 随客户端更新" : data ? "帮助内容会在后台自动更新。" : "查看常见问题无需登录，也无需连接盒子。"}</p>
       </section>`;
     },
   };

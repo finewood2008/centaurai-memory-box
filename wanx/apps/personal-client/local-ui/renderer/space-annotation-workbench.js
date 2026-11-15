@@ -6,7 +6,7 @@
   const effectiveDescription = row => row?.annotation?.description ?? ownDescription(row);
   const stateNames = { unannotated: "待标注", suggested: "有建议", confirmed: "已确认", review: "需复核", failed: "失败" };
   const busyStates = new Set(["scanning", "generating", "suggesting", "applying", "undoing", "running"]);
-  const errors = { SPACE_CONTEXT_CHANGED: "账号、盒子或权限已变化，请重新打开工作台。", SPACE_ANNOTATION_CONFLICT: "文件或标注已经更新，冲突项已保留，请重新核对。", SPACE_ANNOTATION_READ_ONLY: "此空间为只读，不能保存标注。", SPACE_ANNOTATION_STORAGE_FAILED: "草稿或标注未能保存，请检查本机存储后重试。", SPACE_ANNOTATION_MODEL_UNAVAILABLE: "尚未配置可用模型；手工批量标注仍可使用。", SPACE_ANNOTATION_INSTRUCTIONS_TOO_LONG: "方案要求与本批补充要求合计最多 4000 个字符，请缩短后重试。", SPACE_ANNOTATION_NO_CHANGES: "所选项目已与目标一致，没有需要保存的变更。", BOX_CONNECTION_REQUIRED: "连接暂不可用，请恢复盒子连接后继续。", UNKNOWN_CLIENT_ACTION: "工作台接口尚未加载，请重启客户端。" };
+  const errors = { SPACE_CONTEXT_CHANGED: "账号、盒子或权限已变化，请重新打开工作台。", SPACE_ANNOTATION_CONFLICT: "文件或标注已经更新，冲突项已保留，请重新核对。", SPACE_ANNOTATION_READ_ONLY: "此空间为只读，不能保存标注。", SPACE_ANNOTATION_STORAGE_FAILED: "草稿或标注未能保存，请检查本机存储后重试。", SPACE_ANNOTATION_MODEL_UPSTREAM_UNAVAILABLE: "当前默认模型的上游服务暂不可用，请检查盒子模型服务后重试；原标注未改动。", SPACE_ANNOTATION_MODEL_INPUT_TOO_LARGE: "当前资料超出默认模型的单次输入上限，请缩小范围或选用较短资料；内容未被截断。", SPACE_ANNOTATION_MODEL_UNAVAILABLE: "盒子默认模型暂不可用，请检查模型配置。", SPACE_ANNOTATION_MODEL_FORBIDDEN: "模型访问被拒绝，请检查当前盒子的访问权限。", SPACE_ANNOTATION_MODEL_UPDATE_REQUIRED: "当前盒子尚未提供所需模型接口，请先更新盒子服务。", SPACE_ANNOTATION_MODEL_TIMEOUT: "默认模型调用超时，本次未生成建议。", SPACE_ANNOTATION_MODEL_QUOTA: "默认模型额度或调用频率受限，请稍后重试。", SPACE_ANNOTATION_MODEL_FAILED: "默认模型调用未完成，请稍后重试。", SPACE_ANNOTATION_INVALID_MODEL_OUTPUT: "模型返回的建议格式无效，本次未保存。", SPACE_ANNOTATION_INSTRUCTIONS_TOO_LONG: "方案要求与本批补充要求合计最多 4000 个字符，请缩短后重试。", SPACE_ANNOTATION_NO_CHANGES: "所选项目已与目标一致，没有需要保存的变更。", BOX_CONNECTION_REQUIRED: "连接暂不可用，请恢复盒子连接后继续。", UNKNOWN_CLIENT_ACTION: "工作台接口尚未加载，请重启客户端。" };
   const errorText = cause => { const code = String(cause?.code || cause?.message || cause || ""); return Object.entries(errors).find(([key]) => code.includes(key))?.[1] || "操作未完成，已保留本次草稿。请重试。"; };
   const size = value => Number.isFinite(value) ? value >= 1048576 ? `${(value / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.ceil(value / 1024))} KB` : "—";
   const button = (label, name, extra = "", disabled = false, primary = false) => `<button type="button" class="button ${primary ? "primary" : ""}" data-action="space-wb-${name}" ${extra} ${disabled ? "disabled" : ""}>${label}</button>`;
@@ -17,11 +17,12 @@
 
   window.createSpaceAnnotationWorkbench = ({ call, changed = () => {}, onClose = () => {} }) => {
     let visible = false, epoch = 0, origin = null, job = null, items = [], total = 0, filteredTotal = 0, offset = 0;
-    let summary = {}, filteredSummary = null, resumableJobs = [], error = "", loading = false, message = "", leftHidden = false, rightHidden = false;
+    let summary = {}, filteredSummary = null, resumableJobs = [], error = "", loading = false, message = "", leftHidden = true;
     let query = "", type = "", state = "", activeId = "", anchor = "", selected = new Set(), allMatching = null;
     let cache = new Map(), drafts = new Map(), draftTimers = new Map(), draftWrites = new Map(), draftError = new Set(), committingDrafts = new Map();
     let scrollTop = 0, poll = null, queryTimer = null, loadingList = false, nextAfterApply = null;
-    let tab = "edit", model = "", models = { available: false, presets: [] }, schemes = [], scheme = "", instructions = "", schemeName = "";
+    let schemesLoading = false;
+    let tab = "edit", schemes = [], scheme = "", instructions = "", schemeName = "";
     let bulk = { tagMode: "keep", tags: "", descriptionMode: "keep", description: "", inherit: "keep" };
     let suggestionPolicy = { tagMode: "add", descriptionMode: "fill-empty" };
     let plan = null, planKind = "", preview = null, previewURL = null, previewOpen = false, composing = false, scopeHistory = [], pendingFocus = "", focusedPlan = "";
@@ -78,21 +79,19 @@
       catch (cause) { if (visible && revision === epoch) error = errorText(cause); }
       finally { if (revision === epoch) { loadingList = false; loading = false; emit(); } }
     }
-    async function loadAuxiliary() {
-      const revision = epoch;
-      const values = await Promise.allSettled([invoke({ op: "models" }), invoke({ op: "schemes" })]);
-      if (!visible || revision !== epoch) return;
-      models = values[0].status === "fulfilled" ? values[0].value : { available: false, presets: [] };
-      schemes = values[1].status === "fulfilled" ? values[1].value.items || [] : [];
-      if (!models.presets?.some(item => item.id === model)) model = models.presets?.[0]?.id || "";
-      emit();
+    async function loadSchemes() {
+      if (schemesLoading) return;
+      const revision = epoch; schemesLoading = true; emit();
+      try { schemes = (await invoke({ op: "schemes" })).items || []; }
+      catch (cause) { if (visible && revision === epoch) error = errorText(cause); }
+      finally { if (revision === epoch) { schemesLoading = false; emit(); } }
     }
     async function open(input, keepHistory = false) {
       const history = keepHistory ? [...scopeHistory] : [];
       reset(); scopeHistory = history; visible = true; epoch++; origin = { ...input }; loading = true;
       const revision = epoch;
       selected = new Set(input.ids || []); activeId = input.ids?.[0] || ""; error = ""; emit();
-      try { consume(await invoke({ op: "open", space_id: input.space_id || "personal", parent: input.parent || "", ...(input.ids?.length ? { ids: input.ids } : {}), recursive: input.recursive === true, ...(input.fresh ? { fresh: true } : {}) })); void loadAuxiliary(); }
+      try { consume(await invoke({ op: "open", space_id: input.space_id || "personal", parent: input.parent || "", ...(input.ids?.length ? { ids: input.ids } : {}), recursive: input.recursive === true, ...(input.fresh ? { fresh: true } : {}) })); }
       catch (cause) { if (visible && revision === epoch) error = errorText(cause); }
       finally { if (revision === epoch) { loading = false; emit(); } }
     }
@@ -104,7 +103,7 @@
       activeId = anchor = ""; selected.clear(); allMatching = null; error = message = ""; plan = null; nextAfterApply = null;
       summary = {}; filteredSummary = null; resumableJobs = []; query = type = state = ""; previewOpen = composing = false;
       scopeHistory = []; pendingFocus = focusedPlan = "";
-      models = { available: false, presets: [] }; model = scheme = schemeName = instructions = ""; schemes = []; tab = "edit";
+      schemesLoading = false; scheme = schemeName = instructions = ""; schemes = []; tab = "edit"; leftHidden = true;
       bulk = { tagMode: "keep", tags: "", descriptionMode: "keep", description: "", inherit: "keep" };
       suggestionPolicy = { tagMode: "add", descriptionMode: "fill-empty" };
     }
@@ -137,7 +136,7 @@
         allMatching = null;
         const from = items.findIndex(row => row.id === (anchor || before)), to = items.findIndex(row => row.id === id);
         for (const row of items.slice(Math.max(0, Math.min(from, to)), Math.max(from, to) + 1)) selected.add(row.id);
-      } else anchor = id;
+      } else { anchor = id; if (!event.preserveSelection && selected.size === 1 && !selected.has(id)) selected.clear(); }
       if (previewOpen) void fetchPreview();
       emit();
     }
@@ -199,27 +198,54 @@
       if (!id || id === job?.id || loading) return;
       for (const draftId of drafts.keys()) await flushDraft(draftId);
       await Promise.all([...draftWrites.values()]);
-      epoch++; loadingList = false;
+      epoch++; loadingList = false; schemesLoading = false;
       clearTimeout(poll); clearTimeout(queryTimer); poll = queryTimer = null;
       drafts.clear(); draftWrites.clear(); draftError.clear(); committingDrafts.clear(); cache.clear(); releasePreview();
       selected.clear(); allMatching = null; activeId = anchor = ""; items = []; offset = scrollTop = 0; plan = null; nextAfterApply = null; previewOpen = false; filteredSummary = null;
-      suggestionPolicy = { tagMode: "add", descriptionMode: "fill-empty" }; job = { id, status: "paused" }; await loadPage();
+      suggestionPolicy = { tagMode: "add", descriptionMode: "fill-empty" };
+      bulk = { tagMode: "keep", tags: "", descriptionMode: "keep", description: "", inherit: "keep" };
+      scheme = schemeName = instructions = ""; tab = "edit"; job = { id, status: "paused" }; await loadPage();
     }
     async function action(name, data = {}, event = {}) {
       if (!visible) return;
       try {
         if (name === "close") return await close();
         if (name === "focus") return await focusRow(data.id, event);
-        if (name === "check") { allMatching = null; if (selected.has(data.id)) selected.delete(data.id); else selected.add(data.id); if (!activeId) activeId = data.id; emit(); return; }
-        if (name === "page-select") { allMatching = null; const all = items.length > 0 && items.every(row => selected.has(row.id)); for (const row of items) if (all) selected.delete(row.id); else selected.add(row.id); emit(); return; }
+        if (name === "check") {
+          if (allMatching || !cache.has(data.id)) return;
+          const adding = !selected.has(data.id), next = new Set(selected);
+          if (adding) next.add(data.id); else next.delete(data.id);
+          const focus = next.size === 1 ? [...next][0] : adding ? data.id : activeId;
+          if (focus !== activeId) { await focusRow(focus, { preserveSelection: true }); if (activeId !== focus) return; }
+          selected = next; emit(); return;
+        }
+        if (name === "page-select") {
+          if (allMatching) { allMatching = null; selected.clear(); emit(); return; }
+          const next = new Set(selected), all = items.length > 0 && items.every(row => selected.has(row.id));
+          for (const row of items) if (all) next.delete(row.id); else next.add(row.id);
+          if (next.size === 1) { const focus = [...next][0]; await focusRow(focus, { preserveSelection: true }); if (activeId !== focus) return; }
+          selected = next; emit(); return;
+        }
         if (name === "matching-select") { if (!job?.scanComplete) { message = "目录仍在扫描，完成后可选择整个筛选范围。"; emit(); return; } selected.clear(); allMatching = { query, type, status: state }; emit(); return; }
         if (name === "clear") { selected.clear(); allMatching = null; emit(); return; }
         if (name === "filter") { state = data.status || ""; offset = scrollTop = 0; allMatching = null; filteredSummary = null; await loadPage(); return; }
         if (name === "previous-page" || name === "next-page") { offset = Math.max(0, offset + (name === "next-page" ? pageSize : -pageSize)); scrollTop = 0; await loadPage(); return; }
         if (name === "previous" || name === "next") { const index = items.findIndex(row => row.id === activeId); await focusRow(items[Math.max(0, Math.min(items.length - 1, index + (name === "next" ? 1 : -1)))]?.id || activeId); return; }
         if (name === "preview") { if (previewOpen) { previewOpen = false; releasePreview(); emit(); } else await fetchPreview(); return; }
-        if (name === "left" || name === "right") { if (name === "left") leftHidden = !leftHidden; else rightHidden = !rightHidden; emit(); return; }
-        if (name === "tab") { tab = data.tab; emit(); return; }
+        if (name === "left") { leftHidden = !leftHidden; emit(); return; }
+        if (name === "tab") { if (!["edit", "schemes"].includes(data.tab)) return; tab = data.tab; emit(); if (tab === "schemes") await loadSchemes(); return; }
+        if (name === "use-scheme") {
+          const chosen = schemes.find(item => item.id === scheme);
+          if (!chosen || !selectedCount() || isBusy() || !writable()) return;
+          if (isBatch()) bulk.tagMode = "add";
+          else {
+            const row = current(); if (!row || row.writable === false) return;
+            const draft = draftFor(row); draft.tags = [...new Set([...draft.tags, ...parseTags(bulk.tags)])]; draft._fields.add("tags");
+            if (bulk.inherit !== "keep") { draft.inherit = bulk.inherit === "on"; draft._fields.add("inherit"); }
+            draft._dirty = draft._edited = true; draft._serial++; await flushDraft(row.id);
+          }
+          tab = "edit"; message = "已带入方案，请核对后保存。"; emit(); return;
+        }
         if (name === "plan-close") { plan = null; emit(); return; }
         if (name === "plan-apply") return await submitPlan();
         if (name === "discard-draft") { loading = true; emit(); const value = await invoke({ op: "refresh-item", jobId: job.id, id: activeId, discardDraft: true }); clearTimeout(draftTimers.get(activeId)); draftTimers.delete(activeId); drafts.delete(activeId); draftError.delete(activeId); committingDrafts.delete(activeId); consume(value, true); await loadPage(true); loading = false; emit(); return; }
@@ -233,6 +259,7 @@
           loading = true; error = ""; emit(); consume(await invoke({ op: "skip-suggestions", jobId: job.id, selection: name === "skip-item-suggestion" ? { ids: [activeId] } : selection() }), true); await loadPage(true);
           message = "已跳过建议，已有标签、说明与人工草稿保持原值。"; loading = false; emit(); return;
         }
+        if (name === "resume" && job?.activity === "suggest") { message = "自动建议已停用，可直接手工标注。"; emit(); return; }
         if (["pause", "resume", "cancel", "undo"].includes(name)) { loading = true; emit(); consume(await invoke({ op: name, jobId: job.id }), true); await loadPage(true); message = name === "undo" ? "已核对并撤销可恢复的项目；后续修改冲突会单独保留。" : ""; loading = false; emit(); return; }
         if (name === "refresh") return await loadPage();
         if (name === "fresh") return await changeScope({ ...origin, fresh: true }, false);
@@ -240,11 +267,6 @@
         if (name === "scope-folder") return await changeScope({ space_id: origin.space_id, parent: data.id || "", recursive: origin.recursive, scopeName: data.name || "文件夹" });
         if (name === "source") return await changeScope({ space_id: origin.space_id, parent: "", ids: [data.id], scopeName: data.name || "来源文件夹" });
         if (name === "chip") { if (!writable() || isBusy()) return; if (isBatch()) { bulk.tagMode = "add"; bulk.tags = [...new Set([...parseTags(bulk.tags), data.tag])].join("，"); } else { const value = draftFor(current()); value.tags = [...new Set([...value.tags, data.tag])]; value._fields.add("tags"); value._dirty = value._edited = true; value._serial++; if (!value._conflict) void flushDraft(activeId).catch(() => {}); } emit(); return; }
-        if (name === "suggest") {
-          if (!models.available || !model || !selectedCount() || isBusy()) return;
-          loading = true; error = ""; emit(); consume(await invoke({ op: "suggest", jobId: job.id, selection: selection(), modelPresetId: model, instructions, ...(scheme ? { schemeId: scheme } : {}) }), true); await loadPage(true);
-          message = "建议将逐项进入待审核列表，原标注尚未改变。"; loading = false; emit(); return;
-        }
         if (name === "save-scheme") {
           if (!schemeName.trim()) { error = "请为方案填写名称。"; emit(); return; }
           if (schemeName.trim().length > 80) { error = "方案名称最多 80 个字符。"; emit(); return; }
@@ -262,6 +284,7 @@
         draft._dirty = draft._edited = true; draft._serial++; clearTimeout(draftTimers.get(row.id)); if (!draft._conflict) draftTimers.set(row.id, setTimeout(() => { void flushDraft(row.id).catch(() => {}); }, 250)); return;
       }
       if (name === "query") { query = value; offset = scrollTop = 0; allMatching = null; filteredSummary = null; clearTimeout(queryTimer); queryTimer = setTimeout(() => { void loadPage(); }, 250); return; }
+      if (name === "status") { if (value && !Object.hasOwn(stateNames, value)) return; state = value; offset = scrollTop = 0; allMatching = null; filteredSummary = null; void loadPage(); return; }
       if (name === "type") { type = value; offset = scrollTop = 0; allMatching = null; filteredSummary = null; void loadPage(); return; }
       if (name === "recursive") { void changeScope({ ...origin, recursive: value, fresh: true }, false).catch(cause => { error = errorText(cause); emit(); }); return; }
       if (name === "job") { void changeJob(value).catch(cause => { error = errorText(cause); emit(); }); return; }
@@ -271,19 +294,23 @@
         else schemeName = "";
         emit(); return;
       }
-      if (name === "model") model = value;
-      else if (name === "suggestion-tags" && ["add", "keep", "replace"].includes(value)) suggestionPolicy.tagMode = value;
+      if (name === "suggestion-tags" && ["add", "keep", "replace"].includes(value)) suggestionPolicy.tagMode = value;
       else if (name === "suggestion-description" && ["fill-empty", "keep", "replace"].includes(value)) suggestionPolicy.descriptionMode = value;
       else if (name === "instructions") instructions = value;
       else if (name === "scheme-name") schemeName = value;
-      else if (name.startsWith("bulk-")) { const field = name.slice(5); if (Object.hasOwn(bulk, field)) bulk[field] = value; }
+      else if (name.startsWith("bulk-")) {
+        const field = name.slice(5); if (Object.hasOwn(bulk, field)) bulk[field] = value;
+        if (field === "tags" && bulk.tagMode === "keep") bulk.tagMode = "add";
+        if (field === "description" && bulk.descriptionMode === "keep") bulk.descriptionMode = "fill-empty";
+      }
       if (["bulk-tagMode", "bulk-descriptionMode", "bulk-inherit", "suggestion-tags", "suggestion-description"].includes(name)) emit();
     }
     async function keydown(event) {
       if (!visible || composing || event.isComposing) return false;
-      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); if (plan) await submitPlan(); else await prepare("next"); return true; }
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { if (tab === "schemes" && !plan) return false; event.preventDefault(); if (plan) await submitPlan(); else await prepare(isBatch() ? "batch" : "next"); return true; }
       if (plan) { if (event.key === "Escape") { event.preventDefault(); plan = null; emit(); } return true; }
-      if (event.target?.closest?.("input, textarea, select")) return false;
+      if (event.key === "Escape" && !leftHidden) { event.preventDefault(); leftHidden = true; emit(); return true; }
+      if (event.target?.closest?.("input, textarea, select, button, summary, a, [role=button]")) return false;
       if (["ArrowDown", "ArrowUp"].includes(event.key)) { event.preventDefault(); const index = items.findIndex(row => row.id === activeId); const row = items[Math.max(0, Math.min(items.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)))]; if (row) await focusRow(row.id, event); return true; }
       if (event.key === " " && activeId) { event.preventDefault(); await action("check", { id: activeId }); return true; }
       return false;
@@ -301,28 +328,52 @@
         values = { count: rows.length, tagCounts: [...counts].map(([tag, count]) => ({ tag, count })), emptyDescriptions: descriptions.filter(value => !value.trim()).length,
           commonDescription: descriptions.every(value => value === descriptions[0]) ? descriptions[0] : null, inheritOn: rows.filter(row => row.annotation?.inherit !== false).length, inheritOff: rows.filter(row => row.annotation?.inherit === false).length };
       }
-      const chips = `<div class="awb-common-tags">${(values.tagCounts || []).slice(0, 12).map(({ tag, count }) => `<span class="awb-chip ${count === values.count ? "" : "is-mixed"}" title="${count === values.count ? "全部共有" : "部分文件已有"}">${esc(tag)} <small>${count}/${values.count}</small></span>`).join("") || '<span class="muted">暂无本项标签</span>'}</div>`;
+      const chips = `<div class="awb-common-tags">${(values.tagCounts || []).slice(0, 12).map(({ tag, count }) => `<span class="awb-chip ${count === values.count ? "" : "is-mixed"}" title="${count === values.count ? "全部共有" : "部分文件已有"}">${esc(tag)} <small>${count}/${values.count}</small></span>`).join("") || '<span class="muted">暂无直接标签</span>'}</div>`;
       if (!isBatch()) return chips;
       const partial = !allMatching && rows.length < selectedCount();
       return `${note}${partial ? `<p class="awb-hint">已加载 ${rows.length}/${selectedCount()} 项，以下仅统计已加载项；提交前会完整核对。</p>` : allMatching ? '<p class="awb-hint">完整筛选范围统计</p>' : ""}${chips}<p class="awb-hint">${values.commonDescription === null ? "说明为混合值，未修改时各项保留" : `说明共同值：${esc(values.commonDescription || "空说明")}`}<br>空说明 ${Number(values.emptyDescriptions) || 0}/${values.count} 项 · 继承开启 ${Number(values.inheritOn) || 0} 项 / 关闭 ${Number(values.inheritOff) || 0} 项</p>`;
     }
     function suggestionControls(disabled = false) {
-      return `<div class="awb-reading-scope"><strong>接受建议的方式</strong><label>建议标签<select data-wb-field="suggestion-tags" ${disabled ? "disabled" : ""}><option value="add" ${suggestionPolicy.tagMode === "add" ? "selected" : ""}>补充标签，保留已有标签</option><option value="keep" ${suggestionPolicy.tagMode === "keep" ? "selected" : ""}>保持已有标签</option><option value="replace" ${suggestionPolicy.tagMode === "replace" ? "selected" : ""}>替换本项标签</option></select></label><label>建议说明<select data-wb-field="suggestion-description" ${disabled ? "disabled" : ""}><option value="fill-empty" ${suggestionPolicy.descriptionMode === "fill-empty" ? "selected" : ""}>仅填补空说明</option><option value="keep" ${suggestionPolicy.descriptionMode === "keep" ? "selected" : ""}>保持已有说明</option><option value="replace" ${suggestionPolicy.descriptionMode === "replace" ? "selected" : ""}>替换本项说明</option></select></label><p class="awb-hint">逐文件使用各自的建议；继承设置保持原值。替换前会展示实际变更。</p></div>`;
+      return `<div class="awb-reading-scope"><strong>接受建议的方式</strong><label>建议标签<select data-wb-field="suggestion-tags" ${disabled ? "disabled" : ""}><option value="add" ${suggestionPolicy.tagMode === "add" ? "selected" : ""}>补充标签，保留已有标签</option><option value="keep" ${suggestionPolicy.tagMode === "keep" ? "selected" : ""}>保持已有标签</option><option value="replace" ${suggestionPolicy.tagMode === "replace" ? "selected" : ""}>替换直接添加的标签</option></select></label><label>建议说明<select data-wb-field="suggestion-description" ${disabled ? "disabled" : ""}><option value="fill-empty" ${suggestionPolicy.descriptionMode === "fill-empty" ? "selected" : ""}>仅填补空说明</option><option value="keep" ${suggestionPolicy.descriptionMode === "keep" ? "selected" : ""}>保持已有说明</option><option value="replace" ${suggestionPolicy.descriptionMode === "replace" ? "selected" : ""}>替换本项说明</option></select></label><p class="awb-hint">逐文件使用各自的建议；继承设置保持原值。替换前会展示实际变更。</p></div>`;
     }
     function editPanel() {
-      const row = current(), batch = isBatch(), disabled = isBusy() || !writable();
-      const draft = draftFor(row);
+      const row = current(), batch = isBatch(), disabled = isBusy() || !writable(), draft = draftFor(row);
       const inherited = row?.annotation?.provenance?.filter(item => item.source === "inherited") || [];
-      if (!row && !allMatching) return '<div class="awb-panel-empty">从列表选择一份文件，或勾选多项批量处理。</div>';
-      const tags = batch ? `<label>标签操作<select data-wb-field="bulk-tagMode"><option value="keep" ${bulk.tagMode === "keep" ? "selected" : ""}>保持原值</option><option value="add" ${bulk.tagMode === "add" ? "selected" : ""}>新增标签</option><option value="remove" ${bulk.tagMode === "remove" ? "selected" : ""}>移除本项标签</option><option value="replace" ${bulk.tagMode === "replace" ? "selected" : ""}>替换本项标签</option></select></label>${bulk.tagMode !== "keep" ? `<label>标签（逗号分隔）<input data-wb-field="bulk-tags" value="${esc(bulk.tags)}" maxlength="2400" placeholder="例如：客户资料，待归档" ${disabled ? "disabled" : ""}></label>` : ""}` : `<label>本项标签<input data-wb-field="item-tags" value="${esc(draft.tags.join("，"))}" maxlength="2400" placeholder="输入标签，以逗号分隔" ${disabled ? "disabled" : ""}></label>`;
-      const description = batch ? `<label>说明操作<select data-wb-field="bulk-descriptionMode"><option value="keep" ${bulk.descriptionMode === "keep" ? "selected" : ""}>保持原值</option><option value="fill-empty" ${bulk.descriptionMode === "fill-empty" ? "selected" : ""}>只填写空说明</option><option value="replace" ${bulk.descriptionMode === "replace" ? "selected" : ""}>统一修改说明</option></select></label>${bulk.descriptionMode !== "keep" ? `<label>统一说明<textarea data-wb-field="bulk-description" rows="4" maxlength="2000" ${disabled ? "disabled" : ""}>${esc(bulk.description)}</textarea></label><p class="awb-hint">该文字将用于符合条件的全部目标文件；逐文件说明请使用助手建议。</p>` : ""}` : `<label>本项说明<textarea data-wb-field="item-description" rows="5" maxlength="2000" placeholder="这份资料是什么，适合何时使用…" ${disabled ? "disabled" : ""}>${esc(draft.description)}</textarea></label>`;
-      return `<div class="awb-editor"><div class="awb-panel-heading"><strong>${batch ? `批量处理 ${selectedCount()} 项` : esc(row.name)}</strong>${row?.writable === false ? '<span class="awb-badge">只读</span>' : ""}</div>${selectionSummary()}${row?.annotation?.needsReview ? '<p class="awb-alert">文件内容已变化，保存前请复核原标注。</p>' : ""}${tags}${description}${batch ? `<label>文件夹继承<select data-wb-field="bulk-inherit"><option value="keep" ${bulk.inherit === "keep" ? "selected" : ""}>逐项保持原设置</option><option value="on" ${bulk.inherit === "on" ? "selected" : ""}>开启继承</option><option value="off" ${bulk.inherit === "off" ? "selected" : ""}>关闭继承</option></select></label>` : `<label class="awb-check"><input type="checkbox" data-wb-field="item-inherit" ${draft.inherit ? "checked" : ""} ${disabled ? "disabled" : ""}>继承上级文件夹标签与说明</label>`}${inherited.length ? `<div class="awb-inherited"><span>继承标签 · 修改来源或关闭继承后调整</span>${inherited.map(item => `<button type="button" class="awb-chip is-inherited" data-action="space-wb-source" data-id="${esc(item.itemId)}" data-name="${esc(item.sourceName || "来源文件夹")}" title="${esc(item.sourcePath || item.sourceName || "查看来源文件夹")}">${esc(item.tag)} <small>↗ ${esc(item.sourceName || "来源文件夹")}</small></button>`).join("")}</div>` : ""}${!batch && draft._conflict ? `<section class="awb-alert"><p>标注已经更新，本项未提交草稿仍保留。请核对最新值后选择处理方式。</p><p>最新标签：${esc(ownTags(row).join("、") || "无")}<br>最新说明：${esc(effectiveDescription(row) || "无")}</p>${button("采用最新标注", "discard-draft", "", disabled)}${button("以此草稿重新预览", "review-draft", "", disabled)}</section>` : ""}${draftError.has(activeId) ? '<p class="awb-alert">本项草稿尚未保存，请重试。</p>' : ""}<div class="awb-editor-actions">${button(batch ? "预览批量变更" : "预览并保存", "prepare", "", disabled || (!batch && draft._conflict), true)}${!batch ? button("保存并下一项", "save-next", "", disabled || draft._conflict) : ""}</div>${row?.suggestion ? `<section class="awb-suggestion"><h4>当前项待审核建议</h4><p>${(row.suggestion.tags || []).map(tag => `<span class="awb-chip">${esc(tag)}</span>`).join("")}</p><p>${esc(row.suggestion.description)}</p><small>${esc(analysisLabel(row.suggestion))}${row.suggestion.truncated ? ` · 部分内容（${readingLimits}，此建议未覆盖全文）` : ""}${analysisReason(row.suggestion) ? ` · ${esc(analysisReason(row.suggestion))}` : ""}</small>${suggestionControls(disabled)}${button("审核此建议", "accept-item-suggestion", "", disabled)}${button("跳过此建议", "skip-item-suggestion", "", isBusy())}</section>` : ""}</div>`;
-    }
-    function assistantPanel() {
-      return `<div class="awb-editor"><h3>辅助标注</h3><p class="awb-hint">逐份生成建议，审核保存后才改变标注。已有人工说明默认保留。</p>${!models.available ? `<p class="awb-alert">${esc(models.reason || "尚未配置可用模型。手工标注和方案仍可使用。")}</p>` : models.aiAvailable === false ? '<p class="awb-message">AI 尚未配置；可使用本地规则生成建议，手工标注和方案仍可使用。</p>' : ""}<label>使用模型<select data-wb-field="model" ${!models.available ? "disabled" : ""}>${(models.presets || []).map(item => `<option value="${esc(item.id)}" ${item.id === model ? "selected" : ""}>${esc(item.name || item.id)}${item.provider ? ` · ${esc(item.provider)}` : ""}</option>`).join("") || '<option>暂无可用模型</option>'}</select></label><label>本批要求<textarea data-wb-field="instructions" rows="6" maxlength="4000" placeholder="例如：按客户和资料用途归类，每份资料用一句话说明。">${esc(instructions)}</textarea></label><div class="awb-reading-scope"><strong>本次读取范围</strong><p>${selectedCount()} 项 · ${allMatching ? "整个筛选范围" : "当前选定文件"}</p><p>${readingLimits}。图片、扫描件等会明确标记仅按名称分析，首版不提供 OCR。文件不会被移动或删除。</p></div>${button(isBusy() ? "正在处理…" : `为 ${selectedCount()} 项生成建议`, "suggest", "", !models.available || !model || !selectedCount() || isBusy(), true)}<p class="awb-hint">可随时暂停。恢复任务由你确认，避免重启后自动重复调用模型。</p>${suggestionControls(isBusy() || !writable())}${button("审核所选建议", "accept-suggestion", "", !selectedCount() || isBusy() || !writable())}${button("跳过所选建议", "skip-suggestions", "", !selectedCount() || isBusy())}</div>`;
+      if (!row && !allMatching) return '<div class="awb-panel-empty"><strong>开始标注</strong><p>点选文件，在这里填写标签和说明。</p></div>';
+      const tagLabel = batch ? bulk.tagMode === "remove" ? "移除标签" : bulk.tagMode === "replace" ? "替换标签" : "添加标签" : row.kind === "folder" ? "文件夹标签" : "文件标签";
+      const descriptionLabel = batch ? bulk.descriptionMode === "replace" ? "统一修改说明" : "填写空说明" : row.kind === "folder" ? "文件夹说明" : "文件说明";
+      const controls = batch ? `<label>标签操作<select data-wb-field="bulk-tagMode" ${disabled ? "disabled" : ""}><option value="keep" ${bulk.tagMode === "keep" ? "selected" : ""}>保持原值</option><option value="add" ${bulk.tagMode === "add" ? "selected" : ""}>新增标签</option><option value="remove" ${bulk.tagMode === "remove" ? "selected" : ""}>移除此项目的标签</option><option value="replace" ${bulk.tagMode === "replace" ? "selected" : ""}>替换直接添加的标签</option></select></label><label>说明操作<select data-wb-field="bulk-descriptionMode" ${disabled ? "disabled" : ""}><option value="keep" ${bulk.descriptionMode === "keep" ? "selected" : ""}>保持原值</option><option value="fill-empty" ${bulk.descriptionMode === "fill-empty" ? "selected" : ""}>仅填写尚未填写的说明</option><option value="replace" ${bulk.descriptionMode === "replace" ? "selected" : ""}>统一修改说明</option></select></label><label>文件夹继承<select data-wb-field="bulk-inherit" ${disabled ? "disabled" : ""}><option value="keep" ${bulk.inherit === "keep" ? "selected" : ""}>逐项保持原设置</option><option value="on" ${bulk.inherit === "on" ? "selected" : ""}>开启继承</option><option value="off" ${bulk.inherit === "off" ? "selected" : ""}>关闭继承</option></select></label>`
+        : `<label class="awb-check"><input type="checkbox" data-wb-field="item-inherit" ${draft.inherit ? "checked" : ""} ${disabled ? "disabled" : ""}>继承上级文件夹标签与说明</label>`;
+      return `<div class="awb-editor">
+        <div class="awb-editor-heading"><span class="awb-eyebrow">${batch ? "批量标注" : "标注"}</span>${button("常用方案", "tab", 'data-tab="schemes"')}</div>
+        <div class="awb-panel-heading"><h3>${batch ? `批量处理 ${selectedCount()} 项` : esc(row.name)}</h3>${row?.writable === false ? '<span class="awb-badge">只读</span>' : ""}</div>
+        ${batch ? '<p class="awb-hint">默认追加标签、只填空说明，未修改的内容保留。</p>' : ""}
+        ${row?.annotation?.needsReview ? '<p class="awb-alert">文件内容已变化，保存前请复核原标注。</p>' : ""}
+        <label>${tagLabel}<input data-wb-field="${batch ? "bulk-tags" : "item-tags"}" value="${esc(batch ? bulk.tags : draft.tags.join("，"))}" maxlength="2400" placeholder="输入标签，用逗号分隔" ${disabled ? "disabled" : ""}></label>
+        ${(summary.tagCounts || []).length ? `<div class="awb-quick-tags"><span>常用</span>${summary.tagCounts.slice(0, 8).map(item => `<button type="button" class="awb-chip" data-action="space-wb-chip" data-tag="${esc(item.tag)}" ${disabled ? "disabled" : ""}>+ ${esc(item.tag)}</button>`).join("")}</div>` : ""}
+        <label>${descriptionLabel}<textarea data-wb-field="${batch ? "bulk-description" : "item-description"}" rows="5" maxlength="2000" placeholder="简单说明这份资料的内容或用途" ${disabled ? "disabled" : ""}>${esc(batch ? bulk.description : draft.description)}</textarea></label>
+        ${scheme && instructions ? `<p class="awb-hint">填写提示：${esc(instructions)}</p>` : ""}
+        ${!batch && row?.kind === "folder" ? '<p class="awb-hint">文件夹标注可由子文件继承，无需逐项填写。</p>' : ""}
+        ${inherited.length && !batch ? `<div class="awb-inherited"><span>继承标签 · 来源文件夹</span>${inherited.map(item => `<button type="button" class="awb-chip is-inherited" data-action="space-wb-source" data-id="${esc(item.itemId)}" data-name="${esc(item.sourceName || "来源文件夹")}" title="${esc(item.sourcePath || item.sourceName || "查看来源文件夹")}">${esc(item.tag)} <small>↗ ${esc(item.sourceName || "来源文件夹")}</small></button>`).join("")}</div>` : ""}
+        <details class="awb-details"><summary>${batch ? "更多批量选项" : "继承设置"}</summary><div class="awb-detail-fields">${controls}</div></details>
+        ${batch ? `<details class="awb-details"><summary>查看已有标注与差异</summary>${selectionSummary()}</details>` : ""}
+        ${!batch && draft._conflict ? `<section class="awb-alert"><p>标注已经更新，本项未提交草稿仍保留。请核对最新值后选择处理方式。</p><p>最新标签：${esc(ownTags(row).join("、") || "无")}<br>最新说明：${esc(effectiveDescription(row) || "无")}</p>${button("采用最新标注", "discard-draft", "", disabled)}${button("以此草稿重新预览", "review-draft", "", disabled)}</section>` : ""}
+        ${draftError.has(activeId) ? '<p class="awb-alert">本项草稿尚未保存，请重试。</p>' : ""}
+        <div class="awb-editor-actions">${button(batch ? "预览批量变更" : "保存标注", "prepare", "", disabled || (!batch && draft._conflict), true)}${!batch ? button("保存并下一项", "save-next", "", disabled || draft._conflict) : ""}</div>
+        ${row?.suggestion ? `<details class="awb-details awb-suggestion"><summary>历史建议</summary><p>${(row.suggestion.tags || []).map(tag => `<span class="awb-chip">${esc(tag)}</span>`).join("")}</p><p>${esc(row.suggestion.description)}</p><small>${esc(analysisLabel(row.suggestion))}${row.suggestion.truncated ? ` · 部分内容（${readingLimits}，此建议未覆盖全文）` : ""}${analysisReason(row.suggestion) ? ` · ${esc(analysisReason(row.suggestion))}` : ""}</small>${suggestionControls(disabled)}<div class="awb-actions">${button("审核此建议", "accept-item-suggestion", "", disabled || row.writable === false)}${button("跳过此建议", "skip-item-suggestion", "", isBusy())}${batch ? button("审核所选建议", "accept-suggestion", "", disabled) + button("跳过所选建议", "skip-suggestions", "", isBusy()) : ""}</div></details>` : ""}
+      </div>`;
     }
     function schemesPanel() {
-      return `<div class="awb-editor"><h3>可复用标注方案</h3><p class="awb-hint">方案只保存标签和填写要求，不携带文件权限或模型凭据。</p><label>选择方案<select data-wb-field="scheme"><option value="">新建方案</option>${schemes.map(item => `<option value="${esc(item.id)}" ${item.id === scheme ? "selected" : ""}>${esc(item.name)}</option>`).join("")}</select></label><label>方案名称<input data-wb-field="scheme-name" maxlength="80" value="${esc(schemeName)}" placeholder="例如：客户项目资料"></label><label>常用标签<input data-wb-field="bulk-tags" maxlength="2400" value="${esc(bulk.tags)}" placeholder="客户资料，项目归档"></label><label>说明填写要求<textarea data-wb-field="instructions" rows="5" maxlength="4000">${esc(instructions)}</textarea></label><label>继承偏好<select data-wb-field="bulk-inherit"><option value="keep" ${bulk.inherit === "keep" ? "selected" : ""}>保留各项设置</option><option value="on" ${bulk.inherit === "on" ? "selected" : ""}>开启继承</option><option value="off" ${bulk.inherit === "off" ? "selected" : ""}>关闭继承</option></select></label>${button("保存方案", "save-scheme", "", loading, true)}${scheme ? button("删除此方案", "delete-scheme", "", loading) : ""}<p class="awb-hint">选择已有方案后，可回到“标注”预览应用，也可带入助手生成建议。</p></div>`;
+      return `<div class="awb-editor"><div class="awb-editor-heading"><h3>常用方案</h3>${button("返回标注", "tab", 'data-tab="edit"')}</div>
+        <p class="awb-hint">保存常用标签，下次直接复用。</p>
+        ${schemesLoading ? '<p class="awb-hint" role="status">正在读取方案…</p>' : ""}
+        <label>选择方案<select data-wb-field="scheme"><option value="">新建方案</option>${schemes.map(item => `<option value="${esc(item.id)}" ${item.id === scheme ? "selected" : ""}>${esc(item.name)}</option>`).join("")}</select></label>
+        <label>方案名称<input data-wb-field="scheme-name" maxlength="80" value="${esc(schemeName)}" placeholder="例如：客户项目资料"></label>
+        <label>常用标签<input data-wb-field="bulk-tags" maxlength="2400" value="${esc(bulk.tags)}" placeholder="客户资料，项目归档"></label>
+        <label>说明填写提示<textarea data-wb-field="instructions" rows="3" maxlength="4000" placeholder="提醒自己需要填写哪些内容">${esc(instructions)}</textarea></label>
+        <details class="awb-details"><summary>继承偏好</summary><label><select aria-label="方案继承偏好" data-wb-field="bulk-inherit"><option value="keep" ${bulk.inherit === "keep" ? "selected" : ""}>保留各项设置</option><option value="on" ${bulk.inherit === "on" ? "selected" : ""}>开启继承</option><option value="off" ${bulk.inherit === "off" ? "selected" : ""}>关闭继承</option></select></label></details>
+        <div class="awb-editor-actions">${scheme ? button("使用此方案", "use-scheme", "", loading || schemesLoading || !selectedCount() || !writable(), true) : ""}${button("保存方案", "save-scheme", "", loading || schemesLoading, !scheme)}${scheme ? button("删除此方案", "delete-scheme", "", loading || schemesLoading) : ""}</div>
+      </div>`;
     }
     function previewView() {
       if (!previewOpen) return "";
@@ -351,10 +402,38 @@
       if (!visible) return "";
       const start = Math.max(0, Math.floor(scrollTop / rowHeight) - 4), end = Math.min(items.length, start + visibleRows);
       const rendered = items.slice(start, end), selectedVisible = items.length && items.every(row => selected.has(row.id));
-      const stateSummary = Object.entries(stateNames).map(([key, name]) => `<button type="button" class="awb-queue ${state === key ? "active" : ""}" data-action="space-wb-filter" data-status="${key}"><span>${name}</span><small>${Number(summary[key]) || 0}</small></button>`).join("");
       const typeOptions = [...new Set([...cache.values()].map(row => row.kind === "folder" ? "folder" : String(row.name).split(".").at(-1).toLowerCase()).concat(type ? [type] : []))].sort();
-      const folders = items.filter(row => row.kind === "folder");
-      return `<section class="annotation-workbench ${leftHidden ? "is-left-hidden" : ""} ${rightHidden ? "is-right-hidden" : ""}" aria-label="空间标注工作台" data-workbench-job="${esc(job?.id || "")}"><header class="awb-top"><div>${button("← 返回空间", "close")}<div><p class="awb-eyebrow">SPACE ANNOTATION</p><h2>标注工作台</h2></div></div><div class="awb-top-actions">${button(leftHidden ? "显示范围" : "收起范围", "left")}${button(rightHidden ? "显示编辑器" : "收起编辑器", "right")}${button("撤销最近批次", "undo", "", loading || !job)}${button("重新扫描", "fresh", "", loading)}${job?.status === "paused" || job?.status === "partial" ? button("继续任务", "resume", "", loading, true) : busyStates.has(job?.status) ? button("暂停", "pause", "", loading) : ""}${busyStates.has(job?.status) || job?.status === "paused" ? button("取消后续处理", "cancel", "", loading) : ""}</div></header><div class="awb-progress" role="status"><span>${loading ? "正在处理…" : job?.scanComplete === false ? `正在扫描，已发现 ${Number(job?.scanned) || items.length} 项` : `已扫描 ${Number(job?.scanned) || total} 项`}</span><span>${job?.status === "paused" ? "任务已暂停，继续后才会恢复处理" : busyStates.has(job?.status) ? "进度自动保留" : "支持混合文件 · 人工字段优先"}</span>${job?.completed !== undefined ? `<span>已完成 ${Number(job.completed)}${job.failed ? ` · ${Number(job.failed)} 项需处理` : ""}</span>` : ""}</div>${error ? `<div class="awb-alert" role="alert">${esc(error)} ${button("重试读取", "refresh", "", loading)}</div>` : ""}${message ? `<p class="awb-message" role="status">${esc(message)}</p>` : ""}<div class="awb-layout"><aside class="awb-left" aria-label="标注范围与待办"><h3>处理范围</h3>${scopeHistory.length ? button("← 上一级范围", "scope-parent") : ""}<p class="awb-scope-name">${esc(origin?.scopeName || (origin?.ids?.length ? `选定的 ${origin.ids.length} 项` : "当前文件夹"))}</p><label class="awb-check"><input type="checkbox" data-wb-field="recursive" ${origin?.recursive ? "checked" : ""} ${loading || origin?.ids?.length ? "disabled" : ""}>包含子文件夹</label><p class="awb-hint">文件夹默认标注自身，后代通过继承生效。</p>${resumableJobs.length ? `<label>最近任务<select data-wb-field="job"><option value="${esc(job?.id)}">当前任务 · ${total} 项</option>${resumableJobs.filter(item => item.id !== job?.id).map(item => `<option value="${esc(item.id)}" ${item.id === job?.id ? "selected" : ""}>${esc(item.name || "标注任务")} · ${Number(item.total) || 0} 项${item.status === "paused" ? " · 已暂停" : ""}</option>`).join("")}</select></label>` : ""}<div class="awb-queues"><button type="button" class="awb-queue ${!state ? "active" : ""}" data-action="space-wb-filter" data-status=""><span>全部文件</span><small>${total}</small></button>${stateSummary}</div><details ${folders.length < 8 ? "open" : ""}><summary>当前目录中的文件夹</summary>${folders.slice(0, 30).map(row => `<button type="button" class="awb-folder" data-action="space-wb-scope-folder" data-id="${esc(row.id)}" data-name="${esc(row.name)}">▸ ${esc(row.name)}</button>`).join("") || '<p class="awb-hint">当前页没有文件夹。</p>'}</details><div class="awb-tag-library"><h3>当前范围常用标签</h3>${(summary.tagCounts || []).slice(0, 18).map(item => `<button type="button" class="awb-chip" data-action="space-wb-chip" data-tag="${esc(item.tag)}">${esc(item.tag)} <small>${Number(item.count) || 0}</small></button>`).join("") || '<p class="awb-hint">扫描后在这里复用已有标签。</p>'}</div></aside><main class="awb-main"><div class="awb-list-tools"><label class="awb-search"><span>查找</span><input type="search" data-wb-field="query" value="${esc(query)}" placeholder="名称、路径、标签或说明"></label><select data-wb-field="type" aria-label="按文件类型筛选"><option value="">所有类型</option>${typeOptions.map(value => `<option value="${esc(value)}" ${type === value ? "selected" : ""}>${esc(value === "folder" ? "文件夹" : value.toUpperCase())}</option>`).join("")}</select></div><div class="awb-selection-bar">${button(selectedVisible && !allMatching ? "取消本页选择" : "选择当前页", "page-select", "", !items.length)}${button(`选择整个筛选范围（${filteredTotal}）`, "matching-select", "", !job?.scanComplete || !filteredTotal)}${selected.size || allMatching ? button("清除选择", "clear") : ""}<span>${allMatching ? `整个筛选范围 ${filteredTotal} 项` : selected.size ? `已勾选 ${selected.size} 项` : activeId ? "当前文件 · 尚未勾选批量目标" : "请选择文件"}</span></div><div class="awb-table-head" role="row"><span>选择</span><span>名称与目录</span><span>标签</span><span>状态</span></div><div class="awb-virtual" data-wb-scroll tabindex="0" role="listbox" aria-multiselectable="true" aria-label="标注文件列表" aria-busy="${loading}"><div style="height:${start * rowHeight}px" aria-hidden="true"></div>${rendered.map(row => `<article class="awb-file ${row.id === activeId ? "is-current" : ""} ${allMatching || selected.has(row.id) ? "is-selected" : ""}" role="option" aria-selected="${allMatching || selected.has(row.id)}" data-action="space-wb-focus" data-id="${esc(row.id)}" tabindex="${row.id === activeId ? "0" : "-1"}"><input type="checkbox" aria-label="选择 ${esc(row.name)}" data-action="space-wb-check" data-id="${esc(row.id)}" ${allMatching || selected.has(row.id) ? "checked" : ""}><div class="awb-file-name"><strong><span aria-hidden="true">${row.kind === "folder" ? "▰" : "▤"}</span> ${esc(row.name)}</strong><small title="${esc(row.path || "")}">${esc(row.path || "当前目录")} · ${row.kind === "folder" ? "文件夹" : size(row.size)}</small></div><div class="awb-row-tags">${(row.annotation?.tags || []).slice(0, 3).map(tag => `<span class="awb-chip">${esc(tag)}</span>`).join("")}${(row.annotation?.tags?.length || 0) > 3 ? `<small>+${row.annotation.tags.length - 3}</small>` : ""}</div><div><span class="awb-status is-${esc(row.status || "unannotated")}">${stateNames[row.status] || "待标注"}</span>${row.writable === false ? '<small class="awb-readonly">只读</small>' : ""}${row.error ? `<small title="${esc(errorText(row.error))}">需重试</small>` : ""}</div></article>`).join("") || `<div class="awb-empty">${loading ? "正在读取文件…" : "当前筛选没有文件"}</div>`}<div style="height:${Math.max(0, items.length - end) * rowHeight}px" aria-hidden="true"></div></div><footer class="awb-list-footer"><span>${filteredTotal ? offset + 1 : 0}–${Math.min(offset + items.length, filteredTotal)} / ${filteredTotal}${job?.scanComplete === false ? " · 扫描中，数量仍在增加" : ""}</span><div>${button("上一页", "previous-page", "", offset === 0 || loading)}${button("下一页", "next-page", "", offset + items.length >= filteredTotal || loading)}</div></footer><div class="awb-reader-bar">${button("上一项", "previous", "", !activeId)}${button("下一项", "next", "", !activeId)}${button(previewOpen ? "收起预览" : "展开预览", "preview", "", !activeId)}</div>${previewView()}</main><aside class="awb-right" aria-label="标注编辑器"><nav class="awb-tabs" aria-label="标注工具">${[ ["edit", "标注"], ["assistant", "AI 助手"], ["schemes", "方案"] ].map(([key, label]) => `<button type="button" data-action="space-wb-tab" data-tab="${key}" aria-selected="${tab === key}" class="${tab === key ? "active" : ""}">${label}</button>`).join("")}</nav>${tab === "assistant" ? assistantPanel() : tab === "schemes" ? schemesPanel() : editPanel()}</aside></div><footer class="awb-bottom"><span>↑ ↓ 切换文件 · 空格勾选 · Shift 连选</span><span>⌘ / Ctrl + Enter 保存并下一项 · 提交前核对变更</span></footer>${planView()}</section>`;
+      const folders = items.filter(row => row.kind === "folder"), hasSelection = selected.size > 0 || !!allMatching;
+      const resumeAllowed = ["paused", "partial"].includes(job?.status) && job?.activity !== "suggest" && (job?.activity || job?.scanComplete === false);
+      const legacyGenerating = job?.activity === "suggest" && busyStates.has(job?.status);
+      return `<section class="annotation-workbench ${leftHidden ? "is-left-hidden" : ""}" aria-label="空间标注工作台" data-workbench-job="${esc(job?.id || "")}">
+        <header class="awb-top"><div>${button("← 返回空间", "close")}<div><h2>标注工作台</h2><p class="awb-context">${esc(origin?.scopeName || (origin?.ids?.length ? `选定的 ${origin.ids.length} 项` : "当前文件夹"))}</p></div></div>
+          <div class="awb-top-actions">${resumeAllowed ? button("继续未完成任务", "resume", "", loading, true) : ""}
+            <details class="awb-more"><summary class="button">更多 ⋯</summary><div class="awb-menu" role="group" aria-label="工作台更多操作">${button("撤销最近批次", "undo", "", loading || !job)}${button("重新扫描", "fresh", "", loading)}${busyStates.has(job?.status) ? button("暂停", "pause", "", loading) : ""}${busyStates.has(job?.status) || job?.status === "paused" ? button("取消后续处理", "cancel", "", loading) : ""}</div></details>
+          </div></header>
+        ${loading || busyStates.has(job?.status) || job?.scanComplete === false ? `<div class="awb-progress" role="status"><span>${loading ? "正在处理…" : job?.scanComplete === false ? `正在扫描，已发现 ${Number(job?.scanned) || items.length} 项` : `已完成 ${Number(job?.completed) || 0} 项`}</span>${legacyGenerating ? `<span>此前的建议任务仍在运行</span>${button("停止生成", "cancel", "", loading)}` : '<span>进度自动保留</span>'}</div>` : ""}
+        ${error ? `<div class="awb-alert" role="alert">${esc(error)} ${button("重试读取", "refresh", "", loading)}</div>` : ""}
+        ${message ? `<p class="awb-message" role="status">${esc(message)}</p>` : ""}
+        <div class="awb-layout">
+          ${!leftHidden ? `<aside class="awb-left" aria-label="标注范围与待办"><div class="awb-panel-heading"><h3>范围设置</h3>${button("完成", "left")}</div>${scopeHistory.length ? button("← 上一级范围", "scope-parent") : ""}
+            <p class="awb-scope-name">${esc(origin?.scopeName || "当前文件夹")}</p><label class="awb-check"><input type="checkbox" data-wb-field="recursive" ${origin?.recursive ? "checked" : ""} ${loading || origin?.ids?.length ? "disabled" : ""}>包含子文件夹</label>
+            ${resumableJobs.filter(item => item.id !== job?.id).length ? `<label>最近任务<select data-wb-field="job"><option value="${esc(job?.id)}">当前任务 · ${total} 项</option>${resumableJobs.filter(item => item.id !== job?.id).map(item => `<option value="${esc(item.id)}">${esc(item.name || "标注任务")} · ${Number(item.total) || 0} 项${item.status === "paused" ? " · 已暂停" : ""}</option>`).join("")}</select></label>` : ""}
+            ${folders.length ? `<div class="awb-scope-folders"><h3>当前目录中的文件夹</h3>${folders.slice(0, 30).map(row => `<button type="button" class="awb-folder" data-action="space-wb-scope-folder" data-id="${esc(row.id)}" data-name="${esc(row.name)}">▸ ${esc(row.name)}</button>`).join("")}</div>` : ""}
+          </aside>` : ""}
+          <main class="awb-main"><div class="awb-list-tools"><label class="awb-search"><input type="search" aria-label="查找文件" data-wb-field="query" value="${esc(query)}" placeholder="搜索文件、标签或说明"></label>
+            <select data-wb-field="status" aria-label="按标注状态筛选"><option value="">全部状态</option>${Object.entries(stateNames).map(([key, name]) => `<option value="${key}" ${state === key ? "selected" : ""}>${name} (${Number(summary[key]) || 0})</option>`).join("")}</select>
+            <select data-wb-field="type" aria-label="按文件类型筛选"><option value="">所有类型</option>${typeOptions.map(value => `<option value="${esc(value)}" ${type === value ? "selected" : ""}>${esc(value === "folder" ? "文件夹" : value.toUpperCase())}</option>`).join("")}</select>
+            ${button("范围设置", "left", `aria-expanded="${!leftHidden}"`)}</div>
+            <div class="awb-selection-bar"><span>${allMatching ? `已选全部筛选结果 ${filteredTotal} 项` : selected.size ? `已选 ${selected.size} 项` : `共 ${filteredTotal} 项 · 点击文件开始标注`}</span>${hasSelection ? button("清除选择", "clear") : ""}${hasSelection && !allMatching && filteredTotal > items.length ? button(`选择整个筛选范围（${filteredTotal}）`, "matching-select", "", !job?.scanComplete) : ""}</div>
+            <div class="awb-table-head" role="row"><span><input type="checkbox" data-action="space-wb-page-select" aria-label="选择当前页" title="选择当前页" ${selectedVisible || allMatching ? "checked" : ""} ${!items.length ? "disabled" : ""}></span><span>文件</span><span>标签</span><span>状态</span></div>
+            <div class="awb-virtual" data-wb-scroll tabindex="0" role="listbox" aria-multiselectable="true" aria-label="标注文件列表" aria-busy="${loading}"><div style="height:${start * rowHeight}px" aria-hidden="true"></div>${rendered.map(row => `<article class="awb-file ${row.id === activeId ? "is-current" : ""} ${allMatching || selected.has(row.id) ? "is-selected" : ""}" role="option" aria-selected="${allMatching || selected.has(row.id)}" data-action="space-wb-focus" data-id="${esc(row.id)}" tabindex="${row.id === activeId ? "0" : "-1"}"><input type="checkbox" aria-label="选择 ${esc(row.name)}" data-action="space-wb-check" data-id="${esc(row.id)}" ${allMatching || selected.has(row.id) ? "checked" : ""} ${allMatching ? 'disabled title="先清除全部范围选择，再逐项选择"' : ""}><div class="awb-file-name"><strong><span aria-hidden="true">${row.kind === "folder" ? "▰" : "▤"}</span> ${esc(row.name)}</strong><small title="${esc(row.path || "")}">${esc(row.path || "当前目录")} · ${row.kind === "folder" ? "文件夹" : size(row.size)}</small></div><div class="awb-row-tags">${(row.annotation?.tags || []).slice(0, 2).map(tag => `<span class="awb-chip">${esc(tag)}</span>`).join("")}${(row.annotation?.tags?.length || 0) > 2 ? `<small>+${row.annotation.tags.length - 2}</small>` : ""}</div><div><span class="awb-status is-${esc(row.status || "unannotated")}">${stateNames[row.status] || "待标注"}</span>${row.writable === false ? '<small class="awb-readonly">只读</small>' : ""}${row.error ? `<small title="${esc(errorText(row.error))}">需重试</small>` : ""}</div></article>`).join("") || `<div class="awb-empty">${loading ? "正在读取文件…" : "没有匹配的文件"}</div>`}<div style="height:${Math.max(0, items.length - end) * rowHeight}px" aria-hidden="true"></div></div>
+            <footer class="awb-list-footer"><span>${filteredTotal ? offset + 1 : 0}–${Math.min(offset + items.length, filteredTotal)} / ${filteredTotal}${job?.scanComplete === false ? " · 扫描中" : ""}</span><div>${button("上一页", "previous-page", "", offset === 0 || loading)}${button("下一页", "next-page", "", offset + items.length >= filteredTotal || loading)}</div></footer>
+            <div class="awb-reader-bar">${button("上一项", "previous", "", !activeId)}${button("下一项", "next", "", !activeId)}${button(previewOpen ? "收起预览" : "文件预览", "preview", "", !activeId)}</div>${previewView()}
+          </main>
+          <aside class="awb-right" aria-label="标注编辑器">${tab === "schemes" ? schemesPanel() : editPanel()}</aside>
+        </div>
+        <footer class="awb-bottom"><span>勾选多项即可批量标注</span><span>↑ ↓ 切换 · ⌘ / Ctrl + Enter 保存${isBatch() ? "所选项" : "并下一项"}</span></footer>${planView()}
+      </section>`;
     }
     function mounted(root = document) {
       const viewport = root.querySelector?.("[data-wb-scroll]");
@@ -367,7 +446,7 @@
     function retainEditor() {
       if (!visible || plan || drafts.get(activeId)?._conflict || isBusy()) return false;
       const field = document.activeElement;
-      return !!field?.dataset?.wbField && !["type", "recursive", "job", "scheme", "model", "suggestion-tags", "suggestion-description", "bulk-tagMode", "bulk-descriptionMode", "bulk-inherit"].includes(field.dataset.wbField);
+      return !!field?.dataset?.wbField && !["type", "status", "recursive", "job", "scheme", "suggestion-tags", "suggestion-description", "bulk-tagMode", "bulk-descriptionMode", "bulk-inherit"].includes(field.dataset.wbField);
     }
     return { open, render, action, input, keydown, reset, active: () => visible, mounted, onScroll, retainEditor,
       composition(value) { composing = value; }, refresh: loadPage };

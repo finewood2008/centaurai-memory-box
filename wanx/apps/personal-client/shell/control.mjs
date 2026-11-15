@@ -102,7 +102,7 @@ export function registerControlActions({
     ipcMain.handle(`wanx-client:${name}`, (event, argument) => {
       const management = isControlSender(event, control, controlURL);
       if (!management && !(panelActions.has(name) && isControlSender(event, panel, panelURL)))
-        throw new Error("此页面无权操作万象连接。");
+        throw new Error("此页面无权操作记忆盒子连接。");
       if (["applications-launch", "applications-request-open", "applications-confirm-open", "studio-preview-open"].includes(name) ||
           /^(?:panel-)?ai-dialogue-(?:send|resume|polish|version)$/.test(name)) updates?.client?.assertUsable?.();
       // Keep validation synchronous; mutations also refresh both trusted windows.

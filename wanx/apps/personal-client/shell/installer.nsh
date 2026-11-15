@@ -9,7 +9,7 @@
 
 !macro customInit
   ${If} $installMode == "all"
-    MessageBox MB_ICONSTOP|MB_OK "万象仅支持为当前用户安装。"
+    MessageBox MB_ICONSTOP|MB_OK "记忆盒子仅支持为当前用户安装。"
     SetErrorLevel 1603
     Quit
   ${EndIf}
@@ -95,7 +95,7 @@ FunctionEnd
     ; A silent install must fail fast: a dialog nobody can see would hang the
     ; installer forever and leave a half-installed tree behind.
     IfSilent +2
-    MessageBox MB_ICONSTOP|MB_OK "安装目录安全权限设置失败，万象不会启动。请重新安装并选择本机 NTFS 目录。诊断日志已保存到临时目录。"
+    MessageBox MB_ICONSTOP|MB_OK "安装目录安全权限设置失败，记忆盒子不会启动。请重新安装并选择本机 NTFS 目录。诊断日志已保存到临时目录。"
     SetErrorLevel 1603
     Abort
   ${EndIf}
@@ -106,7 +106,7 @@ FunctionEnd
   ${If} $0 != 0
     Call WanxWriteAclFailureLog
     IfSilent +2
-    MessageBox MB_ICONSTOP|MB_OK "安装目录安全权限验证失败，万象不会启动。诊断日志已保存到临时目录。"
+    MessageBox MB_ICONSTOP|MB_OK "安装目录安全权限验证失败，记忆盒子不会启动。诊断日志已保存到临时目录。"
     SetErrorLevel 1603
     Abort
   ${EndIf}

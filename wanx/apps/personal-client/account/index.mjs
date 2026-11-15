@@ -132,7 +132,7 @@ export function createAccount({
   fetch: fetcher = globalThis.fetch,
   emit = () => {},
   platform = process.platform,
-  deviceModel = "万象连接",
+  deviceModel = "记忆盒子连接",
   now = Date.now,
   measure = (_step, operation) => operation(),
   onGrantTiming = () => {},
@@ -737,7 +737,7 @@ export function createAccount({
                 ? platform
                 : "unknown"),
             deviceModel,
-            displayName: "万象连接",
+            displayName: "记忆盒子连接",
           },
         },
         generation,

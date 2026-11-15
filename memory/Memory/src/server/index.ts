@@ -18,7 +18,7 @@ import { MEMORY_RUNTIME_BUILD_ID } from "../runtime-build.js";
 import { listenMemoryStartupHttpServer, type MemoryStartupHttpServer, type MemoryStartupState } from "./startup-http.js";
 import { prepareSqliteStorage } from "./storage-startup.js";
 import { MemoryServiceError } from "../utils/error.js";
-import { bindWanxSourceProfile, checkWanxStorageDirectory, commitWanxStoragePath, copyWanxDatabase, prepareWanxRestore, readWanxStorageSelection,
+import { bindWanxSourceProfile, unifyWanxSourceProfile, checkWanxStorageDirectory, commitWanxStoragePath, copyWanxDatabase, prepareWanxRestore, readWanxStorageSelection,
     type WanxStorageMove, type WanxStorageResult } from "./wanx-storage.js";
 
 const logger = createMemoryLogger("server");
@@ -106,10 +106,11 @@ previousMoveResult?: WanxStorageResult, boundPort?: number): Promise<{
     const canMove = config.storage.backend === "sqlite" && Boolean(config.storage.token);
     const selection = canMove ? await readWanxStorageSelection(serviceHome) : undefined;
     const selectedPath = selection?.databasePath;
-    const recoveryPath = migration?.recoveryPath ?? selection?.recoveryPath;
+    let recoveryPath = migration?.recoveryPath ?? selection?.recoveryPath;
     const sqlitePath = migration?.databasePath ?? selectedPath ?? options.dbPath ?? config.storage.sqlitePath ?? defaultDatabasePath();
     const sourceProfile = process.env.MEMMY_ISOLATED_CODEX_PROFILE;
     if (sourceProfile && !["codex-desktop", "codex-cli"].includes(sourceProfile)) throw new Error("Invalid Codex memory source profile");
+    const unifiedSources = !sourceProfile && process.env.MEMMY_UNIFY_AGENT_SOURCES === "1";
     const freshDatabase = !existsSync(sqlitePath);
     if ((selectedPath || migration) && !existsSync(sqlitePath)) {
         throw new Error("The selected local memory database is unavailable");
@@ -222,7 +223,14 @@ previousMoveResult?: WanxStorageResult, boundPort?: number): Promise<{
             token: config.storage.token,
             skipMigrations: config.storage.backend !== "openmem-cloud-rest"
         });
-        if (backend instanceof SqliteStorageBackend) bindWanxSourceProfile(backend.db, sourceProfile, freshDatabase);
+        if (backend instanceof SqliteStorageBackend) {
+            const previous = unifiedSources ? await unifyWanxSourceProfile(backend.db, join(serviceHome, "unified-upgrade")) : undefined;
+            if (previous) {
+                await commitWanxStoragePath(serviceHome, { databasePath: sqlitePath, recoveryPath: previous });
+                recoveryPath = previous;
+            }
+            bindWanxSourceProfile(backend.db, sourceProfile, freshDatabase);
+        }
         startupStage("storage.ready");
         startupStage("service.constructing");
         service = new MemoryService({
@@ -268,7 +276,7 @@ previousMoveResult?: WanxStorageResult, boundPort?: number): Promise<{
                         const directory = await checkWanxStorageDirectory(restoring ? activeDirectory : fields.directory);
                         if (!restoring && selectedPath && directory === activeDirectory) return { accepted: false };
                         if (startupController.signal.aborted) throw new MemoryServiceError("conflict", "记忆服务正在切换。");
-                        const candidatePath = restoring ? await prepareWanxRestore(fields.rollback === true ? recoveryPath : fields.restoreFrom, directory, sourceProfile) : undefined;
+                        const candidatePath = restoring ? await prepareWanxRestore(fields.rollback === true ? recoveryPath : fields.restoreFrom, directory, sourceProfile, unifiedSources) : undefined;
                         requestedMove = { id: fields.id, directory, candidatePath };
                     } finally { preparingStorage = false; }
                     return { accepted: true, afterResponse() {

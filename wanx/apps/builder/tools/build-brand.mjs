@@ -16,7 +16,7 @@ export async function buildBuilderBrand(root,destination){
  const header=Buffer.alloc(6+16*sizes.length);header.writeUInt16LE(1,2);header.writeUInt16LE(sizes.length,4);let offset=header.length;
  images.forEach((image,i)=>{const at=6+i*16;header[at]=header[at+1]=sizes[i]===256?0:sizes[i];header.writeUInt16LE(1,at+4);header.writeUInt16LE(32,at+6);header.writeUInt32LE(image.length,at+8);header.writeUInt32LE(offset,at+12);offset+=image.length});
  await writeFile(path.join(destination,'wanx-builder.ico'),Buffer.concat([header,...images]));
- if(process.platform==='darwin'){
+ if(process.platform==='darwin'&&process.env.WANX_CLIENT_PRODUCT!=='memobox'){
   const set=path.join(destination,'.wanx-builder.iconset');await mkdir(set,{recursive:true});
   try{for(const size of [16,32,128,256,512])for(const scale of [1,2])await sharp(icon).resize(size*scale,size*scale).toFile(path.join(set,`icon_${size}x${size}${scale===2?'@2x':''}.png`));execFileSync('iconutil',['-c','icns','-o',path.join(destination,'wanx-builder.icns'),set])}finally{await rm(set,{recursive:true,force:true})}
  }

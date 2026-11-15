@@ -81,7 +81,7 @@ test("macOS menus and tray expose the current box, restore the window and revoke
   assert.match(h.app.dockIcon, /icon\.png$/);
   assert.equal(h.trays[0].icon.template, true);
   assert.match(h.trays[0].icon.path, /trayTemplate\.png$/);
-  assert.equal(h.app.about.credits, "你的 AI 应用底座");
+  assert.equal(h.app.about.credits, "你的个人 AI 记忆空间。\n\nPowered by wanx");
   assert.match(h.trays[0].menu.getMenuItemById("connection-status").label, /测试盒子 102/);
   h.control.hidden = true;
   h.control.minimized = true;
@@ -107,9 +107,9 @@ test("About shows the client edition without mixing in build or box diagnostics"
     versionInfo: { buildId: "source-123", distributionClass: "development" },
   });
   assert.equal(h.app.about.applicationVersion, "0.1.0");
-  assert.equal(h.app.about.credits, "你的 AI 应用底座\n开发构建");
+  assert.equal(h.app.about.credits, "你的个人 AI 记忆空间。\n开发构建\n\nPowered by wanx");
   h.update({ ...ready, connection: { ...ready.connection, name: "另一台盒子" } });
-  assert.equal(h.app.about.credits, "你的 AI 应用底座\n开发构建");
+  assert.equal(h.app.about.credits, "你的个人 AI 记忆空间。\n开发构建\n\nPowered by wanx");
   h.desktop.dispose();
 });
 
@@ -314,8 +314,8 @@ test("Mac application and tray menus route quit through the Host confirmation an
 test("packaging ships readable platform icons and Retina tray artwork", async () => {
   const root = new URL("../", import.meta.url);
   const config = JSON.parse(await readFile(new URL("package.json", root), "utf8")).build;
-  assert.equal(config.productName, "半人马AI-记忆盒子");
-  assert.equal(DESKTOP_NAME, "半人马AI-记忆盒子 · CentaurAI-MemoBox");
+  assert.equal(config.productName, "半人马AI记忆盒子");
+  assert.equal(DESKTOP_NAME, "半人马AI记忆盒子 · CentaurAI MemoBox");
   assert.ok(config.files.includes("resources/**"));
   const icns = await readFile(new URL(config.mac.icon, root));
   assert.equal(icns.toString("ascii", 0, 4), "icns");

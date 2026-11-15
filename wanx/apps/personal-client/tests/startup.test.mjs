@@ -17,7 +17,7 @@ function harness({ isPackaged = true, platform = "darwin", settings = {}, prefer
     getLoginItemSettings(options) {
       app.readOptions = options; reads++;
       return { ...current, ...(platform === "win32" ? { launchItems: current.launchItems ?? (current.openAtLogin
-        ? [{ name: "万象", path: executable, args: [], scope: "user", enabled: current.executableWillLaunchAtLogin !== false }] : []) } : {}) };
+        ? [{ name: "半人马AI记忆盒子", path: executable, args: [], scope: "user", enabled: current.executableWillLaunchAtLogin !== false }] : []) } : {}) };
     },
     setLoginItemSettings(value) {
       writes.push(value);
@@ -37,7 +37,7 @@ test("raw development runtimes and unsupported platforms never register a login 
     const h = harness(options);
     assert.equal(h.startup.get().supported, false);
     assert.equal(h.startup.set(true).enabled, false);
-    assert.match(h.startup.get().reason, /万象|此版本/);
+    assert.match(h.startup.get().reason, /记忆盒子|此版本/);
     assert.equal(h.startup.wasOpenedAtLogin(), false);
     assert.equal(h.reads, 0);
     assert.deepEqual(h.writes, []);
@@ -153,7 +153,7 @@ test("packaged Windows registers the installed executable with a silent login fl
   assert.equal(h.startup.initializeDefault().enabled, true);
   const options = { path: executable, args: ["--wanx-login-startup"] };
   assert.deepEqual(h.app.readOptions, { path: executable });
-  assert.deepEqual(h.writes, [{ openAtLogin: true, ...options, enabled: true, name: "万象" }]);
+  assert.deepEqual(h.writes, [{ openAtLogin: true, ...options, enabled: true, name: "半人马AI记忆盒子" }]);
   assert.equal(h.startup.wasOpenedAtLogin(), false);
   h.startup.set(false);
   const restarted = harness({ platform: "win32", preferenceFile, executable, argv: [executable] });
@@ -176,17 +176,17 @@ test("Windows path-only read reflects the named enabled item when Electron drops
     settings: { openAtLogin: false, status: undefined, launchItems: [] } });
   for (const enabled of [true, false, true]) {
     h.afterWrite({ openAtLogin: false, executableWillLaunchAtLogin: enabled,
-      launchItems: enabled ? [{ name: "万象", path: executable, args: [], scope: "user", enabled: true }] : [] });
+      launchItems: enabled ? [{ name: "半人马AI记忆盒子", path: executable, args: [], scope: "user", enabled: true }] : [] });
     assert.equal(h.startup.set(enabled).enabled, enabled);
   }
   assert.deepEqual(h.app.readOptions, { path: executable });
   assert.deepEqual(h.writes, [true, false, true].map(enabled => ({ openAtLogin: enabled, path: executable,
-    args: ["--wanx-login-startup"], enabled, name: "万象" })));
+    args: ["--wanx-login-startup"], enabled, name: "半人马AI记忆盒子" })));
 });
 
 test("Windows reports only its exact current-user startup item and respects its disabled state", t => {
   const executable = "D:\\wanx-sol\\WANX.exe";
-  const item = { name: "万象", path: executable, args: [], scope: "user", enabled: true };
+  const item = { name: "半人马AI记忆盒子", path: executable, args: [], scope: "user", enabled: true };
   const h = harness({ platform: "win32", preferenceFile: preferences(t), executable,
     settings: { openAtLogin: true, executableWillLaunchAtLogin: true, status: undefined, launchItems: [] } });
   for (const other of [{ ...item, name: "Other" }, { ...item, path: "C:\\old\\WANX.exe" }, { ...item, scope: "machine" }]) {
@@ -202,4 +202,23 @@ test("Windows reports only its exact current-user startup item and respects its 
   assert.equal(h.startup.get().enabled, true, "Windows path comparison is case insensitive and accepts either separator");
   h.afterWrite({ launchItems: [{ ...item, path: "C:\\old\\WANX.exe" }] });
   assert.equal(h.startup.set(true).enabled, false, "a write is not proof that the current executable was registered");
+});
+
+test("Windows legacy registration migrates only the same executable and preserves opt-out", t => {
+  for (const enabled of [true, false]) {
+    const preferenceFile = preferences(t), executable = "C:/MemoBox/MemoBox.exe";
+    let items = [{ name: "万象", path: executable, scope: "user", enabled }];
+    const writes = [];
+    const app = { isPackaged: true, getPath: key => key === "exe" ? executable : path.dirname(preferenceFile),
+      getLoginItemSettings: () => ({ launchItems: items }),
+      setLoginItemSettings(value) { writes.push(value); items = items.filter(item => item.name !== value.name);
+        if (value.openAtLogin) items.push({ name: value.name, path: value.path, scope: "user", enabled: value.enabled }); },
+    };
+    const startup = createStartupSettings({ app, platform: "win32", preferenceFile });
+    assert.equal(startup.initializeDefault().enabled, enabled);
+    assert.equal(writes[0].name, "万象"); assert.equal(writes[0].openAtLogin, false);
+    assert.equal(writes[1].name, "半人马AI记忆盒子"); assert.equal(writes[1].openAtLogin, enabled);
+    const count = writes.length; startup.initializeDefault(); assert.equal(writes.length, count);
+    assert.equal(JSON.parse(readFileSync(preferenceFile)).enabled, enabled);
+  }
 });

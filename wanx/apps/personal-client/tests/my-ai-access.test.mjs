@@ -101,11 +101,12 @@ test("one Agent connection registers all three sources and revokes them across s
   assert.deepEqual((await call("space_list")).items.map(item => item.id), [projectId]);
   const space = await call("space_search", { query: "Project" });
   assert.equal((await call("space_read", { fileId: space.matches[0].fileId })).text, "Project text");
-  await call("space_list", { folderId: reserved }, true);
   assert.equal((await call("starlink_warehouses")).warehouses[0].id, warehouse);
   const starlink = await call("starlink_search", { warehouseId: warehouse, query: "Project" });
   assert.equal((await call("starlink_evidence", { warehouseId: warehouse, evidenceId: starlink.matches[0].evidenceId })).text, "Project evidence.");
   assert.equal((await access.status(check)).claude_code.available, true);
+  await call("space_list", { folderId: reserved }, true);
+  assert.equal((await access.status(check)).claude_code.available, false);
   await call("memory_search", { query: "Project", task_id: "a".repeat(36) }, true);
   owner = "Bob";
   access.sync();

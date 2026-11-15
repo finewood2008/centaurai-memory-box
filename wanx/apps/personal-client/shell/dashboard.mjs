@@ -78,7 +78,7 @@ function createDashboardSurface({
       height: 900,
       minWidth: 800,
       minHeight: 600,
-      title: route.endsWith("/terminal") ? `${connection.name || "万象盒子"} · 终端` : route.endsWith("/desktop") ? `${connection.name || "万象盒子"} · 远程桌面` : connection.name || "万象",
+      title: route.endsWith("/terminal") ? `${connection.name || "盒子"} · 终端` : route.endsWith("/desktop") ? `${connection.name || "盒子"} · 远程桌面` : connection.name || "记忆盒子",
       webPreferences: {
         session: isolatedSession,
         nodeIntegration: false,

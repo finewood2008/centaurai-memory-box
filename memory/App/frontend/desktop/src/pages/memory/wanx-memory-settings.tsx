@@ -45,9 +45,9 @@ interface MemoryModelSettingsView {
   error?: string;
 }
 const modelErrors: Record<string, string> = {
-  MEMORY_MODEL_BOX_DISCONNECTED: "请连接万象盒子。",
-  MEMORY_MODEL_BOX_UPDATE_REQUIRED: "当前万象盒端版本尚未提供记忆模型接口。",
-  MEMORY_MODEL_NOT_CONFIGURED: "请在万象盒端设置默认模型。",
+  MEMORY_MODEL_BOX_DISCONNECTED: "请连接盒子。",
+  MEMORY_MODEL_BOX_UPDATE_REQUIRED: "当前盒子版本尚未提供记忆模型接口。",
+  MEMORY_MODEL_NOT_CONFIGURED: "请在盒子设置默认模型。",
 };
 const wanxTextRoles: ReadonlyArray<readonly [WanxTextRole, string]> = [
   ["memory_summary", "记忆摘要"],
@@ -106,7 +106,7 @@ function MemoryModelSettings({ sessionToken }: { sessionToken: string }) {
         <select className="rounded-btn border border-border-stone bg-background-paper px-3 py-2"
           value={settings?.mode ?? "wanx"} disabled={pending || !settings}
           onChange={event => void load({ mode: event.currentTarget.value as MemoryModelSource })}>
-          <option value="wanx">使用万象盒端模型（默认）</option>
+          <option value="wanx">使用盒子默认模型</option>
           <option value="custom">使用本机模型配置</option>
         </select>
       </label>

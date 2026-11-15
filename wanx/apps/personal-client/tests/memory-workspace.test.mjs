@@ -51,6 +51,8 @@ test("legacy libraries retain authenticated connection operations", async t => {
   const { token } = await h.memory.open();
   assert.equal((await h.fetch("/api/agent-sources/codex/plugin", { method: "POST" })).status, 403);
   assert.equal(h.requests.length, 0);
+  const oldPicker = await h.fetch("/api/wanx-memory/backup", { token, method: "POST", body: { action: "select-library", libraryId: "codex-cli" } });
+  assert.equal(oldPicker.status, 400);
   assert.equal((await h.fetch("/api/agent-sources/codex/plugin", { token, method: "POST" })).status, 200);
   assert.equal(h.requests.length, 1);
   const invalid = await h.fetch("/api/app/settings", { token, method: "PATCH", body: null });

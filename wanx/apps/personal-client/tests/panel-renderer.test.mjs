@@ -416,7 +416,7 @@ test('a late failed panel reply cannot revive an error after the accepted upload
 });
 test('panel keeps unaccepted submissions and actionable errors separate from another recovering upload',async()=>{
  const task={id:'a'.repeat(32),name:'原有.bin',size:100,offset:50,phase:'retrying'};
- for(const [code,text] of [['SPACE_REQUEST_FAILED',/暂未确认操作结果/],['SPACE_DISK_FULL',/存储空间不足/],['ACCOUNT_LOGIN_REQUIRED',/请先登录万象/]]){
+ for(const [code,text] of [['SPACE_REQUEST_FAILED',/暂未确认操作结果/],['SPACE_DISK_FULL',/存储空间不足/],['ACCOUNT_LOGIN_REQUIRED',/请先登录记忆盒子/]]){
   const h=await harness(connectedState(),undefined,{...uploadState(),tasks:[task]});h.respond('upload',()=>({ok:false,code}));
   await h.drag('dragenter');await h.drag('drop',{files:[{name:'未入队.bin'}]});assert.match(h.html,text);
   await h.space({...uploadState(),tasks:[{...task,phase:'running'}]});assert.match(h.html,text);
@@ -457,5 +457,5 @@ test("local panel uses its own data identity without cloud and clears private up
   await h.update({ ...value, account: { phase: 'authenticated', accountId: 'cloud-a' },
     dataIdentity: { ...value.dataIdentity, phase: 'locked', generation: 2, selected: null } });
   assert.doesNotMatch(h.html, /private-note.txt|打开记忆/);
-  assert.match(h.html, /data-page="memory" aria-label="登录万象"/);
+  assert.match(h.html, /data-page="memory" aria-label="登录记忆盒子"/);
 });

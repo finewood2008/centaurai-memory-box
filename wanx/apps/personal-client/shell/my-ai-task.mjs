@@ -295,10 +295,10 @@ export function createMyAiTask({
       } catch (error) { prepared?.revoke(); throw error; }
     }
     const scope = boxScope();
-    if (!scope) throw inputError("请先在「盒子」里连接万象盒子。");
+    if (!scope) throw inputError("请先在“盒子”中连接设备。");
     const check = () => {
       assertScope();
-      if (boxScope() !== scope) throw inputError("万象连接已切换，请重新选择资料并重试。");
+      if (boxScope() !== scope) throw inputError("连接的设备已切换，请重新选择资料后重试。");
     };
     const warehouseScope = createHash("sha256").update(scope).digest("hex");
     if (action === "warehouses") return { items: await warehouses(check), warehouseScope };
@@ -311,7 +311,7 @@ export function createMyAiTask({
     const instructions = taskSources ? retrievalInstructions({ ...taskSources, memoryEnabled: selected.memoryEnabled === true }) : "";
     const reference = [];
     if (input.warehouseId) {
-      if (input.warehouseScope !== warehouseScope) throw inputError("万象连接已切换，请重新选择星图仓库。");
+      if (input.warehouseScope !== warehouseScope) throw inputError("记忆盒子连接已切换，请重新选择星图仓库。");
       const current = (await warehouses(check)).find(item => item.id === input.warehouseId);
       if (!current) throw inputError("当前账号无法访问所选仓库，请重新选择。");
       const results = await starlink("search", { warehouseId: current.id, query: input.draft.trim().slice(0, 2000) });
@@ -336,7 +336,7 @@ export function createMyAiTask({
     check();
     const result = await polish(text, signal, check);
     check();
-    if (!validText(result?.text, 16000 - instructions.length)) throw new Error("万象模型未返回有效提示词，请重试。");
+    if (!validText(result?.text, 16000 - instructions.length)) throw new Error("模型未返回有效提示词，请重试。");
     return { text: result.text.trim() + instructions, referenceCount: reference.length };
   };
 }

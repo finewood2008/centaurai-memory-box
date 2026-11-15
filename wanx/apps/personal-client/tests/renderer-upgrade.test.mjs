@@ -37,7 +37,7 @@ async function harness(initial = state(), onAction = async () => {}, timers = nu
 
 test("settings retain client build identity without exposing box versions", async () => {
   const h = await harness();
-  assert.match(h.app.innerHTML, /万象客户端.*v0\.1\.4/);
+  assert.match(h.app.innerHTML, /记忆盒子.*v0\.1\.4/);
   assert.match(h.app.innerHTML, /dev-abc123/);
   assert.doesNotMatch(h.app.innerHTML, /版本待核验|盒端版本|data-detail-id="updates-box"|data-action="updates-box-|已是.*最新|data-action="updates-client-install"/);
 });
@@ -61,7 +61,7 @@ test("a missing release does not hide a required client update or another blocke
     const h = await harness(initial);
     assert.doesNotMatch(h.app.innerHTML, /当前已是最新版本/);
     assert.match(h.app.innerHTML, /此更新暂不可用/);
-    assert.match(h.app.innerHTML, gate.requirement ? /需要更新万象至/ : /UPDATE_EDITION_MISMATCH/);
+    assert.match(h.app.innerHTML, gate.requirement ? /需要更新记忆盒子至/ : /UPDATE_EDITION_MISMATCH/);
   }
 });
 
@@ -75,7 +75,7 @@ test("client OTA conflicts identify the affected application and give interface 
   assert.match(h.app.innerHTML, /测试应用（example\.application）/);
   assert.match(h.app.innerHTML, /已安装版本 2\.3\.4/);
   assert.match(h.app.innerHTML, /应用接口不兼容/);
-  assert.match(h.app.innerHTML, /请先安装兼容的应用版本，再检查万象更新/);
+  assert.match(h.app.innerHTML, /请先安装兼容的应用版本，再检查记忆盒子更新/);
   assert.doesNotMatch(h.app.innerHTML, /private-server-detail|data-action="updates-client-(?:download|install)"/);
 });
 
@@ -89,7 +89,7 @@ test("client OTA unknown application metadata gives specific, escaped guidance",
   assert.match(h.app.innerHTML, /无法核验应用/);
   assert.match(h.app.innerHTML, /example\.application/);
   assert.match(h.app.innerHTML, /已安装版本 1\.0\.0/);
-  assert.match(h.app.innerHTML, /请先更新或重新安装此应用，再检查万象更新/);
+  assert.match(h.app.innerHTML, /请先更新或重新安装此应用，再检查记忆盒子更新/);
   assert.match(h.app.innerHTML, /&lt;img src=x onerror=&quot;alert\(1\)&quot;&gt;/);
   assert.doesNotMatch(h.app.innerHTML, /<img src=x|private-server-detail/);
 });
@@ -120,7 +120,7 @@ test("settings and boxes hide box versions and security management without readi
     const h = await harness(initial, async () => {}, timers);
     for (const action of ["show-settings", "show-boxes", "show-profile", "show-settings"]) {
       await h.click(action);
-      assert.doesNotMatch(h.app.innerHTML, /box-version-summary|盒端万象|盒端版本|box-running-build|box-updater-build|box-update-task|data-detail-id="updates-box"|data-action="(?:updates-box-|show-box-version|device-trust-open)|管理可信设备|打开安全管理|aria-label="本地设备安全"/);
+      assert.doesNotMatch(h.app.innerHTML, /box-version-summary|盒端记忆盒子|盒端版本|box-running-build|box-updater-build|box-update-task|data-detail-id="updates-box"|data-action="(?:updates-box-|show-box-version|device-trust-open)|管理可信设备|打开安全管理|aria-label="本地设备安全"/);
     }
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(timers.size, 0, "retired box update surfaces must not schedule polling");
@@ -132,7 +132,7 @@ for (const [phase, code, guidance] of [
   ["development", "UPDATE_DEVELOPMENT_BUILD", /这是开发构建，请使用正式发行包/],
   ["unavailable", "UPDATE_NOT_CONFIGURED", /当前未配置正式更新/],
   ["unavailable", "UPDATE_INSTALL_LOCATION_UNSUPPORTED", /当前安装位置不支持应用内更新/],
-  ["idle", "ACCOUNT_LOGIN_REQUIRED", /请先登录万象平台账号，再检查更新/],
+  ["idle", "ACCOUNT_LOGIN_REQUIRED", /请先登录云账号，再检查更新/],
   ["blocked", "UPDATE_EDITION_MISMATCH", /此更新包与当前客户端版本类型不一致/],
 ]) {
   test(`client update check remains actionable in ${phase} (${code}) and explains its local gate`, async () => {
@@ -207,7 +207,7 @@ test("retired box update controls stay hidden and members cannot dispatch privil
 });
 
 test("application compatibility errors distinguish client mismatch from box updates", async () => {
-  for (const [code, message] of [["CLIENT_VERSION_INCOMPATIBLE", /与当前万象版本不兼容.*检查万象和应用更新/], ["BACKEND_CONTRACT_INCOMPATIBLE", /联系盒主更新/]]) {
+  for (const [code, message] of [["CLIENT_VERSION_INCOMPATIBLE", /与当前记忆盒子版本不兼容.*检查记忆盒子和应用更新/], ["BACKEND_CONTRACT_INCOMPATIBLE", /联系盒主更新/]]) {
     const initial = state();
     initial.applications = [{ applicationId: "app-1", name: "测试应用", version: "1.0.0" }];
     const h = await harness(initial, action => { if (action === "applications.request-open") throw new Error(code); });
@@ -236,7 +236,7 @@ test("opening an app above its old client upper bound shows success", async () =
   await h.click("applications-tab", { tab: "local" });
   await h.click("applications-launch", { applicationId: "app-1" });
   assert.match(h.app.innerHTML, /已打开/);
-  assert.doesNotMatch(h.app.innerHTML, /与当前万象版本不兼容|暂时无法完成应用市场操作|请先在设置中更新万象|请先升级万象/);
+  assert.doesNotMatch(h.app.innerHTML, /与当前记忆盒子版本不兼容|暂时无法完成应用市场操作|请先在设置中更新记忆盒子|请先升级记忆盒子/);
 });
 
 for (const reason of ["client_version", "CLIENT_VERSION_INCOMPATIBLE"]) {
@@ -244,9 +244,9 @@ for (const reason of ["client_version", "CLIENT_VERSION_INCOMPATIBLE"]) {
     const h = await harness(state(), action => action === "market.list" ? { ok: true, value: { items: [{ applicationId: "app-1", name: "测试应用" }] } }
       : action === "market.candidate" ? { ok: true, value: { status: "incompatible", reason } } : undefined);
     await h.click("show-applications");
-    assert.match(h.app.innerHTML, /与当前万象版本不兼容.*检查万象和应用更新/);
+    assert.match(h.app.innerHTML, /与当前记忆盒子版本不兼容.*检查记忆盒子和应用更新/);
     assert.match(h.app.innerHTML, /联系管理员确认适配版本/);
-    assert.doesNotMatch(h.app.innerHTML, /请先在设置中更新万象|请先升级万象|data-action="market-install"/);
+    assert.doesNotMatch(h.app.innerHTML, /请先在设置中更新记忆盒子|请先升级记忆盒子|data-action="market-install"/);
   });
 }
 
@@ -287,22 +287,22 @@ function requiredClientState(phase = "available") {
 test("required client update blocks business navigation while retaining settings and diagnostics", async () => {
   const h = await harness(requiredClientState());
   assert.match(h.app.innerHTML, /<h2>设置<\/h2>/);
-  assert.match(h.app.innerHTML, /需要更新万象至 v2\.0\.0/);
+  assert.match(h.app.innerHTML, /需要更新记忆盒子至 v2\.0\.0/);
   await h.click("show-applications");
-  assert.match(h.app.innerHTML, /<h2>需要更新万象<\/h2>/);
+  assert.match(h.app.innerHTML, /<h2>需要更新记忆盒子<\/h2>/);
   assert.match(h.app.innerHTML, /data-action="updates-client-download"/);
   assert.match(h.app.innerHTML, /已打开的应用不会被强制关闭/);
   for (const action of ["show-ai-dialogue", "show-space", "applications-launch", "notifications-open", "pending-confirm"]) {
     await h.click(action, { applicationId: "example.app", id: "message-1" });
-    assert.match(h.app.innerHTML, /<h2>需要更新万象<\/h2>/);
+    assert.match(h.app.innerHTML, /<h2>需要更新记忆盒子<\/h2>/);
   }
   assert.equal(h.calls.some(call => ["applications.request-open", "applications.confirm-open", "notifications.open"].includes(call.action)), false);
   h.navigate("ai-dialogue");
-  assert.match(h.app.innerHTML, /<h2>需要更新万象<\/h2>/);
+  assert.match(h.app.innerHTML, /<h2>需要更新记忆盒子<\/h2>/);
   await h.click("show-settings");
   assert.match(h.app.innerHTML, /<h2>设置<\/h2>/);
   await h.click("show-boxes");
-  assert.match(h.app.innerHTML, /<h2>万象盒子 <span/);
+  assert.match(h.app.innerHTML, /<h2>我的设备 <span/);
   assert.match(h.app.innerHTML, /data-action="show-client-update"/);
   await h.click("show-client-update");
   assert.match(h.app.innerHTML, /data-action="desktop-quit"/);
@@ -318,11 +318,11 @@ test("cancelling required installation never dismisses the requirement or instal
   assert.match(h.app.innerHTML, /role="alertdialog"/);
   await h.click("market-cancel");
   assert.doesNotMatch(h.app.innerHTML, /role="alertdialog"/);
-  assert.match(h.app.innerHTML, /<h2>需要更新万象<\/h2>/);
+  assert.match(h.app.innerHTML, /<h2>需要更新记忆盒子<\/h2>/);
   await h.click("updates-client-install");
   await h.key("Escape");
   assert.doesNotMatch(h.app.innerHTML, /role="alertdialog"/);
-  assert.match(h.app.innerHTML, /<h2>需要更新万象<\/h2>/);
+  assert.match(h.app.innerHTML, /<h2>需要更新记忆盒子<\/h2>/);
   assert.equal(h.calls.some(call => call.action === "updates.client.install"), false);
   await h.click("updates-client-install");
   await h.click("market-confirm");
@@ -335,7 +335,7 @@ test("failed checks keep required update recovery actions and clearing the requi
   initial.upgrades.client.reason = "UPDATE_REQUEST_FAILED";
   const h = await harness(initial);
   await h.click("show-applications");
-  assert.match(h.app.innerHTML, /<h2>需要更新万象<\/h2>/);
+  assert.match(h.app.innerHTML, /<h2>需要更新记忆盒子<\/h2>/);
   assert.match(h.app.innerHTML, /暂时无法连接更新服务/);
   assert.match(h.app.innerHTML, /data-action="updates-client-check"/);
   assert.match(h.app.innerHTML, /data-action="show-boxes"/);
@@ -343,8 +343,8 @@ test("failed checks keep required update recovery actions and clearing the requi
   assert.equal(h.calls.filter(call => call.action === "updates.client.check").length, 1);
   assert.equal(h.calls.some(call => call.action === "updates.client.download"), false);
   h.update({ ...initial, upgrades: { ...initial.upgrades, client: { ...initial.upgrades.client, requirement: null, phase: "up_to_date", reason: null } } });
-  assert.doesNotMatch(h.app.innerHTML, /<h2>需要更新万象<\/h2>|data-action="show-client-update"/);
-  assert.match(h.app.innerHTML, /<h2>万象应用 <span/);
+  assert.doesNotMatch(h.app.innerHTML, /<h2>需要更新记忆盒子<\/h2>|data-action="show-client-update"/);
+  assert.match(h.app.innerHTML, /<h2>AI 应用 <span/);
 });
 
 test("required update preserves account login and reappears after signing in", async () => {
@@ -354,9 +354,9 @@ test("required update preserves account login and reappears after signing in", a
   await h.click("show-client-update");
   await h.click("logout");
   assert.match(h.app.innerHTML, /data-form="auth"/);
-  assert.doesNotMatch(h.app.innerHTML, /<h2>需要更新万象<\/h2>/);
+  assert.doesNotMatch(h.app.innerHTML, /<h2>需要更新记忆盒子<\/h2>/);
   h.update(initial);
-  assert.match(h.app.innerHTML, /<h2>需要更新万象<\/h2>/);
+  assert.match(h.app.innerHTML, /<h2>需要更新记忆盒子<\/h2>/);
 });
 
 test("My Apps offers addable applications and gives an added app one installed card", async () => {
@@ -389,7 +389,7 @@ test("My Apps offers addable applications and gives an added app one installed c
   await new Promise(resolve => setImmediate(resolve));
   const tabs = [...h.app.innerHTML.matchAll(/data-action="applications-tab" data-tab="([^"]+)"[^>]*>([^<]+)<\/button>/g)];
   assert.deepEqual(tabs.map(([, id, label]) => [id, label]), [
-    ["wanx", "应用市场"], ["local", "我的应用"], ["workshop", "万象工坊"],
+    ["wanx", "应用市场"], ["local", "我的应用"], ["workshop", "应用工坊"],
   ]);
   assert.match(h.app.innerHTML, /id="applications-panel-local"/);
   assert.match(h.app.innerHTML, /aria-label="可添加的应用"/);

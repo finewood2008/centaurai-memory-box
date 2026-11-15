@@ -1,5 +1,6 @@
 // Rebuild Builder resources from checked-in source. Generated assets stay ignored.
 import { build } from 'esbuild';
+import { memoboxSource, memoboxBuildPlugin, brandMemoboxTree } from './memobox-branding.mjs';
 import { assembleStarlink } from './assemble-starlink.mjs';
 import {buildKnowledgeTemplate} from './build-knowledge-template.mjs';
 import {buildZhikeTemplate} from './build-zhike-template.mjs';
@@ -17,6 +18,7 @@ const personalDialogueFiles = new Set([
   'local-ui/renderer/ai-dialogue.js',
   'local-ui/renderer/ai-dialogue.css',
   'shell/ai-dialogue.mjs',
+  'shell/assistant-service.mjs',
 ]);
 for (const [folder, names] of [
   ['local-ui/renderer', ['ai-dialogue.js','ai-dialogue.css','space-shares.js','space-shares.css','space-workspaces.js','space-agent-hub.js','space-agent-hub.css','space-document-preview.css']],
@@ -27,6 +29,10 @@ for (const [folder, names] of [
   if (edition === 'personal' && personalDialogueFiles.has(`${folder}/${name}`)) continue;
   await mkdir(path.join(client,folder),{recursive:true});
   await cp(path.join(root,'integration/team-client',name),path.join(client,folder,name));
+  if (edition === 'personal' && /\.[cm]?js$/.test(name)) {
+    const target=path.join(client,folder,name);
+    await writeFile(target,memoboxSource(await readFile(target,'utf8'),name));
+  }
 }
 await cp(path.join(root,'integration/team-client/channel-icons'),path.join(client,'local-ui/renderer/channel-icons'),{recursive:true});
 // Both editions use the same file preview/transfer implementation.
@@ -39,21 +45,29 @@ if (edition === 'team') for (const file of ['shell/personal-space.mjs','shell/sp
 if (edition === 'personal') {
   await buildKnowledgeTemplate();
   await buildZhikeTemplate();
-  for (const script of ['build','package']) execFileSync(process.platform==='win32'?'npm.cmd':'npm',['run',script],{cwd:root,stdio:'inherit',shell:process.platform==='win32'});
+  for (const script of ['build','package']) execFileSync(process.platform==='win32'?'npm.cmd':'npm',['run',script],{cwd:root,stdio:'inherit',shell:process.platform==='win32',env:{...process.env,WANX_CLIENT_PRODUCT:'memobox'}});
   const personalVersion=JSON.parse(await readFile(path.join(root,'package.json'),'utf8')).version;
   await mkdir(path.join(client,'workshop'),{recursive:true});
   await cp(path.join(root,'release/wanx-studio-'+personalVersion),path.join(client,'workshop/workbench'),{recursive:true});
   await cp(path.join(root,'dist/runtime'),path.join(client,'workshop/runtime'),{recursive:true});
+  await brandMemoboxTree(path.join(client,'workshop'));
   await cp(path.join(root,'integration/embedded-preload.cjs'),path.join(client,'workshop/embedded-preload.cjs'));
-  await build({entryPoints:[path.join(root,'integration/personal-client/workshop-service.mjs')],bundle:true,platform:'node',format:'esm',external:['electron'],banner:{js:'import {createRequire as workshopRequire} from "node:module";const require=workshopRequire(import.meta.url);'},outfile:path.join(client,'shell/personal-workshop.mjs'),logLevel:'silent'});
+  await build({entryPoints:[path.join(root,'integration/personal-client/workshop-service.mjs')],bundle:true,platform:'node',format:'esm',plugins:[memoboxBuildPlugin()],external:['electron'],banner:{js:'import {createRequire as workshopRequire} from "node:module";const require=workshopRequire(import.meta.url);'},outfile:path.join(client,'shell/personal-workshop.mjs'),logLevel:'silent'});
   await mkdir(path.join(client,'local-ui/renderer/assets/app-icons'),{recursive:true});
   await cp(path.join(root,'ui/assets/wanx-workshop-v1.png'),path.join(client,'local-ui/renderer/assets/app-icons/workshop-v1.png'));
-  for(const name of ['workshop.js','workshop.css','personal-layout.css','material-theme.css','action-menus.js'])await cp(path.join(root,'integration/personal-client',name),path.join(client,'local-ui/renderer',name));
+  for(const name of ['workshop.js','workshop.css','personal-layout.css','material-theme.css','action-menus.js']) {
+    const target=path.join(client,'local-ui/renderer',name);
+    const source=await readFile(path.join(root,'integration/personal-client',name),'utf8');
+    await writeFile(target,name.endsWith('.js')?memoboxSource(source,name):source);
+  }
   await cp(path.join(root,'integration/personal-client/assets/material-v1'),path.join(client,'local-ui/renderer/assets/material-v1'),{recursive:true});
   await cp(path.join(root,'integration/personal-client/assets/section-icons-v2'),path.join(client,'local-ui/renderer/assets/section-icons-v2'),{recursive:true});
-  for(const name of ['studio-product.js','studio-home.css','construction.css'])await cp(path.join(root,'integration',name),path.join(client,'local-ui/renderer',name));
-  await build({entryPoints:[path.join(root,'integration/personal-client/data-service.mjs')],bundle:true,platform:'node',format:'esm',outfile:path.join(client,'shell/personal-data-service.mjs'),banner:{js:'import {createRequire as personalDataRequire} from "node:module";const require=personalDataRequire(import.meta.url);'},logLevel:'silent'});
-  await build({entryPoints:[path.join(root,'integration/team-client/data-view.js')],bundle:true,platform:'browser',format:'iife',outfile:path.join(client,'local-ui/renderer/data-view.js'),logLevel:'silent'});
+  for(const name of ['studio-product.js','studio-home.css','construction.css']) {
+    const target=path.join(client,'local-ui/renderer',name),source=await readFile(path.join(root,'integration',name),'utf8');
+    await writeFile(target,name.endsWith('.js')?memoboxSource(source,name):source);
+  }
+  await build({entryPoints:[path.join(root,'integration/personal-client/data-service.mjs')],bundle:true,platform:'node',format:'esm',plugins:[memoboxBuildPlugin()],outfile:path.join(client,'shell/personal-data-service.mjs'),banner:{js:'import {createRequire as personalDataRequire} from "node:module";const require=personalDataRequire(import.meta.url);'},logLevel:'silent'});
+  await build({entryPoints:[path.join(root,'integration/team-client/data-view.js')],bundle:true,platform:'browser',format:'iife',plugins:[memoboxBuildPlugin()],outfile:path.join(client,'local-ui/renderer/data-view.js'),logLevel:'silent'});
   await cp(path.join(root,'integration/team-client/data.css'),path.join(client,'local-ui/renderer/data.css'));
   process.exit(0);
 }

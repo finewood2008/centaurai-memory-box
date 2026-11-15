@@ -3,7 +3,6 @@ import { Cloud, LoaderCircle, RefreshCw } from "lucide-react";
 
 interface BackupStatus {
   library?: { id: string; name: string };
-  libraries?: { id: string; name: string }[];
   connected: boolean;
   context: string | null;
   enabled: boolean;
@@ -27,7 +26,7 @@ interface BackupCatalog {
   sourcesError?: string;
 }
 
-type Action = "enable" | "disable" | "backup" | "catalog" | "restore" | "rollback" | "configure" | "select-library";
+type Action = "enable" | "disable" | "backup" | "catalog" | "restore" | "rollback" | "configure";
 type RestoreAction = "restore" | "rollback";
 
 const snapshotDate = (modified: number) => new Date(modified * 1000).toLocaleString();
@@ -118,12 +117,10 @@ export function MemorySyncSummary({ sessionToken, count, automatic, children }: 
     mutation.current = true;
     epoch.current++;
     setPending(action);
-    if (action === "select-library") setProfileReady(false);
     setError("");
     try {
       const result = await request<BackupCatalog>(signal, { action, context,
         ...(action === "configure" ? { intervalMinutes: value } : {}),
-        ...(action === "select-library" ? { libraryId: value } : {}),
         ...(action === "restore" && selectedSnapshot ? { sourceId, id: selectedSnapshot.id, digest: selectedSnapshot.digest } : {}),
       });
       epoch.current++;
@@ -157,7 +154,7 @@ export function MemorySyncSummary({ sessionToken, count, automatic, children }: 
   const blocked = Boolean(pending || status?.busy);
   const progress = status?.progress;
   const percent = progress?.total ? " " + Math.floor(progress.bytes / progress.total * 100) + "%" : "";
-  const hint = pending === "select-library" ? "正在切换库并重新打开客户端…" : !status ? "正在读取备份状态…" : restoring ? "正在恢复记忆" + percent :
+  const hint = !status ? "正在读取备份状态…" : restoring ? "正在恢复记忆" + percent :
     backingUp ? "正在备份本机记忆" + percent : status.phase === "restored" ? "记忆库已恢复" :
     status.lastError === "SPACE_DISK_FULL" ? "盒子空间不足，请腾出空间后重试" :
     status.lastError === "MEMORY_BACKUP_SOURCE_UNAVAILABLE" ? "无法识别本机备份来源，请检查设备标识" :
@@ -176,10 +173,7 @@ export function MemorySyncSummary({ sessionToken, count, automatic, children }: 
       </div>
     </div>
     <div className="my-ai-sync-status">
-      {status?.library && <label>当前记忆库 <select value={status.library.id} disabled={blocked || !status.context}
-        onChange={event => void update("select-library", event.target.value)}>
-        {status.libraries?.map(library => <option key={library.id} value={library.id}>{library.name}</option>)}
-      </select></label>}
+      <span>统一采集到本机记忆库</span>
       <span id="space-backup-status" role="status">{(backingUp || restoring) && <LoaderCircle size={13} className="animate-spin" aria-hidden="true" />}{hint}</span>
       {status?.enabled && <span>每 {intervalLabel}备份本机记忆库</span>}
       {status?.connected && <button type="button" className="my-ai-button" disabled={blocked} onClick={() => void update("backup")}>立即备份</button>}
@@ -188,7 +182,7 @@ export function MemorySyncSummary({ sessionToken, count, automatic, children }: 
     </div>
     {error && <p className="my-ai-feedback error" role="alert">{error}</p>}
     {catalog && <div className="my-ai-restore-confirm" role="group" aria-label="选择恢复来源">
-      {status?.library && <p>显示「{status.library.name}」的备份。可切换记忆库查看其他来源。</p>}
+      <p>按来源设备或安装选择备份快照。</p>
       {catalog.sourcesError && <p>{catalog.sourcesError}</p>}
       {!status?.connected && <p>连接盒子后可查看空间快照。</p>}
       {status?.connected && !catalog.sourcesError && !catalog.sources.length && <p>盒子上暂无记忆备份。</p>}

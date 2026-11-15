@@ -89,9 +89,9 @@ test('rejected revocation keeps the active connection and shows no success messa
 });
 
 
-test('NetBird relay explicitly tells the user to keep WANX connected',async()=>{
+test('NetBird relay explicitly tells the user to keep MemoBox connected',async()=>{
  const h=setup();h.data.localRelay=true;h.data.url='http://127.0.0.1:45123/mcp/space';await h.hub.open();
- assert.match(h.html(),/本机 MCP 入口 · 保持万象连接/);assert.match(h.html(),/经万象网络连接盒子/);
+ assert.match(h.html(),/本机 MCP 入口 · 保持记忆盒子连接/);assert.match(h.html(),/经盒子连接连接盒子/);
 });
 
 

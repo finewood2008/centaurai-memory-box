@@ -300,7 +300,7 @@ test("box recovery shows attempts without a fixed limit and supports cancellatio
 test("login opens My AI while the network prepares, with registration available and no account identifier", async () => {
   const login = pendingResponse();
   const h = await harness({ account: { phase: "signed_out" } }, [application], { loginRequest: () => login.promise });
-  assert.match(h.app.innerHTML, /登录万象平台/);
+  assert.match(h.app.innerHTML, /登录记忆盒子/);
   assert.match(h.app.innerHTML, /data-action="auth-register"/);
   assert.doesNotMatch(h.app.innerHTML, /name="code"/);
   const loggingIn = h.submit("auth", { username: "13800000000", password: "example-password" });
@@ -328,8 +328,8 @@ test("memory models and budget stay in settings while My AI has a top-level tab"
   await h.click("show-my-ai");
   assert.match(h.app.innerHTML, /data-action="show-my-ai" aria-current="page"\s*>我的 AI<\/button>/);
   assert.match(h.app.innerHTML, /wanx-section-banner my-ai-banner/);
-  assert.match(h.app.innerHTML, /半人马AI-记忆盒子/);
-  assert.match(h.app.innerHTML, /CentaurAI-MemoBox/);
+  assert.match(h.app.innerHTML, /半人马AI记忆盒子/);
+  assert.match(h.app.innerHTML, /CentaurAI MemoBox/);
   assert.doesNotMatch(h.app.innerHTML, /个人版/);
   assert.match(h.app.innerHTML, /class="memory-host" data-memory-section="my-ai"/);
   await h.click("show-memory");
@@ -431,7 +431,7 @@ test("box management has its own top-level tab and exposes no console action", a
   assert.deepEqual(h.dashboards, []);
   assert.equal(h.launches.length, 0);
   await h.click("show-settings");
-  assert.match(h.app.innerHTML, /已登录万象平台/);
+  assert.match(h.app.innerHTML, /已登录云账号/);
   assert.match(h.app.innerHTML, /data-action="startup-toggle" disabled/);
   assert.doesNotMatch(h.app.innerHTML, /account-1|data-action="dashboard-open"/);
 });
@@ -600,7 +600,7 @@ test("retired task workspace does not bypass standalone Loop compatibility", asy
     aiDialogue: { action: async method => { methods.push(method); return {}; } },
   });
   assert.doesNotMatch(h.app.innerHTML, /data-action="open-loop-engine"/);
-  assert.match(h.app.innerHTML, /请先升级万象/);
+  assert.match(h.app.innerHTML, /请先升级记忆盒子/);
   await h.click("store-details", { applicationId: loop.applicationId });
   assert.doesNotMatch(h.app.innerHTML, /data-action="open-loop-engine"/);
   assert.match(h.app.innerHTML, /尚未安装/);
@@ -727,7 +727,7 @@ test("late market responses after logout do not leak the previous account catalo
   await h.click("logout");
   resolveList({ items: [{ ...application, name: "Private old catalog" }] });
   await new Promise((resolve) => setImmediate(resolve));
-  assert.match(h.app.innerHTML, /登录万象平台/);
+  assert.match(h.app.innerHTML, /登录记忆盒子/);
   assert.doesNotMatch(h.app.innerHTML, /Private old catalog/);
 });
 
@@ -759,7 +759,7 @@ test("logout resets settings and the next login returns to My AI", async () => {
   const h = await harness();
   await h.click("show-settings");
   await h.click("logout");
-  assert.match(h.app.innerHTML, /登录万象平台/);
+  assert.match(h.app.innerHTML, /登录记忆盒子/);
   await h.submit("auth", { username: "13800000000", password: "example-password" });
   assert.match(h.app.innerHTML, /class="memory-host" data-memory-section="my-ai"/);
   assert.doesNotMatch(h.app.innerHTML, /设备管理/);
@@ -990,7 +990,7 @@ test("an empty scan allows retry after reporting no nearby box", async (t) => {
 test("native menu navigation reaches settings and home while preserving login and setup boundaries", async () => {
   const h = await harness({ account: { phase: "signed_out" } });
   h.navigate("settings");
-  assert.match(h.app.innerHTML, /登录万象平台/);
+  assert.match(h.app.innerHTML, /登录记忆盒子/);
   h.update(state());
   h.navigate("boxes");
   assert.match(h.app.innerHTML, /设备管理/);
@@ -1069,8 +1069,8 @@ for (const [reason, label] of [
   ["application_unlisted", "此应用尚未上架或已下架"],
   ["no_published_target", "暂无可安装的应用包.*通用应用包"],
   ["release_unavailable", "此发行版本暂不可用"],
-  ["wanx_version", "请先升级万象"],
-  ["host_protocol", "当前万象运行协议不兼容"],
+  ["wanx_version", "请先升级记忆盒子"],
+  ["host_protocol", "当前记忆盒子运行协议不兼容"],
   ["reinstall_required", "此版本需管理员协助重新安装"],
 ]) {
   test(`candidate reason ${reason} explains how to proceed without enabling install`, async () => {
@@ -1704,7 +1704,7 @@ test("space is files only and box maintenance is confined to settings", async ()
   await h.click("show-settings");
   assert.doesNotMatch(h.app.innerHTML, /管理与切换盒子|data-action="network-toggle"/);
   assert.match(h.app.innerHTML, /退出当前账号/);
-  assert.match(h.app.innerHTML, /退出账号会断开盒子，万象仍在后台运行/);
+  assert.match(h.app.innerHTML, /退出后将断开盒子连接，客户端继续在后台运行/);
   assert.doesNotMatch(h.app.innerHTML, /data-action="desktop-quit"/);
   assert.doesNotMatch(h.app.innerHTML, /data-action="device-trust-open"/);
   assert.match(h.app.innerHTML, /<details class="settings-maintenance"[^>]*data-detail-id="settings-maintenance"\s*>/);
@@ -1783,7 +1783,7 @@ test("box ownership UI is owner-only and explicitly retains data", async () => {
   await h.click("show-boxes");
   assert.equal((h.app.innerHTML.match(/data-action="transfer-open"/g) || []).length, 1);
   await h.click("transfer-open", { deviceId: "box-102" });
-  assert.match(h.app.innerHTML, /客户万象账号手机号/);
+  assert.match(h.app.innerHTML, /接收方云账号手机号/);
   assert.match(h.app.innerHTML, /我同意保留盒内数据并转移所有权/);
   assert.match(h.app.innerHTML, /需要清空交付时/);
   assert.deepEqual(h.calls.filter(item => item[0] === "scroll-form"), [["scroll-form", "transfer", "center"]]);
@@ -1844,7 +1844,7 @@ test("revoked recipient client explains reauthentication instead of reporting tr
   await h.click("transfer-refresh");
   await h.click("transfer-accept", { transferId: "t-1" });
   await h.click("market-confirm");
-  assert.match(h.app.innerHTML, /当前客户端登录已失效，请重新登录万象后再接受转移/);
+  assert.match(h.app.innerHTML, /当前客户端登录已失效，请重新登录记忆盒子后再接受转移/);
   assert.doesNotMatch(h.app.innerHTML, /已接受所有权/);
 });
 
@@ -2268,7 +2268,7 @@ test("an old setup completion cannot change the next account's setup state", asy
   h.update(next); await flushActions();
   await h.click("provisioning");
   refresh.resolve({ state: "completed" }); await pending;
-  assert.match(h.app.innerHTML, /发现附近的万象盒子/);
+  assert.match(h.app.innerHTML, /发现附近的盒子/);
   assert.doesNotMatch(h.app.innerHTML, /设备已完成联网和账号绑定/);
   assert.doesNotMatch(actionButton(h, "start-provisioning"), /disabled/);
 });
@@ -2280,7 +2280,7 @@ test("logout unlocks the login form and its late completion cannot unlock a new 
   await h.click("show-settings");
   const loggingOut = h.click("logout");
   await flushActions();
-  assert.match(h.app.innerHTML, /登录万象平台/);
+  assert.match(h.app.innerHTML, /登录记忆盒子/);
   assert.doesNotMatch(h.app.innerHTML, /处理中…/);
   assert.equal(h.form("auth").querySelector('button[type="submit"]').disabled, false);
   const loggingIn = h.submit("auth", { username: "13800000000", password: "example-password" });
@@ -2295,7 +2295,7 @@ test("logout unlocks the login form and its late completion cannot unlock a new 
 });
 
 
-for (const [status, message] of [["checking", "正在检查电脑蓝牙状态"], ["unavailable", "请先开启蓝牙"], ["permission-denied", "允许万象访问蓝牙"], ["unsupported", "不支持蓝牙发现"], ["error", "无法读取电脑蓝牙状态"]]) {
+for (const [status, message] of [["checking", "正在检查电脑蓝牙状态"], ["unavailable", "请先开启蓝牙"], ["permission-denied", "允许记忆盒子访问蓝牙"], ["unsupported", "不支持蓝牙发现"], ["error", "无法读取电脑蓝牙状态"]]) {
   test(`Bluetooth ${status} blocks scanning and offers the appropriate guidance`, async () => {
     const h = await harness(state(), [], { setupRequest: async () => ({ state: "idle" }), bluetoothStatus: status });
     await h.click("provisioning");
@@ -2803,7 +2803,7 @@ test("box overview shows WANX-wide usage and the box LAN addresses, never public
     network: { publicIp: "8.8.4.4", lanAddresses: ["192.168.1.25", "fd00::25"], addresses: ["10.8.0.8", "100.120.28.60", "172.17.0.1", "192.168.1.25", "fd00::25"], scope: "container" },
   });
   await h.click("show-boxes");
-  assert.match(h.app.innerHTML, /万象占用<\/span><strong>5\.0 GB/);
+  assert.match(h.app.innerHTML, /应用与服务占用<\/span><strong>5\.0 GB/);
   assert.match(h.app.innerHTML, /数据、应用与运行组件/);
   assert.match(h.app.innerHTML, /<code>192\.168\.1\.25<\/code>/);
   assert.match(h.app.innerHTML, /<code>fd00::25<\/code>/);
@@ -3153,12 +3153,12 @@ test("personal Workshop follows My Apps and keeps its existing project workflow"
   const tabRow=h.app.innerHTML.match(/<nav class="applications-tabs"[^>]*>([\s\S]*?)<\/nav>/)?.[1]||"";
   const tabs=[...tabRow.matchAll(/data-action="applications-tab" data-tab="([^"]+)"[^>]*>([^<]+)/g)]
     .map(match=>[match[1],match[2]]);
-  assert.deepEqual(tabs,[["wanx","应用市场"],["local","我的应用"],["workshop","万象工坊"]]);
+  assert.deepEqual(tabs,[["wanx","应用市场"],["local","我的应用"],["workshop","应用工坊"]]);
   const nav=[...h.app.innerHTML.matchAll(/class="nav-item[^" ]*(?: [^"]*)?"[^>]*data-action="show-([^"]+)"[^>]*>([^<]+)/g)].map(m=>[m[1],m[2]]);
   assert.deepEqual(nav,[["my-ai","我的 AI"],["memory","记忆"],["data","星图"],["space","空间"],["boxes","盒子"]]);
   await h.click("applications-tab",{tab:"workshop"});await flushActions();
   assert.doesNotMatch(h.app.innerHTML, /data-action="show-applications"/);
-  assert.match(h.app.innerHTML,/id="applications-panel-workshop"[^>]*aria-label="万象工坊"/);
+  assert.match(h.app.innerHTML,/id="applications-panel-workshop"[^>]*aria-label="应用工坊"/);
   assert.doesNotMatch(h.app.innerHTML,/选择应用开始修改|workshop-choose/);
   assert.doesNotMatch(h.app.innerHTML,/创建新产品|首次访谈/);
   await h.click("workshop-choose");await flushActions();
@@ -3172,7 +3172,7 @@ test("personal Workshop follows My Apps and keeps its existing project workflow"
 
 test('personal module banners retain consistent bilingual identity when disconnected', async () => {
   const h=await harness();
-  for(const [route,key,name,english] of [['workshop','workshop','万象工坊','WanX Workshop'],['data','starlink','万象星图','STARLINK'],['space','space','万象空间','WanX Space'],['boxes','boxes','万象盒子','WanX Box']]) {
+  for(const [route,key,name,english] of [['workshop','workshop','应用工坊','App Workshop'],['data','starlink','知识星图','STARLINK'],['space','space','文件空间','Files'],['boxes','boxes','我的设备','Devices']]) {
     await h.click('show-'+route);
     assert.match(h.app.innerHTML,new RegExp('wanx-section-banner[^>]*data-section="'+key+'"'));
     assert.match(h.app.innerHTML,new RegExp('<h2>'+name+' '+(key==='workshop'?'<span class="feature-beta">Beta</span> ':key==='starlink'?'<small class="data-edition-label">精简版</small> ':'')+'<span class="wanx-section-english">'+english+'</span></h2>'));
@@ -3278,7 +3278,7 @@ test("Main-window navigation keeps the Academy drawer available and redirects th
   assert.match(h.app.innerHTML, /aria-label="应用市场"/);
   assert.deepEqual(h.academy.context, { module: "app-market" });
   assert.doesNotMatch(h.app.innerHTML, /data-action="(?:show-ai-dialogue|academy-open)"/);
-  assert.match(h.app.innerHTML, /data-action="applications-tab" data-tab="workshop"[^>]*>万象工坊/);
+  assert.match(h.app.innerHTML, /data-action="applications-tab" data-tab="workshop"[^>]*>应用工坊/);
   h.navigate("ai-dialogue");
   assert.equal(h.academy.mode, "dialogue");
   assert.match(h.app.innerHTML, /aria-label="应用市场"/);

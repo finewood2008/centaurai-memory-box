@@ -45,10 +45,10 @@ async function samePath(expected, actual) {
   return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 
-async function readEndpoint(base, route, headers = {}) {
+async function readEndpoint(base, route, headers = {}, method = "GET") {
   try {
     const response = await fetch(new URL(route, base), {
-      headers, redirect: "error", signal: AbortSignal.timeout(2000),
+      method, headers, redirect: "error", signal: AbortSignal.timeout(2000),
     });
     return { status: response.status, body: await response.json().catch(() => null) };
   } catch {
@@ -61,7 +61,8 @@ async function readyEngine(record, configFile, databasePath, token) {
   if (record?.status !== "ready" || !processExists(record.pid) || !endpoint ||
       !await samePath(configFile, record.configPath) || !await samePath(databasePath, record.sqlitePath)) return null;
   const storage = await readEndpoint(endpoint, "/api/v1/admin/wanx-storage", { authorization: `Bearer ${token}` });
-  return storage.status === 200 && await samePath(path.dirname(databasePath), storage.body?.dataPath) ? endpoint : null;
+  return storage.status === 200 && await samePath(path.dirname(databasePath), storage.body?.dataPath)
+    ? { endpoint, sourceProfile: storage.body?.sourceProfile } : null;
 }
 
 async function ensureEngine({ configFile, databasePath, serviceHome, engineEntry, config }) {
@@ -70,12 +71,23 @@ async function ensureEngine({ configFile, databasePath, serviceHome, engineEntry
   const end = Date.now() + STARTUP_TIMEOUT_MS;
   let child;
   let childFailed = false;
+  let retiring;
   const runtimeStateFile = path.join(serviceHome, "runtime.json");
   const serviceLock = path.join(serviceHome, "service.lock");
   while (Date.now() < end) {
     const record = await jsonFile(runtimeStateFile);
-    const endpoint = await readyEngine(record, configFile, databasePath, config.storage.token);
-    if (endpoint) return endpoint;
+    // Let the retiring engine drain its keep-alive connections before polling it again.
+    const ready = retiring === record?.pid ? null : await readyEngine(record, configFile, databasePath, config.storage.token);
+    if (ready) {
+      if (process.env.MEMMY_UNIFY_AGENT_SOURCES === "1" && ready.sourceProfile) {
+        if (!["codex-desktop", "codex-cli"].includes(ready.sourceProfile)) throw new Error("MEMORY_SOURCE_PROFILE_UNKNOWN");
+        if (retiring !== record.pid) {
+          const stopped = await readEndpoint(ready.endpoint, "/api/v1/admin/shutdown", { authorization: `Bearer ${config.storage.token}` }, "POST");
+          if (![200, 202].includes(stopped.status)) throw new Error("MEMORY_SOURCE_UPGRADE_FAILED");
+          retiring = record.pid;
+        }
+      } else return ready.endpoint;
+    }
 
     // A running owner may be starting up or moving its SQLite database.
     // The engine also holds its own exclusive service and database locks.
@@ -110,11 +122,11 @@ async function probeApi(descriptor, engine) {
   const endpoint = usableLocalUrl(configured?.baseUrl);
   if (!endpoint || endpoint.hostname !== "127.0.0.1" || typeof configured.localToken !== "string" || !configured.localToken) return false;
   const headers = { "x-memmy-local-token": configured.localToken };
+  if (usableLocalUrl(configured.memory?.baseUrl)?.origin !== engine.origin) return false;
   const bootstrap = await readEndpoint(endpoint, "/api/app/bootstrap", headers);
   if (bootstrap.status !== 200 || !bootstrap.body) return false;
-  if (usableLocalUrl(configured.memory?.baseUrl)?.origin !== engine.origin) throw new Error("MEMORY_API_ENGINE_MISMATCH");
   const health = await readEndpoint(endpoint, "/api/v1/health", headers);
-  if (health.status !== 200 || health.body?.storage?.ready !== true) throw new Error("MEMORY_API_ENGINE_NOT_READY");
+  if (health.status !== 200 || health.body?.storage?.ready !== true) return false;
   return true;
 }
 
@@ -137,7 +149,7 @@ async function run(sourceRoot, runtimeHome, descriptor, apiDatabasePath) {
     const { mutateMemoryConfig } = await import(memory("config", "writer.js"));
     await mutateMemoryConfig(configFile, root => {
       if (existsSync(configFile)) return;
-      const isolated = Boolean(process.env.MEMMY_ISOLATED_CODEX_PROFILE);
+      const isolated = Boolean(process.env.MEMMY_ISOLATED_CODEX_PROFILE) || process.env.MEMMY_UNIFY_AGENT_SOURCES === "1";
       root.memmyMemory = { storage: { mode: "local", backend: "sqlite", sqlitePath: defaultDatabasePath,
         endpoint: isolated ? "http://127.0.0.1:0" : "http://127.0.0.1:18960", token: randomBytes(32).toString("hex") },
         ...(isolated ? { agentAccess: { autoInjectSkill: false, autoScanKnownAgents: false, watchFileChanges: false } } : {}) };

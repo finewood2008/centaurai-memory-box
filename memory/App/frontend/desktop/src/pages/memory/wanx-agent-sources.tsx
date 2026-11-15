@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronRight, Folder, Orbit, X } from "lucide-react";
+import { Check, ChevronRight, Folder, History, Orbit, X } from "lucide-react";
 import { Modal } from "../../components/modal.js";
 import type { AgentAccessStatus, MyAiRequest, TaskSelection, TaskSource, TaskSources } from "./wanx-my-ai-model.js";
 
@@ -131,10 +131,14 @@ export function AgentSources({ request, agent, mode, name, refresh, sources, onS
         {sources.folder && <button type="button" className="my-ai-icon-button" disabled={pickerDisabled} aria-label="移除空间文件夹"
           onClick={() => void save({ ...sources, folder: undefined })}><X size={15} aria-hidden="true" /></button>}
       </div>
-      <label className="my-ai-help"><input type="checkbox" checked={sources.memoryEnabled === true} disabled={pickerDisabled}
-        onChange={event => void save({ ...sources, memoryEnabled: event.target.checked })} />允许检索历史记忆</label>
+      <button type="button" className="my-ai-button my-ai-source-trigger my-ai-memory-toggle" disabled={pickerDisabled}
+        aria-label="允许检索记忆" aria-pressed={sources.memoryEnabled === true}
+        title={sources.memoryEnabled ? "已允许检索历史记忆，点击关闭" : "允许此智能体检索历史记忆"}
+        onClick={() => void save({ ...sources, memoryEnabled: sources.memoryEnabled !== true })}>
+        <History size={16} aria-hidden="true" /><span>检索记忆</span><Check className="my-ai-memory-check" size={14} aria-hidden="true" />
+      </button>
     </div>
-    <p className="my-ai-help">{saving ? "正在保存范围…" : unavailable ? "连接当前盒子后，可选择资料范围。" : "所选范围会为此产品保存；启动任务时重新校验权限。"}</p>
+    {(saving || unavailable) && <p className="my-ai-help" role="status">{saving ? "正在保存范围…" : "连接盒子后可选择资料。"}</p>}
     {!picker && error && <div><p className="my-ai-feedback error" role="alert">{error}</p>
       {!ready && <button type="button" className="my-ai-button" disabled={disabled} onClick={() => setLoadAttempt(value => value + 1)}>重新读取范围</button>}</div>}
     <Modal open={picker !== null} title={choosingSpace ? "空间文件" : "参考星图"}

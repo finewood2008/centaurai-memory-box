@@ -19,7 +19,7 @@ const currentStarlinkVersion=JSON.parse(await readFile(new URL('../../team-clien
 async function directory(t) {const p=await mkdtemp(path.join(os.tmpdir(),'wanx-starlink-builtin-'));t.after(()=>rm(p,{recursive:true,force:true}));return p;}
 async function pack(source,target){const stream=await asar.createPackage(source,target);if(stream?.on)await finished(stream);}
 
-test('both editions contain the same complete pinned Starlink; stale UI and missing dependencies fail verification',async t=>{
+test('both editions preserve pinned Starlink with isolated product copy; stale UI and missing dependencies fail verification',async t=>{
  const temp=await directory(t);const digests=[];
  for(const edition of ['personal','team']) {
   const result=await assembleStarlink(edition);
@@ -33,7 +33,9 @@ test('both editions contain the same complete pinned Starlink; stale UI and miss
    await rm(path.join(payload,'node_modules/ws/index.js'));const missing=path.join(temp,'missing.asar');await pack(stage,missing);await assert.rejects(verifyPackagedStarlink(missing,path.join(root,'apps/team-client')));
   }
  }
- assert.equal(digests[0],digests[1]);
+ assert.notEqual(digests[0],digests[1]);
+ assert.equal(JSON.parse(await readFile(path.join(root,'apps/personal-client/applications/starlink/application.manifest.json'),'utf8')).name,'知识星图');
+ assert.equal(JSON.parse(await readFile(path.join(root,'apps/team-client/applications/starlink/application.manifest.json'),'utf8')).name,'万象·星图');
 });
 
 test('both editions verify Builder-filtered contracts and reject missing or changed runtime schemas',async t=>{

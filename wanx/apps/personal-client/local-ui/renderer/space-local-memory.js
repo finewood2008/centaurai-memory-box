@@ -111,7 +111,7 @@
     const disabled = pending ? "disabled" : "";
     const canEdit = storage && !pending;
     return `<section class="settings-panel space-local-memory" aria-label="本机记忆库">
-      <div><h3>本机记忆库</h3><p class="muted">记忆数据库的保存位置。选择新位置时，万象会在所选文件夹下建立专用的「万象记忆库」目录。</p>
+      <div><h3>本机记忆库</h3><p class="muted">记忆数据库的保存位置。选择新位置时，记忆盒子会在所选文件夹下建立专用的「记忆盒子记忆库」目录。</p>
         ${storage ? `<code class="space-local-path">${esc(storage.dataPath)}</code>` : ""}
         ${pending ? `<p class="muted" role="status">${["choose", "reset", "initialize"].includes(pending) ? "正在准备保存位置，迁移时记忆服务会短暂重启…" : "正在处理…"}</p>` : ""}
         ${notice ? `<p class="muted" role="status">${esc(notice)}</p>` : ""}

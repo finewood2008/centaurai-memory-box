@@ -266,6 +266,9 @@ test("independent installations keep history, recover a selected version, and re
     await cli.action("rollback");
     assert.equal(cli.local(), "CLI after backup");
     assert.equal(desktop.local(), "Desktop only");
+    const mixedHistory = (await upgraded.action("catalog")).sources;
+    assert.ok(mixedHistory.some(source => source.id === cliSources[0].id));
+    assert.ok(mixedHistory.some(source => source.id === desktopSources[0].id));
   } finally {
     await Promise.all(devices.map(backup => backup.close()));
     if (path.dirname(root) === tmpdir()) await rm(root, { recursive: true, force: true });

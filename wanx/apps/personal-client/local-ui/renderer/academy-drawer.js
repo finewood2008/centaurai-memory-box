@@ -3,14 +3,14 @@
 
   const panelMarkup = `
     <header class="academy-toolbar">
-      <div id="academy-tabs" class="academy-tabs" role="tablist" aria-label="万象小助理板块">
+      <div id="academy-tabs" class="academy-tabs" role="tablist" aria-label="AI 助手板块">
         <button id="academy-tab-assistant" role="tab" aria-selected="true" aria-controls="academy-assistant" type="button">小助理</button>
         <button id="academy-tab-academy" role="tab" aria-selected="false" aria-controls="academy-resources" tabindex="-1" type="button">半人马AI学院</button>
       </div>
-      <button id="academy-close" class="academy-icon-button" type="button" aria-label="收起万象小助理" title="收起万象小助理">×</button>
+      <button id="academy-close" class="academy-icon-button" type="button" aria-label="收起 AI 助手" title="收起 AI 助手">×</button>
     </header>
     <section id="academy-assistant" role="tabpanel" aria-labelledby="academy-tab-assistant">
-      <section id="academy-dialogue" aria-label="万象对话">
+      <section id="academy-dialogue" aria-label="AI 对话">
         <div id="academy-dialogue-host"></div>
       </section>
     </section>
@@ -76,7 +76,7 @@
     const app = document.getElementById("app");
     const drawer = document.createElement("aside");
     drawer.id = "academy-drawer";
-    drawer.setAttribute("aria-label", "万象小助理");
+    drawer.setAttribute("aria-label", "AI 助手");
     drawer.hidden = true;
     drawer.innerHTML = panelMarkup;
     const handle = document.createElement("button");
@@ -94,7 +94,7 @@
     const helpToggle = document.createElement("button");
     helpToggle.id = "academy-help-toggle";
     helpToggle.type = "button";
-    helpToggle.textContent = "万象帮助";
+    helpToggle.textContent = "记忆盒子帮助";
     helpToggle.title = "开启后，发送时参考当前页面";
     helpToggle.setAttribute("aria-controls", "academy-page-help");
 
@@ -111,7 +111,7 @@
           <p id="academy-hint"></p>
           <p id="academy-error-hint" hidden></p>
         </details>
-        <button id="academy-close-page-help" type="button" aria-label="关闭万象帮助" title="关闭万象帮助">×</button>
+        <button id="academy-close-page-help" type="button" aria-label="关闭记忆盒子帮助" title="关闭记忆盒子帮助">×</button>
         <div id="academy-question-list" hidden>
           <p id="academy-question-heading">常用问题</p>
           <ul id="academy-examples" aria-labelledby="academy-question-heading"></ul>
@@ -236,7 +236,7 @@
       handle.hidden = !availableNow();
       document.body.classList.toggle("academy-drawer-open", shown);
       handle.setAttribute("aria-expanded", String(shown));
-      const label = shown ? "收起万象小助理" : "打开万象小助理";
+      const label = shown ? "收起 AI 助手" : "打开 AI 助手";
       handle.setAttribute("aria-label", label);
       handle.title = label;
       if (shown !== wasVisible) onOpenChange?.(shown);

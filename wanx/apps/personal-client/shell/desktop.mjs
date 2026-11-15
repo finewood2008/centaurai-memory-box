@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 
-export const DESKTOP_NAME = "半人马AI-记忆盒子 · CentaurAI-MemoBox";
+export const DESKTOP_NAME = "半人马AI记忆盒子 · CentaurAI MemoBox";
 const resource = (name) => fileURLToPath(new URL(`../resources/${name}`, import.meta.url));
 export const APP_ICON = resource("icon.png");
 
@@ -20,7 +20,7 @@ export function createDesktopIntegration({
         : versionInfo ? "构建状态未验证" : null;
   app.setAboutPanelOptions({
     applicationName: DESKTOP_NAME, applicationVersion: app.getVersion(), iconPath: APP_ICON,
-    credits: `你的 AI 应用底座${edition ? `\n${edition}` : ""}`,
+    credits: `你的个人 AI 记忆空间。${edition ? `\n${edition}` : ""}\n\nPowered by wanx`,
   });
   if (mac) app.dock.setIcon(APP_ICON);
   if (mac && usesPanel) app.dock.hide();
@@ -137,14 +137,14 @@ export function createDesktopIntegration({
   const spaceItem = () => ({ id: "space", label: "盒子空间", accelerator: "CmdOrCtrl+2", click: () => showManagement("space") });
   const settingsItem = () => ({ id: "settings", label: "设置…", accelerator: "CmdOrCtrl+,", click: () => showManagement("settings") });
   const separator = { type: "separator" };
-  const about = { role: "about", label: "关于万象" };
+  const about = { role: "about", label: "关于记忆盒子" };
   const updatesItem = () => ({ id: "updates", label: "检查更新…", click: () => {
     showManagement("settings");
     if (checkUpdates) void Promise.resolve().then(checkUpdates).catch(() => {});
   } });
   const quit = mac
-    ? { id: "quit", label: "退出万象", accelerator: "Command+Q", click: requestQuit }
-    : { role: "quit", label: "退出万象" };
+    ? { id: "quit", label: "退出记忆盒子", accelerator: "Command+Q", click: requestQuit }
+    : { role: "quit", label: "退出记忆盒子" };
   const menu = Menu.buildFromTemplate([
     ...(mac ? [{ label: DESKTOP_NAME, submenu: [
       about, updatesItem(), separator, settingsItem(), separator,
@@ -154,7 +154,7 @@ export function createDesktopIntegration({
       { role: "unhide", label: "显示全部" }, separator, quit,
     ] }] : []),
     { label: "应用", submenu: [
-      { label: usesPanel ? "打开万象" : "显示主窗口", accelerator: "CmdOrCtrl+Shift+M", click: show },
+      { label: usesPanel ? "打开记忆盒子" : "显示主窗口", accelerator: "CmdOrCtrl+Shift+M", click: show },
       homeItem(), memoryItem(), spaceItem(), ...(!mac ? [settingsItem()] : []),
       ...(!mac ? [separator, about, updatesItem(), quit] : []),
     ] },
@@ -181,7 +181,7 @@ export function createDesktopIntegration({
   }
   const trayMenu = Menu.buildFromTemplate([
     { id: "connection-status", label: "未连接盒子", enabled: false }, separator,
-    { label: usesPanel ? "打开万象" : "显示主窗口", click: show }, homeItem(), memoryItem(), spaceItem(), settingsItem(),
+    { label: usesPanel ? "打开记忆盒子" : "显示主窗口", click: show }, homeItem(), memoryItem(), spaceItem(), settingsItem(),
     separator, about, quit,
   ]);
 
@@ -196,7 +196,7 @@ export function createDesktopIntegration({
       Boolean(state.connection?.deviceId && state.connection.gatewayURL) &&
       (state.connection.mode === "local" || (networkAvailable && state.connection.mode === "netbird"));
     const unavailable = state.platform?.phase === "unavailable" || ["unavailable", "failed", "error"].includes(state.network?.phase);
-    const label = !signedIn ? "尚未登录万象" : connected ? `已连接 · ${state.connection.name || state.connection.deviceId}` : state.network?.enabled === false ? "网络已关闭" :
+    const label = !signedIn ? "尚未登录记忆盒子" : connected ? `已连接 · ${state.connection.name || state.connection.deviceId}` : state.network?.enabled === false ? "网络已关闭" :
       unavailable ? "网络暂不可用" : !networkReady ? "网络连接中" :
       state.phase === "recovering" ? "盒子连接恢复中" : state.phase === "connecting" ? "盒子连接中" : "未连接盒子";
     const key = JSON.stringify([signedIn, memoryAvailable, connected, label]);

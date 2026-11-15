@@ -1,6 +1,9 @@
 // Shared builtin payload for both clients. Never reads or writes installed apps/user data.
 import { createHash } from 'node:crypto';
-import { cp, mkdir, readFile, readdir, rm, lstat } from 'node:fs/promises';
+import { memoboxSource } from './memobox-branding.mjs';
+const productPayload = (name, bytes, personal) => personal && /\.(?:[cm]?js|html|json)$/.test(name) && !/(?:lock|receipt|kit)\.json$/.test(name)
+  ? Buffer.from(memoboxSource(bytes.toString('utf8'), name)) : bytes;
+import { cp, mkdir, readFile, writeFile, readdir, rm, lstat } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -110,7 +113,7 @@ export async function assembleStarlink(edition, { repoRoot = repository, appKitD
     await mkdir(target, { recursive: true });
     for (const name of names) {
       await mkdir(path.dirname(path.join(target, name)), { recursive: true });
-      await cp(path.join(source, name), path.join(target, name));
+      await writeFile(path.join(target, name), productPayload(name, await readFile(path.join(source, name)), true));
     }
   }
   await rm(path.join(target, 'node_modules'), { recursive: true, force: true });
@@ -139,10 +142,13 @@ export async function verifyPackagedStarlink(archive, clientRoot, { repoRoot = r
   const kit = await resolveAppKit(repoRoot, sdkPackage, appKitDirectory);
   const { extractFile, listPackage } = createRequire(path.join(clientRoot, 'package.json'))('@electron/asar');
   const actual = name => extractFile(archive, path.join('applications', 'starlink', name));
+  const personal = JSON.parse(await readFile(path.join(clientRoot,'package.json'),'utf8')).wanxEdition !== 'team';
+  const source = path.join(repoRoot,'apps/team-client/applications/starlink');
   // Electron Builder omits the lockfile and declaration files from app.asar.
   const packagedNames = names.filter(name => name !== 'package-lock.json' && !name.endsWith('.d.ts'));
   for (const name of packagedNames) {
-    if (digest(actual(name)) !== receipt.files[name]) throw Error(`STARLINK_PACKAGED_HASH_MISMATCH:${name}`);
+    const expected = productPayload(name, await readFile(path.join(source,name)), personal);
+    if (!actual(name).equals(expected)) throw Error(`STARLINK_PACKAGED_HASH_MISMATCH:${name}`);
   }
   const packagedSdkFiles = kit.sdkArtifact.files.filter(name => !name.endsWith('.d.ts'));
   for (const name of packagedSdkFiles) {
