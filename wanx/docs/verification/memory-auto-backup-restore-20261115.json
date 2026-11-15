@@ -1,0 +1,86 @@
+{
+  "date": "2026-11-15",
+  "result": "passed",
+  "scope": "Real box storage; actual desktop client and production local memory service; isolated empty profile and database simulate a replacement computer on the same Windows machine.",
+  "limitations": [
+    "This is not a second physical computer test.",
+    "Native UI automation was unavailable. The test used the same authenticated custom-scheme API as the restore button, without manipulating the DOM.",
+    "The real automatic upload was triggered by the client's automatic check. Timer interval boundaries were additionally covered by regression tests."
+  ],
+  "automaticBackup": {
+    "manuallyTriggered": false,
+    "managedDirectoryCreatedWithoutPicker": true,
+    "archiveBytes": 124003487,
+    "archiveSha256": "099dd5358503b098bf48096a91b49cbbbbdf3fa0e7677cac91119ebc96f2429b",
+    "boxDigestMatchesLocalSnapshot": true
+  },
+  "replacementComputer": {
+    "initialMemoryCount": 0,
+    "initialSessionCount": 0,
+    "backupDiscoveredAutomatically": true,
+    "emptyDatabaseDidNotOverwriteBoxBackup": true,
+    "restoreHttpStatus": 200,
+    "restoredPhase": "ready",
+    "backupPreferenceStillEnabledAfterRestore": true,
+    "testInstanceBackupDisabledAfterAcceptanceToPreserveOriginalBackup": true
+  },
+  "integrity": {
+    "sqliteIntegrityCheck": "ok",
+    "schemaVersion": 15,
+    "physicalTablesCompared": 59,
+    "physicalTableHashesIdentical": 55,
+    "contentAndVectorTableHashesIdentical": true,
+    "counts": {
+      "memories": 284,
+      "raw_turns": 103,
+      "sessions": 74,
+      "episodes": 16,
+      "user_memories": 6,
+      "memory_vector_entries": 284
+    },
+    "layers": { "L1": 237, "L2": 7, "Skill": 40 },
+    "explainedPhysicalDifferences": {
+      "memories_fts_data": "Internal segment layout changed; every logical term/document/column/offset matches.",
+      "memories_fts_idx": "Internal segment layout changed; every logical term/document/column/offset matches.",
+      "runtime_kv": "Only memory_byok_budget_v1 and worker.model_configuration_fingerprint values/timestamps changed for the isolated runtime configuration.",
+      "schema_migrations": "Only applied_at changed during startup."
+    },
+    "fullTextIndexes": {
+      "memories_fts": { "termsCompared": 65406, "sha256": "afc1359759be8e7bac88ba2a32fe0f897c02d7038f833a4e9345425ba032ec0d", "identical": true },
+      "user_memories_fts": { "termsCompared": 369, "sha256": "eb1cdfbcd656d9d13db8a78e3b43b7dc79e5429bcb327fcb6455001973e04c92", "identical": true }
+    }
+  },
+  "restart": {
+    "clientRestarted": true,
+    "localMemoryServiceRestarted": true,
+    "restoredDatabasePathPreserved": true,
+    "countsAndFullTextHashesStillMatch": true,
+    "clientReadProbes": [
+      { "layer": "L1", "httpStatus": 200, "idAndBodyMatch": true },
+      { "layer": "L2", "httpStatus": 200, "idAndBodyMatch": true },
+      { "layer": "Skill", "httpStatus": 200, "idAndBodyMatch": true }
+    ]
+  },
+  "fixes": [
+    "Upload 1 MiB chunks with a retry budget per chunk; reconcile committed offsets after a lost reply instead of restarting the whole archive.",
+    "Download at most 1 MiB per request with a fresh connection, 15-second idle timeout and transient-error retry.",
+    "Display restore download percentage."
+  ],
+  "regressionChecks": {
+    "backupAndWorkspaceTests": { "passed": 15, "failed": 0 },
+    "frontendTypecheck": "passed",
+    "frontendProductionBuild": "passed"
+  },
+  "originalEnvironmentAfterTest": {
+    "clientReconnectedToBox": true,
+    "memoryServiceHealthy": true,
+    "originalDatabasePathPreserved": true,
+    "currentMemories": 292,
+    "currentCountsAtLeastSnapshot": true,
+    "automaticBackupEnabled": true,
+    "intervalMinutes": 60,
+    "isolatedTestProcessesStopped": true,
+    "isolatedLoginCopiesRemoved": true
+  },
+  "privacy": "Only hashes, counts and outcomes are included. No memory contents, credentials or database snapshots are committed."
+}

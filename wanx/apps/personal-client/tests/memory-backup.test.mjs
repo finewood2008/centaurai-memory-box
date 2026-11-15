@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -19,7 +19,7 @@ test("automatically updates one backup and restores verified data on a clean ins
   const folders = new Map();
   let createdFolders = 0;
   const devices = [];
-  let corrupted = false, lostChunkReply = false, resetDownload = false, sequence = 0;
+  let corrupted = false, lostChunkReply = false, resetDownload = false, stalledDownload = false, sequence = 0;
 
   function device(name, initial, saved) {
     let prefs = saved, local = initial, restored, online = true, listener, clock = Date.now();
@@ -45,6 +45,7 @@ test("automatically updates one backup and restores verified data on a clean ins
               return json({ offset: upload.bytes.length, state: "pending" });
             }
             const upload = uploads.get(id);
+            if (input.method === "GET") return json({ offset: upload.bytes.length, state: "pending" });
             if (operation === "complete") {
               assert.equal(JSON.parse(input.body).digest, hash(upload.bytes));
               const file = { ...upload, kind: "file", digest: hash(upload.bytes), modified: ++sequence };
@@ -67,12 +68,19 @@ test("automatically updates one backup and restores verified data on a clean ins
           if (input.method === "DELETE") { files.delete(id); return json(null, 204); }
           const file = files.get(id);
           if (!operation) return json(file);
+          assert.equal(Number(url.searchParams.get("length")), 1024 * 1024);
+          assert.equal(input.idleTimeoutMs, 15_000);
+          assert.equal(input.freshConnection, true);
           if (resetDownload) {
             resetDownload = false;
             online = false;
             listener();
             void delay(180).then(() => { online = true; listener(); });
             throw Object.assign(new Error("connection reset"), { code: "ECONNRESET" });
+          }
+          if (stalledDownload) {
+            stalledDownload = false;
+            throw Object.assign(new Error("chunk stalled"), { code: "SPACE_CHUNK_STALLED" });
           }
           const bytes = corrupted ? Buffer.from("bad") : file.bytes;
           return { status: 200, body: bytes, headers: { "x-content-sha256": hash(file.bytes), etag: file.digest } };
@@ -167,8 +175,9 @@ test("automatically updates one backup and restores verified data on a clean ins
     await assert.rejects(second.action("restore", { id: existing.id }), /SPACE_CHUNK_INVALID/);
     assert.equal(second.local(), "blank local library");
     corrupted = false;
-    resetDownload = true;
+    resetDownload = stalledDownload = true;
     await second.action("restore", { id: existing.id });
+    assert.equal(stalledDownload, false, "stalled downloads retry without losing the restore");
     assert.equal(second.local(), "scheduled memory");
     assert.equal((await second.status()).enabled, true);
     await second.action("disable");
@@ -177,6 +186,73 @@ test("automatically updates one backup and restores verified data on a clean ins
     assert.equal((await second.status()).enabled, true, "preference can change offline");
   } finally {
     await Promise.all(devices.map(backup => backup.close()));
+    if (path.dirname(root) === tmpdir()) await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("large backup reconciles committed chunks after repeated lost replies and stale offsets", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "wanx-backup-reconcile-"));
+  const original = randomBytes(6 * 1024 * 1024);
+  const parent = "a".repeat(32);
+  let upload, completed, created = 0, lost = 0, conflicts = 0, statusReads = 0, largestChunk = 0;
+  let staleStatus = true, preferences;
+  const backup = createMemoryBackup({
+    accountScope: () => "account", space: { snapshot: () => ({ scope: "box", dataContextId: "session" }) },
+    store: { async load() { return preferences; }, async save(value) { preferences = value; } },
+    stagingRoot: root, protect: async () => {},
+    client: {
+      subscribe() { return () => {}; },
+      async applicationConnection() {
+        return { context() {}, async request(input) {
+          const url = new URL(input.path, "http://box.test");
+          const [, , , collection, id, operation] = url.pathname.split("/");
+          if (collection === "uploads") {
+            if (!id) { created++; upload ??= { ...JSON.parse(input.body), bytes: Buffer.alloc(0) }; return json({ offset: upload.bytes.length }); }
+            if (input.method === "GET") {
+              statusReads++;
+              if (staleStatus) { staleStatus = false; return json({ offset: 0 }); }
+              return json({ offset: upload.bytes.length });
+            }
+            if (operation === "complete") {
+              assert.equal(JSON.parse(input.body).digest, hash(upload.bytes));
+              completed = { ...upload, kind: "file", digest: hash(upload.bytes), modified: 1 };
+              return json(completed);
+            }
+            if (input.method === "DELETE") return json(null, 204);
+            const offset = Number(url.searchParams.get("offset"));
+            if (offset !== upload.bytes.length) { conflicts++; return json({ detail: { code: "SPACE_UPLOAD_OFFSET" } }, 409); }
+            assert.equal(input.headers["x-content-sha256"], hash(input.body));
+            largestChunk = Math.max(largestChunk, input.body.length);
+            upload.bytes = Buffer.concat([upload.bytes, input.body]);
+            if (lost++ < 6) {
+              if (lost === 1) throw Object.assign(new Error("chunk stalled"), { code: "SPACE_CHUNK_STALLED" });
+              return json({ detail: { code: "SPACE_CONNECTION_TIMEOUT" } }, 503);
+            }
+            return json({ offset: upload.bytes.length });
+          }
+          const selected = url.searchParams.get("parent") || "";
+          return json({ space_id: "personal", root: "", parent: selected,
+            breadcrumbs: selected ? [{ id: parent, name: "半人马AI记忆备份" }] : [],
+            items: selected ? [] : [{ id: parent, parent: "", name: "半人马AI记忆备份", kind: "folder" }] });
+        } };
+      },
+    },
+    async localRequest(_route, data) {
+      const file = path.join(data.directory, "memory.sqlite");
+      await writeFile(file, original);
+      return { path: file };
+    },
+  });
+  try {
+    const deadline = Date.now() + 15_000;
+    while ((await backup.action("status")).phase !== "ready" && Date.now() < deadline) await delay(20);
+    assert.equal((await backup.action("status")).phase, "ready");
+    assert.equal(created, 1, "resume a single upload instead of recreating the whole backup");
+    assert.ok(lost >= 6 && statusReads >= 7 && conflicts === 1);
+    assert.equal(largestChunk, 1024 * 1024);
+    assert.deepEqual(gunzipSync(completed.bytes), original);
+  } finally {
+    await backup.close();
     if (path.dirname(root) === tmpdir()) await rm(root, { recursive: true, force: true });
   }
 });

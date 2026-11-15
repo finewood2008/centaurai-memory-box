@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { mkdir, mkdtemp, realpath, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, open, realpath, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { setTimeout as delay } from "node:timers/promises";
@@ -12,9 +12,9 @@ const interval = 5 * 60_000;
 const managedFolderName = "半人马AI记忆备份";
 const entryId = /^[a-f0-9]{32}$/;
 const backupName = /^半人马AI-记忆备份-[a-f0-9]{32}-[a-f0-9]{32}\.sqlite(?:\.gz)?$/;
-const retryableReadCodes = new Set(["ECONNRESET", "ECONNREFUSED", "EPIPE", "ETIMEDOUT", "EHOSTUNREACH", "ENETUNREACH",
+const retryableReadCodes = new Set(["ECONNRESET", "ECONNREFUSED", "EPIPE", "ETIMEDOUT", "EHOSTUNREACH", "ENETUNREACH", "ENETDOWN", "EAI_AGAIN",
   "CONNECT_TIMEOUT", "NETWORK_NOT_READY", "NETWORK_CHANGED", "BOX_CONNECTION_REQUIRED", "SESSION_CLOSED", "GATEWAY_CLOSED",
-  "SPACE_CONNECTION_TIMEOUT", "tunnel_timeout", "netbird_peer_disconnected", "network_unavailable", "network_recovering"]);
+  "SPACE_CONNECTION_TIMEOUT", "SPACE_CHUNK_STALLED", "tunnel_timeout", "tunnel_rejected", "netbird_peer_disconnected", "network_unavailable", "network_recovering"]);
 const retryableReadStatuses = new Set([408, 429, 502, 503, 504]);
 const fail = message => new Error(message);
 
@@ -75,6 +75,12 @@ export function createMemoryBackup({ client, space, store, stagingRoot, protect,
       async request(route, { method = "GET", body, headers, timeoutMs, signal: requestSignal }) {
         const attempts = method === "GET" ? 8 : 1;
         const bytes = body instanceof Uint8Array;
+        const downloading = method === "GET" && /^\/api\/personal-space\/files\/[a-f0-9]{32}\/content\?/.test(route);
+        if (downloading) {
+          const url = new URL(route, "http://localhost");
+          url.searchParams.set("length", String(Math.min(Number(url.searchParams.get("length")) || 1024 * 1024, 1024 * 1024)));
+          route = url.pathname + url.search;
+        }
         for (let attempt = 0; attempt < attempts; attempt++) {
           check();
           requestSignal?.throwIfAborted();
@@ -87,7 +93,7 @@ export function createMemoryBackup({ client, space, store, stagingRoot, protect,
               signal: AbortSignal.any([signal, timeout, ...(requestSignal ? [requestSignal] : [])]),
               headers: { ...(body && !bytes ? { "content-type": "application/json" } : {}), ...headers },
               body: body && !bytes ? JSON.stringify(body) : body,
-              ...(method === "PUT" ? { idleTimeoutMs: 15_000, freshConnection: true } : {}),
+              ...(method === "PUT" || downloading ? { idleTimeoutMs: 15_000, freshConnection: true } : {}),
               ...(attempt ? { freshConnection: true } : {}),
             });
             check();
@@ -174,28 +180,60 @@ export function createMemoryBackup({ client, space, store, stagingRoot, protect,
     return record;
   }
 
-  async function uploadSnapshot(drive, { parent, name, file, size, signal }) {
+  async function uploadSnapshot(drive, { parent, name, file, size, digest, signal }) {
     const uploadId = randomUUID().replaceAll("-", "");
-    const permanent = new Set(["SPACE_DISK_FULL", "SPACE_INVALID_SIZE", "SPACE_NOT_FOUND", "SPACE_LOCAL_FILE_CHANGED", "SPACE_CHUNK_INVALID"]);
-    try {
-      for (const wait of [0, 1_000, 3_000]) {
-        if (wait) await delay(wait, undefined, { signal });
-        const data = createReadStream(file, { signal });
-        try {
-          const entry = await drive.upload({
-            parent, name, data, size, uploadId, signal,
-            onProgress: ({ offset }) => { progress = { bytes: offset, total: size }; },
-          });
-          if (entry.id !== uploadId) throw fail("盒端备份标识校验失败。");
-          return entry;
-        } catch (error) {
-          if (signal.aborted || permanent.has(error.code) || wait === 3_000) throw error;
-        } finally { data.destroy(); }
+    const retryable = error => retryableReadCodes.has(error?.code ?? error?.message) ||
+      ["SPACE_UPLOAD_OFFSET", "SPACE_REQUEST_FAILED"].includes(error?.code) || error?.name === "TimeoutError";
+    async function retry(work) {
+      for (let attempt = 0; ; attempt++) {
+        signal.throwIfAborted();
+        try { return await work(); }
+        catch (error) {
+          if (signal.aborted || attempt >= 7 || !retryable(error)) throw error;
+          await delay(Math.min(400 * 2 ** attempt, 8_000), undefined, { signal });
+        }
       }
+    }
+    const validOffset = value => {
+      if (!Number.isSafeInteger(value) || value < 0 || value > size) throw fail("盒端备份偏移校验失败。");
+      return value;
+    };
+    const handle = await open(file, "r");
+    try {
+      const remote = await retry(() => drive.createUpload({ parent, name, size, uploadId, signal }));
+      let offset = validOffset(remote.offset);
+      progress = { bytes: offset, total: size };
+      while (offset < size) {
+        const start = offset;
+        const bytes = Buffer.alloc(Math.min(1024 * 1024, size - start));
+        const { bytesRead } = await handle.read(bytes, 0, bytes.length, start);
+        if (bytesRead !== bytes.length) throw fail("本机备份文件已变化。");
+        let reconcile = false;
+        offset = await retry(async () => {
+          if (reconcile) {
+            const state = await drive.uploadStatus(uploadId, { signal });
+            const confirmed = validOffset(state.offset);
+            if (confirmed === start + bytes.length) return confirmed;
+            if (confirmed !== start) throw fail("盒端备份偏移校验失败。");
+          }
+          // A lost reply may still have committed the whole chunk on the box.
+          // Reconcile before re-sending, and reset the retry budget per chunk.
+          reconcile = true;
+          const result = await drive.writeChunk(uploadId, {
+            offset: start, data: bytes, signal,
+          });
+          if (result.offset !== start + bytes.length) throw fail("盒端备份偏移校验失败。");
+          return result.offset;
+        });
+        progress = { bytes: offset, total: size };
+      }
+      const entry = await retry(() => drive.completeUpload(uploadId, { digest, signal }));
+      if (entry.id !== uploadId || entry.size !== size) throw fail("盒端备份标识校验失败。");
+      return entry;
     } catch (error) {
       if (!signal.aborted) await drive.cancelUpload(uploadId, { signal: AbortSignal.timeout(5_000) }).catch(() => {});
       throw error;
-    }
+    } finally { await handle.close(); }
   }
 
   async function snapshot(record, data, current, drive, signal) {
@@ -224,7 +262,7 @@ export function createMemoryBackup({ client, space, store, stagingRoot, protect,
       }
       const fileName = ownPrefix + randomUUID().replaceAll("-", "") + ".sqlite.gz";
       const { size } = await stat(archive);
-      const entry = await uploadSnapshot(drive, { parent: record.parent, name: fileName, file: archive, size, signal });
+      const entry = await uploadSnapshot(drive, { parent: record.parent, name: fileName, file: archive, size, digest, signal });
       if (entry.digest !== digest || entry.name !== fileName) throw fail("盒端备份校验失败。");
       await save(data, current, { ...record, digest, backupId: entry.id, lastBackup: entry.modified }, signal);
       // Retire this installation's snapshots and the exact backup it continued from.
@@ -244,7 +282,15 @@ export function createMemoryBackup({ client, space, store, stagingRoot, protect,
     phase = "restoring";
     await withStaging(async directory => {
       const source = path.join(directory, "restore.sqlite");
-      const data = drive.read(restoreId, { signal });
+      progress = { bytes: 0, total: location.latest.size };
+      const data = (async function* () {
+        let received = 0;
+        for await (const bytes of drive.read(restoreId, { signal })) {
+          received += bytes.length;
+          progress = { bytes: received, total: location.latest.size };
+          yield bytes;
+        }
+      })();
       const destination = createWriteStream(source, { flags: "wx", mode: 0o600 });
       if (location.latest.name.endsWith(".gz")) {
         await pipeline(data, createGunzip(), destination, { signal });

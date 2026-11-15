@@ -90,7 +90,7 @@ export function MemorySyncSummary({ sessionToken, count, automatic, children }: 
   const progress = status?.progress;
   const percent = progress?.total ? " " + Math.floor(progress.bytes / progress.total * 100) + "%" : "";
   const hint = !status ? "正在读取备份状态…" : !status.enabled ? "已关闭，记忆继续保存在本机" :
-    !status.connected ? "连接盒子后自动备份" : status.phase === "restoring" ? "正在恢复记忆…" :
+    !status.connected ? "连接盒子后自动备份" : status.phase === "restoring" ? "正在恢复记忆" + percent :
     status.phase === "backing-up" ? "正在备份" + percent : status.availableBackup ? "发现已有备份，恢复前暂停上传" :
     status.phase === "error" ? "备份暂未完成，稍后自动重试" : status.lastBackup ?
     "最近备份 " + new Date(status.lastBackup * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "已开启，等待首次备份";
