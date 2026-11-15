@@ -21,6 +21,7 @@ import {
   resolveCodexHomeDirectory,
   resolveDeepseekHarnessHomeDirectory,
   resolveHermesHomeDirectory,
+  resolveGeminiHomeDirectory,
   resolveOpenclawStateDirectory,
   resolveOpencodeConfigDirectory,
   resolvePiAgentDirectory,
@@ -34,6 +35,7 @@ import { createDeepseekHarnessSourceAdapter } from "./adapters/deepseek-harness/
 import { createHermesSourceAdapter } from "./adapters/hermes/index.js";
 import { createOpenclawSourceAdapter } from "./adapters/openclaw/index.js";
 import { createOpencodeSourceAdapter } from "./adapters/opencode/index.js";
+import { createGeminiSourceAdapter } from "./adapters/gemini/index.js";
 import { createPiSourceAdapter } from "./adapters/pi/index.js";
 import { createQwenworkSourceAdapter } from "./adapters/qwenwork/index.js";
 import { createSourceRegistry, type SourceRegistry } from "./adapters/source-registry.js";
@@ -63,6 +65,7 @@ import { createDeepseekHarnessSkillTarget } from "./integration/deepseek-harness
 import { createHermesSkillTarget } from "./integration/hermes/index.js";
 import { createOpenclawSkillTarget } from "./integration/openclaw/index.js";
 import { createOpencodeSkillTarget } from "./integration/opencode/index.js";
+import { createGeminiSkillTarget } from "./integration/gemini/index.js";
 import { createPiSkillTarget } from "./integration/pi/index.js";
 import { createQwenworkSkillTarget } from "./integration/qwenwork/index.js";
 import {
@@ -1030,6 +1033,11 @@ function sameScanRequest(
 }
 
 export function createBuiltinSourceRegistry(): SourceRegistry {
+  const profile = process.env.MEMMY_ISOLATED_CODEX_PROFILE;
+  if (profile === "codex-desktop" || profile === "codex-cli") {
+    const allowedOrigins = new Set(profile === "codex-desktop" ? ["Codex Desktop"] : ["codex-tui", "codex_exec"]);
+    return createSourceRegistry([createCodexSourceAdapter({ allowedOrigins })]);
+  }
   return createSourceRegistry([
     createCursorSourceAdapter(),
     createClaudeCodeSourceAdapter(),
@@ -1040,11 +1048,13 @@ export function createBuiltinSourceRegistry(): SourceRegistry {
     createDeepseekHarnessSourceAdapter(),
     createWorkbuddySourceAdapter(),
     createPiSourceAdapter(),
-    createQwenworkSourceAdapter()
+    createQwenworkSourceAdapter(),
+    createGeminiSourceAdapter()
   ]);
 }
 
 export function createBuiltinIntegrationRegistry(configPath: string): SkillTargetRegistry {
+  if (process.env.MEMMY_ISOLATED_CODEX_PROFILE) return createSkillTargetRegistry([]);
   return createSkillTargetRegistry([
     createCursorSkillTarget({ memmyConfigPath: configPath }),
     createClaudeCodeSkillTarget({ memmyConfigPath: configPath }),
@@ -1055,7 +1065,8 @@ export function createBuiltinIntegrationRegistry(configPath: string): SkillTarge
     createDeepseekHarnessSkillTarget({ memmyConfigPath: configPath }),
     createWorkbuddySkillTarget(),
     createPiSkillTarget(),
-    createQwenworkSkillTarget()
+    createQwenworkSkillTarget(),
+    createGeminiSkillTarget()
   ]);
 }
 
@@ -1713,6 +1724,7 @@ function agentRootDirectory(sourceId: string): string | null {
     case "workbuddy": return resolveWorkbuddyHomeDirectory();
     case "pi": return resolvePiAgentDirectory();
     case "qwenwork": return resolveQwenworkHomeDirectory();
+    case "gemini": return resolveGeminiHomeDirectory();
     default: return null;
   }
 }
@@ -1902,7 +1914,7 @@ function connectionStatus(sourceId: string): AgentConnectionStatus {
 }
 
 function agentConnectionKind(sourceId: string): "plugin" | "skill" {
-  return ["cursor", "claude_code", "codex", "opencode", "openclaw", "hermes", "deepseek_harness"].includes(sourceId)
+  return ["cursor", "claude_code", "codex", "opencode", "openclaw", "hermes", "deepseek_harness", "gemini"].includes(sourceId)
     ? "plugin"
     : "skill";
 }

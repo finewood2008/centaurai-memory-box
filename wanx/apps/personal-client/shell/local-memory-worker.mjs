@@ -137,8 +137,10 @@ async function run(sourceRoot, runtimeHome, descriptor, apiDatabasePath) {
     const { mutateMemoryConfig } = await import(memory("config", "writer.js"));
     await mutateMemoryConfig(configFile, root => {
       if (existsSync(configFile)) return;
+      const isolated = Boolean(process.env.MEMMY_ISOLATED_CODEX_PROFILE);
       root.memmyMemory = { storage: { mode: "local", backend: "sqlite", sqlitePath: defaultDatabasePath,
-        endpoint: "http://127.0.0.1:18960", token: randomBytes(32).toString("hex") } };
+        endpoint: isolated ? "http://127.0.0.1:0" : "http://127.0.0.1:18960", token: randomBytes(32).toString("hex") },
+        ...(isolated ? { agentAccess: { autoInjectSkill: false, autoScanKnownAgents: false, watchFileChanges: false } } : {}) };
     });
   }
   const { loadMemmyConfig } = await import(memory("config", "index.js"));

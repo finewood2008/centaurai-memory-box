@@ -199,8 +199,18 @@ const actions = {
   ].map(([product, method]) => [`updates.${product}.${method}`, input => ipcRenderer.invoke(`wanx-client:updates-${product}-${method}`, input)])),
 };
 
-for (const method of ["snapshot", "refresh", "stat", "list", "mkdir", "move", "trash", "restore", "purge", "uploads", "download", "downloads", "transfer", "preview", "cancel-preview", "restore-version"])
+for (const method of ["snapshot", "refresh", "stat", "list", "mkdir", "move", "trash", "restore", "purge", "uploads", "download", "downloads", "transfer", "preview", "cancel-preview", "restore-version", "annotation", "set-annotation", "auto-annotate", "search-annotations"])
   actions[`space.${method}`] = input => ipcRenderer.invoke(`wanx-client:space-${method}`, input);
+
+// Fetch the fixed operation contract from the trusted main process once;
+// sandboxed preload cannot require arbitrary sibling modules.
+let annotationWorkbenchContract;
+actions["space.annotation-workbench"] = async input => {
+  annotationWorkbenchContract ||= ipcRenderer.invoke("wanx-client:space-annotation-workbench-contract").catch(error => { annotationWorkbenchContract = null; throw error; });
+  const contract = await annotationWorkbenchContract;
+  if (contract?.version !== 1 || !Array.isArray(contract.operations) || !contract.operations.includes(input?.op)) throw new Error("SPACE_ANNOTATION_INVALID");
+  return ipcRenderer.invoke("wanx-client:space-annotation-workbench", input);
+};
 
 for (const method of ["share-create", "share-list", "share-detail", "share-copy", "share-revoke", "share-dismiss", "spaces", "space-manage", "file-transfer", "storage-set", "storage-choose", "mcp-reset-endpoint","mcp-drives","mcp-manage","mcp-rotate","mcp-state", "mcp-issue", "mcp-revoke", "mcp-grant", "mcp-revoke-grant", "mcp-folders", "mcp-archive", "mcp-prompt", "mcp-copy"])
   actions[`space.links-${method}`] = input => ipcRenderer.invoke(`wanx-client:space-links-${method}`, input);

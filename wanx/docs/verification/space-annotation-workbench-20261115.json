@@ -1,0 +1,264 @@
+{
+  "recordedAt": "2026-11-15T15:55:09.802882+00:00",
+  "primaryRoot": "/Users/finewood/Projects/Memobox",
+  "initialWorkspaceRoot": "/Volumes/ORICO/Memobox",
+  "codexWorkspaceStillBoundToOldRoot": true,
+  "head": "a6df9bb769d04e7eefd9eea042a9a49c974f9ea0",
+  "codeCommitted": false,
+  "published": false,
+  "boxCodeChanged": false,
+  "installedApp": "/Applications/半人马AI-记忆盒子 空间标注开发版.app",
+  "runtimeKind": "local-development-source-runtime",
+  "tests": {
+    "client": {
+      "passed": 166,
+      "failed": 0,
+      "skipped": 0,
+      "cwd": "/Users/finewood/Projects/Memobox/wanx/apps/personal-client"
+    },
+    "model": {
+      "passed": 59,
+      "failed": 0,
+      "cwd": "/Volumes/ORICO/Memobox/memory/App/backend",
+      "sameFeatureSourcesInPrimary": true
+    },
+    "realElectron": {
+      "passed": 1,
+      "failed": 0,
+      "items": 1000,
+      "processes": 2,
+      "atomicReceipts": 21,
+      "fakeBox": true,
+      "temporaryAesKey": true
+    },
+    "totalPassed": 226
+  },
+  "installedAcceptance": {
+    "box": "CentaurOS-79",
+    "folder": "Annotation Workbench QA 20261115",
+    "syntheticFiles": 12,
+    "uploadedBytesDisplay": "11.3 KB",
+    "tag": "WB-QA-20261115",
+    "batchApplied": 12,
+    "rulesSuggestionsGenerated": 12,
+    "docxTextInspected": true,
+    "scanPdfNameOnlyNoOcrInspected": true,
+    "singleSuggestionAcceptedAndUndone": true,
+    "restartReadback": true,
+    "builtInRecursiveSearchResults": 12,
+    "retrievedText": "SYNTHETIC QA ONLY - NO REAL DATA\nAmber Harbor project proposal and contract review.",
+    "schemeRestored": "合成工作台验收",
+    "finalQueues": {
+      "unannotated": 0,
+      "suggested": 0,
+      "confirmed": 12,
+      "failed": 0
+    },
+    "liveExternalModelCalled": false
+  },
+  "stores": [
+    {
+      "name": "space-annotations.enc",
+      "bytes": 80204,
+      "sha256": "4fad7f7ae8ed322997a9b3bb30c5e975d9ed7218f2c53642cdab8cafe39e2616",
+      "containsPlaintextSyntheticTag": false
+    },
+    {
+      "name": "space-annotation-workbench.enc",
+      "bytes": 94919,
+      "sha256": "8be4e80bbf7a243a699d82d6ef803ea4058a737a21ca496141aad9dc0c901d6f",
+      "containsPlaintextSyntheticTag": false
+    }
+  ],
+  "files": [
+    {
+      "path": "wanx/apps/personal-client/shell/space-annotation-workbench.mjs",
+      "sha256": "085cc65a9d953426313be19a9af543ee32b5c7d73f5002f24748f65e00a054f6",
+      "bytes": 32546
+    },
+    {
+      "path": "wanx/apps/personal-client/shell/annotation-workbench-contract.mjs",
+      "sha256": "a746503eb404065ff86a4afc856eeef724b51ea663a432c73164492b503a8e5e",
+      "bytes": 1556
+    },
+    {
+      "path": "wanx/apps/personal-client/shell/annotation-model-client.mjs",
+      "sha256": "cd49dd6722df395f2454e3e4778a228e918f1d98cf4327bb81893c87c78047d4",
+      "bytes": 1893
+    },
+    {
+      "path": "wanx/apps/personal-client/shell/annotation-content.mjs",
+      "sha256": "f539885b28658796246e9f175a3a96f51843ea4b2f2c6ffa7240a41ce82d1acb",
+      "bytes": 4338
+    },
+    {
+      "path": "wanx/apps/personal-client/shell/annotation-content-worker.mjs",
+      "sha256": "18f01670218a1e0aac15b3e5827a6af2d350167e0a76144bb7b6aa13f585867f",
+      "bytes": 12255
+    },
+    {
+      "path": "wanx/apps/personal-client/shell/space-annotation-service.mjs",
+      "sha256": "4324a0404627ee5604840b6c5362a3093209c560d3471c1d832c9f0946d0c685",
+      "bytes": 15558
+    },
+    {
+      "path": "wanx/apps/personal-client/shell/space-annotations.mjs",
+      "sha256": "4f8af46bad04d493dacfde9a3c7bcfc3ce95be67493023a35fb9e0bf5cb58942",
+      "bytes": 28654
+    },
+    {
+      "path": "wanx/apps/personal-client/shell/personal-space.mjs",
+      "sha256": "1c6d7a6aae415b46ba81a29e5f3d8bf394bfac96f2415c3fc34b6977167b5097",
+      "bytes": 54601
+    },
+    {
+      "path": "wanx/apps/personal-client/shell/control.mjs",
+      "sha256": "7c55f8461257086cc622a48037bdd62ff8dc22e1580d020fe4221a19781ecc29",
+      "bytes": 33923
+    },
+    {
+      "path": "wanx/apps/personal-client/shell/main.mjs",
+      "sha256": "80385bde67f04d57e59d348fb7d1a21aec04fb9945261f047c5564e9978f72cf",
+      "bytes": 51628
+    },
+    {
+      "path": "wanx/apps/personal-client/local-ui/remote-preload.cjs",
+      "sha256": "2413c6f7baff1d0e63e76dbaee55c5b67a13e5ff35e12bf0be038ae91487051b",
+      "bytes": 25837
+    },
+    {
+      "path": "wanx/apps/personal-client/local-ui/renderer/space-annotation-workbench.js",
+      "sha256": "eb02a5701dfa61845b538c996b3c00ef5ceb76ca37fbdc1b9216cfad85991b64",
+      "bytes": 53202
+    },
+    {
+      "path": "wanx/apps/personal-client/local-ui/renderer/space-annotation-workbench.css",
+      "sha256": "b641692cb8b6e15e06985f8000125dce6d2fe80a09752b197a83886d3cb98d0c",
+      "bytes": 11024
+    },
+    {
+      "path": "wanx/apps/personal-client/local-ui/renderer/personal-space.js",
+      "sha256": "9738deca0b0d183ca13e27ee9e1aad83113b44f45678546419ac112c98c82f8e",
+      "bytes": 95796
+    },
+    {
+      "path": "wanx/apps/personal-client/local-ui/renderer/index.html",
+      "sha256": "17b5c5b80229d216dc1cc40eb7e3a26c41a206a8f2e5f4b5885d5b4384c67974",
+      "bytes": 2340
+    },
+    {
+      "path": "wanx/apps/personal-client/package.json",
+      "sha256": "763cc8ec23c80b9b8ec006bab9ae9fe9ce7a252cb73d0f044ce520112b7cf82a",
+      "bytes": 6107
+    },
+    {
+      "path": "wanx/apps/personal-client/package-lock.json",
+      "sha256": "5db69c9b68cb96e3cc2af694c0b462fae817958cebdee574dcef91d7a6d3b2bf",
+      "bytes": 190810
+    },
+    {
+      "path": "wanx/apps/personal-client/tests/annotation-workbench-integration.test.mjs",
+      "sha256": "b2490a09afa7ca16e775224dc59a62fc1c6f6d91a6c96fc9b7fedd372f79c674",
+      "bytes": 51340
+    },
+    {
+      "path": "wanx/apps/personal-client/tests/annotation-model-client.test.mjs",
+      "sha256": "5f7c4a7c413270aa8658ec9eaea65e28041ac7fb258cf8177aba84924976a80d",
+      "bytes": 9915
+    },
+    {
+      "path": "wanx/apps/personal-client/tests/annotation-content.test.mjs",
+      "sha256": "3b276758ee8c305df41784df28cfe9724ce7a1f38c4943b162c29cf9068f607b",
+      "bytes": 12865
+    },
+    {
+      "path": "wanx/apps/personal-client/tests/annotation-workbench-electron.test.mjs",
+      "sha256": "95433a9088eb569303c1eed37bf2a10d49902390ebdf14d8324b88ac10b135ca",
+      "bytes": 2218
+    },
+    {
+      "path": "wanx/apps/personal-client/tests/support/electron-annotation-workbench.mjs",
+      "sha256": "17f5015fa8b038b082cc9b390a7b12b3dffb8ac61a7d5b64b96d84bd2a2d9aaf",
+      "bytes": 15414
+    },
+    {
+      "path": "wanx/apps/personal-client/tests/space-annotation-workbench-ui.test.mjs",
+      "sha256": "5f8d1abbac8f926bef255e0e9918d937fe51eea19534e06087684be4e049ae3a",
+      "bytes": 31802
+    },
+    {
+      "path": "wanx/apps/personal-client/tests/space-annotation-service.test.mjs",
+      "sha256": "314a77592d56aa1d95922d3162d14417a39a1db174eb69867100e7479054c4e1",
+      "bytes": 17066
+    },
+    {
+      "path": "wanx/apps/personal-client/tests/space-annotations-batch.test.mjs",
+      "sha256": "3ffd93440c857674d1a632a4d5d5fef65c62ce14f48eecdb03703523afcd25fb",
+      "bytes": 20593
+    },
+    {
+      "path": "wanx/apps/personal-client/tests/space-annotations-preload.test.mjs",
+      "sha256": "2c88186f99218d9c2097e4369ece226075442e7518cda30dadb8e389dbad9fc7",
+      "bytes": 4022
+    },
+    {
+      "path": "wanx/apps/personal-client/tools/create-annotation-workbench-fixtures.mjs",
+      "sha256": "835722d49f1a74e3081359346f9c0f3d7623b1df647d4f82899bf32db2c4fe9a",
+      "bytes": 17773
+    },
+    {
+      "path": "wanx/apps/builder/tools/assemble-client.mjs",
+      "sha256": "20260366566ff32e2adfefa65e834986fb7bcc84e130beb4a2d3abd63402f122",
+      "bytes": 8422
+    },
+    {
+      "path": "memory/App/backend/src/services/plugin-model-inference-service.ts",
+      "sha256": "d31a9d74b59f0fb0003ec8082e4a4def3c0c5024afbf6b86f788ccfd79b9fcbf",
+      "bytes": 7976
+    },
+    {
+      "path": "memory/App/backend/src/services/text-model-inference-service.ts",
+      "sha256": "d00c0d30d84986bad667371e4ff9166a241742ff3801d6cbc09e9d4cedac6c26",
+      "bytes": 24521
+    },
+    {
+      "path": "memory/App/backend/src/services/space-annotation-inference-service.ts",
+      "sha256": "98dbb04b04db781624eb7b85286b4b2617f322c56d5c8bb3c6834a5963401c27",
+      "bytes": 11046
+    },
+    {
+      "path": "memory/App/backend/src/services/index.ts",
+      "sha256": "3765b79ed3fe00f8019164ba99efd884f80f1f30e63e7bd93464cfb0b38dfcbe",
+      "bytes": 24962
+    },
+    {
+      "path": "memory/App/backend/src/adapters/inbound/local-api/routes/space-annotations.ts",
+      "sha256": "51dec028dd4e80eada68eae18eb6e2a2f081ec7b54a8c9d507cd84a0be60ecb9",
+      "bytes": 2304
+    },
+    {
+      "path": "memory/App/backend/src/adapters/inbound/local-api/server.ts",
+      "sha256": "12876e22791447a1cd7777b51d2110e02b092516914480b142340cd19fb20709",
+      "bytes": 15522
+    },
+    {
+      "path": "memory/App/backend/src/services/tests/space-annotation-inference-service.test.ts",
+      "sha256": "efa25c7ea2be25dd75b97ad26914f24a75fcfd209c2ffe462e81a3cabca43493",
+      "bytes": 9565
+    },
+    {
+      "path": "memory/App/backend/src/adapters/inbound/local-api/tests/space-annotations-route.test.ts",
+      "sha256": "5d9ea4c499b38e36ce1d869c3817b63be8965a9dc0235d916b6fa18c8f3131b5",
+      "bytes": 3923
+    }
+  ],
+  "remainingScope": [
+    "Live external-model inference not exercised: no configured model",
+    "Real model-driven Agent dialogue not exercised",
+    "Standalone Starlink",
+    "Standalone box MCP",
+    "Cross-device annotation synchronization"
+  ],
+  "appSignaturesStrictVerified": true,
+  "appResourceHashesMatchPrimary": true
+}

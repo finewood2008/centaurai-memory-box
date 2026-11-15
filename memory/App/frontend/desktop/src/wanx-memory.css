@@ -212,7 +212,10 @@ body[data-memory-surface="my-ai"] {
 .my-ai-sync-details .my-ai-sync-panel { padding: 12px; box-shadow: none; }
 .my-ai-sync-details .my-ai-source-tools { margin-bottom: 14px; }
 .my-ai-sync-details .my-ai-sync-source { padding: 10px 12px; }
-.my-ai-restore-confirm { margin-top: 10px; padding: 12px; background: #f1e9dd; border-radius: 10px; font-size: 13px; }
+.my-ai-restore-confirm { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; margin-top: 10px; padding: 12px; background: #f1e9dd; border-radius: 10px; font-size: 13px; }
+.my-ai-restore-confirm label { display: grid; gap: 4px; max-width: 100%; }
+.my-ai-restore-confirm select { min-width: 0; max-width: 100%; border: 1px solid #ccbba6; border-radius: 6px; padding: 4px 7px; background: #fffaf3; color: inherit; }
+.my-ai-restore-confirm > div, .my-ai-restore-confirm > p { flex-basis: 100%; }
 .my-ai-restore-confirm p { margin: 0 0 8px; }
 .my-ai-restore-confirm button + button { margin-left: 8px; }
 @media (max-width: 580px) {

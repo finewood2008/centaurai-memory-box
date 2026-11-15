@@ -54,7 +54,9 @@ export function createMemoryRuntimeSupervisor({
       });
       if (!response.ok) return false;
       const health = await response.json();
-      return health?.ok === true && health.storage?.ready === true;
+      // Aggregate `ok` also includes model-provider errors. A reachable, ready
+      // database must stay connected while those providers are degraded.
+      return health?.storage?.ready === true;
     } catch { return false; }
   }
 

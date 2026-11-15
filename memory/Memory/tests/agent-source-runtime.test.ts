@@ -340,7 +340,8 @@ describe("standalone Agent source executor", () => {
       "deepseek_harness",
       "workbuddy",
       "pi",
-      "qwenwork"
+      "qwenwork",
+      "gemini"
     ]);
   });
 

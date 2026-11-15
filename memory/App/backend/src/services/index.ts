@@ -76,6 +76,7 @@ import { createTurnService, type TurnService } from "./turn-service.js";
 import { createPluginService, type PluginRuntimeHost, type PluginService } from "./plugin-service.js";
 import { createPluginLocalArtifactService } from "./plugin-local-artifact-service.js";
 import { createPluginModelInferenceService } from "./plugin-model-inference-service.js";
+import { createSpaceAnnotationInferenceService, type SpaceAnnotationInferenceService } from "./space-annotation-inference-service.js";
 import { entitledPluginIds, reconcileEntitledPlugins } from "./plugin-entitlement-reconcile-service.js";
 import { createPluginAsrService } from "./plugin-asr-service.js";
 import { createPluginAssetKeyService } from "./plugin-asset-key-service.js";
@@ -87,6 +88,7 @@ export interface BackendServices {
   agentAdapterRegistry: AgentAdapterRegistry;
   bootstrap: BootstrapService;
   appConfig: AppConfigService;
+  spaceAnnotations?: SpaceAnnotationInferenceService;
   account: AccountService;
   /** Integrations. */
   integrations: IntegrationService;
@@ -332,6 +334,14 @@ export function createBackendServices(options: CreateBackendServicesOptions): Ba
   return {
     memoryClient: options.memoryClient,
     agentAdapterRegistry: options.agentAdapterRegistry,
+    spaceAnnotations: createSpaceAnnotationInferenceService({
+      configWriter: memmyConfigWriter,
+      context: () => {
+        const account = accountSessionRepository.get();
+        return { mode: options.appStateStore.repositories.bootstrap.getAppSettings().userMode,
+          activeAccountId: account.authenticated ? account.profile.userId : null };
+      }
+    }),
     bootstrap: createBootstrapService({
       ...options,
       getMemoryUserId: resolveMemoryUserId,

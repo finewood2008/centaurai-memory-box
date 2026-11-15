@@ -1,0 +1,35 @@
+--- a/wanx/apps/personal-client/shell/space-annotation-workbench.mjs
++++ b/wanx/apps/personal-client/shell/space-annotation-workbench.mjs
+@@ -161,7 +161,7 @@
+     if (tagMode === "remove") { const removed = new Set(wantedTags.map(tag => tag.toLocaleLowerCase())); changes.tags = ownTags.filter(tag => !removed.has(tag.toLocaleLowerCase())); }
+     if (tagMode === "replace") changes.tags = uniqueTags(wantedTags);
+     const description = suggestion?.description ?? mode.description ?? "", descriptionMode = suggestion && mode.descriptionMode === undefined ? "fill-empty" : mode.descriptionMode || "keep";
+-    if (descriptionMode === "replace" || descriptionMode === "fill-empty" && !annotation.description?.trim()) changes.description = description;
++    if (descriptionMode === "replace" || descriptionMode === "fill-empty" && description.trim() && !annotation.description?.trim()) changes.description = description;
+     if (mode.inherit !== undefined) changes.inherit = mode.inherit;
+     if (input.useDrafts && row.draft) {
+       if (row.draftRevision !== undefined && row.draftRevision !== row.annotation.revision) throw fail("SPACE_ANNOTATION_CONFLICT");
+--- a/wanx/apps/personal-client/tests/annotation-workbench-integration.test.mjs
++++ b/wanx/apps/personal-client/tests/annotation-workbench-integration.test.mjs
+@@ -747,3 +747,21 @@
+   await waitFor(async () => (await f.op("list", { jobId, limit: 200 })).items.filter(row => row.suggestion).length === 3, "explicitly resumed AI task");
+   assert.ok(f.modelCalls.length <= 4, "completed suggestions should not be recomputed");
+ });
++
++
++test("empty rule descriptions do not create human overrides that hide later folder inheritance", async t => {
++  const f = await fixture(t, { count: 9 });
++  const opened = await f.op("open", { parent: rootId }), jobId = opened.job.id, id = itemId(8);
++  await f.ready(jobId);
++  await f.op("suggest", { jobId, selection: { ids: [id] }, modelPresetId: "rules" });
++  const suggested = await f.idle(jobId);
++  assert.equal(suggested.items.find(row => row.id === id).suggestion.description, "");
++  const plan = await f.op("prepare", { jobId, selection: { ids: [id] }, change: { tagMode: "add", descriptionMode: "fill-empty" }, acceptSuggestions: true });
++  assert.equal(Object.hasOwn(plan.examples[0].after, "description"), false);
++  await f.op("apply", { jobId, planId: plan.planId }); await f.idle(jobId);
++  const parent = await f.service.operation("annotation", { id: rootId });
++  await f.service.operation("set-annotation", { id: rootId, expectedRevision: parent.revision, description: "合成父级说明仍可继承", reviewed: true });
++  const child = await f.service.operation("annotation", { id });
++  assert.equal(Object.hasOwn(child.manual, "description"), false);
++  assert.equal(child.description, "合成父级说明仍可继承");
++});

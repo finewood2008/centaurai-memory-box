@@ -36,11 +36,13 @@ const USER_CONTENT_ITEM_KIND = "user.text";
 export async function* readCodexRollout(
   filePath: string,
   signal?: AbortSignal,
-  stopEvidence?: { conversationId?: string; turnId: string }
+  stopEvidence?: { conversationId?: string; turnId: string },
+  allowedOrigins?: ReadonlySet<string>
 ): AsyncIterable<RawCodexMessage> {
   const fileId = rolloutFileId(filePath);
   let conversationId = "";
   let workspacePath: string | undefined;
+  let acceptedOrigin = allowedOrigins === undefined;
   let current: RawCodexMessage[] = [];
   let turnId = "";
   let startedAt = "";
@@ -98,6 +100,8 @@ export async function* readCodexRollout(
     const payload = isRecord(record.payload) ? record.payload : {};
     const timestamp = iso(record.timestamp);
     if (record.type === "session_meta") {
+      if (allowedOrigins && !allowedOrigins.has(text(payload.originator))) return;
+      acceptedOrigin = true;
       const nativeId = text(payload.session_id) || text(payload.id);
       if (conversationId && nativeId && nativeId !== conversationId) {
         invalidReason = "identity_conflict";
@@ -107,6 +111,7 @@ export async function* readCodexRollout(
       workspacePath = text(payload.cwd) || workspacePath;
       continue;
     }
+    if (!acceptedOrigin) continue;
     if (record.type === "turn_context" || (record.type === "event_msg" && payload.type === "task_started")) {
       const nextId = text(payload.turn_id);
       if (nextId && nextId !== turnId) {

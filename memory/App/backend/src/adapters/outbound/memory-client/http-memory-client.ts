@@ -185,17 +185,25 @@ export function createHttpMemoryClient(
       return request("GET", "exportBundle", z.record(z.string(), z.unknown()));
     },
 
+    async importBundle(bundle) {
+      return request("POST", "importBundle", z.object({
+        ok: z.literal(true), inserted: z.record(z.string(), z.number()), skipped: z.record(z.string(), z.number())
+      }), { body: { bundle, conflictStrategy: "skip" }, maxRetries: 0, timeoutMs: 120_000 });
+    },
+
     async getWanxStorage() {
       return request("GET", "wanxStorage", z.object({
         dataPath: z.string().min(1),
         configured: z.boolean(),
+        rollbackAvailable: z.boolean().optional(),
+        sourceProfile: z.string().optional(),
         result: z.object({ id: z.string(), failed: z.boolean() }).optional()
       }), { maxRetries: 0, timeoutMs: 3000 });
     },
 
     async moveWanxStorage(input) {
       return request("POST", "wanxStorage", z.object({ accepted: z.boolean() }), {
-        body: input, maxRetries: 0, timeoutMs: "restoreFrom" in input ? 120_000 : 5000
+        body: input, maxRetries: 0, timeoutMs: "directory" in input ? 5000 : 120_000
       });
     },
 

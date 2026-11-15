@@ -1,0 +1,73 @@
+{
+  "date": "2026-11-15T13:18:53.316232+00:00",
+  "baseline": "a6df9bb769d04e7eefd9eea042a9a49c974f9ea0",
+  "node": "v25.9.0",
+  "summary": {
+    "tests": 276,
+    "pass": 276,
+    "fail": 0,
+    "cancelled": 0,
+    "skipped": 0,
+    "todo": 0
+  },
+  "test_files": [
+    "wanx/apps/personal-client/tests/space-annotations.test.mjs",
+    "wanx/apps/personal-client/tests/space-annotation-service.test.mjs",
+    "wanx/apps/personal-client/tests/space-annotations-ui.test.mjs",
+    "wanx/apps/personal-client/tests/codex-context-sources.test.mjs",
+    "wanx/apps/personal-client/tests/starlink-space-annotations.test.mjs",
+    "wanx/apps/personal-client/tests/personal-space.test.mjs",
+    "wanx/apps/personal-client/tests/personal-space-folders.test.mjs",
+    "wanx/apps/personal-client/tests/personal-space-batch.test.mjs",
+    "wanx/apps/personal-client/tests/personal-space-recovery.test.mjs",
+    "wanx/apps/personal-client/tests/personal-space-refresh.test.mjs",
+    "wanx/apps/personal-client/tests/personal-space-renderer.test.mjs",
+    "wanx/apps/personal-client/tests/personal-space-upload-limits.test.mjs",
+    "wanx/apps/personal-client/tests/space-drive-routing.test.mjs",
+    "wanx/apps/builder/tests/personal-data-service.test.mjs",
+    "wanx/apps/builder/tests/team-data-view.test.mjs"
+  ],
+  "command": "node --test wanx/apps/personal-client/tests/space-annotations.test.mjs wanx/apps/personal-client/tests/space-annotation-service.test.mjs wanx/apps/personal-client/tests/space-annotations-ui.test.mjs wanx/apps/personal-client/tests/codex-context-sources.test.mjs wanx/apps/personal-client/tests/starlink-space-annotations.test.mjs wanx/apps/personal-client/tests/personal-space.test.mjs wanx/apps/personal-client/tests/personal-space-folders.test.mjs wanx/apps/personal-client/tests/personal-space-batch.test.mjs wanx/apps/personal-client/tests/personal-space-recovery.test.mjs wanx/apps/personal-client/tests/personal-space-refresh.test.mjs wanx/apps/personal-client/tests/personal-space-renderer.test.mjs wanx/apps/personal-client/tests/personal-space-upload-limits.test.mjs wanx/apps/personal-client/tests/space-drive-routing.test.mjs wanx/apps/builder/tests/personal-data-service.test.mjs wanx/apps/builder/tests/team-data-view.test.mjs",
+  "evidence_type": "Production client modules and synthetic fixtures; mocked box transport; not real desktop or box acceptance",
+  "source_sha256": {
+    "wanx/apps/personal-client/shell/space-annotations.mjs": "c139b91428a066a4a46178c94349908d3467477b011ccd33bb4fe51f7943a98b",
+    "wanx/apps/personal-client/shell/space-annotation-service.mjs": "dad6b269a78b59c968ed9d9c26ba8fe2cd2f0c12bdfc5610bc07eaec26d1cdb3",
+    "wanx/apps/personal-client/shell/personal-space.mjs": "1eda2da075906f0484e4035a537518322b2fb340c7c28f2e9a7089891c3786ad",
+    "wanx/apps/personal-client/shell/codex-context-sources.mjs": "435037360a0fa5fa2b0c74e83b89f3571beb23f6f15cc928ad8e67460cf88544",
+    "wanx/apps/personal-client/local-ui/renderer/personal-space.js": "d9346ee6a932adc857f7966694f04be460685e625b37d1c4e00961ed73a847b4",
+    "wanx/apps/builder/integration/personal-client/starlink-space-annotations.mjs": "002cc50704516d7482ed1596ae2723b7beb9c1ca2f08f5ff3b4d07180318e6bf",
+    "wanx/apps/builder/integration/personal-client/data-service.mjs": "65d0f2929417fc9be37f687b39c403f50dbb7b9f08b7f4765e71485b25772dc7",
+    "wanx/apps/builder/integration/team-client/data-view.js": "4e7676a09b2d733680f82c06737d35c812d9324ff36c981757246c918897732d",
+    "wanx/apps/builder/tools/assemble-client.mjs": "03a576cee387be5cf3b4ee58f41a600243c64802cf37f2cc0c2e1441c21e9b48"
+  },
+  "test_sha256": {
+    "wanx/apps/personal-client/tests/space-annotations.test.mjs": "d5451b6fab2b76843ba6f28fbe439ae1f871846fcea1a54edeb36c1f3463fad4",
+    "wanx/apps/personal-client/tests/space-annotation-service.test.mjs": "314a77592d56aa1d95922d3162d14417a39a1db174eb69867100e7479054c4e1",
+    "wanx/apps/personal-client/tests/space-annotations-ui.test.mjs": "879a5bda0713670f54cacbea72b214a89c0129d26c0cf4469624e508b762fe50",
+    "wanx/apps/personal-client/tests/codex-context-sources.test.mjs": "020c3a652ddf3cf09c1b772c2468f5dcbf47325d013db9a53e8cfb3340b8ee4e",
+    "wanx/apps/personal-client/tests/starlink-space-annotations.test.mjs": "979a8ca04fe423c655ad14ae823afc96284031df205fd3fcde117da1fa86b748",
+    "wanx/apps/personal-client/tests/personal-space.test.mjs": "6c702eda2c9e560b5b0ba3e5e95813e2b05bdc1ffdd2ebca8566d43466d9f9fc",
+    "wanx/apps/personal-client/tests/personal-space-folders.test.mjs": "23c52e77f28e5a9c521209e793aebc15f4c05a1c532c5b2ab96fe69df555e191",
+    "wanx/apps/personal-client/tests/personal-space-batch.test.mjs": "98a88da327b1ed0dd2449033b3dba5d9afdd631e00170a161fe70bb60b22ad59",
+    "wanx/apps/personal-client/tests/personal-space-recovery.test.mjs": "991fd5fdd52cd9054dcf69d9146ad7e5d7492d73f1a762af7debbf37926933f5",
+    "wanx/apps/personal-client/tests/personal-space-refresh.test.mjs": "68a83fef5abd45bca1e173e58391b6062837499994d05d851e1c6b4fb99b7d03",
+    "wanx/apps/personal-client/tests/personal-space-renderer.test.mjs": "54b1158442b086130f44718a65866dce896621675d8bee19435540f175ea71cb",
+    "wanx/apps/personal-client/tests/personal-space-upload-limits.test.mjs": "7f4a377ed4d99346167ca3438bba9fbbd9738c94d9f97566db9f333bf9b96a13",
+    "wanx/apps/personal-client/tests/space-drive-routing.test.mjs": "c3b73a3b706f273e4750797821d0ee02cbd3fd1e4768857e0da657c1a72f6e1b",
+    "wanx/apps/builder/tests/personal-data-service.test.mjs": "4898859b75a690c8b9751cbb159ac95f327f46a7afb44189a49a4083badaca8e",
+    "wanx/apps/builder/tests/team-data-view.test.mjs": "dd1a912375ff9864e88e13a21ee0140ac80b16e97adfed93a6f84ec53a0ea675"
+  },
+  "checks": {
+    "scoped_git_diff_check": "passed",
+    "syntax": "passed",
+    "targeted_esbuild_personal_data_service_and_view": "passed"
+  },
+  "not_verified": [
+    "standalone_installed_starlink_annotation_search",
+    "standalone_box_mcp_annotation_search",
+    "real_desktop_box_agent_end_to_end",
+    "cross_device_annotation_sync",
+    "cross_process_store_locking",
+    "unknown_document_id_after_lost_commit_response"
+  ]
+}

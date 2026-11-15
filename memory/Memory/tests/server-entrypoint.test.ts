@@ -8,8 +8,24 @@ import { describe, expect, it, vi } from "vitest";
 import { isDirectRun, main, writeCurrentEndpoint } from "../src/server/index.js";
 import * as memoryHttp from "../src/server/http.js";
 import * as memoryRestart from "../src/server/service-restart.js";
+import { MemoryDb } from "../src/storage/db.js";
+import { bindWanxSourceProfile, copyWanxDatabase, prepareWanxRestore } from "../src/server/wanx-storage.js";
 
 describe("memmy memory server entrypoint", () => {
+  it("checks the source inside a SQLite snapshot before restoring it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "memobox-source-profile-"));
+    const cli = new MemoryDb({ path: join(root, "cli.sqlite") });
+    const desktop = new MemoryDb({ path: join(root, "desktop.sqlite") });
+    try {
+      bindWanxSourceProfile(cli, "codex-cli", true);
+      bindWanxSourceProfile(desktop, "codex-desktop", true);
+      expect(() => bindWanxSourceProfile(cli, "codex-desktop", false)).toThrow(/different source/);
+      const cliFile = await copyWanxDatabase(cli, root);
+      await expect(prepareWanxRestore(cliFile, root, "codex-desktop")).rejects.toThrow(/备份/);
+      await expect(prepareWanxRestore(cliFile, root)).rejects.toThrow(/备份/);
+      await expect(prepareWanxRestore(cliFile, root, "codex-cli")).resolves.toMatch(/\.sqlite$/);
+    } finally { cli.close(); desktop.close(); rmSync(root, { recursive: true, force: true }); }
+  });
   it("gives shutdown priority over restart while cleanup is still pending", async () => {
     const root = mkdtempSync(join(tmpdir(), "memmy-memory-restart-shutdown-"));
     const configPath = join(root, "config.yaml");
@@ -145,7 +161,7 @@ describe("memmy memory server entrypoint", () => {
     }
   });
 
-  it("restores a verified snapshot with committed WAL data and retains the destination's original database", async () => {
+  it("validates restore candidates, preserves committed WAL data and supports a local rollback", async () => {
     const root = mkdtempSync(join(tmpdir(), "memmy-wanx-restore-"));
     const stage = mkdtempSync(join(root, "stage-"));
     const configPath = join(root, "config.yaml");
@@ -170,6 +186,7 @@ describe("memmy memory server entrypoint", () => {
     const running = main(["--config", configPath, "--host", "127.0.0.1", "--port", "0"]);
     try {
       const { endpoint } = await ready();
+      expect((await request(endpoint, "wanx-storage", { id: randomUUID(), rollback: true })).status).toBe(400);
       const source = new Database(databasePath);
       let snapshot: string;
       try {
@@ -183,16 +200,52 @@ describe("memmy memory server entrypoint", () => {
       const bad = join(stage, "invalid.sqlite");
       writeFileSync(bad, "invalid sqlite");
       expect((await request(endpoint, "wanx-storage", { id: randomUUID(), restoreFrom: bad })).status).toBe(400);
+      const future = join(stage, "future.sqlite");
+      writeFileSync(future, readFileSync(snapshot));
+      const newer = new Database(future);
+      try { newer.exec("UPDATE schema_migrations SET version = 10000 WHERE version = (SELECT MAX(version) FROM schema_migrations)"); }
+      finally { newer.close(); }
+      expect((await request(endpoint, "wanx-storage", { id: randomUUID(), restoreFrom: future })).status).toBe(400);
+      expect((await ready()).sqlitePath).toBe(databasePath);
+
+      const failedId = randomUUID();
+      const startup = vi.spyOn(memoryHttp, "createMemoryHttpServer").mockImplementationOnce(() => {
+        throw new Error("test failure before storage switch commits");
+      });
+      const awaitResult = (id: string, failed: boolean) => vi.waitFor(async () => {
+        const state = readRuntime();
+        expect(state.status).toBe("ready");
+        const response = await request(state.endpoint, "wanx-storage");
+        expect((await response.json()).result).toEqual({ id, failed });
+        return state;
+      }, { timeout: 15_000 });
+      try {
+        expect(await (await request(endpoint, "wanx-storage", { id: failedId, restoreFrom: snapshot })).json()).toEqual({ accepted: true });
+        expect((await awaitResult(failedId, true)).sqlitePath).toBe(databasePath);
+      } finally { startup.mockRestore(); }
+
       const id = randomUUID();
-      expect(await (await request(endpoint, "wanx-storage", { id, restoreFrom: snapshot })).json()).toEqual({ accepted: true });
-      const restored = await ready(databasePath);
-      expect((await (await request(restored.endpoint, "wanx-storage")).json()).result).toEqual({ id, failed: false });
+      const reverted = await ready();
+      expect(await (await request(reverted.endpoint, "wanx-storage", { id, restoreFrom: snapshot })).json()).toEqual({ accepted: true });
+      const restored = await awaitResult(id, false);
+      expect(restored.sqlitePath).not.toBe(databasePath);
+      expect(restored.endpoint).toBe(endpoint);
+      expect((await (await request(restored.endpoint, "wanx-storage")).json()).rollbackAvailable).toBe(true);
+      const { recoveryPath } = JSON.parse(readFileSync(join(root, "memory-service", "wanx-storage.json"), "utf8"));
+      expect(recoveryPath).not.toBe(databasePath);
       const original = new Database(databasePath, { readonly: true });
       const active = new Database(restored.sqlitePath, { readonly: true });
+      const recovery = new Database(recoveryPath, { readonly: true });
       try {
         expect(original.prepare("SELECT value FROM wanx_backup_test").pluck().get()).toBe("after");
         expect(active.prepare("SELECT value FROM wanx_backup_test").pluck().get()).toBe("before");
-      } finally { original.close(); active.close(); }
+        expect(recovery.prepare("SELECT value FROM wanx_backup_test").pluck().get()).toBe("after");
+      } finally { original.close(); active.close(); recovery.close(); }
+      const undoId = randomUUID();
+      expect(await (await request(restored.endpoint, "wanx-storage", { id: undoId, rollback: true })).json()).toEqual({ accepted: true });
+      const undone = new Database((await awaitResult(undoId, false)).sqlitePath, { readonly: true });
+      try { expect(undone.prepare("SELECT value FROM wanx_backup_test").pluck().get()).toBe("after"); }
+      finally { undone.close(); }
     } finally {
       await request((await ready()).endpoint, "shutdown", {});
       await running;

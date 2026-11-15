@@ -42,6 +42,8 @@
     "@nexusaos/local-provisioning-electron-ble": "file:vendor/nexusaos-local-provisioning-electron-ble-2.0.1-wanx.3.tgz",
     "electron-updater": "6.8.9",
     "jsonc-parser": "3.3.1",
+    "jszip": "3.10.2",
+    "pdfjs-dist": "5.4.624",
     "qrcode": "1.5.4",
     "semver": "7.8.5",
     "ws": "8.22.0",

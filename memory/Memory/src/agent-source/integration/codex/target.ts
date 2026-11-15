@@ -15,7 +15,7 @@ import { renderMemmyPluginSkillManifest } from "../templates/memmy-plugin.js";
 import { renderMemmyResumeHookScript } from "../templates/memmy-resume-hook.js";
 import { renderMemmySkillBootstrapManifest } from "../templates/memmy-skill-directory.js";
 import type { SkillManifest, SkillTarget } from "../types.js";
-import { trustMemmyCodexHooks, type TrustMemmyCodexHooks } from "./hook-trust.js";
+import type { TrustMemmyCodexHooks } from "./hook-trust.js";
 import { loadMemmyWorkspaceBridgeRuntimeAsset } from "../workspace-bridge/runtime-loader.js";
 
 const CODEX_TARGET_ID = "codex";
@@ -38,7 +38,7 @@ export interface CreateCodexSkillTargetDeps {
   rootDirectory?: string;
   /** Memmy config path. */
   memmyConfigPath?: string;
-  /** Persists trust for the installed user-level Memmy hooks. */
+  /** Optional explicit trust action. Normal installation leaves trust to the user in Codex. */
   trustHooks?: TrustMemmyCodexHooks;
 }
 
@@ -46,7 +46,7 @@ export interface CreateCodexSkillTargetDeps {
 export function createCodexSkillTarget(deps: CreateCodexSkillTargetDeps = {}): SkillTarget {
   const rootDirectory = deps.rootDirectory ?? resolveCodexHomeDirectory();
   const memmyConfigPath = deps.memmyConfigPath ?? join(homedir(), ".memmy", "config.yaml");
-  const trustHooks = deps.trustHooks ?? trustMemmyCodexHooks;
+  const trustHooks = deps.trustHooks;
 
   return {
     targetId: CODEX_TARGET_ID,
@@ -115,7 +115,7 @@ export function createCodexSkillTarget(deps: CreateCodexSkillTargetDeps = {}): S
           await writeFileAtomically(hookScriptPath, renderMemmyResumeHookScript({ source: CODEX_TARGET_ID, mode: "codex" }));
           await writeFileAtomically(bridgePath, await loadMemmyWorkspaceBridgeRuntimeAsset());
           await upsertCodexHookConfig(hooksFilePath, hookCommand);
-          await trustHooks({ codexHomeDirectory: root, hooksFilePath, hookCommand });
+          await trustHooks?.({ codexHomeDirectory: root, hooksFilePath, hookCommand });
         }
       );
 

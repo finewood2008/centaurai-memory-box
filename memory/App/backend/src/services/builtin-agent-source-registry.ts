@@ -5,6 +5,7 @@ import { createHermesSourceAdapter } from "@memmy/agent-source-readers/adapters/
 import { createDeepseekHarnessSourceAdapter } from "@memmy/agent-source-readers/adapters/deepseek-harness/index";
 import { createOpenclawSourceAdapter } from "@memmy/agent-source-readers/adapters/openclaw/index";
 import { createOpencodeSourceAdapter } from "@memmy/agent-source-readers/adapters/opencode/index";
+import { createGeminiSourceAdapter } from "@memmy/agent-source-readers/adapters/gemini/index";
 import { createPiSourceAdapter } from "@memmy/agent-source-readers/adapters/pi/index";
 import { createQwenworkSourceAdapter } from "@memmy/agent-source-readers/adapters/qwenwork/index";
 import { createSourceRegistry, type SourceRegistry } from "@memmy/agent-source-readers/adapters/source-registry";
@@ -21,6 +22,7 @@ export function createBuiltinAgentSourceRegistry(): SourceRegistry {
     createDeepseekHarnessSourceAdapter(),
     createWorkbuddySourceAdapter(),
     createPiSourceAdapter(),
-    createQwenworkSourceAdapter()
+    createQwenworkSourceAdapter(),
+    createGeminiSourceAdapter()
   ]);
 }

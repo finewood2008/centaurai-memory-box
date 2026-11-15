@@ -30,7 +30,7 @@ for (const [folder, names] of [
 }
 await cp(path.join(root,'integration/team-client/channel-icons'),path.join(client,'local-ui/renderer/channel-icons'),{recursive:true});
 // Both editions use the same file preview/transfer implementation.
-if (edition === 'team') for (const file of ['shell/personal-space.mjs','shell/space-drive-routing.mjs','local-ui/renderer/personal-space.js']) {
+if (edition === 'team') for (const file of ['shell/personal-space.mjs','shell/space-drive-routing.mjs','shell/space-annotation-service.mjs','shell/space-annotations.mjs','shell/space-annotation-workbench.mjs','shell/annotation-workbench-contract.mjs','shell/annotation-content.mjs','shell/annotation-content-worker.mjs','local-ui/renderer/personal-space.js']) {
   let source = await readFile(path.join(root,'../personal-client',file),'utf8');
   if (file === 'shell/personal-space.mjs') source = source.replace('"../device-trust/data-context.mjs"','"./cloud-context.mjs"').replace('changed || client.snapshot().dataIdentity?.profileId','changed');
   await writeFile(path.join(client,file),source);

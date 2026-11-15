@@ -90,8 +90,9 @@ export interface MemoryClient {
   reloadConfig(input?: MemoryReloadConfigInput): Promise<MemoryReloadConfigOutput>;
   getMemoryTokenBudget(): Promise<MemoryTokenBudgetDto>;
   exportBundle?(): Promise<Record<string, unknown>>;
-  getWanxStorage?(): Promise<{ dataPath: string; configured: boolean; result?: { id: string; failed: boolean } }>;
-  moveWanxStorage?(input: { id: string; directory: string } | { id: string; restoreFrom: string }): Promise<{ accepted: boolean }>;
+  importBundle?(bundle: Record<string, unknown>): Promise<{ ok: true; inserted: Record<string, number>; skipped: Record<string, number> }>;
+  getWanxStorage?(): Promise<{ dataPath: string; configured: boolean; rollbackAvailable?: boolean; sourceProfile?: string; result?: { id: string; failed: boolean } }>;
+  moveWanxStorage?(input: { id: string } & ({ directory: string } | { restoreFrom: string } | { rollback: true })): Promise<{ accepted: boolean }>;
   snapshotWanxStorage?(input: { directory: string }): Promise<{ path: string }>;
   clearAllData?(): Promise<{ ok: true; clearedAt: string; cleared: Record<string, number> }>;
 

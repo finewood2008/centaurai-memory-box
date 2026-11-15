@@ -1,0 +1,403 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import vm from "node:vm";
+import { readFile } from "node:fs/promises";
+
+const source = await readFile(new URL("../local-ui/renderer/space-annotation-workbench.js", import.meta.url), "utf8");
+const spaceSource = await readFile(new URL("../local-ui/renderer/personal-space.js", import.meta.url), "utf8");
+const tick = () => new Promise(resolve => setImmediate(resolve));
+const id = index => index.toString(16).padStart(32, "0");
+const rows = count => Array.from({ length: count }, (_, index) => ({ id: id(index + 1), name: `合成文件 ${index + 1}.txt`, path: `项目/合成文件 ${index + 1}.txt`, kind: "file", parent: id(9999), size: 10, writable: true, status: "unannotated", annotation: {
+  tags: [index % 2 ? "共同标签" : "仅部分标签", "继承标签"], automatic: { tags: [index % 2 ? "共同标签" : "仅部分标签"], description: "自动说明" },
+  manual: null, description: "有效说明", revision: 1, inherit: true, provenance: [{ tag: "继承标签", source: "inherited", itemId: id(9999), sourceName: "项目", sourcePath: "我的空间/项目" }],
+} }));
+function harness(t, options = {}) {
+  const calls = [], document = { activeElement: null }, data = options.rows || rows(3);
+  let closed = 0, changed = 0, snapshot = { job: { id: "synthetic-job", status: "ready", scanned: data.length, scanComplete: true, total: data.length }, items: data, total: data.length, filteredTotal: data.length, offset: 0,
+    summary: { total: data.length, unannotated: data.length, tagCounts: [{ tag: "共同标签", count: 2 }] } };
+  const window = {};
+  vm.runInNewContext(source, { window, document, setTimeout, clearTimeout, URL, Blob, atob, TextDecoder, Uint8Array });
+  const workbench = window.createSpaceAnnotationWorkbench({ changed: () => { changed++; }, onClose: () => { closed++; }, async call(input) {
+    calls.push(structuredClone(input));
+    const custom = await options.call?.(input);
+    if (custom !== undefined) { if (custom.job && custom.items) snapshot = { ...snapshot, ...custom }; return custom; }
+    if (input.op === "models") return { available: options.ai !== false, presets: [{ id: "synthetic-model", name: "测试模型", provider: "本机测试" }] };
+    if (input.op === "schemes") return { items: [{ id: "synthetic-scheme", name: "客户资料", tags: ["客户"], instructions: "每份一句说明", inherit: true }] };
+    if (input.op === "prepare") return { planId: "synthetic-plan", operationId: "synthetic-op", targetCount: input.selection.ids?.length || data.length, changeCount: 1, examples: [{ name: data[0].name, before: { tags: ["旧值"] }, after: { tags: ["新值"] } }], warnings: [] };
+    if (input.op === "draft") return { saved: true };
+    if (input.op === "preview") return { name: "合成预览", type: "text/plain", data: Buffer.from("<script>合成正文</script>").toString("base64"), truncated: true };
+    return structuredClone(snapshot);
+  } });
+  t.after(() => workbench.reset());
+  return { workbench, calls, data, document, get closed() { return closed; }, get changed() { return changed; }, setSnapshot(value) { snapshot = { ...snapshot, ...value }; } };
+}
+async function opened(t, options) { const h = harness(t, options); await h.workbench.open({ space_id: "personal", parent: id(9999), scopeName: "合成项目" }); await tick(); return h; }
+
+test("workbench virtualizes 1000 mixed records and distinguishes page selection from the full filter", async t => {
+  const h = await opened(t, { rows: rows(1000) });
+  let html = h.workbench.render();
+  assert.equal((html.match(/class="awb-file /g) || []).length, 22);
+  assert.match(html, /选择当前页/); assert.match(html, /选择整个筛选范围（1000）/);
+  h.workbench.onScroll(58 * 700);
+  html = h.workbench.render();
+  assert.equal((html.match(/class="awb-file /g) || []).length, 22);
+  assert.match(html, /合成文件 697/);
+  await h.workbench.action("matching-select");
+  await h.workbench.action("prepare");
+  const prepare = h.calls.find(call => call.op === "prepare");
+  assert.deepEqual(prepare.selection, { allMatching: { query: "", type: "", status: "" } });
+  assert.match(h.workbench.render(), /保存前核对/);
+  assert.equal(h.calls.some(call => call.op === "apply"), false, "preview does not mutate annotations");
+  await h.workbench.action("plan-apply");
+  assert.equal(h.calls.filter(call => call.op === "apply").length, 1);
+});
+
+test("an incomplete scan cannot silently select undiscovered files", async t => {
+  const h = await opened(t);
+  h.setSnapshot({ job: { id: "synthetic-job", status: "ready", scanned: 3, scanComplete: false } });
+  await h.workbench.refresh();
+  await h.workbench.action("matching-select");
+  assert.match(h.workbench.render(), /目录仍在扫描/);
+  await h.workbench.action("prepare");
+  assert.deepEqual(h.calls.find(call => call.op === "prepare").selection.ids, [h.data[0].id]);
+});
+
+test("batch mixed fields remain keep until changed and own labels never materialize inherited tags", async t => {
+  const h = await opened(t);
+  await h.workbench.action("check", { id: h.data[0].id }); await h.workbench.action("check", { id: h.data[1].id });
+  let html = h.workbench.render(); assert.match(html, /1\/2/); assert.match(html, /保持原值/);
+  h.workbench.input("bulk-tagMode", "add"); h.workbench.input("bulk-tags", "客户，合同");
+  await h.workbench.action("prepare");
+  const change = h.calls.find(call => call.op === "prepare").change;
+  assert.equal(change.tagMode, "add"); assert.deepEqual(change.tags, ["客户", "合同"]); assert.equal(change.descriptionMode, "keep");
+  assert.equal(Object.hasOwn(change, "inherit"), false);
+  await h.workbench.action("plan-close"); await h.workbench.action("clear");
+  await h.workbench.action("save-next");
+  const patch = h.calls.find(call => call.op === "draft").patch;
+  assert.deepEqual(patch.tags, ["仅部分标签"]); assert.ok(!patch.tags.includes("继承标签"));
+});
+
+test("continuous editing flushes drafts before switching files and command-enter requires confirmation", async t => {
+  const h = await opened(t);
+  h.workbench.input("item-tags", "草稿标签"); h.workbench.input("item-description", "手工草稿");
+  await h.workbench.keydown({ key: "ArrowDown", preventDefault() {}, target: { closest() { return false; } } });
+  const draft = h.calls.find(call => call.op === "draft");
+  assert.equal(draft.id, h.data[0].id); assert.equal(draft.patch.description, "手工草稿");
+  await h.workbench.action("previous"); assert.match(h.workbench.render(), /value="草稿标签"/);
+  await h.workbench.keydown({ key: "Enter", ctrlKey: true, preventDefault() {}, target: { closest() { return true; } } });
+  assert.match(h.workbench.render(), /确认保存并下一项/); assert.equal(h.calls.some(call => call.op === "apply"), false);
+  await h.workbench.keydown({ key: "Enter", ctrlKey: true, preventDefault() {} });
+  assert.equal(h.calls.filter(call => call.op === "apply").length, 1);
+});
+
+test("schemes populate explicit batch additions and AI is optional and never auto-applies", async t => {
+  const h = await opened(t, { ai: false });
+  await h.workbench.action("tab", { tab: "assistant" });
+  assert.match(h.workbench.render(), /手工标注和方案仍可使用/);
+  await h.workbench.action("suggest"); assert.equal(h.calls.some(call => call.op === "suggest"), false);
+  await h.workbench.action("tab", { tab: "schemes" }); h.workbench.input("scheme", "synthetic-scheme");
+  await h.workbench.action("save-scheme");
+  const saved = h.calls.find(call => call.op === "save-scheme").scheme;
+  assert.deepEqual(saved.tags, ["客户"]); assert.equal(saved.instructions, "每份一句说明");
+  assert.equal(Object.hasOwn(saved, "modelPresetId"), false); assert.equal(Object.hasOwn(saved, "parent"), false);
+  await h.workbench.action("tab", { tab: "edit" }); await h.workbench.action("check", { id: h.data[0].id }); await h.workbench.action("check", { id: h.data[1].id });
+  assert.match(h.workbench.render(), /value="客户"/);
+});
+
+test("preview and annotation labels are escaped, while inherited sources display names rather than IDs", async t => {
+  const data = rows(2); data[0].name = '<img src=x onerror="bad()">.txt';
+  const h = await opened(t, { rows: data });
+  assert.match(h.workbench.render(), /&lt;img/); assert.doesNotMatch(h.workbench.render(), /<img src=x/);
+  assert.match(h.workbench.render(), /↗ 项目/);
+  await h.workbench.action("preview");
+  assert.match(h.workbench.render(), /&lt;script&gt;合成正文/); assert.match(h.workbench.render(), /部分内容/);
+  assert.doesNotMatch(h.workbench.render(), /<script>合成正文/);
+});
+
+test("reset hides private jobs, clears draft timers and ignores late responses", async t => {
+  let release;
+  const h = await opened(t, { call: input => input.op === "preview" ? new Promise(resolve => { release = resolve; }) : undefined });
+  const pending = h.workbench.action("preview"); await tick();
+  h.workbench.input("item-description", "未完成的私密草稿"); h.workbench.reset();
+  release({ type: "text/plain", data: Buffer.from("迟到正文").toString("base64") }); await pending;
+  assert.equal(h.workbench.render(), "");
+  await new Promise(resolve => setTimeout(resolve, 270));
+  assert.equal(h.calls.some(call => call.op === "draft"), false);
+  assert.equal(h.workbench.active(), false);
+});
+
+test("read-only rows can be inspected but cannot submit item drafts", async t => {
+  const data = rows(1); data[0].writable = false;
+  const h = await opened(t, { rows: data });
+  assert.match(h.workbench.render(), /只读/); assert.match(h.workbench.render(), /data-wb-field="item-tags"[^>]*disabled/);
+  h.workbench.input("item-tags", "不得保存"); await h.workbench.action("prepare");
+  assert.equal(h.calls.some(call => ["draft", "prepare", "apply"].includes(call.op)), false);
+});
+
+test("rule suggestions remain available when AI is unconfigured and never become an implicit save", async t => {
+  const h = await opened(t, { call: input => input.op === "models" ? { available: true, aiAvailable: false, presets: [{ id: "rules", name: "本地规则", provider: "local" }] } : undefined });
+  await h.workbench.action("tab", { tab: "assistant" });
+  assert.match(h.workbench.render(), /AI 尚未配置/); assert.match(h.workbench.render(), /本地规则/);
+  await h.workbench.action("suggest");
+  assert.equal(h.calls.find(call => call.op === "suggest").modelPresetId, "rules");
+  assert.equal(h.calls.some(call => call.op === "apply"), false);
+});
+
+test("suggestions distinguish name-only, unsupported and content analysis with readable reasons", async t => {
+  const data = rows(3);
+  data[0].suggestion = { tags: ["名称建议"], contentMode: "name-only", reason: "SPACE_ANNOTATION_IMAGE_NO_OCR" };
+  data[1].suggestion = { tags: [], contentMode: "unsupported", reason: "SPACE_ANNOTATION_CONTENT_TOO_LARGE" };
+  data[2].suggestion = { tags: [], contentMode: "content", truncated: true };
+  const h = await opened(t, { rows: data });
+  assert.match(h.workbench.render(), /<small>仅分析名称 · 图片尚不支持文字识别<\/small>/);
+  assert.doesNotMatch(h.workbench.render(), /<small>内容分析/);
+  await h.workbench.action("next");
+  assert.match(h.workbench.render(), /<small>不支持内容分析 · 文件超出本次内容读取大小限制<\/small>/);
+  assert.doesNotMatch(h.workbench.render(), /SPACE_ANNOTATION_CONTENT_TOO_LARGE/);
+  await h.workbench.action("next");
+  assert.match(h.workbench.render(), /<small>内容分析 · 部分内容（每项最大 64 MB；文本型 PDF 最多读取前 200 页；每项最多分析 32768 个字符，此建议未覆盖全文）<\/small>/);
+  await h.workbench.action("accept-suggestion");
+  const dialog = h.workbench.render().split('aria-label="确认标注变更"')[1];
+  assert.match(dialog, /内容读取边界：每项最大 64 MB；文本型 PDF 最多读取前 200 页；每项最多分析 32768 个字符/);
+  assert.match(dialog, /标记“部分内容”的建议未覆盖全文/);
+});
+
+test("scheme names share the backend 80 character limit", async t => {
+  const h = await opened(t);
+  await h.workbench.action("tab", { tab: "schemes" });
+  assert.match(h.workbench.render(), /data-wb-field="scheme-name" maxlength="80"/);
+  h.workbench.input("scheme-name", "合".repeat(81)); await h.workbench.action("save-scheme");
+  assert.equal(h.calls.some(call => call.op === "save-scheme"), false);
+  assert.match(h.workbench.render(), /方案名称最多 80 个字符/);
+});
+
+test("confirmation describes description-only, empty and inheritance-only changes using own before values", async t => {
+  const h = await opened(t, { call: input => input.op === "prepare" ? { planId: "diffs", targetCount: 3, changeCount: 3, examples: [
+    { name: "说明项", before: { manual: { tags: ["人工标签"], description: "原说明" }, tags: ["人工标签", "继承标签"], inherit: true }, after: { description: "新说明" } },
+    { name: "清空项", before: { automatic: { tags: [], description: "自动说明" }, inherit: false }, after: { description: "", inherit: true } },
+    { name: "继承项", before: { manual: { tags: [], description: "" }, inherit: true }, after: { inherit: false } },
+  ] } : undefined });
+  await h.workbench.action("prepare"); const html = h.workbench.render();
+  assert.match(html, /<del>本项标签：人工标签 · 本项说明：原说明 · 继承：开启<\/del>/);
+  assert.match(html, /<ins>本项说明改为：新说明<\/ins>/);
+  assert.match(html, /<ins>清空本项说明 · 开启继承<\/ins>/);
+  assert.match(html, /<ins>关闭继承<\/ins>/);
+  assert.doesNotMatch(html, /<del>[^<]*继承标签/);
+  assert.doesNotMatch(html, /保持未修改字段/);
+});
+
+test("assistant displays extraction budgets and gives a friendly combined-instructions error", async t => {
+  const h = await opened(t, { call(input) { if (input.op === "suggest") throw Object.assign(Error("too long"), { code: "SPACE_ANNOTATION_INSTRUCTIONS_TOO_LONG" }); } });
+  await h.workbench.action("tab", { tab: "assistant" });
+  assert.match(h.workbench.render(), /每项最大 64 MB；文本型 PDF 最多读取前 200 页；每项最多分析 32768 个字符/);
+  await h.workbench.action("suggest");
+  assert.match(h.workbench.render(), /方案要求与本批补充要求合计最多 4000 个字符/);
+  assert.doesNotMatch(h.workbench.render(), /SPACE_ANNOTATION_INSTRUCTIONS_TOO_LONG/);
+});
+
+test("AI acceptance has independent safe defaults and explicit keep or replace policies", async t => {
+  const h = await opened(t);
+  await h.workbench.action("page-select");
+  h.workbench.input("bulk-tagMode", "remove"); h.workbench.input("bulk-tags", "已有人工标签");
+  h.workbench.input("bulk-descriptionMode", "replace"); h.workbench.input("bulk-description", "上一轮统一说明"); h.workbench.input("bulk-inherit", "off");
+  await h.workbench.action("tab", { tab: "assistant" });
+  let html = h.workbench.render();
+  assert.match(html, /data-wb-field="suggestion-tags"[^>]*><option value="add" selected/);
+  assert.match(html, /data-wb-field="suggestion-description"[^>]*><option value="fill-empty" selected/);
+  await h.workbench.action("accept-suggestion");
+  let request = h.calls.filter(call => call.op === "prepare").at(-1);
+  assert.deepEqual(request.change, { tagMode: "add", descriptionMode: "fill-empty", tags: [], description: "" });
+  assert.equal(request.acceptSuggestions, true); assert.equal(Object.hasOwn(request, "useDrafts"), false);
+  assert.equal(h.calls.some(call => call.op === "apply"), false);
+  await h.workbench.action("plan-close");
+  h.workbench.input("suggestion-tags", "keep"); h.workbench.input("suggestion-description", "replace"); await h.workbench.action("accept-suggestion");
+  request = h.calls.filter(call => call.op === "prepare").at(-1);
+  assert.deepEqual(request.change, { tagMode: "keep", descriptionMode: "replace", tags: [], description: "" });
+  await h.workbench.action("plan-close");
+  h.workbench.input("suggestion-tags", "replace"); h.workbench.input("suggestion-description", "keep"); await h.workbench.action("accept-suggestion");
+  request = h.calls.filter(call => call.op === "prepare").at(-1);
+  assert.deepEqual(request.change, { tagMode: "replace", descriptionMode: "keep", tags: [], description: "" });
+  assert.equal(Object.hasOwn(request.change, "inherit"), false);
+});
+
+test("item suggestion review is scoped to the current item even with a larger selection", async t => {
+  const data = rows(3); data[0].suggestion = { tags: ["建议标签"], description: "单项建议", contentMode: "name-only" };
+  const h = await opened(t, { rows: data }); await h.workbench.action("page-select");
+  assert.match(h.workbench.render(), /接受建议的方式/); assert.match(h.workbench.render(), /审核此建议/);
+  await h.workbench.action("accept-item-suggestion");
+  const request = h.calls.find(call => call.op === "prepare");
+  assert.deepEqual(request.selection, { ids: [data[0].id] });
+  assert.equal(request.change.tagMode, "add"); assert.equal(request.change.descriptionMode, "fill-empty");
+});
+
+test("skipping item and selected suggestions persists without submitting annotations or drafts", async t => {
+  const data = rows(3); for (const row of data) row.suggestion = { tags: ["待跳过"], description: "建议", contentMode: "name-only" };
+  const annotations = structuredClone(data.map(row => row.annotation));
+  const h = await opened(t, { rows: data, call(input) { if (input.op === "skip-suggestions") { const ids = new Set(input.selection.ids || data.map(row => row.id)); for (const row of data) if (ids.has(row.id)) delete row.suggestion; } } });
+  await h.workbench.action("page-select");
+  assert.match(h.workbench.render(), /跳过此建议/); await h.workbench.action("skip-item-suggestion");
+  assert.deepEqual(h.calls.find(call => call.op === "skip-suggestions").selection, { ids: [data[0].id] });
+  assert.equal(data[1].suggestion.tags[0], "待跳过"); assert.doesNotMatch(h.workbench.render(), /跳过此建议/);
+  await h.workbench.action("tab", { tab: "assistant" });
+  assert.match(h.workbench.render(), /跳过所选建议/); await h.workbench.action("skip-suggestions");
+  assert.deepEqual(h.calls.filter(call => call.op === "skip-suggestions").at(-1).selection, { ids: data.map(row => row.id) });
+  assert.deepEqual(data.map(row => row.annotation), annotations);
+  assert.equal(h.calls.some(call => ["prepare", "apply", "draft"].includes(call.op)), false);
+});
+
+test("batch summaries count effective descriptions and inheritance across the explicit selection", async t => {
+  const data = rows(4);
+  data.forEach((row, index) => { row.annotation.description = index < 2 ? "继承的共同说明" : ""; row.annotation.inherit = index < 2; row.annotation.automatic.tags = ["所有项共有", `部分${index % 2}`]; });
+  const h = await opened(t, { rows: data });
+  await h.workbench.action("check", { id: data[0].id }); await h.workbench.action("check", { id: data[1].id });
+  assert.match(h.workbench.render(), /说明共同值：继承的共同说明/);
+  assert.match(h.workbench.render(), /空说明 0\/2 项 · 继承开启 2 项 \/ 关闭 0 项/);
+  await h.workbench.action("page-select"); const html = h.workbench.render();
+  assert.match(html, /title="全部共有">所有项共有 <small>4\/4/);
+  assert.match(html, /title="部分文件已有">部分0 <small>2\/4/);
+  assert.match(html, /说明为混合值，未修改时各项保留/);
+  assert.match(html, /空说明 2\/4 项 · 继承开启 2 项 \/ 关闭 2 项/);
+});
+
+test("whole-filter summaries use complete backend statistics rather than the visible page", async t => {
+  const h = await opened(t);
+  h.setSnapshot({ total: 1000, filteredTotal: 1000, filteredSummary: { count: 1000, tagCounts: [{ tag: "整批标签", count: 990 }], commonDescription: null, emptyDescriptions: 777, inheritOn: 601, inheritOff: 399 } });
+  await h.workbench.refresh(); await h.workbench.action("matching-select");
+  const html = h.workbench.render();
+  assert.match(html, /完整筛选范围统计/); assert.match(html, /整批标签 <small>990\/1000/);
+  assert.match(html, /空说明 777\/1000 项 · 继承开启 601 项 \/ 关闭 399 项/);
+  assert.equal(h.calls.some(call => call.op === "prepare"), false);
+  h.setSnapshot({ filteredSummary: undefined }); await h.workbench.refresh();
+  assert.match(h.workbench.render(), /完整筛选范围统计尚未就绪/);
+  assert.doesNotMatch(h.workbench.render(), /空说明 0\/3 项/);
+});
+
+test("tag-only item edits preserve inherited descriptions and untouched inheritance settings", async t => {
+  const data = rows(2); data[0].annotation.description = "父文件夹说明"; data[0].annotation.automatic.description = "";
+  const h = await opened(t, { rows: data });
+  assert.match(h.workbench.render(), /data-wb-field="item-description"[^>]*>父文件夹说明<\/textarea>/);
+  h.workbench.input("item-tags", "子文件标签"); await h.workbench.action("save-next");
+  assert.deepEqual(h.calls.find(call => call.op === "draft").patch, { tags: ["子文件标签"] });
+  assert.equal(h.calls.find(call => call.op === "prepare").useDrafts, true);
+  await h.workbench.action("plan-close"); await h.workbench.action("next"); await h.workbench.action("save-next");
+  const untouched = h.calls.filter(call => call.op === "draft").at(-1).patch;
+  assert.equal(Object.hasOwn(untouched, "description"), false); assert.equal(Object.hasOwn(untouched, "inherit"), false);
+});
+
+test("save-and-next skips already-matching annotations without submitting an empty batch", async t => {
+  const h = await opened(t, { call(input) { if (input.op === "prepare") throw Object.assign(Error("same"), { code: "SPACE_ANNOTATION_NO_CHANGES" }); } });
+  await h.workbench.action("save-next");
+  assert.match(h.workbench.render(), /所选项目已与目标一致，没有需要保存的变更/);
+  assert.match(h.workbench.render(), new RegExp(`awb-file is-current[^>]*data-id="${h.data[1].id}"`));
+  assert.equal(h.calls.some(call => call.op === "apply"), false);
+  await h.workbench.action("prepare");
+  assert.match(h.workbench.render(), /所选项目已与目标一致，没有需要保存的变更/);
+});
+
+for (const operation of ["batch", "suggestion"]) test(`${operation} apply refreshes untouched item drafts before continuous save`, async t => {
+  const data = rows(2), after = structuredClone(data);
+  after[0].annotation = { ...after[0].annotation, tags: ["仅部分标签", "批次新标签", "继承标签"], description: "最新人工说明", manual: { tags: ["仅部分标签", "批次新标签"], description: "最新人工说明" }, revision: 2 };
+  const h = await opened(t, { rows: data, call: input => input.op === "apply" ? { job: { id: "synthetic-job", status: "complete", scanComplete: true, applied: data.map(row => row.id) }, items: after, total: 2, filteredTotal: 2 } : undefined });
+  h.workbench.render(); // Opening an item creates the untouched editor baseline.
+  await h.workbench.action("page-select");
+  if (operation === "batch") { h.workbench.input("bulk-tagMode", "add"); h.workbench.input("bulk-tags", "批次新标签"); }
+  await h.workbench.action(operation === "batch" ? "prepare" : "accept-suggestion");
+  await h.workbench.action("plan-apply"); await h.workbench.action("clear");
+  assert.match(h.workbench.render(), /data-wb-field="item-tags" value="仅部分标签，批次新标签"/);
+  await h.workbench.keydown({ key: "Enter", ctrlKey: true, preventDefault() {} });
+  const patch = h.calls.filter(call => call.op === "draft").at(-1).patch;
+  assert.deepEqual(patch.tags, ["仅部分标签", "批次新标签"]);
+  assert.equal(Object.hasOwn(patch, "description"), false, "unchanged descriptions stay out of the patch");
+  assert.match(h.workbench.render(), /最新人工说明/);
+});
+
+test("cross-page apply reloads the current page instead of replacing it with the mutation receipt page", async t => {
+  const data = rows(400); let applied = false;
+  const view = (offset, limit = 200) => ({ job: { id: "synthetic-job", status: applied ? "complete" : "ready", scanComplete: true, applied: applied ? [data[200].id] : [] }, items: data.slice(offset, offset + limit), total: 400, filteredTotal: 400, offset });
+  const h = await opened(t, { rows: data, call(input) {
+    if (input.op === "open") return view(0);
+    if (input.op === "list") return view(input.offset, input.limit);
+    if (input.op === "apply") { applied = true; data[200].annotation = { ...data[200].annotation, revision: 2, manual: { tags: ["跨页保存标签"], description: "已更新" } }; return view(0, 100); }
+  } });
+  await h.workbench.action("next-page"); await h.workbench.action("focus", { id: data[200].id }); h.workbench.render();
+  await h.workbench.action("page-select"); h.workbench.input("bulk-tagMode", "add"); h.workbench.input("bulk-tags", "跨页保存标签");
+  await h.workbench.action("prepare"); await h.workbench.action("plan-apply"); await h.workbench.action("clear");
+  assert.equal(h.calls.filter(call => call.op === "list").at(-1).offset, 200);
+  assert.match(h.workbench.render(), /201–400 \/ 400/);
+  assert.match(h.workbench.render(), /data-wb-field="item-tags" value="跨页保存标签"/);
+  await h.workbench.action("save-next");
+  assert.deepEqual(h.calls.filter(call => call.op === "draft").at(-1).patch.tags, ["跨页保存标签"]);
+});
+
+test("a persisted edited draft survives concurrent revisions and requires explicit conflict resolution", async t => {
+  const h = await opened(t);
+  h.workbench.input("item-tags", "待提交草稿"); await h.workbench.action("next");
+  const after = structuredClone(h.data); after[0].annotation.revision = 2; after[0].annotation.manual = { tags: ["别处新标签"], description: "别处新说明" };
+  h.setSnapshot({ items: after }); await h.workbench.refresh(); await h.workbench.action("previous");
+  assert.match(h.workbench.render(), /value="待提交草稿"/); assert.match(h.workbench.render(), /最新标签：别处新标签/);
+  assert.match(h.workbench.render(), /data-action="space-wb-save-next"[^>]*disabled/);
+  await h.workbench.keydown({ key: "Enter", ctrlKey: true, preventDefault() {} });
+  assert.equal(h.calls.some(call => call.op === "prepare"), false);
+  await h.workbench.action("discard-draft");
+  assert.match(h.workbench.render(), /data-wb-field="item-tags" value="别处新标签"/);
+  assert.deepEqual(h.calls.find(call => call.op === "refresh-item"), { op: "refresh-item", jobId: "synthetic-job", id: h.data[0].id, discardDraft: true });
+});
+
+test("a successfully applied single draft does not become a conflict or return stale fields", async t => {
+  const data = rows(2), after = structuredClone(data);
+  after[0].annotation = { ...after[0].annotation, revision: 2, manual: { tags: ["单项新标签"], description: "单项新说明" } };
+  const h = await opened(t, { rows: data, call: input => input.op === "apply" ? { job: { id: "synthetic-job", status: "complete", scanComplete: true, applied: [data[0].id] }, items: after, total: 2, filteredTotal: 2 } : undefined });
+  h.workbench.input("item-tags", "单项新标签"); h.workbench.input("item-description", "单项新说明");
+  await h.workbench.action("save-next"); await h.workbench.action("plan-apply"); await h.workbench.action("previous");
+  assert.match(h.workbench.render(), /data-wb-field="item-tags" value="单项新标签"/);
+  assert.doesNotMatch(h.workbench.render(), /本项未提交草稿仍保留/);
+});
+
+test("restored drafts retain their source revision and expose conflicts after restart", async t => {
+  const data = rows(1); data[0].annotation.revision = 3;
+  data[0].draft = { tags: ["重启前草稿"], description: "旧稿", inherit: true }; data[0].draftRevision = 2;
+  const h = await opened(t, { rows: data });
+  assert.match(h.workbench.render(), /value="重启前草稿"/);
+  assert.match(h.workbench.render(), /本项未提交草稿仍保留/);
+  await h.workbench.action("save-next");
+  assert.equal(h.calls.some(call => call.op === "draft" || call.op === "prepare"), false);
+});
+
+test("switching recent jobs flushes drafts to their original job and isolates task editors", async t => {
+  const next = rows(1); next[0].draft = { tags: ["其他任务草稿"], description: "另一任务", inherit: true };
+  const h = await opened(t, { call: input => input.op === "list" && input.jobId === "other-job" ? { job: { id: "other-job", status: "ready", scanComplete: true }, items: next, total: 1, filteredTotal: 1 } : undefined });
+  h.setSnapshot({ resumableJobs: [{ id: "other-job", total: 1, status: "paused" }] }); await h.workbench.refresh();
+  assert.match(h.workbench.render(), /当前任务 · 3 项/);
+  h.workbench.input("item-tags", "原任务新草稿"); h.workbench.input("job", "other-job"); await tick(); await tick();
+  const draft = h.calls.find(call => call.op === "draft");
+  assert.equal(draft.jobId, "synthetic-job"); assert.deepEqual(draft.patch.tags, ["原任务新草稿"]);
+  assert.match(h.workbench.render(), /data-workbench-job="other-job"/);
+  assert.match(h.workbench.render(), /value="其他任务草稿"/);
+});
+
+test("scope navigation flushes a draft and can return to the parent range", async t => {
+  const data = rows(2); data[1].kind = "folder";
+  const h = await opened(t, { rows: data });
+  h.workbench.input("item-description", "切换目录前保留");
+  await h.workbench.action("scope-folder", { id: data[1].id, name: "合成子目录" });
+  assert.ok(h.calls.find(call => call.op === "draft" && call.patch.description === "切换目录前保留"));
+  assert.match(h.workbench.render(), /上一级范围/);
+  assert.equal(h.calls.filter(call => call.op === "open").at(-1).parent, data[1].id);
+  await h.workbench.action("scope-parent");
+  assert.equal(h.calls.filter(call => call.op === "open").at(-1).parent, id(9999));
+});
+
+test("space integrates toolbar, multiselection and folder entry without changing the original navigation", async () => {
+  const events = new Map(), opens = [], data = rows(2), root = { addEventListener(type, handler) { events.set(type, handler); }, focus() {} };
+  const folder = { ...data[0], kind: "folder", name: "合成目录" };
+  const wb = { active: () => false, open: async value => opens.push(value), reset() {}, render: () => "", retainEditor: () => false };
+  const window = { createSpaceAnnotationWorkbench: () => wb, wanxClient: { async action(name) { return { ok: true, value: name === "space.refresh" ? { phase: "ready", tasks: [], annotationAvailable: true } : { items: [folder, data[1]], breadcrumbs: [] } }; }, onSpaceState() {} } };
+  vm.runInNewContext(spaceSource, { window, document: { querySelector: () => root, querySelectorAll: () => [], addEventListener() {} }, setInterval() {}, setTimeout, requestAnimationFrame: () => 1, cancelAnimationFrame() {}, queueMicrotask, URL, Blob, atob, TextDecoder });
+  const space = window.wanxSpace; space.bind({ render() {} }); space.hostState({ route: "applications", canLaunchApplications: true, account: { accountId: "synthetic" }, activeDeviceId: "box" }); space.activate(true); await tick();
+  assert.match(space.view(), /标注工作台/);
+  const click = (name, item = "") => events.get("click")({ target: { closest: () => ({ dataset: { action: `space-${name}`, id: item } }) } });
+  await click("workbench"); assert.equal(opens[0].parent, "");
+  await click("select", data[1].id); await click("workbench-selected"); assert.deepEqual(Array.from(opens[1].ids), [data[1].id]);
+  await click("workbench-folder", folder.id); assert.deepEqual(Array.from(opens[2].ids), [folder.id]);
+  assert.equal(opens[2].recursive, false); assert.match(space.view(), /合成目录/);
+});

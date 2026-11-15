@@ -64,7 +64,7 @@ function MemorySurface() {
       checking = true;
       try {
         const health = await connection.memoryRuntime.health(AbortSignal.any([signal, AbortSignal.timeout(5_000)]));
-        failures = health.ok && health.storage.ready ? 0 : failures + 1;
+        failures = health.storage.ready === true ? 0 : failures + 1;
       } catch {
         failures += 1;
       } finally {

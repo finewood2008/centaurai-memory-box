@@ -14,6 +14,7 @@ export const MEMORY_LAYER_PATHS = Object.freeze({
   reloadConfig: "/api/v1/admin/reload-config",
   memoryTokenBudget: "/api/v1/admin/memory-token-budget",
   exportBundle: "/api/v1/admin/export",
+  importBundle: "/api/v1/admin/import",
   wanxStorage: "/api/v1/admin/wanx-storage",
   wanxStorageSnapshot: "/api/v1/admin/wanx-storage/snapshot",
   clearAllData: "/api/v1/admin/data",

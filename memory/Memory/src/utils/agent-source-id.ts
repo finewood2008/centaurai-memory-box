@@ -14,6 +14,7 @@ const AGENT_SOURCE_FAMILIES = [
   "cursor",
   "openclaw",
   "hermes",
+  "gemini",
   "memmy"
 ] as const;
 

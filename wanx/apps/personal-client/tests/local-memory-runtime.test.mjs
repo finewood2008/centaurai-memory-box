@@ -39,3 +39,19 @@ test("runtime startup joins concurrent callers and only relaunches after a faile
   await runtime.ensure();
   assert.equal(starts, 2);
 });
+
+test("model errors do not relaunch a reachable ready memory database", async t => {
+  const root = await mkdtemp(path.join(tmpdir(), "wanx-memory-degraded-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const runtimeFile = path.join(root, "runtime.json");
+  await writeFile(runtimeFile, JSON.stringify({ baseUrl: "http://127.0.0.1:3334", localToken: "fixture" }));
+  let starts = 0;
+  const runtime = createMemoryRuntimeSupervisor({
+    runtimeFile, appPath: root, source: root, appData: root, home: root, env: {},
+    request: async () => Response.json({ ok: false, storage: { ready: true }, models: { embedding: { lastError: "fixture unavailable" } } }),
+    start: () => { starts++; throw new Error("must not restart a live database"); },
+  });
+  await runtime.ensure();
+  await runtime.ensure();
+  assert.equal(starts, 0);
+});

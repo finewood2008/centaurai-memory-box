@@ -19,13 +19,15 @@ test("one Agent connection registers all three sources and revokes them across s
   const warehouse = "a1c4c496-d58b-4b3c-b6d3-1b3d25c20110";
   const fileId = "1".repeat(32);
   const reserved = "2".repeat(32);
-  const file = { id: fileId, kind: "file", name: "Project.txt", parent: "", size: 12, version: 1 };
+  const projectId = "3".repeat(32);
+  const project = { id: projectId, kind: "folder", name: "Project", parent: "" };
+  const file = { id: fileId, kind: "file", name: "Project.txt", parent: projectId, size: 12, version: 1 };
   const backup = { id: reserved, kind: "folder", name: "半人马AI记忆备份", parent: "" };
   const sources = createCodexContextSources({
     space: {
       async operation(method, { parent, id }) {
-        if (method === "stat") return id === fileId ? file : null;
-        return { parent, root: "", space_id: "personal", breadcrumbs: parent ? [backup] : [], items: parent ? [] : [file, backup] };
+        if (method === "stat") return id === fileId ? file : id === projectId ? project : null;
+        return { parent, root: "", space_id: "personal", breadcrumbs: parent === projectId ? [project] : parent ? [backup] : [], items: parent === projectId ? [file] : parent ? [] : [project, backup] };
       },
       async preview(id) {
         assert.equal(id, fileId);
@@ -67,8 +69,9 @@ test("one Agent connection registers all three sources and revokes them across s
   const check = () => {};
   let access = make();
   t.after(() => access.close());
+  await access.selection("claude_code", { folderId: projectId, warehouseId: warehouse, memoryEnabled: true }, check);
   await access.connect("claude_code", check);
-  assert.equal((await access.status(check)).claude_code.available, true);
+  assert.equal((await access.status(check)).claude_code.available, false);
   const profile = JSON.parse(await readFile(configFile, "utf8"));
   assert.equal(profile.mcpServers.existing.command, "already-configured");
   assert.equal(profile.mcpServers["wanx-memobox"].type, "stdio");
@@ -91,17 +94,18 @@ test("one Agent connection registers all three sources and revokes them across s
   }
 
   const listed = await rpc("tools/list");
-  assert.equal(listed.result.tools.length, 8);
-  assert.ok(listed.result.tools.every(tool => tool.annotations.readOnlyHint));
+  assert.equal(listed.result.tools.length, 9);
+  assert.ok(listed.result.tools.every(tool => tool.annotations.readOnlyHint === (tool.name !== "memory_save")));
   const memories = await call("memory_search", { query: "Project" });
   assert.equal((await call("memory_read", { memoryId: memories.matches[0].memoryId })).body, "Project memory.");
-  assert.deepEqual((await call("space_list")).items.map(item => item.id), [fileId]);
+  assert.deepEqual((await call("space_list")).items.map(item => item.id), [projectId]);
   const space = await call("space_search", { query: "Project" });
   assert.equal((await call("space_read", { fileId: space.matches[0].fileId })).text, "Project text");
   await call("space_list", { folderId: reserved }, true);
   assert.equal((await call("starlink_warehouses")).warehouses[0].id, warehouse);
   const starlink = await call("starlink_search", { warehouseId: warehouse, query: "Project" });
   assert.equal((await call("starlink_evidence", { warehouseId: warehouse, evidenceId: starlink.matches[0].evidenceId })).text, "Project evidence.");
+  assert.equal((await access.status(check)).claude_code.available, true);
   await call("memory_search", { query: "Project", task_id: "a".repeat(36) }, true);
   owner = "Bob";
   access.sync();
@@ -118,7 +122,7 @@ test("one Agent connection registers all three sources and revokes them across s
   await access.close();
   access = make();
   await access.restore(error => { throw error; });
-  assert.equal((await access.status(check)).claude_code.available, true);
+  assert.equal((await access.status(check)).claude_code.available, false);
   assert.equal((await call("space_list")).items.length, 1);
   await access.disconnect("claude_code", check);
   assert.equal((await access.status(check)).claude_code.connected, false);
@@ -142,18 +146,21 @@ test("editable Agent configurations preserve comments and refuse unrelated entri
   await assert.rejects(config.ensure(), /MCP_CONFIG_NAME_CONFLICT/);
   await config.remove();
   assert.equal(await readFile(opencode, "utf8"), updated);
-  for (const agent of ["hermes", "cursor", "pi", "openclaw", "workbuddy"]) {
+  for (const agent of ["hermes", "cursor", "pi", "openclaw"]) {
     const adapter = createMyAiMcpConfig(agent, options);
     await adapter.ensure();
     assert.equal(await adapter.isConfigured(), true);
-    if (agent === "workbuddy") {
-      const workbuddy = JSON.parse(await readFile(path.join(home, ".workbuddy", "mcp.json"), "utf8"));
-      assert.deepEqual(workbuddy.mcpServers["wanx-memobox"].args, [options.stdioPath, options.descriptorPath]);
-    }
     await adapter.remove();
     assert.equal(await adapter.isConfigured(), false);
   }
-  const deepseekFile = path.join(home, ".dsh", "cordis.patch.yml");
+  for (const agent of ["workbuddy", "qwenwork"]) {
+    const adapter = createMyAiMcpConfig(agent, options);
+    await adapter.ensure();
+    assert.equal(await adapter.isConfigured(), false);
+    assert.equal(adapter.guided, true);
+    assert.deepEqual(adapter.configuration().mcpServers["wanx-memobox"].args, [options.stdioPath, options.descriptorPath]);
+  }
+  const deepseekFile = path.join(home, ".dsh", "profiles", "desktop", "cordis.patch.yml");
   await mkdir(path.dirname(deepseekFile), { recursive: true });
   await writeFile(deepseekFile, "# keep this patch\n- insert:\n    - id: existing\n      name: something\n");
   const deepseek = createMyAiMcpConfig("deepseek_harness", options);

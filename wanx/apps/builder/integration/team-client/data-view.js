@@ -22,6 +22,8 @@ window.createTeamDataView=({request,changed,edition="team"})=>{
   let constellation=null,starMetric='relations',showIsolated=false;
   let refreshTimer,loadingTimer,contentReady=false,refreshVisible=false,refreshing=false;
   let sharePreview=null,shareError='',governance=null,governanceError='',reviews=[],reviewTotal=0,reviewsOffset=0,review=null,proposal=null,panel=null,panelLoading=false,sourceValue=null,pendingGovernance=null,detailSequence=0,governanceWriting=false;
+  let annotationSearch=null;
+  const pendingAnnotationImports=new Map();
   const defaultTypeInfo={
     PERSON:['人物','人','#7a91a9'],ORG:['组织','组','#7c967e'],GPE:['地点','地','#739b92'],
     EVENT:['事件','事','#8c83a6'],CONCEPT:['概念','知','#b28f93'],DOCUMENT:['材料','文','#9c9780'],
@@ -50,6 +52,7 @@ window.createTeamDataView=({request,changed,edition="team"})=>{
     if(c==='TEAM_DATA_OPERATION_UNCONFIRMED')return '上一项操作的结果尚未确认，请先查询或重试原操作，再发起新的修改。';
     if(c.startsWith('WAREHOUSE_GOVERNANCE_'))return ({REVISION_CONFLICT:'核对事项已更新，请刷新后重新确认。',SOURCE_CHANGED:'来源已变化，请刷新并重新核对当前来源。',DRAFT_CHANGED:'知识草稿已变化，请刷新后重新核对。',TARGET_CHANGED:'目标知识已变化，请刷新后重新核对。',REVIEW_CLOSED:'此核对事项已关闭，请刷新列表。',HUMAN_EDIT_PROTECTED:'这项知识包含人工修正，请通过知识治理功能核对。',MULTI_SOURCE_REVIEW_REQUIRED:'这项修改涉及多份资料，请通过知识治理功能核对。',SOURCE_REVIEW_REQUIRED:'请先核对来源，再决定是否修改。',OPERATION_CONFLICT:'此操作标识对应的内容不同，请刷新后重新确认。',MODEL_OUTPUT_INVALID:'模型未返回可验证的修改建议，原知识保持不变。',MODEL_EVIDENCE_INVALID:'模型引用的证据未通过校验，原知识保持不变。',MODEL_EVIDENCE_INSUFFICIENT:'现有证据不足以支持建议，保留待核对。',MODEL_VALIDATION_FAILED:'模型建议未通过校验，原知识保持不变。',IDENTITY_REVIEW_REQUIRED:'身份尚未确认，请先核对身份，不能作为跨资料连接。',AI_UNAVAILABLE:'当前处理模型不可用，请检查模型与处理配置。',PROPOSAL_NOT_READY:'建议尚未准备完成或证据不足，当前不能应用。',CONFIRMATION_REQUIRED:'请先核对修改内容并明确确认。',PROPOSAL_IN_PROGRESS:'原建议操作仍在后台处理中或曾被中断，请刷新事项核对，服务端不会重复发起模型调用。'}[c.slice('WAREHOUSE_GOVERNANCE_'.length)]||'治理操作未完成，请刷新事项核对原因；原知识尚未改写。');
     if(c==='TEAM_DATA_SOURCE_VERSION_CHANGED')return '来源版本未能验证，未展示可能已变化的正文。请在完整版核对历史版本。';
+    if(c==='SPACE_ANNOTATION_INDEX_PENDING')return '资料已导入，空间标签索引尚未完成。请重试标签索引；重试使用原导入记录。';
     if(c==='TEAM_DATA_KEY_NOT_REPLAYABLE')return '完整 Key 已不可再次读取，请新建只读 Key 并及时保存。';
     if(c==='TEAM_DATA_KEY_REVOKED')return '此 Key 已撤销或到期，无法继续复制或查看。';
     if(c==='TEAM_DATA_SHARE_INVALID')return '请填写用途名称，并选择 1 至 365 天的有效期。';
@@ -71,7 +74,7 @@ window.createTeamDataView=({request,changed,edition="team"})=>{
   const loc=v=>{if(!v)return '来源片段';if(typeof v==='string'){try{v=JSON.parse(v)}catch{return v}}return [v.page_number||v.page?`第 ${v.page_number||v.page} 页`:'',v.sheet||v.sheet_name||'',v.paragraph_number?`段落 ${v.paragraph_number}`:'',v.start_seconds!=null?`${v.start_seconds} 秒`:'',v.segment_id||''].filter(Boolean).join(' · ')||'原文片段'};
   function clearLoading(){if(loadingTimer!==undefined){clearTimeout(loadingTimer);loadingTimer=undefined}}
   function readFailure(e){const text=message(e),failure=code(e);if(invalidScope(e)){reset();error=text;errorCode=failure;changed()}else{error=text;errorCode=failure}}
-  function reset(){ontologyDetail=null;ontologyError='';closeMoreMenu();materialBrowser.reset();detailSequence++;governanceWriting=false;clearTimeout(refreshTimer);clearLoading();epoch++;warehouses=[];warehouseId=null;overviewWarehouseId=null;documents=[];jobs=[];results=[];clearGraph();sharePreview=null;shareError='';governance=null;governanceError='';reviews=[];reviewTotal=0;reviewsOffset=0;review=null;proposal=null;panel=null;sourceValue=null;panelLoading=false;pendingGovernance=null;retrieval=null;loading=false;searching=false;contentReady=false;refreshVisible=false;busy=false;error='';errorCode='';initialized=false;query='';offset=0;total=0;document.querySelectorAll?.('dialog[data-team-data-dialog]').forEach(d=>{d.close();d.remove()})}
+  function reset(){annotationSearch=null;pendingAnnotationImports.clear();ontologyDetail=null;ontologyError='';closeMoreMenu();materialBrowser.reset();detailSequence++;governanceWriting=false;clearTimeout(refreshTimer);clearLoading();epoch++;warehouses=[];warehouseId=null;overviewWarehouseId=null;documents=[];jobs=[];results=[];clearGraph();sharePreview=null;shareError='';governance=null;governanceError='';reviews=[];reviewTotal=0;reviewsOffset=0;review=null;proposal=null;panel=null;sourceValue=null;panelLoading=false;pendingGovernance=null;retrieval=null;loading=false;searching=false;contentReady=false;refreshVisible=false;busy=false;error='';errorCode='';initialized=false;query='';offset=0;total=0;document.querySelectorAll?.('dialog[data-team-data-dialog]').forEach(d=>{d.close();d.remove()})}
   function sync(state,isAdmin,options={}){
     admin=isAdmin;
     recoveryScope=admin&&state.canLaunchApplications?warehouseRecoveryScope(state,edition):null;
@@ -346,7 +349,7 @@ window.createTeamDataView=({request,changed,edition="team"})=>{
       <footer class="data-core-footer">${!showIsolated&&raw.isolatedCount?`<span>当前图谱已隐藏 ${raw.isolatedCount} 个孤立实体</span>`:''}<span><b>${g.nodes.length}</b> 个实体 <b>${g.edges.length}</b> 条关系 <b>${new Set(g.edges.flatMap(e=>e.evidence.map(v=>v.document_id)).filter(Boolean)).size}</b> 份引用材料</span><span>${node?'实体直接关联':'当前数据仓 · 最多 120 个实体'}</span></footer>
     </section>`;
   }
-  function searchPage(){return `<form class="data-search" data-data-form="search" data-data-context="${esc(JSON.stringify([scope,activeId()]))}"><input data-studio-edit-key="team-data-search" name="query" value="${esc(query)}" placeholder="针对当前数据仓，输入你想查找的问题" aria-label="证据检索问题" required maxlength="2000"><button class="button primary" ${searching?'disabled':''}>${searching?'检索中…':'检索证据'}</button></form><p class="muted">结果遵循数据仓保护规则，保留引用片段与来源定位。</p>${results.map(r=>`<article class="data-search-result"><div><strong>${esc(r.document_name||r.original_name||r.document_id)}</strong><small>${esc(loc(r.locator))}</small></div><p>${esc(r.text||r.excerpt)}</p><button class="text-button" data-data-action="source" data-id="${esc(r.document_id)}" data-version-id="${esc(r.document_version_id||r.version_id||'')}">查看原文来源 →</button></article>`).join('')}${!results.length&&!searching&&(!loading||contentReady)?empty(query?'未找到可交付的证据':'带着具体问题查找'+owner+'知识','如材料尚未完成索引或保护检测，请在星图中查看处理状态。'):''}`}
+  function searchPage(){return `<form class="data-search" data-data-form="search" data-data-context="${esc(JSON.stringify([scope,activeId()]))}"><input data-studio-edit-key="team-data-search" name="query" value="${esc(query)}" placeholder="针对当前数据仓，输入你想查找的问题" aria-label="证据检索问题" required maxlength="2000"><button class="button primary" ${searching?'disabled':''}>${searching?'检索中…':'检索证据'}</button></form><p class="muted">结果遵循数据仓保护规则，保留引用片段与来源定位。</p>${!team&&annotationSearch?.incomplete?'<p role="status">部分空间标签索引尚未核验，结果可能不完整。请重试检索。</p>':''}${results.map(r=>`<article class="data-search-result"><div><strong>${esc(r.document_name||r.original_name||r.document_id)}</strong><small>${esc(loc(r.locator))}</small></div>${!team&&r.annotationMatch?`<p class="muted">空间标签命中 · 文档引用：${esc((r.annotation?.tags||[]).join('、'))}</p>`:''}<p>${esc(r.text||r.excerpt)}</p><button class="text-button" data-data-action="source" data-id="${esc(r.document_id)}" data-version-id="${esc(r.document_version_id||r.version_id||'')}">查看原文来源 →</button></article>`).join('')}${!results.length&&!searching&&(!loading||contentReady)?empty(query?'未找到可交付的证据':'带着具体问题查找'+owner+'知识','如材料尚未完成索引或保护检测，请在星图中查看处理状态。'):''}`}
   const failedPublications=()=>jobs.filter(j=>j.kind==='knowledge_publish'&&j.status==='failed');
   function failedExtractions(){
     const latest=new Map();
@@ -380,7 +383,17 @@ window.createTeamDataView=({request,changed,edition="team"})=>{
     if(panelLoading)return '<p role="status">正在读取来源…</p>';
     if(!sourceValue)return '<p>来源读取未完成，请重试。</p>';
     const v=sourceValue;
-    return `<p class="data-detail-eyebrow">${v.pinned?'固定版本原文':'当前正文 · 未定位历史版本'}</p><h3>${esc(v.document?.original_name||'资料来源')}</h3><small>版本 ${esc(v.version?.id||v.document?.active_version_id||'待解析')}</small>${v.pinned&&Number.isInteger(v.total_chars)?`<p class="muted">正文范围 ${v.start||0}–${v.end||0} / ${v.total_chars} 字</p>`:''}${v.excerpt?`<blockquote>${esc(v.excerpt)}</blockquote>`:''}<div class="data-source">${(v.segments||[]).map(s=>`<article><small>${esc(loc(s.source_locator||s.locator))}</small><p>${esc(s.text||s.content)}</p></article>`).join('')||'<p>正文尚未就绪，或此版本不支持读取。可在完整版查看原件和处理状态。</p>'}</div>${v.pinned&&v.end<v.total_chars?btn('继续读取正文','source',`data-id="${esc(v.sourceId)}" data-warehouse-id="${esc(v.warehouseId)}" data-version-id="${esc(v.version.id)}" data-start="${v.end}"`):''}`;
+    return `<p class="data-detail-eyebrow">${v.pinned?'固定版本原文':'当前正文 · 未定位历史版本'}</p><h3>${esc(v.document?.original_name||'资料来源')}</h3><small>版本 ${esc(v.version?.id||v.document?.active_version_id||'待解析')}</small>${sourceAnnotations(v.sourceAnnotation)}${v.pinned&&Number.isInteger(v.total_chars)?`<p class="muted">正文范围 ${v.start||0}–${v.end||0} / ${v.total_chars} 字</p>`:''}${v.excerpt?`<blockquote>${esc(v.excerpt)}</blockquote>`:''}<div class="data-source">${(v.segments||[]).map(s=>`<article><small>${esc(loc(s.source_locator||s.locator))}</small><p>${esc(s.text||s.content)}</p></article>`).join('')||'<p>正文尚未就绪，或此版本不支持读取。可在完整版查看原件和处理状态。</p>'}</div>${v.pinned&&v.end<v.total_chars?btn('继续读取正文','source',`data-id="${esc(v.sourceId)}" data-warehouse-id="${esc(v.warehouseId)}" data-version-id="${esc(v.version.id)}" data-start="${v.end}"`):''}`;
+  }
+  function sourceAnnotations(value){
+    if(team||!value)return '';
+    const labels={manual:'人工',automatic:'自动规则',inherited:'文件夹继承'};
+    const describe=(annotation,title)=>annotation?`<h4>${title}</h4><p>${esc((annotation.tags||[]).join('、')||'无标签')}</p>${annotation.description?`<p>${esc(annotation.description)}</p>`:''}<ul>${(annotation.provenance||[]).map(p=>`<li>${esc(p.tag)} · ${esc(labels[p.source]||p.source)} · 来源 ${esc(p.itemId)}</li>`).join('')}</ul>`:`<p>${title}暂不可读取。</p>`;
+    return `<details class="data-source-annotation"><summary>空间标签与说明${value.needsRefresh?' · 需核对':''}</summary>${value.indexStatus==='pending'?'<p role="status">资料已导入，空间标签索引待完成；正文就绪后再次检索或打开材料可自动补齐。</p>':value.needsRefresh?`<p role="status">${value.current&&!value.current.needsReview?'空间标注已更新，标签检索使用当前标注。导入快照保留供核对。':'空间原文件或标注已变化，请在空间复核；正文变化需重新导入。'}</p>`:''}${describe(value.snapshot,'导入时快照')}${describe(value.current,'当前空间标注')}</details>`;
+  }
+  function pendingAnnotations(){
+    const count=[...pendingAnnotationImports.values()].filter(item=>item.warehouseId===activeId()).length;
+    return !team&&count?`<p role="status">${count} 份资料已导入，空间标签索引待完成。${btn('重试标签索引','retry-annotation-imports')}</p>`:'';
   }
   function reviewPage(){
     if(governance?.warehouseId===activeId()&&governance.supported===false)return `<h3>知识治理暂不可用</h3><p role="status">${esc(governanceError)}</p><p>仍可查看资料和图谱。服务升级后，请重新打开资料页。</p>`;
@@ -400,7 +413,7 @@ window.createTeamDataView=({request,changed,edition="team"})=>{
     if(!admin)return team?empty('仅管理员可管理团队数据'):`<section class="team-data-page data-lite-page">${pageBar({},false)}${empty('请先登录万象')}</section>`;
     if(!scope)return `<section class="team-data-page data-lite-page">${pageBar({},false)}${empty('请先连接万象盒子','连接后读取当前'+owner+'的数据仓。')}</section>`;
     const w=current(),target={warehouseId:w?.id,view:tab==='materials'?'materials':'graph'},mainTab=tab==='materials'?'materials':'graph';
-    return `<section class="team-data-page data-lite-page ${panel?'has-inspector':''}" aria-busy="${loading||searching}">${pageBar(target)}${error&&(!contentReady||team&&/TEAM_STARLINK_(NOT_INSTALLED|UPGRADE_REQUIRED)/.test(errorCode))?`<div class="data-error" role="alert">${esc(error)} ${team&&/TEAM_STARLINK_(NOT_INSTALLED|UPGRADE_REQUIRED)/.test(errorCode)?btn('安装／更新星图','install-starlink'):btn('重试','refresh')}</div>`:''}${warehouseMetrics()}${warehouseStructure()}<div class="data-lite-toolbar"><div class="data-lite-context">${warehouseSwitcher()}<nav class="data-tabs" aria-label="知识视图">${tabs.map(([id,label])=>`<button class="${mainTab===id?'active':''}" data-data-action="tab" data-tab="${id}" ${mainTab===id?'aria-current="page"':''}>${label}</button>`).join('')}</nav></div><div>${btn('查找知识与证据','tab','data-tab="search"')}</div></div><div class="data-lite-workspace">${mainTab==='materials'?materialPage():graphPage()}${inspector()}</div>${!w&&!loading?`<div class="data-lite-create">${btn('＋ 新建'+owner+'数据仓','create','',true)}<p>${team?'团队管理员共同维护':'仅当前账号可见'} · 导入资料后，知识自动相连。</p></div>`:''}${authorizationFooter()}</section>`;
+    return `<section class="team-data-page data-lite-page ${panel?'has-inspector':''}" aria-busy="${loading||searching}">${pageBar(target)}${error&&(!contentReady||team&&/TEAM_STARLINK_(NOT_INSTALLED|UPGRADE_REQUIRED)/.test(errorCode))?`<div class="data-error" role="alert">${esc(error)} ${team&&/TEAM_STARLINK_(NOT_INSTALLED|UPGRADE_REQUIRED)/.test(errorCode)?btn('安装／更新星图','install-starlink'):btn('重试','refresh')}</div>`:''}${warehouseMetrics()}${warehouseStructure()}<div class="data-lite-toolbar"><div class="data-lite-context">${warehouseSwitcher()}<nav class="data-tabs" aria-label="知识视图">${tabs.map(([id,label])=>`<button class="${mainTab===id?'active':''}" data-data-action="tab" data-tab="${id}" ${mainTab===id?'aria-current="page"':''}>${label}</button>`).join('')}</nav></div><div>${btn('查找知识与证据','tab','data-tab="search"')}</div></div><div class="data-lite-workspace">${mainTab==='materials'?materialPage():graphPage()}${inspector()}</div>${!w&&!loading?`<div class="data-lite-create">${btn('＋ 新建'+owner+'数据仓','create','',true)}<p>${team?'团队管理员共同维护':'仅当前账号可见'} · 导入资料后，知识自动相连。</p></div>`:''}${pendingAnnotations()}${authorizationFooter()}</section>`;
   }
   function dialog(title,body,onSubmit){
     const version=epoch,d=document.createElement('dialog');let submitting=false;d.dataset.teamDataDialog='';d.className='data-dialog';d.innerHTML=`<form><div class="data-dialog-heading"><h3>${esc(title)}</h3><button type="button" data-close aria-label="关闭">×</button></div>${body}<p class="data-dialog-error" role="alert"></p><div class="data-dialog-actions"><button type="button" class="button" data-close>取消</button><button type="submit" class="button primary">确认</button></div></form>`;document.body.append(d);d.showModal();
@@ -408,18 +421,35 @@ window.createTeamDataView=({request,changed,edition="team"})=>{
     d.querySelector('form').onsubmit=async e=>{e.preventDefault();if(submitting)return;submitting=true;const b=d.querySelector('[type=submit]');b.disabled=true;d.querySelectorAll('[data-close]').forEach(c=>c.disabled=true);try{if(version!==epoch)throw Error('TEAM_SESSION_CHANGED');await onSubmit(new FormData(e.target),d);if(version!==epoch)return;d.close();await refresh()}catch(e){d.querySelector('.data-dialog-error').textContent=message(e)}finally{submitting=false;b.disabled=false;d.querySelectorAll('[data-close]').forEach(c=>c.disabled=false)}};
     return d;
   }
-  async function importFiles(files){
+  async function importFiles(files,retryAnnotations=false){
     if(!files?.length)return;const version=epoch,wid=activeId();
     let processing;try{processing=await call('processing',{warehouseId:wid})}catch{}
     if(version!==epoch)return;
     const model=processing?.effective?.extraction||processing?.config?.extraction||processing?.extraction;
-    const d=dialog('导入到 '+current().name,`<p>导入 ${files.length} 份材料，生成可追溯的正文与知识。${esc(model?.model||model?.label||'处理模型沿用当前数据仓配置。')}</p><p>若本仓配置在线模型，正文片段将发送到已确认的模型服务。模型调整与服务确认请在星图中完成。</p><ul>${files.map(f=>`<li>${esc(f.name)} · ${size(f.size)}</li>`).join('')}</ul><label class="data-confirm"><input type="checkbox" name="confirmed" required>已确认材料范围及本仓的处理配置</label><p class="data-upload-state" role="status"></p>`,async(_,dialog)=>{
-      for(let i=0;i<files.length;i++){if(version!==epoch||wid!==activeId())throw Error('TEAM_SESSION_CHANGED');dialog.querySelector('.data-upload-state').textContent=`正在导入 ${i+1}/${files.length}：${files[i].name}`;await call('upload',{warehouseId:wid,handle:files[i].handle})}
+    const completed=new Set();
+    const d=dialog(retryAnnotations?'补齐空间标签索引':'导入到 '+current().name,`${retryAnnotations?'<p>资料已导入，本次核对原导入记录并补齐空间标签索引。</p>':`<p>导入 ${files.length} 份材料，生成可追溯的正文与知识。${esc(model?.model||model?.label||'处理模型沿用当前数据仓配置。')}</p><p>若本仓配置在线模型，正文片段将发送到已确认的模型服务。模型调整与服务确认请在星图中完成。</p>`}<ul>${files.map(f=>`<li>${esc(f.name)} · ${size(f.size)}</li>`).join('')}</ul>${retryAnnotations?'':'<label class="data-confirm"><input type="checkbox" name="confirmed" required>已确认材料范围及本仓的处理配置</label>'}<p class="data-upload-state" role="status"></p>`,async(_,dialog)=>{
+      const pending=[];
+      for(let i=0;i<files.length;i++){
+        if(version!==epoch||wid!==activeId())throw Error('TEAM_SESSION_CHANGED');
+        const file=files[i];if(completed.has(file.handle))continue;
+        dialog.querySelector('.data-upload-state').textContent=`${pendingAnnotationImports.has(file.handle)?'正在补齐标签索引':'正在导入'} ${i+1}/${files.length}：${file.name}`;
+        const receipt=pendingAnnotationImports.get(file.handle);
+        let result=receipt?.documentId?await call('document',{warehouseId:wid,id:receipt.documentId}):null;
+        if(!result?.annotationIndex)result=await call('upload',{warehouseId:wid,handle:file.handle});
+        if(version!==epoch||wid!==activeId())throw Error('TEAM_SESSION_CHANGED');
+        if(!team&&result?.annotationIndex?.status==='pending'){
+          pending.push(file.name);pendingAnnotationImports.set(file.handle,{file,warehouseId:wid,documentId:result.document?.id||receipt?.documentId});
+        }else{completed.add(file.handle);pendingAnnotationImports.delete(file.handle)}
+      }
       if(version!==epoch||wid!==activeId())throw Error('TEAM_SESSION_CHANGED');
+      if(pending.length){
+        dialog.querySelector('.data-upload-state').textContent=`资料已导入；标签索引待完成：${pending.join('、')}`;
+        dialog.querySelector('[type=submit]').textContent='重试标签索引';changed();throw Error('SPACE_ANNOTATION_INDEX_PENDING');
+      }
       warehouseId=wid;tab='tasks';panel='tasks';
     });
-    d.querySelector('[type=submit]').textContent='导入并自动整理';
-    d.addEventListener('close',()=>{if(version===epoch)void call('release-files',{warehouseId:wid,handles:files.map(f=>f.handle)}).catch(()=>{})});
+    d.querySelector('[type=submit]').textContent=retryAnnotations?'重试标签索引':'导入并自动整理';
+    d.addEventListener('close',()=>{if(version===epoch)void call('release-files',{warehouseId:wid,handles:files.filter(f=>!pendingAnnotationImports.has(f.handle)).map(f=>f.handle)}).catch(()=>{})});
   }
   async function spacePicker(){
     const version=epoch,wid=activeId();let listing,sequence=0;const picks=new Map();
@@ -541,7 +571,7 @@ window.createTeamDataView=({request,changed,edition="team"})=>{
       await call('select-warehouse');
       if(selectionEpoch!==epoch)return;
       const switching=name!=='tab';
-      detailSequence++;panelLoading=false;governanceWriting=false;busy=false;epoch++;loading=false;searching=false;contentReady=false;refreshVisible=false;results=[];error='';errorCode='';query='';offset=0;total=0;
+      detailSequence++;panelLoading=false;governanceWriting=false;busy=false;epoch++;loading=false;searching=false;contentReady=false;refreshVisible=false;results=[];annotationSearch=null;error='';errorCode='';query='';offset=0;total=0;
       if(switching){ontologyDetail=null;ontologyError='';materialBrowser.reset();documents=[];jobs=[];clearGraph();sourceValue=null;panel=null;review=null;proposal=null;governance=null;governanceError='';pendingGovernance=null}
       if(name==='select'){if(!warehouses.some(w=>w.id===data.id))return;warehouseId=data.id;overviewWarehouseId=data.id;tab=['tasks','graph'].includes(data.tab)?data.tab:'materials'}else if(name==='overview'){warehouseId=null;tab='graph'}else{warehouseId=activeId();tab=data.tab}
       if(tab==='tasks'||tab==='search')panel=tab;else if(!switching)panel=null;
@@ -563,6 +593,10 @@ window.createTeamDataView=({request,changed,edition="team"})=>{
     if(name==='graph-zoom'){if(graphMotion.zoom(data.direction==='in'?1.25:.8))return;zoom=Math.min(2.5,Math.max(.5,zoom+(data.direction==='in'?.25:-.25)));changed();return}
     if(name==='graph-fit'){if(graphMotion.fit())return;zoom=1;changed();return}
     if(name==='refresh'){await refresh();return}
+    if(name==='retry-annotation-imports'){
+      const files=[...pendingAnnotationImports.values()].filter(item=>item.warehouseId===activeId()).map(item=>item.file);
+      if(!team&&files.length)await importFiles(files,true);return;
+    }
     if(name==='previous'||name==='next'){offset=Math.max(0,offset+(name==='next'?100:-100));await refresh();return}
     if(name==='source'){if(data.warehouseId&&data.warehouseId!==activeId())return;const version=epoch,sequence=detailSequence+1;try{await source(data.id,data.warehouseId||activeId(),data.versionId||'',Number(data.start)||0)}catch(e){if(version===epoch&&sequence===detailSequence){readFailure(e);changed()}}return}
     if(name==='reprocess-failed'||name==='reextract-document'){
@@ -636,13 +670,18 @@ window.createTeamDataView=({request,changed,edition="team"})=>{
     if(kind==='search'){
       if(searching)return;
       query=String(form.get('query')||'').trim();if(!scope||!query)return;
-      const version=epoch;searching=true;results=[];error='';errorCode='';changed();
-      try{const v=await call('search',{warehouseId:activeId(),query});if(version===epoch)results=v.items||v.results||[]}
+      const version=epoch;searching=true;results=[];annotationSearch=null;error='';errorCode='';changed();
+      try{const v=await call('search',{warehouseId:activeId(),query});if(version===epoch){
+        results=v.items||v.results||[];
+        if(!team){annotationSearch=v.annotationSearch||null;results=[...results,...(v.annotationDocuments||[]).map(d=>({
+          document_id:d.documentId,document_version_id:d.versionId,document_name:d.title,text:String(d.text||'').slice(0,900),locator:d.locator,annotation:d.annotation,annotationMatch:true,
+        }))]}
+      }}
       catch(e){if(version===epoch)readFailure(e)}finally{if(version===epoch){searching=false;changed()}}
     }
   }
   const materialBrowser=createMaterialBrowser({call,changed,personal:!team,getContext:()=>({scope,recoveryScope,warehouseId:activeId()})});
-  return {compositionStart:composition.start,compositionEnd:composition.end,isComposing:composition.active,retainInput:root=>retainGraphInput(root,document),currentWarehouse:()=>activeId(),hasMaterialDrafts:()=>materialBrowser.hasDrafts(),sync,suspend(){closeMoreMenu();materialBrowser.reset();graphMotion.reset();admin=false;detailSequence++;governanceWriting=false;epoch++;clearTimeout(refreshTimer);clearLoading();loading=false;searching=false;contentReady=false;refreshVisible=false;busy=false;initialized=false;error='';errorCode='';sharePreview=null;governance=null;panel=null;sourceValue=null;pendingGovernance=null;document.querySelectorAll?.('dialog[data-team-data-dialog]').forEach(d=>{d.close();d.remove()})},render,refresh,action,submit,input:(name,value)=>{if(materialBrowser.input(name,value))return;if(name==='query')query=value;if(name==='filter')filter=value;if(name==='graphQuery')graphQuery=value},needsLoad:()=>scope&&!initialized&&!loading&&!error};
+  return {compositionStart:composition.start,compositionEnd:composition.end,isComposing:composition.active,retainInput:root=>retainGraphInput(root,document),currentWarehouse:()=>activeId(),hasMaterialDrafts:()=>materialBrowser.hasDrafts(),sync,suspend(){annotationSearch=null;closeMoreMenu();materialBrowser.reset();graphMotion.reset();admin=false;detailSequence++;governanceWriting=false;epoch++;clearTimeout(refreshTimer);clearLoading();loading=false;searching=false;contentReady=false;refreshVisible=false;busy=false;initialized=false;error='';errorCode='';sharePreview=null;governance=null;panel=null;sourceValue=null;pendingGovernance=null;document.querySelectorAll?.('dialog[data-team-data-dialog]').forEach(d=>{d.close();d.remove()})},render,refresh,action,submit,input:(name,value)=>{if(materialBrowser.input(name,value))return;if(name==='query')query=value;if(name==='filter')filter=value;if(name==='graphQuery')graphQuery=value},needsLoad:()=>scope&&!initialized&&!loading&&!error};
 };
 
 window.createTeamDataView=wrapAssistantKnowledgeAccess(window.createTeamDataView);

@@ -20,6 +20,7 @@ import { registerLocalDataRoutes } from "./routes/local-data.js";
 import { registerOnboardingInsightRoutes } from "./routes/onboarding-insight.js";
 import { registerPluginRoutes } from "./routes/plugins.js";
 import { registerPluginMcpRoutes } from "./routes/plugin-mcp.js";
+import { registerSpaceAnnotationRoutes } from "./routes/space-annotations.js";
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000;
 const LOCAL_API_SERVICE_NAME = "memmy-local-api";
@@ -120,6 +121,10 @@ export function createLocalApiServer(options: CreateLocalApiServerOptions): Fast
   registerAppConfigRoutes(app, {
     appConfig: options.services.appConfig,
     localWorkspace: options.localWorkspace,
+    authenticateRuntimeToken
+  });
+  registerSpaceAnnotationRoutes(app, {
+    spaceAnnotations: options.services.spaceAnnotations,
     authenticateRuntimeToken
   });
   if (!options.localWorkspace) registerAccountRoutes(app, {

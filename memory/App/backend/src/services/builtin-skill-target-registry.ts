@@ -5,6 +5,7 @@ import { createDeepseekHarnessSkillTarget } from "../adapters/outbound/skill-wri
 import { createHermesSkillTarget } from "../adapters/outbound/skill-writer/hermes/index.js";
 import { createOpenclawSkillTarget } from "../adapters/outbound/skill-writer/openclaw/index.js";
 import { createOpencodeSkillTarget } from "../adapters/outbound/skill-writer/opencode/index.js";
+import { createGeminiSkillTarget } from "../adapters/outbound/skill-writer/gemini/index.js";
 import { createPiSkillTarget } from "../adapters/outbound/skill-writer/pi/index.js";
 import { createQwenworkSkillTarget } from "../adapters/outbound/skill-writer/qwenwork/index.js";
 import { createWorkbuddySkillTarget } from "../adapters/outbound/skill-writer/workbuddy/index.js";
@@ -21,6 +22,7 @@ export function createBuiltinSkillTargetRegistry(memmyConfigPath?: string): Skil
     createDeepseekHarnessSkillTarget({ memmyConfigPath }),
     createWorkbuddySkillTarget(),
     createPiSkillTarget(),
-    createQwenworkSkillTarget()
+    createQwenworkSkillTarget(),
+    createGeminiSkillTarget()
   ]);
 }

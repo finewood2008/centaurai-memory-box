@@ -210,6 +210,37 @@ describe("SourcesSubPage memory service recovery", () => {
     expect(stateApi.state.agentSources.isScanning).toBe(true);
   });
 
+  it("keeps a ready storage connected when model health is degraded", async () => {
+    const health = vi.fn(async () => ({
+      ok: false,
+      storage: { ready: true },
+      models: { embedding: { lastError: "model provider unavailable" } }
+    }));
+    const clients = createClients(health);
+    const version = { generation: 3, sequence: 0 };
+    clients.agentSources.getScanStatus = vi.fn(async () => ({ active: false, progress: null, status: "idle", version }));
+    clients.agentSources.startScan = vi.fn(async () => ({ jobId: "model-degraded", attemptId: "attempt", version: { generation: 3, sequence: 1 } }));
+    clients.config.updateOnboarding = vi.fn(async () => ({} as never));
+    await render(clients);
+    expect(container.textContent).toContain("运行中");
+    expect(container.textContent).not.toContain("暂不可用");
+
+    await advance(10_000);
+    expect(health).toHaveBeenCalledTimes(3);
+    expect(container.textContent).toContain("运行中");
+    expect(restart).not.toHaveBeenCalled();
+    const scan = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent?.trim() === "同步新增");
+    expect(scan?.disabled).toBe(false);
+    await act(async () => { scan!.click(); });
+    expect(clients.agentSources.startScan).toHaveBeenCalledWith(expect.objectContaining({ sourceId: "all" }));
+  });
+
+  it("keeps storage unavailability separate from an otherwise healthy service", async () => {
+    await render(createClients(async () => ({ ok: true, storage: { ready: false } })));
+    expect(container.textContent).toContain("暂不可用");
+    expect(container.textContent).toContain("正在自动重试");
+  });
+
   it("recovers automatically when Memory becomes ready after the first connection failure", async () => {
     const health = vi.fn().mockRejectedValueOnce(new Error("memory layer network error")).mockResolvedValue(healthy);
     await render(createClients(health));

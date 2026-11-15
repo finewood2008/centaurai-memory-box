@@ -137,6 +137,12 @@ export function resolveWorkbuddyProjectsDirectory(options: ResolveAgentPathOptio
   return createAgentPathRuntime(options).pathApi.join(resolveWorkbuddyHomeDirectory(options), "projects");
 }
 
+export function resolveGeminiHomeDirectory(options: ResolveAgentPathOptions = {}): string {
+  const runtime = createAgentPathRuntime(options);
+  const home = resolveConfiguredDirectory(runtime.environment.GEMINI_CLI_HOME, runtime.homeDirectory, runtime);
+  return runtime.pathApi.join(home, ".gemini");
+}
+
 export function resolvePiAgentDirectory(options: ResolveAgentPathOptions = {}): string {
   const runtime = createAgentPathRuntime(options);
   return resolveConfiguredDirectory(

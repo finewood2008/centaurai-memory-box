@@ -20,6 +20,14 @@ afterEach(() => {
 });
 
 describe("codex skill target", () => {
+  it("installs hook files without automatically persisting Codex hook trust", async () => {
+    const { rootDirectory, memmyConfigPath } = createFixture();
+    const target = createCodexSkillTarget({ rootDirectory, memmyConfigPath });
+    await target.installPlugin?.("codex");
+    expect(existsSync(join(rootDirectory, "hooks.json"))).toBe(true);
+    expect(existsSync(join(rootDirectory, "hooks", "memmy-resume-hook.mjs"))).toBe(true);
+    expect(existsSync(join(rootDirectory, "hooks-trust.json"))).toBe(false);
+  });
   it("installs Memmy bootstrap into AGENTS.md and full content into the Skill directory", async () => {
     const { rootDirectory, manifest } = createFixture();
     const target = createCodexSkillTarget({ rootDirectory });

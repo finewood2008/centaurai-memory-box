@@ -48,6 +48,15 @@ function starlinkEvidence(item) {
   };
 }
 
+function starlinkDocument(item) {
+  const content = excerpt(item?.text, readLength);
+  if (!evidenceId(item?.documentId) || !evidenceId(item?.versionId) || !content) return null;
+  const metadata = annotation(item.annotation);
+  return { kind: "document", documentId: item.documentId, versionId: item.versionId,
+    title: excerpt(item.title, 240) || "星图资料", locator: locator(item.locator), snippet: content.slice(0, 900),
+    ...(metadata && { annotation: metadata }) };
+}
+
 function matchQuery(value, terms) {
   const normalized = value.toLowerCase();
   return terms.reduce((score, term, index) => score + (normalized.includes(term) ? index === 0 ? 3 : 1 : 0), 0);
@@ -57,6 +66,22 @@ function snippet(value, terms) {
   const normalized = value.toLowerCase();
   const hit = terms.map(term => normalized.indexOf(term)).find(index => index >= 0);
   return value.slice(Math.max(0, (hit ?? 0) - 90), (hit ?? 0) + 230);
+}
+
+function annotation(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const tags = Array.isArray(value.tags) ? value.tags.filter(tag => typeof tag === "string" && tag.trim()).slice(0, 2048).map(tag => tag.slice(0, 160)) : [];
+  const provenance = Array.isArray(value.provenance) ? value.provenance.filter(row =>
+    row && tags.includes(row.tag) && ["manual", "automatic", "inherited"].includes(row.source) && spaceId(row.itemId)
+  ).slice(0, 2048).map(({ tag, source, itemId }) => ({ tag, source, itemId })) : [];
+  return { tags, description: excerpt(value.description, 2000), provenance,
+    revision: Number.isSafeInteger(value.revision) && value.revision >= 0 ? value.revision : 0,
+    needsReview: value.needsReview === true };
+}
+
+function annotationScore(value, terms) {
+  // Review-pending metadata remains visible, but cannot create a new match.
+  return value && !value.needsReview ? matchQuery([...value.tags, value.description].join("\n"), terms) * 2 : 0;
 }
 
 export function createCodexContextSources({ space, starlink }) {
@@ -171,24 +196,29 @@ export function createCodexContextSources({ space, starlink }) {
       Number.isSafeInteger(file.size) && file.size >= 0 && file.size <= maxTextBytes;
   }
 
+  async function currentFile(root, file, check) {
+    const page = await folderWithin(root, file.parent, check);
+    const current = page.items.find(row => row.id === file.id && row.kind === "file");
+    if (!current || current.version !== file.version || current.name !== file.name ||
+        current.digest !== file.digest || current.size !== file.size)
+      throw error(403, "文件已变化或已离开授权范围，请重新搜索。");
+    return { file: current, path: [...page.relative, current.name].join("/") };
+  }
+
   async function readText(root, file, check) {
     if (!readable(file)) return null;
-    const before = await folderWithin(root, file.parent, check);
-    const candidate = before.items.find(row => row.id === file.id && row.kind === "file");
-    if (!candidate || candidate.version !== file.version || candidate.name !== file.name || !readable(candidate))
+    const { file: candidate } = await currentFile(root, file, check);
+    if (!readable(candidate))
       throw error(403, "文件已变化或已离开授权范围，请重新搜索。");
     const value = await checked(check, () => space.preview(candidate.id, { interactive: false }));
-    const after = await folderWithin(root, candidate.parent, check);
-    const current = after.items.find(row => row.id === candidate.id && row.kind === "file");
-    if (!current || current.version !== candidate.version || current.name !== candidate.name)
-      throw error(403, "文件已变化或已离开授权范围，请重新搜索。");
+    const { file: current, path } = await currentFile(root, file, check);
     if (value?.type !== "text/plain" || value.name !== current.name || typeof value.data !== "string" ||
         value.data.length > Math.ceil(maxTextBytes / 3) * 4) return null;
     try {
       const bytes = Buffer.from(value.data, "base64");
       if (bytes.length !== current.size || bytes.length > maxTextBytes) return null;
       const content = utf8.decode(bytes);
-      return content.includes("\0") ? null : { content, path: [...after.relative, current.name].join("/") };
+      return content.includes("\0") ? null : { content, path, annotation: annotation(current.annotation) };
     } catch {
       return null;
     }
@@ -198,7 +228,7 @@ export function createCodexContextSources({ space, starlink }) {
     const query = queryText(args.query, 300).toLowerCase();
     const terms = [...new Set([query, ...query.split(/[^\p{L}\p{N}_-]+/u).filter(term => term.length >= 2)])].slice(0, 9);
     const { files, truncated } = await collect(root, check);
-    const candidates = files.map(file => ({ file, score: matchQuery(file.path, terms) * 2 }));
+    const candidates = files.map(file => ({ file, score: matchQuery(file.path, terms) * 2 + annotationScore(annotation(file.annotation), terms) }));
     candidates.sort((a, b) => b.score - a.score);
     const excerpts = candidates.filter(({ file }) => readable(file));
     let skipped = 0;
@@ -211,20 +241,39 @@ export function createCodexContextSources({ space, starlink }) {
         skipped++;
         continue;
       }
-      if (candidate.content) candidate.score += matchQuery(candidate.content.content, terms);
+      if (candidate.content) candidate.score = matchQuery(candidate.content.path, terms) * 2 +
+        annotationScore(candidate.content.annotation, terms) + matchQuery(candidate.content.content, terms);
       else skipped++;
     }
     check();
-    const matches = candidates.filter(row => row.score > 0).sort((a, b) => b.score - a.score);
+    const ranked = candidates.filter(row => row.score > 0).sort((a, b) => b.score - a.score);
+    const matches = [];
+    for (const candidate of ranked) {
+      if (matches.length === searchLimit.matches) break;
+      try {
+        // A local annotation index is never an access grant. Revalidate even
+        // non-text matches, and do not publish a label removed during the scan.
+        const current = await currentFile(root, candidate.file, check);
+        const metadata = annotation(current.file.annotation);
+        const score = matchQuery(current.path, terms) * 2 + annotationScore(metadata, terms) +
+          (candidate.content ? matchQuery(candidate.content.content, terms) : 0);
+        if (score > 0) matches.push({ ...candidate, annotation: metadata, score });
+      } catch (cause) {
+        check();
+        if (cause?.status !== 403 && cause?.status !== 404) throw cause;
+      }
+    }
+    matches.sort((a, b) => b.score - a.score);
     return {
-      matches: matches.slice(0, searchLimit.matches).map(({ file, content }) => ({
+      matches: matches.map(({ file, content, annotation: metadata }) => ({
         fileId: file.id,
         name: file.name,
         path: content?.path ?? file.path,
         version: file.version,
         snippet: content ? snippet(content.content, terms) : "",
+        ...(metadata && { annotation: metadata }),
       })),
-      truncated: truncated || excerpts.length > searchLimit.textFiles || matches.length > searchLimit.matches,
+      truncated: truncated || excerpts.length > searchLimit.textFiles || ranked.length > searchLimit.matches,
       skippedTextFiles: skipped,
       filesOutsideTextSupport: files.length - excerpts.length,
     };
@@ -246,7 +295,7 @@ export function createCodexContextSources({ space, starlink }) {
     if (start > source.content.length) throw error(400, "正文读取位置超过文件长度。");
     const end = Math.min(start + readLength, source.content.length);
     return { fileId: file.id, name: file.name, path: source.path, version: file.version, text: source.content.slice(start, end),
-      nextStart: end < source.content.length ? end : null };
+      nextStart: end < source.content.length ? end : null, ...(source.annotation && { annotation: source.annotation }) };
   }
 
   async function call(selection, tool, args = {}, check) {
@@ -263,9 +312,14 @@ export function createCodexContextSources({ space, starlink }) {
       const reply = await checked(check, () => starlink("search", { warehouseId: selectedId, query }));
       const items = reply?.items ?? reply?.results;
       if (!Array.isArray(items)) throw error(503, "星图未返回有效检索结果。");
+      // Annotation recall points to a real, versioned document. It is distinct
+      // from evidence; starlink_evidence only accepts native evidence IDs.
+      const documents = Array.isArray(reply.annotationDocuments) ? reply.annotationDocuments.filter(item =>
+        (!item?.warehouse_id || item.warehouse_id === selectedId) && (!item?.warehouseId || item.warehouseId === selectedId)
+      ).slice(0, 10).map(starlinkDocument).filter(Boolean) : [];
       return {
-        matches: items.slice(0, 10).filter(item => !item?.warehouse_id || item.warehouse_id === selectedId)
-          .map(starlinkEvidence).filter(Boolean).map(({ text, ...metadata }) => ({ ...metadata, snippet: text.slice(0, 900) })),
+        matches: [...documents, ...items.slice(0, 10).filter(item => !item?.warehouse_id || item.warehouse_id === selectedId)
+          .map(starlinkEvidence).filter(Boolean).map(({ text, ...metadata }) => ({ ...metadata, snippet: text.slice(0, 900) }))].slice(0, 10),
       };
     }
     if (tool === "starlink_evidence") {

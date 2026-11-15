@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { chmod, lstat, open, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, isAbsolute, join } from "node:path";
 import { MemoryDb } from "../storage/db.js";
 import { SCHEMA_VERSION } from "../storage/schema.js";
 import { MemoryServiceError } from "../utils/error.js";
@@ -13,18 +13,40 @@ export interface WanxStorageMove {
   candidatePath?: string;
 }
 
+interface WanxStorageSelection {
+  databasePath: string;
+  recoveryPath?: string;
+}
+
 export interface WanxStorageResult {
   id: string;
   failed: boolean;
 }
 
-export function readWanxStoragePath(serviceHome: string): Promise<string | undefined> {
+function databaseSourceProfile(database: MemoryDb): string | undefined {
+  const found = database.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='wanx_memory_source'").get();
+  if (!found) return undefined;
+  const row = database.db.prepare("SELECT profile FROM wanx_memory_source WHERE id=1").get() as { profile: string } | undefined;
+  return row?.profile;
+}
+
+export function bindWanxSourceProfile(database: MemoryDb, profile: string | undefined, fresh: boolean): void {
+  const actual = databaseSourceProfile(database);
+  if (actual === profile) return;
+  if (!fresh || !profile || actual) throw new Error("The memory database belongs to a different source profile");
+  database.db.transaction(() => {
+    database.db.exec("CREATE TABLE wanx_memory_source (id INTEGER PRIMARY KEY CHECK(id=1), profile TEXT NOT NULL)");
+    database.db.prepare("INSERT INTO wanx_memory_source (id, profile) VALUES (1, ?)").run(profile);
+  })();
+}
+
+export function readWanxStorageSelection(serviceHome: string): Promise<WanxStorageSelection | undefined> {
   return readFile(join(serviceHome, SETTINGS), "utf8").then(content => {
-    const { databasePath } = JSON.parse(content);
+    const { databasePath, recoveryPath } = JSON.parse(content);
     if (typeof databasePath !== "string" || !isAbsolute(databasePath)) {
       throw new Error("Invalid local memory storage configuration");
     }
-    return databasePath;
+    return { databasePath, recoveryPath: typeof recoveryPath === "string" && isAbsolute(recoveryPath) ? recoveryPath : undefined };
   }).catch(error => {
     if (error.code !== "ENOENT") throw error;
     return undefined;
@@ -74,7 +96,7 @@ export async function copyWanxDatabase(database: MemoryDb, directory: string, al
   }
 }
 
-export async function prepareWanxRestore(source: unknown, directory: string): Promise<string> {
+export async function prepareWanxRestore(source: unknown, directory: string, profile?: string): Promise<string> {
   if (typeof source !== "string" || !isAbsolute(source) || source.length > 4096) {
     throw new MemoryServiceError("invalid_argument", "备份文件路径无效。");
   }
@@ -84,18 +106,21 @@ export async function prepareWanxRestore(source: unknown, directory: string): Pr
   }
   try {
     const backup = new MemoryDb({ path: source, readonly: true });
-    try { return await copyWanxDatabase(backup, directory, true); }
+    try {
+      if (databaseSourceProfile(backup) !== profile) throw new Error("Source profile mismatch");
+      return await copyWanxDatabase(backup, directory, true);
+    }
     finally { backup.close(); }
   } catch {
     throw new MemoryServiceError("invalid_argument", "无法读取备份，文件已损坏或记忆库版本不兼容。");
   }
 }
 
-export async function commitWanxStoragePath(serviceHome: string, databasePath: string): Promise<void> {
+export async function commitWanxStoragePath(serviceHome: string, selection: WanxStorageSelection): Promise<void> {
   const target = join(serviceHome, SETTINGS);
   const temporary = join(serviceHome, `.${basename(target)}-${randomUUID()}`);
   try {
-    await writeFile(temporary, JSON.stringify({ databasePath: resolve(databasePath) }), { mode: 0o600, flag: "wx", flush: true });
+    await writeFile(temporary, JSON.stringify(selection), { mode: 0o600, flag: "wx", flush: true });
     await rename(temporary, target);
   } finally {
     await rm(temporary, { force: true }).catch(() => {});

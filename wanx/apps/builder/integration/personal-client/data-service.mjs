@@ -13,6 +13,7 @@ import { SemanticaService } from '../team-client/starlink/service.mjs';
 import drive from '../team-client/starlink/drive.cjs';
 import { createDataShareAccess } from '../team-client/data-share-service.mjs';
 import { dataInteractionKey } from '../../../personal-client/device-trust/data-context.mjs';
+import { createStarlinkSpaceAnnotations } from './starlink-space-annotations.mjs';
 const ID = 'centaurai.wanx.semantica';
 const fail = code => Object.assign(Error(code), {code});
 const actions = new Set(['material-workflows','material-workflow','initialize','warehouses','warehouse','create-warehouse','rename-warehouse','select-warehouse','documents','document','delete-document','correct','document-text','evidence','authorization-summary','jobs','graph','retrieval','search','retry-job','build-index','processing','reprocess-models','select-files','select-space-files','space-list','release-files','upload']);
@@ -92,7 +93,7 @@ export function personalStarlinkTarget(input = {}) {
   if(!validStarlinkTarget(target))throw fail('TEAM_DATA_TARGET_INVALID');
   return target;
 }
-export function createPersonalDataService({client, applications, selectFiles, getMcpDetails, writeClipboard, starlinkPackageDir, emit = () => {}}) {
+export function createPersonalDataService({client, personalSpace, applications, selectFiles, getMcpDetails, writeClipboard, starlinkPackageDir, emit = () => {}}) {
   let active, pending, revision = 0, disposed = false;
   const key = () => dataInteractionKey(client.snapshot());
   function invalidate() {
@@ -130,6 +131,7 @@ export function createPersonalDataService({client, applications, selectFiles, ge
         };
         host.drive = drive.createDriveClient(host);
         value.service = new SemanticaService({host, selectFiles, emit});
+        value.annotations = createStarlinkSpaceAnnotations({space:personalSpace, service:value.service, check:() => live(value)});
         value.service.context = await host.context(); live(value); active = value;
         value.unwatch = link.onInvalidated?.(() => {if (active === value) invalidate();});
         return value;
@@ -196,7 +198,7 @@ export function createPersonalDataService({client, applications, selectFiles, ge
       } else {
         if (['create-warehouse','retry-job','build-index'].includes(action)) input = {...input, operationId:operationId(input.operationId)};
         if (['select-files','select-space-files','upload'].includes(action) && !value.service.capabilities) value.service.capabilities = await value.service.api('/capabilities');
-        live(value); result = await value.service.call(action, input);
+        live(value); result = await value.annotations.run(action, input, () => value.service.call(action, input));
       }
       live(value); return result;
     },

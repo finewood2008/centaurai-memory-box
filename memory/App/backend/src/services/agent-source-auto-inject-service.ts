@@ -14,9 +14,10 @@ const AUTO_INJECT_AGENT_SOURCE_IDS = new Set([
   "deepseek_harness",
   "workbuddy",
   "pi",
-  "qwenwork"
+  "qwenwork",
+  "gemini"
 ]);
-const HOOK_OR_PLUGIN_AGENT_SOURCE_IDS = new Set(["cursor", "claude_code", "codex", "opencode", "openclaw", "hermes", "deepseek_harness"]);
+const HOOK_OR_PLUGIN_AGENT_SOURCE_IDS = new Set(["cursor", "claude_code", "codex", "opencode", "openclaw", "hermes", "deepseek_harness", "gemini"]);
 const UPDATABLE_HOOK_AGENT_SOURCE_IDS = new Set(["cursor", "claude_code", "codex", "opencode"]);
 
 export interface AgentSourceAutoInjectService {

@@ -621,3 +621,58 @@ test('team assistant access is kept inside More with the current warehouse while
   const view=make(async name=>name==='data.warehouses'?{items:teamRows}:name==='data.graph'?realGraph:{}, {},{}, {edition});view.sync(state,true);await view.refresh();const html=view.render();const menu=html.match(/<details class="wanx-action-menu"[\s\S]*?<\/details>/)[0];if(edition==='team'){assert.match(menu,/data-data-action="assistant-access" data-warehouse-id="w1"/);assert.equal((html.match(/data-data-action="assistant-access"/g)||[]).length,1)}else{assert.doesNotMatch(html,/assistant-access/);assert.match(html,/wanx-section-banner/);assert.match(html,/data-section="starlink"/);assert.match(html,/wanx-section-english">STARLINK/)}
  }
 });
+
+test('personal search renders source-label document references and opens their real pinned version',async()=>{
+ const calls=[],annotation={tags:['橙色<松鼠>'],description:'说明<script>',revision:3,provenance:[{tag:'橙色<松鼠>',source:'inherited',itemId:'folder-source'}]};
+ const view=make(async(name,input)=>{
+  calls.push([name,input]);
+  if(name==='data.warehouses')return {items:[{id:'w',name:'测试仓'}]};
+  if(name==='data.warehouse')return {id:'w'};
+  if(name==='data.search')return {items:[],annotationDocuments:[{documentId:'real-document',versionId:'real-version',title:'真实来源',text:'合成原始正文',annotation}],annotationSearch:{incomplete:true}};
+  if(name==='data.document')return {document:{id:input.id,original_name:'真实来源',active_version_id:'real-version'},version:{id:'real-version'},segments:[{text:'合成原始正文'}],sourceAnnotation:{snapshot:{...annotation,tags:['导入时标签']},current:annotation,needsRefresh:true}};
+  if(name==='data.document-text')return {version_id:input.versionId,text:'合成原始正文'};
+  return {items:[],nodes:[],edges:[]};
+ },{},{},{edition:'personal'});
+ view.sync(state,true);await view.refresh();await view.action('tab',{tab:'search'});await view.submit('search',{get:()=> '橙色松鼠'});
+ let html=view.render();assert.match(html,/空间标签命中 · 文档引用/);assert.match(html,/合成原始正文/);assert.match(html,/橙色&lt;松鼠&gt;/);assert.match(html,/部分空间标签索引尚未核验/);
+ assert.match(html,/data-id="real-document" data-version-id="real-version"/);
+ await view.action('source',{id:'real-document',versionId:'real-version'});html=view.render();
+ assert.match(html,/空间标签与说明 · 需核对/);assert.match(html,/导入时快照/);assert.match(html,/导入时标签/);assert.match(html,/当前空间标注/);assert.match(html,/文件夹继承 · 来源 folder-source/);assert.match(html,/说明&lt;script&gt;/);assert.doesNotMatch(html,/<script>/);
+ assert.equal(calls.find(([name])=>name==='data.document-text')[1].versionId,'real-version');
+});
+
+test('team search ignores personal annotation-only responses',async()=>{
+ const view=make(async(name,input)=>name==='data.warehouses'?{items:[{id:'w',name:'团队仓'}]}:name==='data.warehouse'?{id:input.id}:name==='data.search'?{items:[],annotationDocuments:[{documentId:'private',title:'个人标签来源',text:'不应出现在团队'}],annotationSearch:{incomplete:true}}:{items:[],nodes:[],edges:[]});
+ view.sync(state,true);await view.refresh();await view.action('tab',{tab:'search'});await view.submit('search',{get:()=> '关键词'});
+ assert.doesNotMatch(view.render(),/个人标签来源|不应出现在团队|空间标签命中|空间标签索引尚未核验/);
+});
+
+test('committed imports expose pending labels and finish durable receipts after reopening without reuploading',async()=>{
+ const dialogs=[],calls=[],uploads=[];let pending=true;
+ const document={querySelectorAll:()=>[],body:{append(){}},createElement:()=>{
+  const form={},submit={},status={},alert={},listeners={};
+  const d={dataset:{},isConnected:true,showModal(){},close(){this.isConnected=false;this.onclose?.();listeners.close?.()},remove(){},
+   addEventListener(name,fn){listeners[name]=fn},querySelectorAll:()=>[],querySelector:s=>s==='form'?form:s==='[type=submit]'?submit:s==='.data-upload-state'?status:alert};
+  dialogs.push(d);return d;
+ }};
+ const view=make(async(name,input)=>{
+  calls.push([name,input]);
+  if(name==='data.warehouses')return {items:[{id:'w',name:'测试仓'}]};
+  if(name==='data.warehouse')return {id:'w'};
+  if(name==='data.select-files')return [{handle:'saved',name:'已完成.txt',size:20},{handle:'pending',name:'待索引.txt',size:20}];
+  if(name==='data.upload'){uploads.push(input.handle);return {document:{id:'doc-'+input.handle},annotationIndex:{status:pending&&input.handle==='pending'?'pending':'saved'}}}
+  if(name==='data.document')return {document:{id:input.id},annotationIndex:{status:pending?'pending':'saved'}};
+  return {items:[],nodes:[],edges:[]};
+ },{},document,{edition:'personal'});
+ const submit=()=>dialogs.at(-1).querySelector('form').onsubmit({preventDefault(){},target:{confirmed:'on'}});
+ view.sync(state,true);await view.refresh();await view.action('import-local');await submit();
+ assert.deepEqual(uploads,['saved','pending']);assert.match(dialogs.at(-1).querySelector('.data-upload-state').textContent,/资料已导入；标签索引待完成：待索引.txt/);
+ assert.equal(dialogs.at(-1).isConnected,true);assert.equal(dialogs.at(-1).querySelector('[type=submit]').textContent,'重试标签索引');
+ dialogs.at(-1).close();await new Promise(r=>setImmediate(r));
+ assert.deepEqual(Array.from(calls.find(([name])=>name==='data.release-files')[1].handles),['saved']);
+ assert.match(view.render(),/1 份资料已导入，空间标签索引待完成/);
+ await view.action('retry-annotation-imports');pending=false;await submit();
+ assert.deepEqual(uploads,['saved','pending']);assert.equal(calls.filter(([name])=>name==='data.select-files').length,1);
+ assert.equal(calls.find(([name])=>name==='data.document')[1].id,'doc-pending');
+ assert.doesNotMatch(view.render(),/份资料已导入，空间标签索引待完成/);
+});

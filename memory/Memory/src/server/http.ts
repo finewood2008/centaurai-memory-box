@@ -26,6 +26,7 @@ import { createMemoryLogger, memoryErrorFields } from "../logging/logger.js";
 import { isMemoryViewerPath, memoryViewerAsset } from "../viewer/static.js";
 import type {
   MemoryAddRequest,
+  MemoryImportRequest,
   ExternalEvidenceSyncRequest,
   ExternalEvidenceStatusRequest,
   ExternalEvidenceSkillSuggestionRequest,
@@ -84,6 +85,7 @@ export const API_ROUTES = [
   "POST /api/v1/admin/wanx-storage",
   "POST /api/v1/admin/wanx-storage/snapshot",
   "GET /api/v1/admin/export",
+  "POST /api/v1/admin/import",
   "DELETE /api/v1/admin/data",
   "GET /api/v1/agent-sources/sync-access",
   "PUT /api/v1/agent-sources/:sourceId/sync-access",
@@ -257,7 +259,9 @@ export function createMemoryHttpServer(options: MemoryHttpServerOptions): Server
         ...(viewerRequest ? viewerPrincipal() : authenticate(request, url, options)),
         timeZone: requestTimeZone(request, options.timeZone)
       };
-      const body = await readJson(request);
+      const body = await readJson(request,
+        ((viewerRequest && url.pathname === "/api/v1/import") ||
+          (principal.kind === "local" && url.pathname === "/api/v1/admin/import")) ? 101 * 1024 * 1024 : undefined);
       if (url.pathname === "/api/v1/admin/wanx-storage/snapshot" && request.method === "POST" && options.wanxStorage?.snapshot) {
         if (principal.kind !== "local") throw new MemoryServiceError("forbidden", "Local storage requires the service credential.");
         writeJson(response, 200, await options.wanxStorage.snapshot(body));
@@ -1077,6 +1081,20 @@ async function routeRequest(
     });
   }
 
+  if (method === "POST" && path === "/api/v1/admin/import") {
+    if (principal.kind !== "local") throw new MemoryServiceError("forbidden", "Local import requires the service credential.");
+    const request = asObject(body, "memory.import");
+    const bundle = asObject(request.bundle, "memory.import.bundle");
+    const manifest = asObject(bundle.manifest, "memory.import.manifest");
+    if (request.conflictStrategy !== "skip" || manifest.service !== "memmy-memory-service" ||
+        !Number.isInteger(bundle.schemaVersion) || (bundle.schemaVersion as number) < 1 ||
+        (bundle.schemaVersion as number) > Number(service.health().storage.schemaVersion))
+      throw new MemoryServiceError("invalid_argument", "Unsupported memory bundle or import strategy");
+    const result = service.importBundle({ bundle: bundle as unknown as MemoryImportRequest["bundle"], conflictStrategy: "skip" });
+    autoWorker.schedule();
+    return result;
+  }
+
   if (method === "DELETE" && path === "/api/v1/admin/data") {
     requireMemoryWrite(principal);
     if (!localPanel) throw new MemoryServiceError("forbidden", "Clearing device memory requires local access");
@@ -1454,7 +1472,7 @@ function responseRecord(value: unknown): Record<string, unknown> {
   return isRecord(value) ? value : {};
 }
 
-async function readJson(request: IncomingMessage): Promise<unknown> {
+async function readJson(request: IncomingMessage, maxBytes = 2 * 1024 * 1024): Promise<unknown> {
   if (request.method === "GET" || request.method === "HEAD") {
     return {};
   }
@@ -1463,7 +1481,7 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     size += buffer.length;
-    if (size > 2 * 1024 * 1024) {
+    if (size > maxBytes) {
       throw new MemoryServiceError("invalid_argument", "request body is too large");
     }
     chunks.push(buffer);

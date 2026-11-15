@@ -1,0 +1,289 @@
+{
+  "createdAt": "2026-11-15T15:20:18.899880+00:00",
+  "sourceRoot": "/Volumes/ORICO/Memobox",
+  "targetRoot": "/Users/finewood/Projects/Memobox",
+  "head": "a6df9bb769d04e7eefd9eea042a9a49c974f9ea0",
+  "status": "applied-and-hash-verified",
+  "files": [
+    {
+      "path": "wanx/apps/personal-client/shell/space-annotation-workbench.mjs",
+      "beforeSha256": "5628ae1eab4be23b1daff5df7e64a30a5e1d03c4d8fa2384f80e739fa2c6ea2a",
+      "afterSha256": "7ef9c1dc839e1c4242d16ce1b4e28b27981cc3f39c434351ece43ffdfb3167ac",
+      "changed": true,
+      "bytes": 32524
+    },
+    {
+      "path": "wanx/apps/personal-client/shell/annotation-workbench-contract.mjs",
+      "beforeSha256": "a12b9b1c763ece2cd7203acf9ea45c423be72ecd3626f27f4175f7afd07a1221",
+      "afterSha256": "a746503eb404065ff86a4afc856eeef724b51ea663a432c73164492b503a8e5e",
+      "changed": true,
+      "bytes": 1556
+    },
+    {
+      "path": "wanx/apps/personal-client/shell/annotation-model-client.mjs",
+      "beforeSha256": "cd49dd6722df395f2454e3e4778a228e918f1d98cf4327bb81893c87c78047d4",
+      "afterSha256": "cd49dd6722df395f2454e3e4778a228e918f1d98cf4327bb81893c87c78047d4",
+      "changed": false,
+      "bytes": 1893
+    },
+    {
+      "path": "wanx/apps/personal-client/shell/annotation-content.mjs",
+      "beforeSha256": "f539885b28658796246e9f175a3a96f51843ea4b2f2c6ffa7240a41ce82d1acb",
+      "afterSha256": "f539885b28658796246e9f175a3a96f51843ea4b2f2c6ffa7240a41ce82d1acb",
+      "changed": false,
+      "bytes": 4338
+    },
+    {
+      "path": "wanx/apps/personal-client/shell/annotation-content-worker.mjs",
+      "beforeSha256": "18f01670218a1e0aac15b3e5827a6af2d350167e0a76144bb7b6aa13f585867f",
+      "afterSha256": "18f01670218a1e0aac15b3e5827a6af2d350167e0a76144bb7b6aa13f585867f",
+      "changed": false,
+      "bytes": 12255
+    },
+    {
+      "path": "wanx/apps/personal-client/shell/space-annotation-service.mjs",
+      "beforeSha256": "4324a0404627ee5604840b6c5362a3093209c560d3471c1d832c9f0946d0c685",
+      "afterSha256": "4324a0404627ee5604840b6c5362a3093209c560d3471c1d832c9f0946d0c685",
+      "changed": false,
+      "bytes": 15558
+    },
+    {
+      "path": "wanx/apps/personal-client/shell/space-annotations.mjs",
+      "beforeSha256": "4f8af46bad04d493dacfde9a3c7bcfc3ce95be67493023a35fb9e0bf5cb58942",
+      "afterSha256": "4f8af46bad04d493dacfde9a3c7bcfc3ce95be67493023a35fb9e0bf5cb58942",
+      "changed": false,
+      "bytes": 28654
+    },
+    {
+      "path": "wanx/apps/personal-client/shell/personal-space.mjs",
+      "beforeSha256": "1c6d7a6aae415b46ba81a29e5f3d8bf394bfac96f2415c3fc34b6977167b5097",
+      "afterSha256": "1c6d7a6aae415b46ba81a29e5f3d8bf394bfac96f2415c3fc34b6977167b5097",
+      "changed": false,
+      "bytes": 54601
+    },
+    {
+      "path": "wanx/apps/personal-client/shell/control.mjs",
+      "beforeSha256": "7c55f8461257086cc622a48037bdd62ff8dc22e1580d020fe4221a19781ecc29",
+      "afterSha256": "7c55f8461257086cc622a48037bdd62ff8dc22e1580d020fe4221a19781ecc29",
+      "changed": false,
+      "bytes": 33923
+    },
+    {
+      "path": "wanx/apps/personal-client/shell/main.mjs",
+      "beforeSha256": "80385bde67f04d57e59d348fb7d1a21aec04fb9945261f047c5564e9978f72cf",
+      "afterSha256": "80385bde67f04d57e59d348fb7d1a21aec04fb9945261f047c5564e9978f72cf",
+      "changed": false,
+      "bytes": 51628
+    },
+    {
+      "path": "wanx/apps/personal-client/local-ui/remote-preload.cjs",
+      "beforeSha256": "2413c6f7baff1d0e63e76dbaee55c5b67a13e5ff35e12bf0be038ae91487051b",
+      "afterSha256": "2413c6f7baff1d0e63e76dbaee55c5b67a13e5ff35e12bf0be038ae91487051b",
+      "changed": false,
+      "bytes": 25837
+    },
+    {
+      "path": "wanx/apps/personal-client/local-ui/renderer/space-annotation-workbench.js",
+      "beforeSha256": "93e2c2db628c4424a116da82354a86be3f6aa8ce2ae7663adf2be2820e8038fb",
+      "afterSha256": "eb02a5701dfa61845b538c996b3c00ef5ceb76ca37fbdc1b9216cfad85991b64",
+      "changed": true,
+      "bytes": 53202
+    },
+    {
+      "path": "wanx/apps/personal-client/local-ui/renderer/space-annotation-workbench.css",
+      "beforeSha256": "e9a89e1e7332202de9fb83e08ced4467c9dba7a47d439b0ab37942e3e5c27a2a",
+      "afterSha256": "e9a89e1e7332202de9fb83e08ced4467c9dba7a47d439b0ab37942e3e5c27a2a",
+      "changed": false,
+      "bytes": 10457
+    },
+    {
+      "path": "wanx/apps/personal-client/local-ui/renderer/personal-space.js",
+      "beforeSha256": "9738deca0b0d183ca13e27ee9e1aad83113b44f45678546419ac112c98c82f8e",
+      "afterSha256": "9738deca0b0d183ca13e27ee9e1aad83113b44f45678546419ac112c98c82f8e",
+      "changed": false,
+      "bytes": 95796
+    },
+    {
+      "path": "wanx/apps/personal-client/local-ui/renderer/index.html",
+      "beforeSha256": "17b5c5b80229d216dc1cc40eb7e3a26c41a206a8f2e5f4b5885d5b4384c67974",
+      "afterSha256": "17b5c5b80229d216dc1cc40eb7e3a26c41a206a8f2e5f4b5885d5b4384c67974",
+      "changed": false,
+      "bytes": 2340
+    },
+    {
+      "path": "wanx/apps/personal-client/package.json",
+      "beforeSha256": "763cc8ec23c80b9b8ec006bab9ae9fe9ce7a252cb73d0f044ce520112b7cf82a",
+      "afterSha256": "763cc8ec23c80b9b8ec006bab9ae9fe9ce7a252cb73d0f044ce520112b7cf82a",
+      "changed": false,
+      "bytes": 6107
+    },
+    {
+      "path": "wanx/apps/personal-client/package-lock.json",
+      "beforeSha256": "5db69c9b68cb96e3cc2af694c0b462fae817958cebdee574dcef91d7a6d3b2bf",
+      "afterSha256": "5db69c9b68cb96e3cc2af694c0b462fae817958cebdee574dcef91d7a6d3b2bf",
+      "changed": false,
+      "bytes": 190810
+    },
+    {
+      "path": "wanx/apps/personal-client/tests/annotation-workbench-integration.test.mjs",
+      "beforeSha256": "7ff9d83775899ad91def00af8d0e7462596f312bfbb042d14a666aeaa82ee51c",
+      "afterSha256": "8548413a6c988ae465baad159e96a28c36f08fa1654eb588deef3e8a28a48239",
+      "changed": true,
+      "bytes": 50098
+    },
+    {
+      "path": "wanx/apps/personal-client/tests/annotation-model-client.test.mjs",
+      "beforeSha256": "5f7c4a7c413270aa8658ec9eaea65e28041ac7fb258cf8177aba84924976a80d",
+      "afterSha256": "5f7c4a7c413270aa8658ec9eaea65e28041ac7fb258cf8177aba84924976a80d",
+      "changed": false,
+      "bytes": 9915
+    },
+    {
+      "path": "wanx/apps/personal-client/tests/annotation-content.test.mjs",
+      "beforeSha256": "3b276758ee8c305df41784df28cfe9724ce7a1f38c4943b162c29cf9068f607b",
+      "afterSha256": "3b276758ee8c305df41784df28cfe9724ce7a1f38c4943b162c29cf9068f607b",
+      "changed": false,
+      "bytes": 12865
+    },
+    {
+      "path": "wanx/apps/personal-client/tests/annotation-workbench-electron.test.mjs",
+      "beforeSha256": null,
+      "afterSha256": "95433a9088eb569303c1eed37bf2a10d49902390ebdf14d8324b88ac10b135ca",
+      "changed": true,
+      "bytes": 2218
+    },
+    {
+      "path": "wanx/apps/personal-client/tests/support/electron-annotation-workbench.mjs",
+      "beforeSha256": null,
+      "afterSha256": "17f5015fa8b038b082cc9b390a7b12b3dffb8ac61a7d5b64b96d84bd2a2d9aaf",
+      "changed": true,
+      "bytes": 15414
+    },
+    {
+      "path": "wanx/apps/personal-client/tests/space-annotation-workbench-ui.test.mjs",
+      "beforeSha256": "2915987fb7761d4b48600940f4a81249d2118ab8aedabd2afd4a94daf9b8886d",
+      "afterSha256": "5f8d1abbac8f926bef255e0e9918d937fe51eea19534e06087684be4e049ae3a",
+      "changed": true,
+      "bytes": 31802
+    },
+    {
+      "path": "wanx/apps/personal-client/tests/space-annotation-service.test.mjs",
+      "beforeSha256": "314a77592d56aa1d95922d3162d14417a39a1db174eb69867100e7479054c4e1",
+      "afterSha256": "314a77592d56aa1d95922d3162d14417a39a1db174eb69867100e7479054c4e1",
+      "changed": false,
+      "bytes": 17066
+    },
+    {
+      "path": "wanx/apps/personal-client/tests/space-annotations-batch.test.mjs",
+      "beforeSha256": "3ffd93440c857674d1a632a4d5d5fef65c62ce14f48eecdb03703523afcd25fb",
+      "afterSha256": "3ffd93440c857674d1a632a4d5d5fef65c62ce14f48eecdb03703523afcd25fb",
+      "changed": false,
+      "bytes": 20593
+    },
+    {
+      "path": "wanx/apps/personal-client/tests/space-annotations-preload.test.mjs",
+      "beforeSha256": "2c88186f99218d9c2097e4369ece226075442e7518cda30dadb8e389dbad9fc7",
+      "afterSha256": "2c88186f99218d9c2097e4369ece226075442e7518cda30dadb8e389dbad9fc7",
+      "changed": false,
+      "bytes": 4022
+    },
+    {
+      "path": "wanx/apps/personal-client/tools/create-annotation-workbench-fixtures.mjs",
+      "beforeSha256": "835722d49f1a74e3081359346f9c0f3d7623b1df647d4f82899bf32db2c4fe9a",
+      "afterSha256": "835722d49f1a74e3081359346f9c0f3d7623b1df647d4f82899bf32db2c4fe9a",
+      "changed": false,
+      "bytes": 17773
+    },
+    {
+      "path": "wanx/apps/builder/tools/assemble-client.mjs",
+      "beforeSha256": "20260366566ff32e2adfefa65e834986fb7bcc84e130beb4a2d3abd63402f122",
+      "afterSha256": "20260366566ff32e2adfefa65e834986fb7bcc84e130beb4a2d3abd63402f122",
+      "changed": false,
+      "bytes": 8422
+    },
+    {
+      "path": "memory/App/backend/src/services/plugin-model-inference-service.ts",
+      "beforeSha256": "d31a9d74b59f0fb0003ec8082e4a4def3c0c5024afbf6b86f788ccfd79b9fcbf",
+      "afterSha256": "d31a9d74b59f0fb0003ec8082e4a4def3c0c5024afbf6b86f788ccfd79b9fcbf",
+      "changed": false,
+      "bytes": 7976
+    },
+    {
+      "path": "memory/App/backend/src/services/text-model-inference-service.ts",
+      "beforeSha256": "d00c0d30d84986bad667371e4ff9166a241742ff3801d6cbc09e9d4cedac6c26",
+      "afterSha256": "d00c0d30d84986bad667371e4ff9166a241742ff3801d6cbc09e9d4cedac6c26",
+      "changed": false,
+      "bytes": 24521
+    },
+    {
+      "path": "memory/App/backend/src/services/space-annotation-inference-service.ts",
+      "beforeSha256": "98dbb04b04db781624eb7b85286b4b2617f322c56d5c8bb3c6834a5963401c27",
+      "afterSha256": "98dbb04b04db781624eb7b85286b4b2617f322c56d5c8bb3c6834a5963401c27",
+      "changed": false,
+      "bytes": 11046
+    },
+    {
+      "path": "memory/App/backend/src/services/index.ts",
+      "beforeSha256": "3765b79ed3fe00f8019164ba99efd884f80f1f30e63e7bd93464cfb0b38dfcbe",
+      "afterSha256": "3765b79ed3fe00f8019164ba99efd884f80f1f30e63e7bd93464cfb0b38dfcbe",
+      "changed": false,
+      "bytes": 24962
+    },
+    {
+      "path": "memory/App/backend/src/adapters/inbound/local-api/routes/space-annotations.ts",
+      "beforeSha256": "51dec028dd4e80eada68eae18eb6e2a2f081ec7b54a8c9d507cd84a0be60ecb9",
+      "afterSha256": "51dec028dd4e80eada68eae18eb6e2a2f081ec7b54a8c9d507cd84a0be60ecb9",
+      "changed": false,
+      "bytes": 2304
+    },
+    {
+      "path": "memory/App/backend/src/adapters/inbound/local-api/server.ts",
+      "beforeSha256": "12876e22791447a1cd7777b51d2110e02b092516914480b142340cd19fb20709",
+      "afterSha256": "12876e22791447a1cd7777b51d2110e02b092516914480b142340cd19fb20709",
+      "changed": false,
+      "bytes": 15522
+    },
+    {
+      "path": "memory/App/backend/src/services/tests/space-annotation-inference-service.test.ts",
+      "beforeSha256": "efa25c7ea2be25dd75b97ad26914f24a75fcfd209c2ffe462e81a3cabca43493",
+      "afterSha256": "efa25c7ea2be25dd75b97ad26914f24a75fcfd209c2ffe462e81a3cabca43493",
+      "changed": false,
+      "bytes": 9565
+    },
+    {
+      "path": "memory/App/backend/src/adapters/inbound/local-api/tests/space-annotations-route.test.ts",
+      "beforeSha256": "5d9ea4c499b38e36ce1d869c3817b63be8965a9dc0235d916b6fa18c8f3131b5",
+      "afterSha256": "5d9ea4c499b38e36ce1d869c3817b63be8965a9dc0235d916b6fa18c8f3131b5",
+      "changed": false,
+      "bytes": 3923
+    }
+  ],
+  "appliedAt": "2026-11-15T15:21:10.325165+00:00",
+  "backup": "/Volumes/ORICO/Memobox/.local/workbench-migration-before-20261115.zip",
+  "viewportFix": {
+    "path": "wanx/apps/personal-client/local-ui/renderer/space-annotation-workbench.css",
+    "beforeSha256": "e9a89e1e7332202de9fb83e08ced4467c9dba7a47d439b0ab37942e3e5c27a2a",
+    "afterSha256": "b641692cb8b6e15e06985f8000125dce6d2fe80a09752b197a83886d3cb98d0c",
+    "reason": "Installed viewport clips bottom controls under the legacy Space banner",
+    "targetOnly": true
+  },
+  "emptyDescriptionFix": {
+    "targetOnly": true,
+    "files": [
+      {
+        "path": "wanx/apps/personal-client/shell/space-annotation-workbench.mjs",
+        "beforeSha256": "7ef9c1dc839e1c4242d16ce1b4e28b27981cc3f39c434351ece43ffdfb3167ac",
+        "afterSha256": "085cc65a9d953426313be19a9af543ee32b5c7d73f5002f24748f65e00a054f6"
+      },
+      {
+        "path": "wanx/apps/personal-client/tests/annotation-workbench-integration.test.mjs",
+        "beforeSha256": "8548413a6c988ae465baad159e96a28c36f08fa1654eb588deef3e8a28a48239",
+        "afterSha256": "b2490a09afa7ca16e775224dc59a62fc1c6f6d91a6c96fc9b7fedd372f79c674"
+      }
+    ]
+  },
+  "backupCopies": [
+    "/Volumes/ORICO/Memobox/.local/workbench-migration-before-20261115.zip",
+    "/Users/finewood/Projects/Memobox/.local/workbench-migration-before-20261115.zip"
+  ]
+}

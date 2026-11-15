@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 import { lstat, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -8,6 +8,7 @@ import { createMemoryModelBridge, SELECTABLE_MODEL_ROLES } from "./memory-model-
 import { createLocalMemorySpace } from "./space-local-memory.mjs";
 import { createMemoryBackup } from "./memory-backup.mjs";
 import { readMemoryConnection } from "./local-memory-runtime.mjs";
+import { catalogAgent, contextAgent } from "./my-ai-catalog.mjs";
 
 export const MEMORY_SCHEME = "wanx-memory";
 export const MEMORY_ORIGIN = `${MEMORY_SCHEME}://local`;
@@ -50,7 +51,10 @@ function accountScope(state) {
 }
 
 function status(code, message) {
-  return Response.json({ error: { code, message } }, { status: code === "forbidden" ? 403 : code === "invalid_request" ? 400 : 503 });
+  const errorCode = code === "invalid_request" ? "invalid_argument" : code === "unavailable" ? "memory_layer_unavailable" : code;
+  return Response.json({ error: { code: errorCode, message, requestId: randomUUID() } }, {
+    status: code === "forbidden" ? 403 : code === "invalid_request" ? 400 : 503,
+  });
 }
 
 export function resolveMemoryRuntimeFile(env = process.env, home = homedir(), managed = false) {
@@ -63,7 +67,7 @@ export function resolveMemoryRuntimeFile(env = process.env, home = homedir(), ma
 
 export function createMemoryWorkspace({
   assets, getState, fetchAsset, request = fetch, client, serviceURL, preferenceFile, protectFile,
-  localStorage, backup, myAiTask, runtime, agentVisibilityStore, agentAccess, manageAgentSync = Boolean(runtime),
+  localStorage, backup, myAiTask, memoryTransfer, runtime, agentVisibilityStore, agentAccess, manageAgentSync = Boolean(runtime),
   runtimeFile = resolveMemoryRuntimeFile(),
 }) {
   const models = client && createMemoryModelBridge({ client, serviceURL, runtimeFile, preferenceFile, protectFile });
@@ -102,17 +106,18 @@ export function createMemoryWorkspace({
     return reply.json();
   }
 
-  function updateVisibility(key, agent, hide, assertScope) {
+  function updateVisibility(key, agent, hide, assertScope, mode) {
     const update = visibilityWrites.then(async () => {
       assertScope();
       const preferences = await readVisibility();
       const hidden = new Set(preferences[key] ?? []);
       if (hide && !hidden.has(agent) && hidden.size >= 100)
         throw Object.assign(new Error("已达到隐藏应用数量上限，请先恢复一项。"), { status: 400 });
-      if (manageAgentSync) {
-        const result = await syncAccess(agent, !hide, assertScope);
+      const source = agent === "claude_desktop" && mode === "code" ? "claude_code" : catalogAgent(agent)?.sourceId ?? agent;
+      if (manageAgentSync && source !== "claude_desktop") {
+        const result = await syncAccess(source, !hide, assertScope);
         assertScope();
-        if (result?.sourceId !== agent || result.syncDisabled !== hide) throw new Error("AGENT_SYNC_ACCESS_FAILED");
+        if (result?.sourceId !== source || result.syncDisabled !== hide) throw new Error("AGENT_SYNC_ACCESS_FAILED");
       }
       if (hide) hidden.add(agent);
       else hidden.delete(agent);
@@ -197,7 +202,7 @@ export function createMemoryWorkspace({
       ["GET", "PUT"].includes(method);
     const backupRoute = memoryBackup && url.pathname === "/api/wanx-memory/backup" && ["GET", "POST"].includes(method);
     const reconnect = runtime && url.pathname === "/api/wanx-memory/reconnect" && method === "POST";
-    const taskAction = myAiTask && (/^\/api\/wanx-memory\/my-ai\/(status|warehouses|optimize|handoff|copy|launch|download|uninstall|hide-agent|show-agent|agent-access\/(?:status|connect|disconnect)|codex-context\/(?:status|catalog|connect|disconnect))$/.exec(url.pathname)?.[1]);
+    const taskAction = (myAiTask || memoryTransfer) && (/^\/api\/wanx-memory\/my-ai\/(status|warehouses|optimize|handoff|copy|launch|download|install|uninstall|hide-agent|show-agent|agent-access\/(?:status|connect|disconnect)|agent-context\/(?:status|catalog|selection|configuration)|memory-transfer\/(?:status|export|preview|import|rollback)|codex-context\/(?:status|catalog|connect|disconnect))$/.exec(url.pathname)?.[1]);
     const taskRoute = taskAction && method === (["status", "warehouses", "agent-access/status", "codex-context/status"].includes(taskAction) ? "GET" : "POST");
     if ((!backupRoute && !reconnect && !taskRoute && !modelSettings && !routes[method]?.some(rule => rule.test(url.pathname))) ||
         /%(?:2f|5c|00)/i.test(url.pathname)) return status("forbidden", "此记忆服务操作不可用。");
@@ -205,18 +210,25 @@ export function createMemoryWorkspace({
     const selected = session;
     if (!selected || !currentScope() || session !== selected || !/^[a-f0-9]{64}$/.test(header) ||
         !timingSafeEqual(Buffer.from(header, "hex"), Buffer.from(selected.token, "hex"))) return status("forbidden", "记忆会话已结束，请重新打开。");
+    if (backup?.library && backup.library.id !== "legacy" && method !== "GET" &&
+        /^\/api\/agent-sources\/(?:manual$|[^/]+\/(?:managed\/sync|plugin|skill)$)/.test(url.pathname)) {
+      return status("forbidden", `「${backup.library.name}」独立记忆库通过本机扫描采集，不支持在此安装或移除 Hook、Skill、Plugin。如需配置接入组件，请先切换到旧版混合库。`);
+    }
     if (backupRoute) {
       try {
         const raw = method === "POST" ? await input.text() : "";
         if (Buffer.byteLength(raw) > 4096) return status("invalid_request", "备份请求过长。");
         const data = raw ? JSON.parse(raw) : {};
         if (!data || typeof data !== "object" || Array.isArray(data) ||
-          (method === "POST" && !["enable", "disable", "restore", "configure"].includes(data.action))) return status("invalid_request", "备份请求无效。");
+          (method === "POST" && !["enable", "disable", "backup", "catalog", "restore", "rollback", "configure", "select-library"].includes(data.action)))
+          return status("invalid_request", "备份请求无效。");
         if (currentScope() !== selected.scope || session !== selected) return status("forbidden", "记忆会话已结束。");
         const result = await memoryBackup.action(method === "GET" ? "status" : data.action, data);
         if (currentScope() !== selected.scope || session !== selected) return status("forbidden", "记忆会话已结束。");
         return Response.json(result ?? {}, { headers: { "cache-control": "no-store" } });
       } catch (error) {
+        if (error.code === "SPACE_DISK_FULL") return status("invalid_request", "盒子空间不足，请腾出空间后重试。");
+        if (error.code === "SPACE_CHUNK_INVALID") return status("invalid_request", "备份完整性校验失败，请重新选择。");
         return status("invalid_request", error instanceof SyntaxError ? "备份请求格式无效。" : error.message);
       }
     }
@@ -248,13 +260,18 @@ export function createMemoryWorkspace({
         }
         if (!data || typeof data !== "object" || Array.isArray(data)) return status("invalid_request", "任务请求格式无效。");
         let result;
-        if (taskAction === "hide-agent" || taskAction === "show-agent") {
+        if (taskAction.startsWith("memory-transfer/")) {
+          if (!memoryTransfer) return status("unavailable", "本机记忆传输尚不可用。");
+          result = await memoryTransfer.action(taskAction.slice("memory-transfer/".length), data, assertScope);
+        } else if (taskAction === "hide-agent" || taskAction === "show-agent") {
           if (!isAgentPreferenceId(data.agent)) return status("invalid_request", "智能体标识无效。");
-          if (taskAction === "hide-agent") await agentAccess?.disconnect(data.agent, assertScope);
-          result = await updateVisibility(visibilityKey(), data.agent, taskAction === "hide-agent", assertScope);
+          const integration = contextAgent(data.agent, data.mode);
+          if (taskAction === "hide-agent" && integration) await agentAccess?.disconnect(integration, assertScope);
+          result = await updateVisibility(visibilityKey(), data.agent, taskAction === "hide-agent", assertScope, data.mode);
         } else if (agentAccess && taskAction === "agent-access/disconnect") {
-          if (!agentAccess.supports(data.agent)) return status("invalid_request", "智能体标识无效。");
-          result = await agentAccess.disconnect(data.agent, assertScope);
+          const integration = contextAgent(data.agent, data.mode);
+          if (!integration || !agentAccess.supports(integration)) return status("invalid_request", "智能体标识无效。");
+          result = await agentAccess.disconnect(integration, assertScope);
         } else {
           if (agentAccess && taskAction === "agent-access/connect") {
             await visibilityWrites;
@@ -269,7 +286,7 @@ export function createMemoryWorkspace({
             const preferences = (await readVisibility())[key] ?? [];
             const disabled = manageAgentSync ? await syncAccess(null, undefined, assertScope).catch(() => null) : null;
             const ids = Array.isArray(disabled?.disabledSourceIds) ? disabled.disabledSourceIds.filter(isAgentPreferenceId) : preferences;
-            result = { ...result, hiddenAgents: [...new Set(ids)] };
+            result = { ...result, hiddenAgents: [...new Set([...preferences, ...ids])] };
           }
         }
         assertScope();

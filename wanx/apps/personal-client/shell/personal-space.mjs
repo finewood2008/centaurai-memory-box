@@ -4,6 +4,8 @@ import { open, stat, lstat, rename, unlink, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { dataOwnerKey, dataInteractionKey } from "../device-trust/data-context.mjs";
 import { walkUploads, importSummaries, validUploadName, sourceError, IMPORT_PAGE, IMPORT_WINDOW, MAX_UPLOAD_BYTES } from "./space-upload-imports.mjs";
+import { createSpaceAnnotationService } from "./space-annotation-service.mjs";
+import { createAnnotationWorkbench } from "./space-annotation-workbench.mjs";
 
 const PREFIX = "/api/personal-space";
 const CHUNK = 4 * 1024 * 1024;
@@ -25,14 +27,17 @@ const fileStat = file => stat(file).catch(error => { if (error.code === "ENOENT"
 
 // Lives in the main process. Local paths come from a native picker or preload's
 // File conversion; credentials, remote URLs and user ids never come from the renderer.
-export async function createPersonalSpace({ client, store, serviceURL, chooseUploads, chooseDownload, chooseDownloadDirectory, driveCatalog, onChanged = () => {}, onEvent = () => {}, retryBaseMs = 1000, maxRetries = 6, recoveryCooldownMs = 30_000, random = Math.random }) {
+export async function createPersonalSpace({ client, store, annotationStore, workbenchStore, annotationAI, annotationExtract, serviceURL, chooseUploads, chooseDownload, chooseDownloadDirectory, driveCatalog, onChanged = () => {}, onEvent = () => {}, retryBaseMs = 1000, maxRetries = 6, recoveryCooldownMs = 30_000, random = Math.random }) {
   let restored = [], storageError = null;
   try { restored = await store.load() || []; if (!Array.isArray(restored)) throw new Error("Invalid transfer records"); }
   catch { storageError = "SECURE_STORAGE_READ_FAILED"; restored = []; }
   let tasks = restored.map(task => ({ ...task, phase: terminal(task) ? task.phase : task.recoveryVersion === 1 && task.autoResume ? "waiting" : "paused" }));
   let closed = false, lease = null, leaseKey = null, generation = 0, connectionPromise = null;
+  let workbench;
   let overview = null, phase = "disconnected", error = null;
   const running = new Map(), scans = new Map(), scanKnown = new Map(), parentWaiters = new Set(), taskIndex = new Map(tasks.map(t => [t.id, t]));
+  const annotationJobs = new Map();
+  let annotationTimer = null;
   let dispatchCursor = 0;
   let lastCheckpoint = 0, checkpointTimer = null, lastNotify = 0, notifyTimer = null;
   let writes = Promise.resolve(), wakeTimer = null, retryUntil = 0, degraded = false;
@@ -62,7 +67,7 @@ export async function createPersonalSpace({ client, store, serviceURL, chooseUpl
   };
   function snapshot() {
     const scope = scopeKey();
-    return { phase, error, storageError, overview, scope, dataOwnerId: accountKey(), dataContextId: dataInteractionKey(client.snapshot(), serviceURL), accountId: client.snapshot().account?.accountId, boxId: client.snapshot().connection?.deviceId || boundBox, imports: importSummaries(tasks, scope), tasks: tasks.filter(t => t.scope === scope && t.direction !== "import").map(({ localPath, partialPath, localStamp, destinationStamp, digest, ...publicTask }) => publicTask) };
+    return { phase, error, storageError, annotationAvailable: !!annotationStore, annotationWorkbenchAvailable: !!workbenchStore, overview, scope, dataOwnerId: accountKey(), dataContextId: dataInteractionKey(client.snapshot(), serviceURL), accountId: client.snapshot().account?.accountId, boxId: client.snapshot().connection?.deviceId || boundBox, imports: importSummaries(tasks, scope), tasks: tasks.filter(t => t.scope === scope && t.direction !== "import").map(({ localPath, partialPath, localStamp, destinationStamp, digest, ...publicTask }) => publicTask) };
   }
   function schedulePump(ms = 0) {
     clearTimeout(wakeTimer);
@@ -90,9 +95,21 @@ export async function createPersonalSpace({ client, store, serviceURL, chooseUpl
       event(task, "connection");
     }
     for (const job of running.values()) job.controller.abort(fail(changed ? "SPACE_CONTEXT_CHANGED" : "SPACE_NETWORK_WAIT"));
+    workbench?.contextChanged();
     void persist().catch(() => {});
     notify(); schedulePump();
+    scheduleAnnotations();
   }
+  const annotations = await createSpaceAnnotationService({ store: annotationStore, scope: () => closed ? null : scopeKey(), request, notify,
+    assertWritable: async ctx => {
+      // The personal API is the current owner's space. Agent disks have an
+      // explicit current permission in the server's catalog; renderer flags
+      // and a previously cached drive grant cannot authorize an edit.
+      if (ctx.spaceId === "personal") return;
+      const disks = await driveCatalog?.(); ctx.check();
+      if (!disks?.some(disk => disk.id === ctx.spaceId && disk.writable === true)) throw fail("SPACE_ANNOTATION_READ_ONLY");
+    },
+  });
   const unsubscribe = client.subscribe(sync);
   sync();
   async function connect() {
@@ -114,6 +131,12 @@ export async function createPersonalSpace({ client, store, serviceURL, chooseUpl
     const connection=await connect();
     return request(connection,`/drives/${aid}/files`,{prefix:"/api/_client/space-mcp",method:"POST",body:{action,params},signal});
   }});
+  workbench = await createAnnotationWorkbench({ store: workbenchStore, scope: () => closed ? null : scopeKey(), owner: accountKey,
+    interaction: () => dataInteractionKey(client.snapshot(), serviceURL), ready, operation,
+    batch: async input => annotations.applyBatch(await connect(), input), undo: async input => annotations.undoBatch(await connect(), input),
+    receipt: async input => annotations.batchReceipt(await connect(), input),
+    readBytes: annotationBytes, preview, model: annotationAI, ...(annotationExtract ? { extract: annotationExtract } : {}), notify,
+  });
   async function request(connection, route, { method = "GET", body, signal, raw = false, headers = {}, prefix = PREFIX, spaceId } = {}) {
     if (signal?.aborted) throw fail("SPACE_PAUSED");
     connection.context();
@@ -162,13 +185,17 @@ export async function createPersonalSpace({ client, store, serviceURL, chooseUpl
     return snapshot();
   }
   async function operation(action, input = {}) {
+    if (action === "annotation-workbench") return workbench.run(input);
+    if (["annotation-stage-import", "annotation-pending-imports"].includes(action)) return annotations.localOperation(action, input);
     const connection = await connect();
+    if (["annotation", "set-annotation", "auto-annotate", "search-annotations", "annotation-bind", "annotation-imports"].includes(action)) return annotations.operation(connection, action, input);
+    const spaceId = input.space_id || "personal";
     switch (action) {
       case "restore-version": return request(connection, `/files/${id(input.id)}/previous`, { method: "POST", body: { expected: input.expected } });
-      case "stat": return metadata(connection, input.id, input.space_id);
-      case "list": return request(connection, `/files?parent=${folder(input.parent || "")}&trash=${input.trash === true}&space_id=${input.space_id && input.space_id !== "personal" ? id(input.space_id) : "personal"}`);
-      case "mkdir": return request(connection, "/folders", { method: "POST", body: { parent: folder(input.parent || ""), name: name(input.name), space_id: input.space_id || "personal" } });
-      case "move": return request(connection, `/files/${id(input.id)}`, { method: "PATCH", body: { parent: folder(input.parent || ""), name: name(input.name) } });
+      case "stat": return annotations.decorate(connection, await metadata(connection, input.id, input.space_id), spaceId);
+      case "list": return annotations.list(connection, await request(connection, `/files?parent=${folder(input.parent || "")}&trash=${input.trash === true}&space_id=${spaceId !== "personal" ? id(spaceId) : "personal"}`), spaceId);
+      case "mkdir": return annotations.decorate(connection, await request(connection, "/folders", { method: "POST", body: { parent: folder(input.parent || ""), name: name(input.name), space_id: spaceId } }), spaceId);
+      case "move": return annotations.decorate(connection, await request(connection, `/files/${id(input.id)}`, { method: "PATCH", body: { parent: folder(input.parent || ""), name: name(input.name) } }), spaceId);
       case "trash": return request(connection, `/files/${id(input.id)}`, { method: "DELETE" });
       case "restore": return request(connection, `/trash/${id(input.id)}/restore`, { method: "POST" });
       case "purge": return request(connection, `/trash/${id(input.id)}`, { method: "DELETE" });
@@ -176,6 +203,21 @@ export async function createPersonalSpace({ client, store, serviceURL, chooseUpl
     }
   }
   async function metadata(connection, itemId, spaceId) { return request(connection, `/files/${id(itemId)}`, {spaceId}); }
+  async function annotationBytes(entry, spaceId, signal) {
+    if (entry.kind !== "file" || !Number.isSafeInteger(entry.size) || entry.size < 0 || entry.size > 64 * 1024 * 1024) throw fail("SPACE_ANNOTATION_CONTENT_TOO_LARGE");
+    const connection = await connect(), context = generation, parts = [];
+    const current = () => { connection.context(); if (closed || context !== generation || signal?.aborted) throw fail("SPACE_CONTEXT_CHANGED"); };
+    const version = value => JSON.stringify([value.id, value.parent, value.name, value.digest, value.size, value.version, value.modified]);
+    current(); if (version(await metadata(connection, entry.id, spaceId)) !== version(entry)) throw fail("SPACE_REMOTE_FILE_CHANGED");
+    for (let offset = 0; offset < entry.size;) {
+      const result = await request(connection, `/files/${id(entry.id)}/content?offset=${offset}&length=${Math.min(CHUNK, entry.size - offset)}`, { raw: true, spaceId, signal }); current();
+      if (!result.bytes.length || result.bytes.length > Math.min(CHUNK, entry.size - offset) || result.headers?.["x-content-sha256"] && hash(result.bytes) !== result.headers["x-content-sha256"]) throw fail("SPACE_CHUNK_INVALID");
+      parts.push(result.bytes); offset += result.bytes.length;
+    }
+    const bytes = Buffer.concat(parts); current();
+    if (entry.digest && hash(bytes) !== entry.digest || version(await metadata(connection, entry.id, spaceId)) !== version(entry)) throw fail("SPACE_REMOTE_FILE_CHANGED");
+    current(); return bytes;
+  }
   async function digestFile(file, signal) {
     const digest = createHash("sha256");
     const handle = await open(file, "r");
@@ -229,6 +271,34 @@ export async function createPersonalSpace({ client, store, serviceURL, chooseUpl
     if (entry.kind !== "folder" || entry.parent !== task.parent) throw fail("SPACE_IMPORT_FOLDER_CHANGED");
     if (entry.name === stagingName) await request(connection, `/files/${task.remoteId}`, { method: "PATCH", signal, body: { parent: task.parent, name: task.name } });
   }
+  async function annotateUpload(task, connection) {
+    task.annotationPending = true;
+    try {
+      await annotations.operation(connection, "auto-annotate", { id: task.kind === "folder" ? task.remoteId : task.id, space_id: task.spaceId || "personal" });
+      task.annotationPending = false; task.annotationError = null; task.annotationRetryAt = null;
+    } catch (cause) {
+      task.annotationError = cause.code || cause.message;
+      task.annotationRetryAt = Date.now() + Math.max(15_000, retryBaseMs);
+    }
+  }
+  function scheduleAnnotations(ms = 0) {
+    clearTimeout(annotationTimer);
+    if (closed || !annotationStore || !ready()) return;
+    annotationTimer = setTimeout(retryAnnotations, ms); annotationTimer.unref?.();
+  }
+  function retryAnnotations() {
+    annotationTimer = null;
+    if (closed || !ready() || storageError || annotationJobs.size) return;
+    const pending = tasks.filter(task => task.scope === scopeKey() && task.phase === "complete" && task.annotationPending);
+    const task = pending.find(item => !item.annotationRetryAt || item.annotationRetryAt <= Date.now());
+    if (!task) { if (pending.length) scheduleAnnotations(Math.max(1, Math.min(...pending.map(item => item.annotationRetryAt)) - Date.now())); return; }
+    const work = (async () => {
+      try { await annotateUpload(task, await connect()); }
+      catch (cause) { task.annotationError = cause.code || cause.message; task.annotationRetryAt = Date.now() + 15_000; }
+      await persist().catch(() => {});
+    })().finally(() => { annotationJobs.delete(task.id); notify(); scheduleAnnotations(); });
+    annotationJobs.set(task.id, work);
+  }
   async function run(task, controller) {
     const { signal } = controller;
     if (task.direction === "import") { await scanPage(task, signal); return; }
@@ -250,6 +320,8 @@ export async function createPersonalSpace({ client, store, serviceURL, chooseUpl
       }
       if (task.kind === "folder") {
         task.phase = "running"; notify(); await uploadFolder(task, connection, signal);
+        if (annotations.enabled) await annotateUpload(task, connection);
+        if (signal.aborted || task.scope !== scopeKey()) throw fail("SPACE_CONTEXT_CHANGED");
         task.phase = "complete"; task.error = null; task.autoResume = false; task.pauseReason = null; event(task, "completed"); return;
       }
       let info;
@@ -283,6 +355,8 @@ export async function createPersonalSpace({ client, store, serviceURL, chooseUpl
       }
       if (stamp(await fileStat(task.localPath)) !== task.localStamp) throw fail("SPACE_LOCAL_FILE_CHANGED");
       if (remote.state !== "complete") await transferRequest(`/uploads/${task.id}/complete`, { method: "POST", signal, body: { digest: task.digest } });
+      if (annotations.enabled) await annotateUpload(task, connection);
+      if (signal.aborted || task.scope !== scopeKey()) throw fail("SPACE_CONTEXT_CHANGED");
     } else {
       const entry = await metadata(connection, task.itemId);
       if (entry.digest !== task.digest || entry.size !== task.size) throw fail("SPACE_REMOTE_FILE_CHANGED");
@@ -368,7 +442,7 @@ export async function createPersonalSpace({ client, store, serviceURL, chooseUpl
         event(task, "interrupted", { errorCode: code, httpStatus: cause.status });
       }).finally(async () => {
         await (task.direction === "upload" && task.kind !== "folder" ? checkpoint() : persist()).catch(() => { task.error = "SECURE_STORAGE_WRITE_FAILED"; task.phase = "paused"; task.autoResume = false; task.pauseReason = "error"; });
-        running.delete(task.id); notify(); pump();
+        running.delete(task.id); notify(); pump(); scheduleAnnotations();
       });
       running.set(task.id, { controller, promise });
       dispatchCursor = (position + 1) % count;
@@ -487,10 +561,15 @@ export async function createPersonalSpace({ client, store, serviceURL, chooseUpl
     return { count: planned.length };
   }
   async function transfer(action, taskId) {
+    if (action === "retry-annotations") {
+      const task = taskIndex.get(id(taskId));
+      if (!task || task.scope !== scopeKey() || task.phase !== "complete" || !task.annotationPending) throw fail("SPACE_NOT_FOUND");
+      task.annotationRetryAt = 0; await persist(); scheduleAnnotations(); return;
+    }
     if (action === "clear-completed") {
       const scope = scopeKey(), groups = importSummaries(tasks, scope);
       if (taskId && !groups.some(g => g.id === id(taskId) && g.phase === "complete")) throw fail("SPACE_TRANSFER_BUSY");
-      const completed = new Set(groups.filter(g => g.phase === "complete" && (!taskId || g.id === taskId)).map(g => g.id));
+      const completed = new Set(groups.filter(g => g.phase === "complete" && (!taskId || g.id === taskId) && !tasks.some(task => task.batchId === g.id && task.annotationPending)).map(g => g.id));
       const remove = task => task.scope === scope && (completed.has(task.batchId) || !taskId && task.direction === "download" && terminal(task));
       for (const task of tasks) if (remove(task)) taskIndex.delete(task.id);
       tasks = tasks.filter(task => !remove(task)); await persist(); notify(); return;
@@ -521,6 +600,7 @@ export async function createPersonalSpace({ client, store, serviceURL, chooseUpl
     }
     if (["pause-all", "resume-all", "retry-failed"].includes(action)) {
       sync(); const scope = scopeKey(), epoch = generation;
+      if (action === "retry-failed") { for (const task of tasks) if (task.scope === scope && task.annotationPending) task.annotationRetryAt = 0; scheduleAnnotations(); }
       if (action === "retry-failed") for (const batch of tasks.filter(t => t.direction === "import" && t.scope === scope && tasks.some(child => child.batchId === t.id && child.preflightError && child.phase === "paused"))) await transfer("retry-batch", batch.id);
       const selected = tasks.filter(t => t.scope === scope && !terminal(t) && (action === "pause-all" ? t.phase !== "paused" : t.phase === "paused" && (action !== "retry-failed" || t.pauseReason === "error"))).map(t => t.id);
       if (action === "pause-all") for (const target of selected) { const task = tasks.find(t => t.id === target); task.autoResume = false; task.phase = "paused"; task.pauseReason = "user"; task.error = null; task.retryAt = null; running.get(target)?.controller.abort(fail("SPACE_PAUSED")); }
@@ -625,5 +705,5 @@ export async function createPersonalSpace({ client, store, serviceURL, chooseUpl
     return result;
   }
   return { snapshot, refresh, operation, uploads, download, downloads, transfer, preview, cancelPreview, clipboardRequest,
-    async close() { closed = true; clearTimeout(wakeTimer); clearTimeout(checkpointTimer); clearTimeout(notifyTimer); generation++; unsubscribe(); for (const job of running.values()) job.controller.abort(); await Promise.allSettled([...running.values()].map(j => j.promise)); for (const iterator of scans.values()) await iterator.return().catch(() => {}); scans.clear(); for (const t of tasks) if (t.phase === "queued") { t.phase = t.autoResume ? "waiting" : "paused"; t.pauseReason = "restart"; } if (!storageError) await persist(); } };
+    async close() { closed = true; clearTimeout(wakeTimer); clearTimeout(annotationTimer); clearTimeout(checkpointTimer); clearTimeout(notifyTimer); generation++; unsubscribe(); for (const job of running.values()) job.controller.abort(); await workbench.close(); await Promise.allSettled([...running.values()].map(j => j.promise)); await Promise.allSettled([...annotationJobs.values()]); for (const iterator of scans.values()) await iterator.return().catch(() => {}); scans.clear(); for (const t of tasks) if (t.phase === "queued") { t.phase = t.autoResume ? "waiting" : "paused"; t.pauseReason = "restart"; } if (!storageError) await persist(); await annotations.close(); } };
 }

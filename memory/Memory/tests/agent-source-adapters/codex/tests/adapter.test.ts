@@ -1,5 +1,5 @@
 /** Adapter tests. */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -71,6 +71,26 @@ describe("codex source adapter", () => {
       expect.objectContaining({ sourceId: "codex", role: "assistant" })
     ]);
     expect(messages.some((message) => message.content.includes(SYNTHETIC_API_KEY))).toBe(false);
+  });
+
+  it("keeps CLI and Desktop in separate scans even when they share one sessions directory", async () => {
+    const fixture = createFixture();
+    const lines = readFileSync(fixture.rolloutPath, "utf8").trim().split("\n");
+    const header = JSON.parse(lines[0]!);
+    for (const [name, originator] of [["cli", "codex-tui"], ["desktop", "Codex Desktop"], ["unknown", "another-client"]]) {
+      const pathname = join(fixture.sessionsRoot, `rollout-${name}.jsonl`);
+      writeFileSync(pathname, [JSON.stringify({ ...header, payload: { ...header.payload, originator } }), ...lines.slice(1)].join("\n"));
+    }
+    for (const [name, originator] of [["cli", "codex-tui"], ["desktop", "Codex Desktop"]]) {
+      const allowedOrigins = new Set([originator!]);
+      const adapter = createCodexSourceAdapter({ sessionsRoot: fixture.sessionsRoot, allowedOrigins });
+      const sessions = await discoverCodexSessions({ root: fixture.sessionsRoot, allowedOrigins, maxSessions: 1 });
+      expect(sessions.map(session => session.sessionFilePath)).toEqual([join(fixture.sessionsRoot, `rollout-${name}.jsonl`)]);
+      const first = await collect(adapter.scan({}));
+      expect(first).toHaveLength(4);
+      expect(await collect(adapter.scan({}))).toEqual(first);
+    }
+    expect(await collect(readCodexRollout(fixture.rolloutPath, undefined, undefined, new Set(["Codex Desktop"])))).toEqual([]);
   });
 
   it("ignores backup copies of rollout files", async () => {

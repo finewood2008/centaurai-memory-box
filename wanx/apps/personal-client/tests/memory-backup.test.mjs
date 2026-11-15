@@ -12,7 +12,7 @@ const hash = bytes => createHash("sha256").update(bytes).digest("hex");
 const rootId = "";
 const json = (value, status = 200) => ({ status, headers: {}, body: Buffer.from(JSON.stringify(value)) });
 
-test("automatically updates one backup and restores verified data on a clean installation", async () => {
+test("independent installations keep history, recover a selected version, and retain legacy snapshots", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "wanx-backup-flow-"));
   const uploads = new Map();
   const files = new Map();
@@ -20,26 +20,29 @@ test("automatically updates one backup and restores verified data on a clean ins
   let createdFolders = 0;
   const devices = [];
   let corrupted = false, lostChunkReply = false, resetDownload = false, stalledDownload = false, sequence = 0;
+  let interrupted, activeUploads = 0, maximumUploads = 0;
 
-  function device(name, initial, saved) {
-    let prefs = saved, local = initial, restored, online = true, listener, clock = Date.now();
+  function device(name, initial, saved, library) {
+    let prefs = saved, local = initial, previous, restored, online = true, listener, clock = Date.now();
     const client = {
       subscribe(fn) { listener = fn; return () => {}; },
       async applicationConnection() {
+        if (!online) throw Object.assign(new Error("offline"), { code: "NETWORK_NOT_READY" });
         return { context() {}, async request(input) {
           const url = new URL(input.path, "http://box.test");
           const [, , , collection, id, operation] = url.pathname.split("/");
           if (collection === "folders") {
             const value = JSON.parse(input.body);
             const existing = [...folders.values()].find(item => item.name === value.name);
-            if (existing) return json({ detail: { code: "SPACE_NAME_CONFLICT" } }, 409);
-            const entry = { id: (++createdFolders).toString(16).padStart(32, "0"), parent: "", name: value.name, kind: "folder" };
+            const entry = { id: (++createdFolders).toString(16).padStart(32, "0"), parent: "",
+              name: existing ? value.name + " (1)" : value.name, kind: "folder" };
             folders.set(entry.id, entry);
             return json(entry);
           }
           if (collection === "uploads") {
             if (!id) {
               const value = JSON.parse(input.body);
+              if (!uploads.has(value.id)) maximumUploads = Math.max(maximumUploads, ++activeUploads);
               const upload = uploads.get(value.id) ?? { ...value, bytes: Buffer.alloc(0) };
               uploads.set(value.id, upload);
               return json({ offset: upload.bytes.length, state: "pending" });
@@ -51,10 +54,19 @@ test("automatically updates one backup and restores verified data on a clean ins
               const file = { ...upload, kind: "file", digest: hash(upload.bytes), modified: ++sequence };
               files.set(id, file);
               uploads.delete(id);
+              activeUploads--;
               return json(file);
             }
+            if (input.method === "DELETE") { uploads.delete(id); activeUploads--; return json(null, 204); }
             assert.equal(hash(input.body), input.headers["x-content-sha256"]);
             upload.bytes = Buffer.concat([upload.bytes, input.body]);
+            if (interrupted === name) {
+              interrupted = false;
+              online = false;
+              listener();
+              setTimeout(() => { online = true; listener(); }, 100).unref();
+              throw Object.assign(new Error("upload interrupted"), { code: "ECONNRESET" });
+            }
             if (!lostChunkReply) {
               lostChunkReply = true;
               return json({ detail: { code: "SPACE_CONNECTION_TIMEOUT" } }, 503);
@@ -65,7 +77,7 @@ test("automatically updates one backup and restores verified data on a clean ins
             const parent = url.searchParams.get("parent") || rootId;
             return json({ space_id: "personal", root: rootId, parent, breadcrumbs: parent ? [{ id: parent, name: folders.get(parent).name }] : [], items: [...folders.values(), ...files.values()].filter(item => item.parent === parent) });
           }
-          if (input.method === "DELETE") { files.delete(id); return json(null, 204); }
+          assert.notEqual(input.method, "DELETE", "must never delete a completed backup");
           const file = files.get(id);
           if (!operation) return json(file);
           assert.equal(Number(url.searchParams.get("length")), 1024 * 1024);
@@ -89,6 +101,8 @@ test("automatically updates one backup and restores verified data on a clean ins
     };
     const backup = createMemoryBackup({
       client, space: { snapshot: () => ({ scope: "owner-and-box", dataContextId: online ? "connection:" + name : null }) },
+      sourceBinding: async () => ({ platform: "darwin", binding: hash(name) }),
+      library,
       store: { async load() { return prefs; }, async save(value) { prefs = value; } },
       protect: async () => {}, stagingRoot: path.join(root, name), intervalMs: 30, now: () => clock,
       async localRequest(route, data) {
@@ -98,11 +112,17 @@ test("automatically updates one backup and restores verified data on a clean ins
           return { path: file };
         }
         if (data?.restoreFrom) {
+          previous = local;
           local = await readFile(data.restoreFrom, "utf8");
           restored = { id: data.id, failed: false };
           return { accepted: true };
         }
-        return { result: restored };
+        if (data?.rollback) {
+          [local, previous] = [previous, local];
+          restored = { id: data.id, failed: false };
+          return { accepted: true };
+        }
+        return { result: restored, rollbackAvailable: previous !== undefined, sourceProfile: library?.id };
       },
     });
     devices.push(backup);
@@ -124,66 +144,128 @@ test("automatically updates one backup and restores verified data on a clean ins
     assert.ok(await check(), "timed out waiting for automatic backup");
   }
 
+  const ready = async target => {
+    const status = await target.status();
+    return status.phase === "ready" && !status.busy;
+  };
+  const contents = () => [...files.values()].filter(file => file.name.endsWith(".gz"))
+    .map(file => gunzipSync(file.bytes).toString()).sort();
+  const restoreInput = (source, entry) => ({ sourceId: source.id, id: entry.id, digest: entry.digest });
+
   try {
-    const first = device("first", "original memory");
-    assert.equal((await first.status()).enabled, true, "enabled by default without a picker");
-    await waitFor(() => files.size === 1);
-    await waitFor(async () => { const status = await first.status(); return status.phase === "ready" && !status.busy; });
-    assert.equal(createdFolders, 1);
-    assert.equal([...folders.values()][0].name, "半人马AI记忆备份");
+    const first = device("first", "A initial");
+    const second = device("second", "B initial");
+    assert.equal((await first.status()).enabled, true);
+    await waitFor(async () => await ready(first) && await ready(second));
+    assert.equal([...folders.values()].filter(folder => folder.name === "半人马AI记忆备份").length, 1);
+    assert.equal(new Set([...files.values()].map(file => file.parent)).size, 1);
+    assert.ok(maximumUploads >= 2, "both machines uploaded concurrently");
+    assert.deepEqual(contents(), ["A initial", "B initial"]);
+
+    await first.action("backup");
+    assert.equal(files.size, 2, "repeated unchanged backup is reused");
+
     first.online(false);
-    first.change("new memory written offline");
-    assert.equal(files.size, 1);
+    first.change("A offline");
+    assert.deepEqual(contents(), ["A initial", "B initial"]);
+    interrupted = "first";
     first.online(true);
-    await waitFor(() => files.size === 1 && gunzipSync([...files.values()][0].bytes).toString() === "new memory written offline");
-    await waitFor(async () => { const status = await first.status(); return status.phase === "ready" && !status.busy; });
+    await waitFor(async () => await ready(first) && contents().includes("A offline"));
+    assert.deepEqual(contents(), ["A initial", "A offline", "B initial"]);
+
     await first.action("configure", { intervalMinutes: 15 });
-    assert.equal((await first.status()).intervalMinutes, 15);
     await assert.rejects(first.action("configure", { intervalMinutes: 0 }), /备份间隔/);
-    await assert.rejects(first.action("configure", { intervalMinutes: 1441 }), /备份间隔/);
-    first.change("scheduled memory");
+    first.change("A scheduled");
     first.advance(14 * 60_000);
     await delay(100);
-    assert.equal(gunzipSync([...files.values()][0].bytes).toString(), "new memory written offline");
+    assert.equal(files.size, 3);
     first.advance(60_000);
-    await waitFor(() => gunzipSync([...files.values()][0].bytes).toString() === "scheduled memory");
-    await waitFor(async () => { const status = await first.status(); return status.phase === "ready" && !status.busy; });
+    await waitFor(async () => await ready(first) && contents().includes("A scheduled"));
+
+    const legacy = { id: "c".repeat(32), parent: [...folders.keys()][0], kind: "file",
+      name: "半人马AI-记忆备份-" + "e".repeat(32) + "-" + "d".repeat(32) + ".sqlite",
+      modified: 1, size: 6, bytes: Buffer.from("legacy") };
+    legacy.digest = hash(legacy.bytes);
+    files.set(legacy.id, legacy);
+
     await first.action("disable");
-    const disabledDigest = [...files.values()][0].digest;
-    first.change("must not upload while disabled");
+    first.change("A kept locally");
     first.online(false);
-    first.online(true);
-    await delay(100);
-    assert.equal([...files.values()][0].digest, disabledDigest);
-    assert.equal((await first.status()).enabled, false);
-    first.online(false);
+    const clone = device("different-host-with-copied-profile", "C cloned", first.prefs());
+    assert.equal((await clone.status()).enabled, false, "preference survives restart");
+    assert.equal((await clone.status()).intervalMinutes, 15);
+    await clone.action("enable");
+    await waitFor(async () => await ready(clone));
 
-    const optedOut = device("opted-out", "private", first.prefs());
-    await delay(100);
-    assert.equal((await optedOut.status()).enabled, false, "explicit opt-out survives restart");
-    assert.equal((await optedOut.status()).intervalMinutes, 15, "configured interval survives restart");
-    assert.equal([...files.values()][0].digest, disabledDigest);
-    optedOut.online(false);
+    const catalog = await second.action("catalog");
+    assert.equal(catalog.sources.length, 4);
+    const sourceA = catalog.sources.find(source => source.snapshots.length === 3);
+    const sourceB = catalog.sources.find(source => source.current);
+    const sourceLegacy = catalog.sources.find(source => source.id.startsWith("legacy-"));
+    assert.ok(sourceA && sourceB && sourceLegacy);
+    assert.equal(sourceLegacy.snapshots[0].id, legacy.id);
+    assert.equal(sourceB.snapshots.length, 1);
+    assert.equal(catalog.rollbackAvailable, false);
 
-    const second = device("second", "blank local library");
-    await waitFor(async () => (await second.status()).phase === "restore-available");
-    assert.equal(createdFolders, 1, "reuse the managed directory on another computer");
-    assert.equal([...files.values()][0].digest, disabledDigest, "empty computer must not overwrite backup");
-    const existing = (await second.status()).availableBackup;
-    await assert.rejects(second.action("restore", { id: "f".repeat(32) }), /备份列表已变化/);
+    const older = sourceA.snapshots.at(-1);
+    const input = restoreInput(sourceA, older);
+    await assert.rejects(second.action("restore", { ...input, sourceId: sourceB.id }), /快照已变化/);
+    await assert.rejects(second.action("restore", { ...input, digest: "0".repeat(64) }), /快照已变化/);
     corrupted = true;
-    await assert.rejects(second.action("restore", { id: existing.id }), /SPACE_CHUNK_INVALID/);
-    assert.equal(second.local(), "blank local library");
+    await assert.rejects(second.action("restore", input), /SPACE_CHUNK_INVALID/);
+    assert.equal(second.local(), "B initial");
     corrupted = false;
     resetDownload = stalledDownload = true;
-    await second.action("restore", { id: existing.id });
-    assert.equal(stalledDownload, false, "stalled downloads retry without losing the restore");
-    assert.equal(second.local(), "scheduled memory");
-    assert.equal((await second.status()).enabled, true);
+    await second.action("restore", input);
+    assert.equal(stalledDownload, false);
+    assert.equal(second.local(), "A initial", "restores the selected older version");
+    assert.equal(first.local(), "A kept locally");
+    assert.equal((await second.action("catalog")).rollbackAvailable, true);
+    await second.action("backup");
+    const restoredCatalog = await second.action("catalog");
+    assert.equal(restoredCatalog.sources.find(source => source.current).id, sourceB.id);
+    assert.equal(restoredCatalog.sources.find(source => source.current).snapshots.length, 2);
+    assert.equal(restoredCatalog.sources.find(source => source.id === sourceA.id).snapshots.length, 3);
+    assert.ok(files.has(legacy.id));
+
+    await second.action("restore", restoreInput(sourceLegacy, sourceLegacy.snapshots[0]));
+    assert.equal(second.local(), "legacy");
     await second.action("disable");
     second.online(false);
-    await second.action("enable");
-    assert.equal((await second.status()).enabled, true, "preference can change offline");
+    assert.equal((await second.action("catalog")).rollbackAvailable, true);
+    await second.action("rollback");
+    assert.equal(second.local(), "A initial");
+    assert.equal((await second.status()).enabled, false, "restoring does not enable automatic backup");
+
+    const customParent = "a".repeat(32);
+    folders.set(customParent, { id: customParent, parent: "", name: "旧自选目录", kind: "folder" });
+    const customLegacy = { ...legacy, parent: customParent, id: "b".repeat(32) };
+    files.set(customLegacy.id, customLegacy);
+    const upgraded = device("previously configured installation", "local upgrade", {
+      [hash("owner-and-box")]: { parent: customParent, writer: "e".repeat(32), enabled: false },
+    });
+    assert.equal((await upgraded.status()).enabled, false);
+    await upgraded.action("backup");
+    const upgradedCatalog = await upgraded.action("catalog");
+    assert.equal(upgradedCatalog.sources.find(source => source.current).snapshots.length, 1);
+    assert.ok(upgradedCatalog.sources.find(source => source.id === sourceLegacy.id).snapshots.some(entry => entry.id === customLegacy.id));
+
+    const cli = device("first", "CLI only", first.prefs(), { id: "codex-cli", name: "Codex CLI" });
+    const desktop = device("first", "Desktop only", first.prefs(), { id: "codex-desktop", name: "Codex Desktop" });
+    await waitFor(async () => await ready(cli) && await ready(desktop));
+    const cliSources = (await cli.action("catalog")).sources;
+    const desktopSources = (await desktop.action("catalog")).sources;
+    assert.equal(cliSources.length, 1);
+    assert.equal(desktopSources.length, 1);
+    assert.equal(cliSources[0].id.replace(/-codex-cli$/, ""), desktopSources[0].id.replace(/-codex-desktop$/, ""));
+    await assert.rejects(desktop.action("restore", restoreInput(cliSources[0], cliSources[0].snapshots[0])), /快照已变化/);
+    cli.change("CLI after backup");
+    await cli.action("restore", restoreInput(cliSources[0], cliSources[0].snapshots[0]));
+    assert.equal(cli.local(), "CLI only");
+    assert.equal(desktop.local(), "Desktop only");
+    await cli.action("rollback");
+    assert.equal(cli.local(), "CLI after backup");
+    assert.equal(desktop.local(), "Desktop only");
   } finally {
     await Promise.all(devices.map(backup => backup.close()));
     if (path.dirname(root) === tmpdir()) await rm(root, { recursive: true, force: true });
@@ -198,6 +280,7 @@ test("large backup reconciles committed chunks after repeated lost replies and s
   let staleStatus = true, preferences;
   const backup = createMemoryBackup({
     accountScope: () => "account", space: { snapshot: () => ({ scope: "box", dataContextId: "session" }) },
+    sourceBinding: async () => ({ platform: "win32", binding: hash("large backup test") }),
     store: { async load() { return preferences; }, async save(value) { preferences = value; } },
     stagingRoot: root, protect: async () => {},
     client: {

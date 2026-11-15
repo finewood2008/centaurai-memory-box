@@ -15,7 +15,8 @@ describe("built-in agent source registry", () => {
       "deepseek_harness",
       "workbuddy",
       "pi",
-      "qwenwork"
+      "qwenwork",
+      "gemini"
     ]);
     expect(registry.require("workbuddy").descriptor.displayName).toBe("WorkBuddy");
     expect(registry.require("pi").descriptor.displayName).toBe("Pi");

@@ -17,15 +17,18 @@ export interface DiscoverCodexSessionsOptions {
   root: string;
   order?: "path_asc" | "recent_first";
   maxSessions?: number;
+  allowedOrigins?: ReadonlySet<string>;
 }
 
 /** Handles discover codex sessions. */
 export async function discoverCodexSessions(options: DiscoverCodexSessionsOptions): Promise<CodexSessionFile[]> {
-  const files = await listRolloutFiles(options.root, options.order ?? "path_asc", options.maxSessions);
+  const files = await listRolloutFiles(options.root, options.order ?? "path_asc", options.allowedOrigins ? undefined : options.maxSessions);
   const sessions: CodexSessionFile[] = [];
 
   for (const filePath of files) {
-    const workspacePath = await readFirstCwd(filePath);
+    if (sessions.length >= (options.maxSessions ?? Infinity)) break;
+    const workspacePath = options.allowedOrigins ? await readScopedSession(filePath, options.allowedOrigins) : await readFirstCwd(filePath);
+    if (workspacePath === undefined) continue;
     sessions.push({
       sessionFilePath: filePath,
       workspacePath,
@@ -34,6 +37,17 @@ export async function discoverCodexSessions(options: DiscoverCodexSessionsOption
   }
 
   return sessions;
+}
+
+async function readScopedSession(filePath: string, allowedOrigins: ReadonlySet<string>): Promise<string | null | undefined> {
+  try {
+    for await (const record of readJsonlObjects(filePath)) {
+      const payload = record.payload;
+      if (record.type !== "session_meta" || !isRecord(payload) || typeof payload.originator !== "string" ||
+          !allowedOrigins.has(payload.originator)) return undefined;
+      return typeof payload.cwd === "string" ? payload.cwd : null;
+    }
+  } catch { /* An unreadable header cannot establish a source. */ }
 }
 
 /** Handles list rollout files. */

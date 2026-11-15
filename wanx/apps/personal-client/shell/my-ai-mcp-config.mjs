@@ -6,7 +6,7 @@ import jsonc from "jsonc-parser";
 import { parseDocument } from "yaml";
 import { isDeepStrictEqual } from "node:util";
 
-export const configurableAgents = ["claude_code", "cursor", "opencode", "openclaw", "hermes", "pi", "workbuddy", "deepseek_harness"];
+export const configurableAgents = ["claude_code", "claude_desktop", "gemini", "workbuddy", "qwenwork", "deepseek_harness"];
 const serverName = "wanx-memobox";
 const mapping = value => value && typeof value === "object" && !Array.isArray(value);
 
@@ -34,19 +34,34 @@ export function createMyAiMcpConfig(agent, { executable = process.execPath, stdi
   const entry = { command: executable, args, env: { ELECTRON_RUN_AS_NODE: "1" } };
   const absolute = (candidate, fallback) => candidate && path.isAbsolute(candidate) ? candidate : fallback;
   const underHome = (...parts) => path.join(home, ...parts);
+  const guided = agent === "workbuddy" || agent === "qwenwork";
   const openCodeDir = path.join(absolute(env.XDG_CONFIG_HOME, underHome(".config")), "opencode");
   const locations = {
     claude_code: [path.join(absolute(env.CLAUDE_CONFIG_DIR, home), ".claude.json"), ["mcpServers"]],
+    claude_desktop: [underHome("Library", "Application Support", "Claude", "claude_desktop_config.json"), ["mcpServers"]],
+    gemini: [path.join(absolute(env.GEMINI_CLI_HOME, home), ".gemini", "settings.json"), ["mcpServers"]],
     cursor: [underHome(".cursor", "mcp.json"), ["mcpServers"]],
     opencode: [path.join(openCodeDir, "opencode.json"), ["mcp"]],
     openclaw: [absolute(env.OPENCLAW_CONFIG_PATH, path.join(absolute(env.OPENCLAW_STATE_DIR, underHome(".openclaw")), "openclaw.json")), ["mcp", "servers"]],
     hermes: [path.join(absolute(env.HERMES_HOME, underHome(".hermes")), "config.yaml"), ["mcp_servers"]],
     pi: [path.join(absolute(env.PI_CODING_AGENT_DIR, underHome(".pi", "agent")), "mcp.json"), ["mcpServers"]],
-    workbuddy: [path.join(absolute(env.WORKBUDDY_CONFIG_DIR, underHome(".workbuddy")), "mcp.json"), ["mcpServers"]],
-    deepseek_harness: [path.join(absolute(env.DSH_HOME, underHome(".dsh")), "cordis.patch.yml"), []],
+    deepseek_harness: [path.join(absolute(env.DSH_HOME, underHome(".dsh")), "profiles", "desktop", "cordis.patch.yml"), []],
   };
-  if (!Object.hasOwn(locations, agent) || ![executable, ...args].every(value => typeof value === "string" && path.isAbsolute(value)))
+  if ((!guided && !Object.hasOwn(locations, agent)) || ![executable, ...args].every(value => typeof value === "string" && path.isAbsolute(value)))
     throw new Error("MCP_CONFIG_INVALID");
+
+  // These desktop clients document Connector setup, not a stable writable
+  // configuration location. Export the bridge command without pretending that
+  // a guessed file has connected the client.
+  const configuration = () => ({ mcpServers: { [serverName]: structuredClone(entry) } });
+  if (guided) return {
+    guided: true,
+    configuration,
+    getConfiguration: configuration,
+    async isConfigured() { return false; },
+    async ensure() {},
+    async remove() {},
+  };
 
   async function settings() {
     let [file, keys] = locations[agent];
@@ -117,6 +132,9 @@ export function createMyAiMcpConfig(agent, { executable = process.execPath, stdi
   }
 
   return {
+    guided: false,
+    configuration,
+    getConfiguration: configuration,
     isConfigured,
     async ensure() {
       const state = await settings();

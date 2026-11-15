@@ -10,6 +10,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { withErrorEnvelope } from "../../../../services/error-envelope.js";
 import type { LocalDataService } from "../../../../services/local-data-service.js";
+import { registerMemoryBundleRoutes } from "./memory-bundle.js";
 
 /** Contract for register local data routes options. */
 export interface RegisterLocalDataRoutesOptions {
@@ -19,10 +20,12 @@ export interface RegisterLocalDataRoutesOptions {
 
 /** Registers register local data routes. */
 export function registerLocalDataRoutes(app: FastifyInstance, options: RegisterLocalDataRoutesOptions): void {
+  registerMemoryBundleRoutes(app, options);
   const directoryInput = z.strictObject({ directory: z.string().min(1).max(4096) });
   const moveInput = z.union([
     directoryInput.extend({ id: z.uuid() }),
-    z.strictObject({ id: z.uuid(), restoreFrom: z.string().min(1).max(4096) })
+    z.strictObject({ id: z.uuid(), restoreFrom: z.string().min(1).max(4096) }),
+    z.strictObject({ id: z.uuid(), rollback: z.literal(true) })
   ]);
   const { getWanxStorage, moveWanxStorage, snapshotWanxStorage } = options.localData ?? {};
   if (getWanxStorage && moveWanxStorage) {

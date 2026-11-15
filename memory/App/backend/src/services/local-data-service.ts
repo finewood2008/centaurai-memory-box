@@ -17,6 +17,8 @@ export interface LocalDataService {
   getPath(): Promise<LocalDataRevealResponse>;
   reveal(): Promise<LocalDataRevealResponse>;
   export(input: ExportLocalDataInput): Promise<LocalDataExportResponse>;
+  exportBundle?: NonNullable<MemoryClient["exportBundle"]>;
+  importBundle?: NonNullable<MemoryClient["importBundle"]>;
   clear(input: ClearLocalDataInput): Promise<LocalDataClearResponse>;
   getWanxStorage?: NonNullable<MemoryClient["getWanxStorage"]>;
   moveWanxStorage?: NonNullable<MemoryClient["moveWanxStorage"]>;
@@ -37,6 +39,8 @@ export function createLocalDataService(options: CreateLocalDataServiceOptions): 
   });
 
   return {
+    exportBundle: options.memoryClient.exportBundle?.bind(options.memoryClient),
+    importBundle: options.memoryClient.importBundle?.bind(options.memoryClient),
     getWanxStorage: options.memoryClient.getWanxStorage?.bind(options.memoryClient),
     moveWanxStorage: options.memoryClient.moveWanxStorage?.bind(options.memoryClient),
     snapshotWanxStorage: options.memoryClient.snapshotWanxStorage?.bind(options.memoryClient),

@@ -4,6 +4,8 @@ import {PANEL_NOTE_METHODS,panelNoteState} from './panel-note.mjs';
 import { panelSpaceState } from "./panel-space.mjs";
 import { isControlSender } from "./security.mjs";
 import { dataInteractionKey, dataOwnerKey } from "../device-trust/data-context.mjs";
+import { backupSourcePattern } from "./memory-backup.mjs";
+import { ANNOTATION_WORKBENCH_CONTRACT, validateWorkbenchInput } from "./annotation-workbench-contract.mjs";
 
 // Electron IPC errors omit custom fields. Return only this locally generated
 // validation notice; all other errors retain their existing sanitization.
@@ -113,14 +115,15 @@ export function registerControlActions({
   register("memory-open", () => openMemoryWorkspace?.() ?? { available: false });
   reads.add("local-memory-storage");
   reads.add("memory-backup");
-  register("memory-backup", async ({ action, parent, id, context } = {}) => {
-    if (!["status", "browse", "enable", "disable", "backup", "restore"].includes(action) ||
-        (parent !== undefined && (typeof parent !== "string" || !/^(?:[a-f0-9]{32})?$/.test(parent))) ||
+  register("memory-backup", async ({ action, sourceId, id, digest, context } = {}) => {
+    if (!["status", "catalog", "enable", "disable", "backup", "restore", "rollback"].includes(action) ||
+        (sourceId !== undefined && (typeof sourceId !== "string" || !backupSourcePattern.test(sourceId))) ||
         (id !== undefined && (typeof id !== "string" || !/^[a-f0-9]{32}$/.test(id))) ||
+        (digest !== undefined && (typeof digest !== "string" || !/^[a-f0-9]{64}$/.test(digest))) ||
         (context !== undefined && (typeof context !== "string" || !/^[a-f0-9]{64}$/.test(context)))) {
       return { error: "无效的记忆备份操作。" };
     }
-    try { return { result: await memoryBackup?.(action, { parent, id, context }) }; }
+    try { return { result: await memoryBackup?.(action, { sourceId, id, digest, context }) }; }
     catch (error) {
       return { error: error.code ? ({
         SPACE_DISK_FULL: "盒子空间不足，请腾出空间后重试。",
@@ -210,9 +213,13 @@ export function registerControlActions({
       throw new Error("SPACE_NOT_FOUND");
     return personalSpace.transfer(input.action, input.id);
   });
-  for (const method of ["snapshot", "refresh", "stat", "list", "mkdir", "move", "trash", "restore", "purge", "uploads", "download", "downloads", "transfer", "preview", "cancel-preview", "restore-version"]) {
+  reads.add("space-annotation-workbench-contract");
+  reads.add("space-annotation-workbench");
+  register("space-annotation-workbench-contract", () => ANNOTATION_WORKBENCH_CONTRACT);
+  for (const method of ["snapshot", "refresh", "stat", "list", "mkdir", "move", "trash", "restore", "purge", "uploads", "download", "downloads", "transfer", "preview", "cancel-preview", "restore-version", "annotation", "set-annotation", "auto-annotate", "search-annotations", "annotation-workbench"]) {
     register(`space-${method}`, async (input = {}) => {
       if (!personalSpace) throw new Error("SPACE_UNAVAILABLE");
+      if (method === "annotation-workbench") return personalSpace.operation(method, validateWorkbenchInput(input));
       if (method === "cancel-preview") return personalSpace.cancelPreview();
       if (method === "snapshot" || method === "refresh") return personalSpace[method]();
       if (method === "downloads") return personalSpace.downloads(input.ids);

@@ -117,6 +117,7 @@ export interface MemorySourcesContentProps {
   sourceRefresh?: number;
   localAgents?: readonly { id: string; name: string }[];
   disconnectedLocalAgentIds?: ReadonlySet<string>;
+  collectionProfile?: { id: string; name: string } | null;
 }
 
 export const MANUAL_AGENT_NAME_PRESETS = ["kimi code", "zcode", "minimax code", "coder"] as const;
@@ -126,7 +127,11 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
   const { clients } = useApiClients();
   const { t, language } = useTranslation();
   const isMyAi = props.surface === "my-ai";
-  const canLaunchManagedTask = !isMyAi && props.surface !== "workspace";
+  const collectionProfile = props.collectionProfile;
+  const canChangeIntegrations = collectionProfile === undefined || collectionProfile?.id === "legacy";
+  const collectionSourceId = collectionProfile?.id === "codex-desktop" || collectionProfile?.id === "codex-cli" ? "codex" : null;
+  const collectionProfilePending = !canChangeIntegrations && !collectionSourceId;
+  const canLaunchManagedTask = canChangeIntegrations && !isMyAi && props.surface !== "workspace";
   const [manualName, setManualName] = useState("");
   const [manualHistoryPath, setManualHistoryPath] = useState("");
   const [manualValidating, setManualValidating] = useState(false);
@@ -162,11 +167,12 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
   const showScanProgress = isScanning || scanStopped || scanCancelling;
   const hasDeterminateScanProgress = Boolean(scanProgress && scanProgress.phase !== "scan" && scanProgress.phase !== "stopped" && scanProgress.total > 0);
   const memoryUnavailable = memoryServiceStatus === "unavailable";
-  const includedSources = state.agentSources.items.filter((source) =>
-    !isMyAi || !source.builtin || !props.disconnectedLocalAgentIds?.has(normalizeAgentSourceId(source.sourceId)));
+  const includedSources = state.agentSources.items.filter((source) => canChangeIntegrations
+    ? !isMyAi || !source.builtin || !props.disconnectedLocalAgentIds?.has(normalizeAgentSourceId(source.sourceId))
+    : collectionSourceId !== null && normalizeAgentSourceId(source.sourceId) === collectionSourceId);
   const visibleSources = visibleAgentSources(includedSources);
   const availableSourceIds = new Set(visibleSources.map((source) => normalizeAgentSourceId(source.sourceId)));
-  const waitingSources = isMyAi ? (props.localAgents ?? []).filter((agent) => !availableSourceIds.has(normalizeAgentSourceId(agent.id))) : [];
+  const waitingSources = isMyAi && canChangeIntegrations ? (props.localAgents ?? []).filter((agent) => !availableSourceIds.has(normalizeAgentSourceId(agent.id))) : [];
   const connectedNames = new Set(visibleSources.map((source) => source.displayName.trim().toLocaleLowerCase()));
   const scanPercent = scanProgress && hasDeterminateScanProgress ? formatActiveScanPercent(scanProgress.current, scanProgress.total) : 0;
   const scannableSources = includedSources.filter((source) => source.available);
@@ -210,7 +216,7 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
             // Fetch receives the same signal; the race also bounds custom clients
             // that do not settle their promise when cancellation is requested.
             const health = await Promise.race([clients.memoryRuntime.health(controller.signal), cancelled]);
-            const ready = health.ok && health.storage.ready;
+            const ready = health.storage.ready === true;
             if (isCurrent()) {
               setMemoryServiceStatus(ready ? "ok" : "unavailable");
               setMemoryServiceError("");
@@ -403,7 +409,7 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
   }
 
   function reinstallCliTools() {
-    if (cliInstallBusy) {
+    if (!canChangeIntegrations || cliInstallBusy) {
       return;
     }
 
@@ -450,6 +456,10 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
    * Triggers an automatic scan.
    */
   function scanSources(sourceId = "all", mode?: AgentSourceScanMode) {
+    if (!canChangeIntegrations) {
+      if (!collectionSourceId || (sourceId !== "all" && sourceId !== collectionSourceId)) return;
+      sourceId = collectionSourceId;
+    }
     if (!clients || isScanning || scanCancelling || scanControlBusy || recentlyCompletedSourceIds.has(sourceId)) {
       return;
     }
@@ -478,6 +488,7 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
   }
 
   function updateScanPreferences(preferences: Partial<ScanPreferences>) {
+    if (collectionProfilePending || (!canChangeIntegrations && preferences.autoInjectSkill !== undefined)) return;
     const previous = state.agentSources.scanPreferences;
     dispatch(appActions.scanPreferencesUpdated(preferences));
     if (!clients) {
@@ -572,6 +583,7 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
    * Adds a manual Agent Source.
    */
   function addManualSource() {
+    if (!canChangeIntegrations) return;
     if (!manualName.trim()) {
       setManualError(t("memory.manualNameRequired"));
       return;
@@ -614,6 +626,7 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
     operation: "connect" | "install" | "uninstall",
     userProvidedDataPath?: string
   ) {
+    if (!canChangeIntegrations) return;
     writePendingFirstEncounterTaskLaunch(
       typeof window === "undefined" ? undefined : window.sessionStorage,
       buildManagedAgentTaskPrompt(source, operation, userProvidedDataPath)
@@ -623,7 +636,7 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
   }
 
   function syncManagedSource(source: AgentSourceView) {
-    if (!clients || managedSyncingSourceId) {
+    if (!canChangeIntegrations || !clients || managedSyncingSourceId) {
       return;
     }
 
@@ -652,7 +665,7 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
   }
 
   function runAgentSourceConnectionAction(action: AgentSourceConnectionAction, source: AgentSourceView) {
-    if (!clients) {
+    if (!canChangeIntegrations || !clients) {
       return;
     }
 
@@ -769,6 +782,9 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
       </div>}
 
       {memoryUnavailable && <Banner tone="danger">{t("memory.unavailable")}</Banner>}
+      {!canChangeIntegrations && <p className="my-ai-help" role="status">{collectionProfilePending
+        ? collectionProfile === null ? "正在确认当前记忆库，接入组件操作暂不可用。" : "当前记忆库暂不支持来源采集配置。"
+        : `${collectionProfile?.name} 独立来源库通过本机扫描采集，无需安装或卸载全局 Hook、插件和 Skill。`}</p>}
 
       {props.surface !== "workspace" && !isMyAi && <div className="bg-background-paper border-content-panel rounded-card p-5 mb-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -780,7 +796,7 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
             description={t("memory.cliDescription")}
             actionLabel={t(cliInstallBusy ? "memory.cliInstalling" : "memory.reinstallPath")}
             onAction={reinstallCliTools}
-            actionDisabled={cliInstallBusy}
+            actionDisabled={!canChangeIntegrations || cliInstallBusy}
             actionBusy={cliInstallBusy}
             feedback={
               <>
@@ -918,7 +934,7 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
           <button
             type="button"
             onClick={scanStopped ? continueScan : () => scanSources()}
-            disabled={isScanning || scanCancelling || scanControlBusy || recentlyCompletedSourceIds.has("all") || (isMyAi && !visibleSources.length)}
+            disabled={isScanning || scanCancelling || scanControlBusy || recentlyCompletedSourceIds.has("all") || (collectionProfilePending || (isMyAi && !visibleSources.length))}
             className={`inline-flex h-8 items-center gap-2 rounded-btn px-3.5 text-xs font-normal text-white shadow-sm transition-all active:scale-[0.98] disabled:cursor-not-allowed ${
               recentlyCompletedSourceIds.has("all")
                 ? "bg-status-success"
@@ -935,13 +951,14 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
         </div>
       </div>
       <div className="space-y-2.5">
-        {isMyAi && !visibleSources.length && !waitingSources.length && !state.agentSources.error && (
+        {isMyAi && canChangeIntegrations && !visibleSources.length && !waitingSources.length && !state.agentSources.error && (
           <p className="rounded-card border-content-panel bg-background-paper p-4 text-sm text-text-ink/60" role="status">
             {t(state.agentSources.isLoading ? "common.loading" : "memory.myAiNoSources")}
           </p>
         )}
         {visibleSources.map((source) => {
           const linked = source.status === "skill_installed" || source.status === "plugin_installed";
+          const sourceName = canChangeIntegrations ? source.displayName : collectionProfile?.name ?? source.displayName;
           const displayPath = source.dataPath === MANAGED_AGENT_DISCOVERY_PENDING_DATA_PATH
             ? t("memory.agentDiscoveryPending")
             : formatSourceDataPath(source.dataPath);
@@ -965,15 +982,15 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
             <article key={source.sourceId} className="my-ai-sync-source flex items-center gap-4 p-4 bg-background-paper border-content-panel rounded-card transition-all">
               <AgentSourceLogo source={source} />
               <div className="flex-1 min-w-0">
-                <div className="text-sm font-normal text-text-ink/80">{source.displayName}</div>
+                <div className="text-sm font-normal text-text-ink/80">{sourceName}</div>
                 {source.sourceId === "opencode" && source.status === "plugin_installed" && (
                   <p className="mt-1 text-xs text-text-ink/60">{t("memory.opencodeReloadHint")}</p>
                 )}
                 <div className="flex items-center gap-2 mt-1">
-                  {isMyAi && <span className="text-xs text-text-ink/65">
+                  {isMyAi && canChangeIntegrations && <span className="text-xs text-text-ink/65">
                     {t(linked ? "memory.myAiConnected" : source.syncReady ? "memory.myAiImportReady" : "memory.myAiNotConnected")}
                   </span>}
-                  <SourceStatusBadge source={source} />
+                  {canChangeIntegrations ? <SourceStatusBadge source={source} /> : <span className="text-xs text-text-ink/65">本机扫描采集</span>}
                   {source.messageCount > 0 && <span className="text-xs text-text-ink/50 shrink-0 whitespace-nowrap">{formatSourceMemoryCount(source.messageCount, t)}</span>}
                   <span title={source.dataPath} className="min-w-0 text-[10px] text-text-ink/40 font-mono truncate max-w-[260px]">{displayPath}</span>
                 </div>
@@ -986,7 +1003,7 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
               <div className="flex items-center gap-2">
                 {source.builtin ? (
                   <>
-                    <ActionBtn
+                    {canChangeIntegrations && <ActionBtn
                       icon={renderConnectionActionIcon(connectionAction)}
                       label={t(isMyAi
                         ? isInstallConnectionAction(connectionAction) ? "memory.myAiConnect" : "memory.myAiDisconnect"
@@ -997,7 +1014,7 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
                       title={connectionActionDisabled
                         ? t("memory.agentNotDetectedActionHint", { agent: source.displayName })
                         : isMyAi ? t(connectionActionLabelKey(connectionAction)) : undefined}
-                    />
+                    />}
                     <ActionBtn
                       icon={<RefreshCw size={13} />}
                       label={t(sourceScanButtonState === "completed" ? "memory.syncCompleted" : source.lastScannedAt ? "memory.syncNew" : "memory.firstScan")}
@@ -1070,7 +1087,7 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
             <button
               type="button"
               onClick={openFullScanConfirm}
-              disabled={isScanning || scanCancelling || scanControlBusy || (isMyAi && !visibleSources.length)}
+              disabled={isScanning || scanCancelling || scanControlBusy || (collectionProfilePending || (isMyAi && !visibleSources.length))}
               className="flex items-start gap-3 rounded-card border-content-panel bg-background-paper/70 p-3 text-left transition-all hover:bg-background-paper disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer outline-none focus:outline-none focus-visible:ring-2 focus-visible:ring-status-error/20"
             >
               <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-btn bg-background-paper/80 text-status-error">
@@ -1081,7 +1098,7 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
                 <span className="mt-1 block text-[11px] leading-relaxed text-text-ink/50">{t("memory.deepScanDescription")}</span>
               </span>
             </button>
-            {!isMyAi && <button
+            {canChangeIntegrations && !isMyAi && <button
               type="button"
               onClick={() => dispatch(appActions.modalChanged("manualSource", true))}
               className="flex items-start gap-3 rounded-card border-content-panel bg-background-paper/70 p-3 text-left transition-all hover:bg-background-paper cursor-pointer outline-none focus:outline-none focus-visible:ring-2 focus-visible:ring-action-sky/20"
@@ -1112,24 +1129,26 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
         <div className="space-y-1">
           <ToggleRow
             label={t("memory.startupScan")}
-            description={t("memory.startupScanDescription")}
+            description={canChangeIntegrations ? t("memory.startupScanDescription") : `${collectionProfile?.name ?? "当前来源"} 启动后扫描新增会话，不安装接入组件。`}
             checked={state.agentSources.scanPreferences.autoScanKnownAgents}
+            disabled={collectionProfilePending}
             onChange={(checked) => updateScanPreferences({ autoScanKnownAgents: checked })}
           />
           <Divider />
           <ToggleRow
             label={t("memory.scheduledScan")}
-            description={t("memory.scheduledScanDescription")}
+            description={canChangeIntegrations ? t("memory.scheduledScanDescription") : `客户端运行期间定时扫描 ${collectionProfile?.name ?? "当前来源"} 的新增会话。`}
             checked={state.agentSources.scanPreferences.watchFileChanges}
+            disabled={collectionProfilePending}
             onChange={(checked) => updateScanPreferences({ watchFileChanges: checked })}
           />
-          <Divider />
+          {canChangeIntegrations && <><Divider />
           <ToggleRow
             label={t("memory.autoInject")}
             description={t("memory.autoInjectDescription")}
             checked={state.agentSources.scanPreferences.autoInjectSkill}
             onChange={(checked) => updateScanPreferences({ autoInjectSkill: checked })}
-          />
+          /></>}
         </div>
       </div>
 
@@ -1192,7 +1211,7 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
 
       </div>}
       {props.surface !== "settings" && !isMyAi && <Modal
-        open={state.modals.manualSource}
+        open={canChangeIntegrations && state.modals.manualSource}
         title={t("memory.addTitle")}
         headerIcon={<FolderSearch size={18} className="text-action-sky" />}
         closeLabel={t("common.close")}
@@ -1508,7 +1527,7 @@ function SourceStatusBadge(props: { source: Pick<AgentSourceView, "sourceId" | "
 }
 
 const NATIVE_PLUGIN_AGENT_SOURCE_IDS = new Set(["opencode", "openclaw", "hermes", "deepseek_harness"]);
-const HOOK_AGENT_SOURCE_IDS = new Set(["codex", "claude_code", "cursor"]);
+const HOOK_AGENT_SOURCE_IDS = new Set(["codex", "claude_code", "cursor", "gemini"]);
 
 export function visibleAgentSources<T extends Pick<AgentSourceView, "builtin" | "available" | "dataPath">>(sources: readonly T[]): T[] {
   return sources.filter((source) => source.builtin
@@ -1902,7 +1921,7 @@ function formatScanProgressTitleKey(phase: AgentSourceScanProgress["phase"]): Me
  * @param props.onChange The state-change callback.
  * @returns The toggle row node.
  */
-function ToggleRow(props: { label: string; description: string; checked: boolean; onChange: (checked: boolean) => void }) {
+function ToggleRow(props: { label: string; description: string; checked: boolean; disabled?: boolean; onChange: (checked: boolean) => void }) {
   return (
     <div className="flex items-center justify-between py-2.5">
       <div className="flex-1 pr-4">
@@ -1913,8 +1932,9 @@ function ToggleRow(props: { label: string; description: string; checked: boolean
         type="button"
         role="switch"
         aria-checked={props.checked}
+        disabled={props.disabled}
         onClick={() => props.onChange(!props.checked)}
-        className={`relative inline-flex shrink-0 h-5 w-9 items-center rounded-full border-0 p-0 cursor-pointer transition-colors ${props.checked ? "bg-action-sky" : "bg-border-stone"}`}
+        className={`relative inline-flex shrink-0 h-5 w-9 items-center rounded-full border-0 p-0 cursor-pointer transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${props.checked ? "bg-action-sky" : "bg-border-stone"}`}
       >
         <span className={`inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${props.checked ? "translate-x-[18px]" : "translate-x-0.5"}`} />
       </button>

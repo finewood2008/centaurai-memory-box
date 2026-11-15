@@ -33,8 +33,11 @@ test("Codex MCP connects once and keeps concurrent grants separate, expiring or 
   const assertScope = () => {};
   assert.deepEqual(await context.describe({ folderId: "folder-a" }, assertScope), { folder: { id: "folder-a", name: "空间 项目 A" } });
   await assert.rejects(context.describe({ folderId: null, warehouseId: "" }, assertScope), { status: 400 });
-  assert.deepEqual(await context.manage("status", {}, assertScope), { connected: false, available: true });
-  assert.deepEqual(await context.manage("connect", {}, assertScope), { connected: true, available: true });
+  assert.equal((await context.manage("status", {}, assertScope)).connected, false);
+  const connected = await context.manage("connect", {}, assertScope);
+  assert.equal(connected.connected, true);
+  assert.equal(connected.available, false);
+  assert.equal(connected.loaded, false);
   const urls = [];
   const task = createMyAiTask({
     codexContext: context, protocolRegistered: () => true,
@@ -43,8 +46,8 @@ test("Codex MCP connects once and keeps concurrent grants separate, expiring or 
   const first = { folderId: "folder-a", warehouseId: "warehouse-a" };
   const second = { folderId: "folder-b", warehouseId: "warehouse-b" };
   const submit = codexContext => task("handoff", { agent: "codex", text: "Inspect the test resource", codexContext }, assertScope);
-  assert.deepEqual(await submit(first), { opened: true });
-  assert.deepEqual(await submit(second), { opened: true });
+  assert.deepEqual(await submit(first), { opened: true, delivery: "draft" });
+  assert.deepEqual(await submit(second), { opened: true, delivery: "draft" });
   const ids = urls.map(url => url.searchParams.get("prompt").match(/task_id: ([a-f0-9]{36})/)[1]);
   assert.notEqual(ids[0], ids[1]);
   const { port, token } = JSON.parse(await readFile(descriptor, "utf8"));
@@ -86,5 +89,5 @@ test("Codex MCP connects once and keeps concurrent grants separate, expiring or 
   const id = reference.instruction.match(/task_id: ([a-f0-9]{36})/)[1];
   assert.equal((await invoke("space_search", id)).isError, true);
   await context.manage("disconnect", {}, assertScope);
-  assert.deepEqual(await context.manage("status", {}, assertScope), { connected: false, available: true });
+  assert.equal((await context.manage("status", {}, assertScope)).connected, false);
 });

@@ -10,6 +10,60 @@ function signedIn(accountId) {
   return { account: { phase: "authenticated", accountId, clientId: "client" } };
 }
 
+test("independent libraries reject connection writes with a readable error envelope while keeping scans available", async t => {
+  for (const id of ["codex-desktop", "codex-cli"]) {
+    const library = { id, name: id === "codex-desktop" ? "Codex Desktop" : "Codex CLI" };
+    const backup = { library, store: { async load() { return {}; } },
+      space: { snapshot() { return { scope: null }; } } };
+    const h = await fixture(t, undefined, undefined, undefined, () => Response.json({ ok: true }), backup);
+    t.after(() => h.memory.close());
+    h.setState(signedIn("one"));
+    const { token } = await h.memory.open();
+    for (const [route, method] of [
+      ["/api/agent-sources/codex/plugin", "POST"],
+      ["/api/agent-sources/codex/plugin", "DELETE"],
+      ["/api/agent-sources/codex/plugin", "PATCH"],
+      ["/api/agent-sources/codex/skill", "POST"],
+      ["/api/agent-sources/codex/managed/sync", "POST"],
+      ["/api/agent-sources/manual", "POST"],
+    ]) {
+      const response = await h.fetch(route, { token, method });
+      assert.equal(response.status, 403);
+      const { error } = await response.json();
+      assert.equal(error.code, "forbidden");
+      assert.match(error.requestId, /^[a-f0-9-]{36}$/);
+      assert.match(error.message, new RegExp(library.name));
+      assert.match(error.message, /本机扫描/);
+    }
+    assert.equal(h.requests.length, 0);
+    assert.equal((await h.fetch("/api/agent-sources", { token })).status, 200);
+    assert.equal((await h.fetch("/api/agent-sources/scan", { token, method: "POST", body: { sourceId: "codex" } })).status, 200);
+    assert.equal(h.requests.length, 2);
+  }
+});
+
+test("legacy libraries retain authenticated connection operations", async t => {
+  const backup = { library: { id: "legacy", name: "旧版混合库" },
+    store: { async load() { return {}; } }, space: { snapshot() { return { scope: null }; } } };
+  const h = await fixture(t, undefined, undefined, undefined, () => Response.json({ ok: true }), backup);
+  t.after(() => h.memory.close());
+  h.setState(signedIn("one"));
+  const { token } = await h.memory.open();
+  assert.equal((await h.fetch("/api/agent-sources/codex/plugin", { method: "POST" })).status, 403);
+  assert.equal(h.requests.length, 0);
+  assert.equal((await h.fetch("/api/agent-sources/codex/plugin", { token, method: "POST" })).status, 200);
+  assert.equal(h.requests.length, 1);
+  const invalid = await h.fetch("/api/app/settings", { token, method: "PATCH", body: null });
+  assert.equal(invalid.status, 400);
+  assert.equal((await invalid.json()).error.code, "invalid_argument");
+  await writeFile(h.runtimeFile, JSON.stringify({ baseUrl: "http://192.0.2.5:32113", localToken: "service-token" }));
+  const unavailable = await h.fetch("/api/app/bootstrap", { token });
+  assert.equal(unavailable.status, 503);
+  const error = (await unavailable.json()).error;
+  assert.equal(error.code, "memory_layer_unavailable");
+  assert.match(error.requestId, /^[a-f0-9-]{36}$/);
+});
+
 test("MemoBox keeps its runtime endpoint when the standalone desktop overwrites the shared file", async t => {
   const root = await mkdtemp(path.join(tmpdir(), "wanx-memory-descriptor-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -153,6 +207,7 @@ test("My AI reads only the selected Starlink warehouse and explicitly hands off 
   let box = "box-one";
   const h = await fixture(t, createMyAiTask({
     protocolRegistered: url => hasCodexDesktop && url === "codex://threads/new",
+    findApplication: async () => null,
     commandInstalled: async command => command === "claude",
     openExternal: async url => opened.push(new URL(url)),
     copyText: value => copied.push(value),
@@ -190,24 +245,24 @@ test("My AI reads only the selected Starlink warehouse and explicitly hands off 
   assert.equal((await post("optimize", { ...input, draft: "换盒子", warehouseId: "alpha", warehouseScope })).status, 400);
   assert.equal((await post("optimize", { ...input, warehouseId: "alpha", warehouseScope })).status, 400);
   assert.deepEqual(modelCalls, [
-    { target: "Codex", taskDraft: draft, starlinkExcerpts: [] },
-    { target: "Codex", taskDraft: draft, starlinkExcerpts: [{ title: "测试文件", excerpt: "仅属于选择的仓库" }] },
+    { target: "Codex 客户端", taskDraft: draft, starlinkExcerpts: [] },
+    { target: "Codex 客户端", taskDraft: draft, starlinkExcerpts: [{ title: "测试文件", excerpt: "仅属于选择的仓库" }] },
   ]);
   assert.deepEqual(opened, []);
   assert.deepEqual(copied, []);
   const text = "修改后的任务\n保留 & # + % 和空格";
-  assert.deepEqual(await (await post("handoff", { agent: "codex", text })).json(), { opened: true });
+  assert.deepEqual(await (await post("handoff", { agent: "codex", text })).json(), { opened: true, delivery: "draft" });
   assert.equal(opened[0].protocol, "codex:");
   assert.equal(opened[0].host + opened[0].pathname, "threads/new");
   assert.deepEqual([...opened[0].searchParams], [["prompt", text]]);
-  assert.deepEqual(await (await post("handoff", { agent: "codex", text: "长".repeat(900) })).json(), { opened: false, reason: "too-long" });
+  assert.deepEqual(await (await post("handoff", { agent: "codex", text: "长".repeat(900) })).json(), { opened: true, copied: true, delivery: "copy-open", reason: "too-long" });
   hasCodexDesktop = false;
-  assert.deepEqual(await (await post("handoff", { agent: "codex", text })).json(), { opened: false, reason: "unavailable" });
-  assert.equal(opened.length, 1);
+  assert.deepEqual(await (await post("handoff", { agent: "codex", text })).json(), { opened: false, copied: true, delivery: "copy-open", reason: "unavailable" });
+  assert.equal(opened.length, 2);
   assert.deepEqual(await (await post("copy", { agent: "codex", text })).json(), { copied: true });
   h.setState(signedIn("two"));
   assert.equal((await post("copy", { agent: "codex", text: "旧账号" })).status, 403);
-  assert.deepEqual(copied, [text]);
+  assert.deepEqual(copied, ["长".repeat(900), text, text]);
   assert.deepEqual(h.requests, []);
 });
 
@@ -254,15 +309,15 @@ test("My AI puts the chosen retrieval instructions into the optimized prompt and
   assert.deepEqual(models.at(-1).taskSources, { spaceFolder: "空间案例", starlinkWarehouse: "支持仓库" });
   assert.equal(grants.length, 0);
 
-  assert.deepEqual(await (await post("handoff", { agent: "codex", text: both, codexContext: selection })).json(), { opened: true });
+  assert.deepEqual(await (await post("handoff", { agent: "codex", text: both, codexContext: selection })).json(), { opened: true, delivery: "draft" });
   assert.equal(delivered[0].split("## 资料检索").length, 2);
   assert.match(delivered[0], /MemoBox MCP task_id: a{36}/);
   const edit = { agent: "codex", text: "保留我编辑的任务。", codexContext: { warehouseId: selection.warehouseId } };
   assert.deepEqual(await (await post("copy", edit)).json(), { copied: true });
   assert.match(copied[0], /^保留我编辑的任务。.*starlink_evidence.*task_id/su);
   assert.doesNotMatch(copied[0], /space_search/u);
-  assert.deepEqual(await (await post("handoff", { ...edit, text: "长".repeat(900) })).json(), { opened: false, reason: "too-long" });
-  assert.equal(grants.at(-1).revoked, true);
+  assert.deepEqual(await (await post("handoff", { ...edit, text: "长".repeat(900) })).json(), { opened: true, copied: true, delivery: "copy-open", reason: "too-long" });
+  assert.equal(grants.at(-1).revoked, false);
   assert.equal((await post("optimize", { agent: "claude_code", draft: "查资料", codexContext: selection })).status, 400);
   switchWhileOptimizing = true;
   assert.equal((await optimize(selection)).status, 400);
@@ -283,17 +338,19 @@ test("My AI uses an official download and only launches and manages verified des
   const act = (action, agent) => h.fetch(get(action), { token, method: "POST", body: { agent } });
   const { agents, apps } = await (await h.fetch(get("status"), { token })).json();
   assert.deepEqual(agents.map(({ id, launchable, uninstallable }) => [id, launchable, uninstallable]),
-    [["codex", true, true], ["claude_code", false, false]]);
-  assert.equal(apps.find(app => app.id === "cursor").installed, false);
+    [["codex", true, true], ["claude_code", false, true]]);
+  assert.equal(apps.some(app => app.id === "cursor"), false);
+  assert.equal(apps.find(app => app.id === "gemini").installed, false);
   assert.equal((await act("download", "https://not-a-vendor.example")).status, 400);
-  assert.equal((await act("download", "cursor")).status, 200);
+  assert.equal((await act("download", "cursor")).status, 400);
+  assert.equal((await act("download", "gemini")).status, 200);
   assert.equal((await act("launch", "claude_code")).status, 400);
   assert.equal((await act("launch", "codex")).status, 200);
   assert.equal((await act("uninstall", "codex")).status, 200);
   codexInstalled = false;
   assert.equal((await act("launch", "codex")).status, 400);
-  assert.equal((await act("uninstall", "codex")).status, 400);
-  assert.deepEqual(opened, ["https://cursor.com/download", "codex://threads/new", "ms-settings:appsfeatures"]);
+  assert.equal((await act("uninstall", "codex")).status, 200);
+  assert.deepEqual(opened, ["https://geminicli.com/docs/get-started/installation/", "codex://threads/new", "ms-settings:appsfeatures", "https://chatgpt.com/download/"]);
 });
 
 test("memory only opens for the current WanX identity and retires stale sessions", async t => {

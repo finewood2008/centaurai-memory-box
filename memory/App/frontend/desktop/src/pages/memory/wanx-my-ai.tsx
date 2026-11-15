@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowUpRight, BookOpen, Bot, Check, ChevronRight, CircleCheck, Clipboard, Download, Ellipsis, Folder, History, Link2, LoaderCircle, Monitor, Orbit, Plus, RefreshCw, Settings2, Sparkles, Unlink2, X } from "lucide-react";
+import { ArrowUpRight, BookOpen, Bot, Check, CircleCheck, Clipboard, Download, Ellipsis, History, Link2, LoaderCircle, Monitor, Plus, RefreshCw, Settings2, Sparkles, Unlink2, X } from "lucide-react";
 import { AgentSourceScanReconciler } from "../../app/agent-source-scan-reconciler.js";
 import { useApiClients } from "../../app/providers.js";
 import { useScanCompletions } from "../../app/use-scan-completions.js";
@@ -11,19 +11,13 @@ import { agentSourceDisplayName, agentSourceLogoUrl, normalizeAgentSourceId } fr
 import { MemorySourcesContent, visibleAgentSources } from "../memory-sources-page.js";
 
 import { MemorySyncSummary } from "./wanx-memory-backup.js";
+import { MemoryTransfer } from "./wanx-memory-transfer.js";
+import { AgentSources } from "./wanx-agent-sources.js";
+import { accessStatusText, contextAgentId, managedAgentIds, modeCapabilities, type Agent, type AgentAccessStatus, type MyAiRequest, type TaskSources } from "./wanx-my-ai-model.js";
 
-interface Agent { id: string; name: string; prefill: boolean; installed: boolean; launchable?: boolean; uninstallable?: boolean }
-interface AppCatalogEntry { id: string; name: string; installed: boolean; downloadLabel?: "官方下载" | "安装说明" }
-type AppAction = "launch" | "download" | "uninstall" | "hide-agent" | "show-agent";
+type AppAction = "launch" | "download" | "install" | "uninstall" | "hide-agent" | "show-agent";
 interface AppFeedback { section: "catalog" | "agent" | "list"; text: string; error?: boolean }
 interface OptimizedPrompt { agentId: string; text: string }
-interface TaskSource { id: string; name: string }
-interface CodexSourceStatus { connected: boolean; available: boolean }
-interface AgentAccessStatus extends CodexSourceStatus { boxReady?: boolean }
-interface CodexSourceCatalog { folders?: TaskSource[]; warehouses?: TaskSource[] }
-interface CodexTaskSources { folder?: TaskSource; warehouse?: TaskSource }
-type CodexSourceKind = "space" | "starlink";
-type MyAiRequest = <T>(action: string, signal: AbortSignal, data?: object) => Promise<T>;
 interface MyAiProps { sessionToken: string; memoryError: boolean; retryMemory: () => void }
 
 export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiProps) {
@@ -35,17 +29,23 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
   scanState.current = state.agentSources;
   const [sourceRefresh, setSourceRefresh] = useState(0);
   const [installed, setInstalled] = useState<Agent[] | null>(null);
-  const [apps, setApps] = useState<AppCatalogEntry[]>([]);
+  const [apps, setApps] = useState<Agent[]>([]);
   const [hiddenAgents, setHiddenAgents] = useState<string[]>([]);
   const [agentAccess, setAgentAccess] = useState<Record<string, AgentAccessStatus>>({});
+  const [integrationUnavailable, setIntegrationUnavailable] = useState("");
   const [chooserOpen, setChooserOpen] = useState(false);
   const [appActionsAgent, setAppActionsAgent] = useState<string | null>(null);
   const [appBusy, setAppBusy] = useState<string | null>(null);
   const [appFeedback, setAppFeedback] = useState<AppFeedback | null>(null);
   const [target, setTarget] = useState<string | null>(null);
+  const [mode, setMode] = useState("chat");
+  const [workspacePath, setWorkspacePath] = useState("");
+  const [uninstallTarget, setUninstallTarget] = useState<Agent | null>(null);
+  const [configuration, setConfiguration] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [optimizedPrompt, setOptimizedPrompt] = useState<OptimizedPrompt | null>(null);
-  const [codexSources, setCodexSources] = useState<CodexTaskSources>({});
+  const [taskSources, setTaskSources] = useState<TaskSources>({ memoryEnabled: false });
+  const [readySourceKey, setReadySourceKey] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -67,12 +67,13 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
   }, [sessionToken]);
 
   async function loadAgents(signal: AbortSignal) {
-    const info = await request<{ agents: Agent[]; apps?: AppCatalogEntry[]; hiddenAgents?: string[]; agentAccess?: Record<string, AgentAccessStatus> }>("status", signal);
+    const info = await request<{ agents: Agent[]; apps?: Agent[]; hiddenAgents?: string[]; agentAccess?: Record<string, AgentAccessStatus>; integrationUnavailable?: string }>("status", signal);
     if (!signal.aborted) {
-      setInstalled(info.agents);
-      setApps(info.apps ?? []);
+      setInstalled(info.agents.filter(agent => managedAgentIds.has(agent.id)));
+      setApps((info.apps ?? []).filter(agent => managedAgentIds.has(agent.id)));
       setHiddenAgents(info.hiddenAgents ?? []);
       setAgentAccess(info.agentAccess ?? {});
+      setIntegrationUnavailable(info.integrationUnavailable ?? "");
     }
   }
 
@@ -86,14 +87,36 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
     try { await perform(signal); }
     catch (cause) { if (!signal.aborted) setError(cause instanceof Error ? cause.message : "任务操作未完成。"); }
     finally {
-      currentAction.current = false;
-      if (!signal.aborted) setBusy(null);
+      if (lifecycle.current?.signal === signal) {
+        currentAction.current = false;
+        if (!signal.aborted) setBusy(null);
+      }
     }
   }
 
   useEffect(() => {
     const controller = new AbortController();
     lifecycle.current = controller;
+    currentAction.current = false;
+    currentAppAction.current = false;
+    setInstalled(null);
+    setAgentAccess({});
+    setIntegrationUnavailable("");
+    setApps([]);
+    setHiddenAgents([]);
+    setTarget(null);
+    setMode("chat");
+    setDraft("");
+    setWorkspacePath("");
+    setOptimizedPrompt(null);
+    setTaskSources({ memoryEnabled: false });
+    setReadySourceKey("");
+    setBusy(null);
+    setAppBusy(null);
+    setConfiguration(null);
+    setUninstallTarget(null);
+    setMessage("");
+    setError("");
     void loadAgents(controller.signal).catch(() => {
       if (!controller.signal.aborted) {
         setInstalled([]);
@@ -127,30 +150,34 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
     return () => { window.clearInterval(timer); controller.abort(); };
   }, [agentSources, dispatch]);
 
-  const detected = new Map((installed ?? []).map(agent => [normalizeAgentSourceId(agent.id), agent]));
+  const detected = new Map<string, Agent>((installed ?? []).map(agent => [agent.id, agent]));
   const sources = new Map(visibleAgentSources(state.agentSources.items).map(source => [normalizeAgentSourceId(source.sourceId), source]));
   for (const [id, source] of sources) {
-    if (source.builtin && !detected.has(id)) detected.set(id, { id: source.sourceId, name: source.displayName, prefill: false, installed: false });
+    if (source.builtin && managedAgentIds.has(id) && !detected.has(id)) detected.set(id, { id, name: source.displayName, prefill: false, installed: false });
   }
   const hidden = new Set(hiddenAgents.map(normalizeAgentSourceId));
   const catalog = new Map([...detected].filter(([id]) => !hidden.has(id)));
   const installedCount = (installed ?? []).filter(agent => !hidden.has(normalizeAgentSourceId(agent.id))).length;
-  const chooserApps = new Map(apps.map(entry => [normalizeAgentSourceId(entry.id), entry]));
+  const chooserApps = new Map(apps.map(entry => [entry.id, entry]));
   for (const hiddenId of hiddenAgents) {
     const id = normalizeAgentSourceId(hiddenId);
+    if (!managedAgentIds.has(id)) continue;
     if (chooserApps.has(id)) continue;
     const agent = detected.get(id);
     chooserApps.set(id, { id: agent?.id ?? hiddenId, name: agent?.name ?? agentSourceDisplayName(id), installed: agent?.installed ?? false });
   }
   const active = (target && catalog.get(normalizeAgentSourceId(target))) || catalog.get("codex") || catalog.values().next().value;
-  const activeAccess = active && agentAccess[normalizeAgentSourceId(active.id)];
-  const result = optimizedPrompt?.agentId === active?.id ? optimizedPrompt?.text ?? null : null;
+  const activeContextId = active && contextAgentId(active.id, mode);
+  const taskMode = active?.id === "claude_desktop" ? mode : undefined;
+  const activeAccess = activeContextId ? agentAccess[activeContextId] : undefined;
+  const activeKey = active ? active.id + ":" + (active.id === "claude_desktop" ? mode : "default") : "";
+  const capabilities = modeCapabilities(active, mode);
+  const delivery = capabilities?.delivery ?? (active?.prefill ? "draft" : "copy-open");
+  const result = optimizedPrompt?.agentId === activeKey ? optimizedPrompt?.text ?? null : null;
   const appActionsOpen = Boolean(active && appActionsAgent === active.id);
   const pending = Boolean(busy);
-  const codexContext = active?.id === "codex" && (codexSources.folder || codexSources.warehouse) ? {
-    folderId: codexSources.folder?.id,
-    warehouseId: codexSources.warehouse?.id,
-  } : undefined;
+  const agentContext = integrationUnavailable || (active?.id === "claude_desktop" && mode === "cowork") ? undefined
+    : { folderId: taskSources.folder?.id, warehouseId: taskSources.warehouse?.id, memoryEnabled: taskSources.memoryEnabled === true };
   const invalidateResult = () => { setOptimizedPrompt(null); setMessage(""); setError(""); };
 
   useEffect(() => {
@@ -172,23 +199,25 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
   async function updateAgentAccess(agent: Agent, connect: boolean) {
     const signal = lifecycle.current?.signal;
     if (!signal || signal.aborted || currentAppAction.current || currentAction.current) return;
-    const id = normalizeAgentSourceId(agent.id);
+    const id = contextAgentId(agent.id, mode);
+    if (!id || integrationUnavailable) return;
     currentAppAction.current = true;
     setAppBusy(agent.id);
     setError("");
     setMessage("");
     try {
-      const access = await request<AgentAccessStatus>(connect ? "agent-access/connect" : "agent-access/disconnect", signal, { agent: id });
+      const access = await request<AgentAccessStatus>(connect ? "agent-access/connect" : "agent-access/disconnect", signal, { agent: agent.id, mode: agent.id === "claude_desktop" ? mode : undefined });
       if (signal.aborted) return;
       setAgentAccess(previous => ({ ...previous, [id]: access }));
       setSourceRefresh(value => value + 1);
-      if (!connect && id === "codex") updateSources({});
-      setMessage(connect ? agent.name + " 的资料工具已配置。重新打开应用或新会话即可加载。" : agent.name + " 的资料访问已断开。");
+      setMessage(connect ? agent.name + " 的资料授权已保存；需在客户端加载并完成检索验证。" : agent.name + " 的资料访问已断开。");
     } catch (cause) {
       if (!signal.aborted) setError(cause instanceof Error ? cause.message : "资料连接操作未完成，请重试。");
     } finally {
-      currentAppAction.current = false;
-      if (!signal.aborted) setAppBusy(null);
+      if (lifecycle.current?.signal === signal) {
+        currentAppAction.current = false;
+        if (!signal.aborted) setAppBusy(null);
+      }
     }
   }
 
@@ -202,13 +231,13 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
     addAppButton.current?.focus();
   }
 
-  async function runAppAction(action: AppAction, agent: Pick<Agent, "id" | "name">) {
+  async function runAppAction(action: AppAction, agent: Agent) {
     const signal = lifecycle.current?.signal;
     if (currentAppAction.current || !signal || signal.aborted) return;
     const visibilityAction = action === "hide-agent" || action === "show-agent";
     if (visibilityAction && currentAction.current) return;
     currentAppAction.current = true;
-    const section = action === "download" || action === "show-agent" ? "catalog" : "agent";
+    const section = action === "download" || action === "install" || action === "show-agent" ? "catalog" : "agent";
     setAppBusy(agent.id);
     setAppFeedback(null);
     try {
@@ -222,7 +251,7 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
           setTarget(null);
           setAppActionsAgent(null);
           invalidateResult();
-          setAppFeedback({ section: "list", text: agent.name + " 已解除接入，后续记忆同步已停止。可在「添加应用」中重新接入。" });
+          setAppFeedback({ section: "list", text: agent.name + " 已解除接入，后续本机采集已停止。可在「添加应用」中重新接入。" });
           addAppButton.current?.focus();
         } else {
           setTarget(active?.id ?? agent.id);
@@ -230,34 +259,43 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
         }
         return;
       }
-      const reply = await request<{ opened: boolean }>(action, signal, { agent: agent.id });
+      const reply = await request<{ opened?: boolean; prepared?: boolean; installed?: boolean; uninstalled?: boolean; guided?: boolean; pending?: boolean; message?: string }>(action, signal, {
+        agent: agent.id, mode: agent.id === "claude_desktop" ? mode : undefined, ...(workspacePath.trim() && { workspacePath: workspacePath.trim() }),
+      });
       if (signal.aborted) return;
-      if (!reply.opened) throw new Error("未能打开，请重新检测后再试。");
-      const text = action === "launch" ? "已请求打开 " + agent.name + "。"
-        : action === "uninstall" ? "已打开系统应用管理。请在系统中卸载 " + agent.name + "，完成后重新检测。"
-        : "已在浏览器打开官方页面。完成安装后，请重新检测。";
+      if (!reply.opened && !reply.prepared && !reply.installed && !reply.uninstalled && !reply.guided && !reply.pending)
+        throw new Error(reply.message || "操作未完成，请重新检测后再试。");
+      const text = reply.message || (reply.installed ? agent.name + " 已完成安装并重新检测。" : reply.uninstalled ? agent.name + " 已完成卸载并重新检测。"
+        : reply.prepared ? "终端启动已准备，请在终端核对后按回车开始。"
+        : action === "launch" ? "已请求打开 " + agent.name + "。"
+        : action === "uninstall" ? "已打开卸载入口，请在系统中完成后重新检测。"
+        : reply.pending ? "安装任务已准备，请按提示完成后重新检测。"
+        : "已打开官方安装入口，完成安装后请重新检测。");
       setAppFeedback({ section, text });
+      if (reply.installed || reply.uninstalled) await loadAgents(signal);
     } catch (cause) {
       if (!signal.aborted) setAppFeedback({ section, text: cause instanceof Error ? cause.message : "操作未完成，请重试。", error: true });
     } finally {
-      currentAppAction.current = false;
-      if (!signal.aborted) setAppBusy(null);
+      if (lifecycle.current?.signal === signal) {
+        currentAppAction.current = false;
+        if (!signal.aborted) setAppBusy(null);
+      }
     }
   }
 
-  function updateSources(sources: CodexTaskSources) {
+  function updateSources(sources: TaskSources) {
     if (currentAction.current) return;
-    if (sources.folder?.id === codexSources.folder?.id && sources.warehouse?.id === codexSources.warehouse?.id) return;
-    setCodexSources(sources);
+    if (sources.folder?.id === taskSources.folder?.id && sources.warehouse?.id === taskSources.warehouse?.id && sources.memoryEnabled === taskSources.memoryEnabled) return;
+    setTaskSources(sources);
     invalidateResult();
   }
 
   function optimize() {
     if (!active) return;
-    const agentId = active.id;
+    const agentId = activeKey;
     return run("optimize", async signal => {
       const response = await request<{ text: string }>("optimize", signal, {
-        agent: agentId, draft: draft.trim(), codexContext,
+        agent: active.id, mode: taskMode, draft: draft.trim(), agentContext,
       });
       if (signal.aborted) return;
       setOptimizedPrompt({ agentId, text: response.text });
@@ -267,16 +305,16 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
   function deliver() {
     if (!active || !result?.trim()) return;
     return run("handoff", async signal => {
-      const response = await request<{ opened: boolean; reason?: string }>("handoff", signal, { agent: active.id, text: result, codexContext });
+      const response = await request<{ opened?: boolean; prepared?: boolean; copied?: boolean; delivery?: string; reason?: string }>("handoff", signal, {
+        agent: active.id, mode: taskMode, text: result, agentContext, ...(workspacePath.trim() && { workspacePath: workspacePath.trim() }),
+      });
       if (signal.aborted) return;
-      if (response.opened) {
-        if (codexContext) {
-          setCodexSources({});
-          setOptimizedPrompt(null);
-        }
-        setMessage("请在 Codex 中核对并发送。");
-      }
-      else setError(response.reason === "too-long" ? "提示词较长，请复制后粘贴到 Codex。" : "无法打开 Codex，请复制提示词后手动打开。");
+      if (response.prepared) setMessage("终端已准备任务。请核对提示词、工作目录和资料范围，按回车后才会开始执行。");
+      else if (response.copied) setMessage(response.opened
+        ? "提示词已复制，并已请求打开 " + active.name + "。请在应用中粘贴后发送。"
+        : "提示词已复制；应用未能打开，请手动打开后粘贴发送。");
+      else if (response.opened) setMessage("请在 " + active.name + " 中核对草稿并发送。");
+      else setError(response.reason === "too-long" ? "提示词较长，请复制后粘贴到应用。" : "无法打开应用，请复制提示词后手动打开。");
     });
   }
 
@@ -297,11 +335,13 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
           </div>
         </div>
         {installed && catalog.size ? <div className="my-ai-agent-list">{[...catalog.values()].map(agent => {
-          const source = sources.get(normalizeAgentSourceId(agent.id));
+          const source = sources.get(normalizeAgentSourceId(agent.sourceId ?? contextAgentId(agent.id) ?? agent.id));
           const connected = source?.status === "plugin_installed" || source?.status === "skill_installed";
           const logo = agentSourceLogoUrl(agent.id);
-          const hasAccess = agentAccess[normalizeAgentSourceId(agent.id)]?.available;
-          const hint = hasAccess ? "记忆、星图、空间已连接" : connected ? "已接入记忆同步" : agent.installed ? "已检测到安装" : "发现本机会话";
+          const status = agentAccess[contextAgentId(agent.id) ?? agent.id];
+          const hasAccess = status?.retrievalVerified;
+          const hint = status?.configured || status?.connected || status?.loaded || hasAccess ? accessStatusText(status)
+            : connected ? "已接入本机采集" : agent.installed ? "已检测到安装" : "发现本机会话";
           const Icon = hasAccess || connected ? CircleCheck : agent.installed ? Monitor : History;
           const isActive = active?.id === agent.id;
           return <div key={agent.id} className="my-ai-agent-row">
@@ -309,6 +349,8 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
               aria-pressed={isActive} onClick={() => {
                 if (isActive) return;
                 setTarget(agent.id);
+                setMode("chat");
+                setConfiguration(null);
                 setAppActionsAgent(null);
                 setAppFeedback(null);
                 invalidateResult();
@@ -329,13 +371,13 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
             {active.launchable && <button type="button" className="my-ai-button" disabled={Boolean(appBusy)}
               onClick={() => void runAppAction("launch", active)}><ArrowUpRight size={15} aria-hidden="true" />打开应用</button>}
             {active.uninstallable && <button type="button" className="my-ai-button" disabled={Boolean(appBusy)}
-              onClick={() => void runAppAction("uninstall", active)}><Settings2 size={15} aria-hidden="true" />管理卸载</button>}
+              onClick={() => setUninstallTarget(active)}><Settings2 size={15} aria-hidden="true" />管理卸载</button>}
             <button type="button" className="my-ai-button" disabled={pending || Boolean(appBusy)}
               onClick={() => void runAppAction("hide-agent", active)}><Unlink2 size={15} aria-hidden="true" />解除接入</button>
           </div>
           {!active.installed ? <p className="my-ai-help">只检测到本机会话。安装应用后，请重新检测。</p>
-            : !active.launchable && !active.uninstallable ? <p className="my-ai-help">命令行版请在终端启动或按官方说明卸载。</p>
-            : active.uninstallable && <p className="my-ai-help">卸载操作在系统中完成。</p>}
+            : !active.launchable && !active.uninstallable ? <p className="my-ai-help">按官方说明启动或管理此应用。</p>
+            : <p className="my-ai-help">{active.version && "版本 " + active.version + " · "}{active.channel && "安装渠道：" + active.channel}</p>}
           {appFeedback?.section === "agent" && <p className={"my-ai-feedback" + (appFeedback.error ? " error" : "")}
             role={appFeedback.error ? "alert" : "status"}>{appFeedback.text}</p>}
         </section>}
@@ -347,18 +389,39 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
           <div><h2 id="my-ai-task-title">发起对话</h2><p>写下任务，补全目标、限制和验收要求。</p></div>
           {active && <span className="my-ai-target"><Bot size={14} aria-hidden="true" />{active.name}</span>}
         </div>
+        {active?.id === "claude_desktop" && <label className="my-ai-target">Claude 运行模式
+          <select aria-label="Claude 运行模式" value={mode} disabled={pending || Boolean(appBusy)} onChange={event => {
+            setMode(event.target.value); setConfiguration(null); invalidateResult();
+          }}><option value="chat">Chat</option><option value="code">Code</option><option value="cowork">Cowork</option></select>
+        </label>}
         {active && <div className="my-ai-source-connection" aria-label={active.name + "资料连接"}>
-          <span aria-live="polite">{activeAccess
-            ? activeAccess.available ? "记忆、星图、空间已连接" : activeAccess.connected ? "等待已授权的盒子连接" : "允许读取本机记忆、星图仓库和个人空间"
-            : active.installed ? "此应用暂不支持自动配置资料工具" : "安装应用后可检测资料连接"}</span>
-          {activeAccess && active.installed && <>
-            {(!activeAccess.connected || (!activeAccess.available && activeAccess.boxReady)) &&
+          <span aria-live="polite">{integrationUnavailable || accessStatusText(activeAccess)}</span>
+          {activeAccess?.memorySaved && <span>记忆已保存</span>}
+          {!integrationUnavailable && active.installed && capabilities?.configuration !== "unsupported" && !(active.id === "claude_desktop" && mode === "cowork") && <>
+            {(!activeAccess?.configured && !activeAccess?.connected) &&
               <button type="button" className="my-ai-button" disabled={pending || Boolean(appBusy)}
-                onClick={() => void updateAgentAccess(active, true)}><Link2 size={14} aria-hidden="true" />{appBusy === active.id ? "正在配置…" : "连接资料"}</button>}
-            {activeAccess.connected && <button type="button" className="my-ai-button" disabled={pending || Boolean(appBusy)}
+                onClick={() => void updateAgentAccess(active, true)}><Link2 size={14} aria-hidden="true" />{appBusy === active.id ? "正在配置…" : capabilities?.configuration === "guided" ? "授权资料接入" : "配置资料工具"}</button>}
+            {(activeAccess?.configured || activeAccess?.connected) && <button type="button" className="my-ai-button" disabled={pending || Boolean(appBusy)}
               onClick={() => void updateAgentAccess(active, false)}><Unlink2 size={14} aria-hidden="true" />断开资料</button>}
+            {capabilities?.configuration === "guided" && <button type="button" className="my-ai-button" disabled={pending || Boolean(appBusy)}
+              onClick={() => void run("configuration", async signal => {
+                const reply = await request<{ config?: object; configuration?: object }>("agent-context/configuration", signal, { agent: active.id, mode: taskMode });
+                if (!signal.aborted) setConfiguration(JSON.stringify(reply.configuration ?? reply.config ?? reply, null, 2));
+              })}>查看接入配置</button>}
           </>}
         </div>}
+        {active && <div className="my-ai-help" aria-label="当前入口能力">
+          <p>{delivery === "draft" ? "支持预填草稿，在客户端核对后发送。" : delivery === "terminal-confirm" ? "终端先展示任务，按回车确认后才开始执行。" : "通过复制并打开交付提示词，需要在应用中粘贴发送。"}</p>
+          <p>{capabilities?.autoMemory === "hook" ? "支持配置逐轮采集，实际启用以客户端验证为准。"
+            : capabilities?.autoMemory === "scan" ? "支持本机会话采集，采集结果在下方单独显示。"
+            : capabilities?.autoMemory === "explicit" ? "记忆通过显式保存写入 MemoBox。" : "自动采集尚未验证。"}</p>
+          {capabilities?.limitations?.map(note => <p key={note}>{note}</p>)}
+          {active.id === "claude_desktop" && mode === "cowork" && <p>Cowork 的资料工具与自动采集尚未验证；此入口先提供草稿预填。</p>}
+        </div>}
+        {(delivery === "terminal-confirm" || (active?.id === "claude_desktop" && mode === "code")) && <label className="my-ai-text-field">
+          <span>工作目录（绝对路径）</span><input aria-label="工作目录" value={workspacePath} disabled={pending || Boolean(appBusy)}
+            placeholder="/Users/你的用户名/项目" onChange={event => { setWorkspacePath(event.target.value); invalidateResult(); }} />
+        </label>}
         <label className="my-ai-text-field">
           <span className="sr-only">任务草稿</span>
           <textarea value={draft} maxLength={12000} rows={5} disabled={pending}
@@ -366,14 +429,15 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
             onChange={event => {
               const text = event.target.value;
               setDraft(text);
-              if (!text.trim()) setCodexSources({});
               invalidateResult();
             }} />
         </label>
         <div className="my-ai-actions my-ai-composer-actions">
-          {active?.id === "codex" && <CodexSources request={request} refresh={sourceRefresh} sources={codexSources}
-            onSourcesChange={updateSources} disabled={pending || Boolean(appBusy)} />}
-          <button type="button" className="my-ai-button primary" disabled={pending || Boolean(appBusy) || !installed || !active || !draft.trim()} onClick={() => void optimize()}>
+          {active && !integrationUnavailable && !(active.id === "claude_desktop" && mode === "cowork") && <AgentSources key={activeKey} request={request} agent={active.id} mode={taskMode}
+            name={active.name} refresh={sourceRefresh} sources={taskSources} onSourcesChange={updateSources}
+            onReady={ready => setReadySourceKey(ready ? activeKey : "")} disabled={pending || Boolean(appBusy)} />}
+          <button type="button" className="my-ai-button primary" disabled={pending || Boolean(appBusy) || !installed || !active || !draft.trim()
+            || (!integrationUnavailable && !(active.id === "claude_desktop" && mode === "cowork") && readySourceKey !== activeKey)} onClick={() => void optimize()}>
             {busy === "optimize" ? <LoaderCircle className="animate-spin" size={16} /> : <Sparkles size={16} aria-hidden="true" />}
             {busy === "optimize" ? "正在优化…" : "优化提示词"}
           </button>
@@ -381,16 +445,16 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
         {result !== null && <div className="my-ai-result">
           <label className="my-ai-text-field"><span>优化后的提示词</span>
             <textarea value={result} maxLength={16000} rows={7} disabled={pending} onChange={event => {
-              if (active) setOptimizedPrompt({ agentId: active.id, text: event.target.value });
+              if (active) setOptimizedPrompt({ agentId: activeKey, text: event.target.value });
             }} />
           </label>
           <div className="my-ai-actions">
             <button type="button" className="my-ai-button" disabled={!result.trim() || pending || Boolean(appBusy)} onClick={() => void run("copy", async signal => {
-              await request("copy", signal, { agent: active?.id, text: result, codexContext });
+              await request("copy", signal, { agent: active?.id, mode: taskMode, text: result, agentContext });
               if (!signal.aborted) setMessage("提示词已复制。");
             })}><Clipboard size={15} aria-hidden="true" />复制提示词</button>
-            {active?.prefill && <button type="button" className="my-ai-button primary" disabled={!result.trim() || pending || Boolean(appBusy)}
-              onClick={() => void deliver()}>带入 Codex 新会话<ArrowUpRight size={16} aria-hidden="true" /></button>}
+            {active?.installed && <button type="button" className="my-ai-button primary" disabled={!result.trim() || pending || Boolean(appBusy)}
+              onClick={() => void deliver()}>{delivery === "terminal-confirm" ? "在终端核对任务" : delivery === "draft" ? "带入 " + active.name + " 新会话" : "复制并打开 " + active.name}<ArrowUpRight size={16} aria-hidden="true" /></button>}
           </div>
         </div>}
         {error && <p className="my-ai-feedback error" role="alert">{error}</p>}
@@ -412,6 +476,8 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
               {entry.installed && <span className="my-ai-app-installed"><Check size={13} aria-hidden="true" />已安装</span>}
             </div>
             <div className="my-ai-app-entry-actions">
+              {!entry.installed && entry.installable && <button type="button" className="my-ai-button" disabled={Boolean(appBusy)}
+                aria-label={entry.name + " 安装"} onClick={() => void runAppAction("install", entry)}><Download size={15} aria-hidden="true" />安装</button>}
               {entry.downloadLabel && <button type="button" className="my-ai-button" disabled={Boolean(appBusy)}
                 aria-label={entry.name + " " + entry.downloadLabel} onClick={() => void runAppAction("download", entry)}>
                 <Icon size={15} aria-hidden="true" />{entry.downloadLabel}
@@ -426,170 +492,31 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
       {appFeedback?.section === "catalog" && <p className={"my-ai-feedback" + (appFeedback.error ? " error" : "")}
         role={appFeedback.error ? "alert" : "status"}>{appFeedback.text}</p>}
     </Modal>
+    <Modal open={uninstallTarget !== null} title={"管理卸载 " + (uninstallTarget?.name ?? "")}
+      subtitle="卸载程序与解除资料接入分别处理。MemoBox 已采集的历史记忆会保留。"
+      closeLabel="取消卸载" onClose={() => setUninstallTarget(null)} closeContent={<X size={18} />}>
+      <p className="my-ai-help">将按检测到的安装渠道处理；需要系统操作时会打开对应入口，完成后重新检测。不会请求清除认证和记忆数据。</p>
+      <button type="button" className="my-ai-button" disabled={Boolean(appBusy)} onClick={() => {
+        const agent = uninstallTarget; setUninstallTarget(null); if (agent) void runAppAction("uninstall", agent);
+      }}>确认管理卸载</button>
+    </Modal>
+    <Modal open={configuration !== null} title="资料工具接入配置" subtitle="在目标应用的连接器设置中导入或粘贴配置，然后新建会话验证检索。"
+      closeLabel="关闭接入配置" onClose={() => setConfiguration(null)} closeContent={<X size={18} />}>
+      <label className="my-ai-text-field"><span>接入配置（点击全选）</span>
+        <textarea aria-label="接入配置" readOnly rows={12} value={configuration ?? ""} onFocus={event => event.currentTarget.select()} />
+      </label>
+    </Modal>
+    <MemoryTransfer sessionToken={sessionToken} />
     <MemorySyncSummary sessionToken={sessionToken} count={catalog.size} automatic={state.agentSources.scanPreferences.watchFileChanges}>
-    {clients ? <MemorySourcesContent embedded surface="my-ai" sourceRefresh={sourceRefresh}
-      localAgents={[...catalog.values()]} disconnectedLocalAgentIds={hidden} /> :
-      <section className="my-ai-memory-panel" aria-label="记忆同步">
+    {collectionProfile => clients ? <MemorySourcesContent embedded surface="my-ai" sourceRefresh={sourceRefresh} collectionProfile={collectionProfile}
+      localAgents={[...catalog.values()]} disconnectedLocalAgentIds={new Set([
+        ...hidden, ...state.agentSources.items.filter(source => source.builtin && !managedAgentIds.has(normalizeAgentSourceId(source.sourceId)))
+          .map(source => normalizeAgentSourceId(source.sourceId)),
+      ])} /> :
+      <section className="my-ai-memory-panel" aria-label="本机来源采集">
         <p className="my-ai-help" role="status">{memoryError ? "本机记忆服务暂不可用。" : "正在连接本机记忆服务…"}</p>
         {memoryError && <button type="button" className="my-ai-button" onClick={retryMemory}>重新连接记忆服务</button>}
       </section>}
     </MemorySyncSummary>
   </main>;
-}
-
-function CodexSources({ request, refresh, sources, onSourcesChange, disabled }: {
-  request: MyAiRequest;
-  refresh: number;
-  sources: CodexTaskSources;
-  onSourcesChange: (sources: CodexTaskSources) => void;
-  disabled: boolean;
-}) {
-  const [status, setStatus] = useState<CodexSourceStatus | null>(null);
-  const [picker, setPicker] = useState<CodexSourceKind | null>(null);
-  const [trail, setTrail] = useState<TaskSource[]>([]);
-  const [catalog, setCatalog] = useState<CodexSourceCatalog | null>(null);
-  const [catalogError, setCatalogError] = useState("");
-  const [attempt, setAttempt] = useState(0);
-  const statusRequest = useRef<AbortController | null>(null);
-  const folderTrigger = useRef<HTMLButtonElement>(null);
-  const warehouseTrigger = useRef<HTMLButtonElement>(null);
-  const currentFolder = trail.at(-1);
-  const parent = currentFolder?.id;
-  const configured = status?.connected === true;
-  const pickerDisabled = disabled || !configured || !status?.available;
-  const choosingSpace = picker === "space";
-  const PickerIcon = choosingSpace ? Folder : Orbit;
-
-  const refreshStatus = useCallback(async () => {
-    if (statusRequest.current) return;
-    const controller = new AbortController();
-    statusRequest.current = controller;
-    try {
-      const value = await request<CodexSourceStatus>("codex-context/status", controller.signal);
-      if (!controller.signal.aborted) setStatus(value);
-    } catch {
-      if (!controller.signal.aborted) setStatus(current => ({ connected: current?.connected ?? false, available: false }));
-    } finally {
-      if (statusRequest.current === controller) statusRequest.current = null;
-    }
-  }, [request]);
-
-  useEffect(() => () => {
-    statusRequest.current?.abort();
-    statusRequest.current = null;
-  }, [request]);
-
-  useEffect(() => { void refreshStatus(); }, [refreshStatus, refresh]);
-
-  useEffect(() => {
-    if (status?.available !== false) return;
-    const check = () => { if (!document.hidden) void refreshStatus(); };
-    const timer = window.setInterval(check, 3000);
-    document.addEventListener("visibilitychange", check);
-    return () => {
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", check);
-    };
-  }, [refreshStatus, status?.available]);
-
-  useEffect(() => {
-    if (!picker || !status?.available) return;
-    const controller = new AbortController();
-    setCatalog(null);
-    setCatalogError("");
-    const filter = picker === "space" ? { kind: picker, parent } : { kind: picker };
-    void request<CodexSourceCatalog>("codex-context/catalog", controller.signal, filter)
-      .then(value => { if (!controller.signal.aborted) setCatalog(value); })
-      .catch(cause => {
-        if (!controller.signal.aborted) {
-          setCatalogError(cause instanceof Error ? cause.message : "暂时无法读取资料，请重试。");
-          void refreshStatus();
-        }
-      });
-    return () => controller.abort();
-  }, [picker, parent, attempt, request, refreshStatus, status?.available]);
-
-  function openPicker(kind: CodexSourceKind) {
-    if (pickerDisabled) return;
-    setCatalog(null);
-    setCatalogError("");
-    setTrail([]);
-    setPicker(kind);
-  }
-
-  function closePicker() {
-    setPicker(null);
-    (choosingSpace ? folderTrigger : warehouseTrigger).current?.focus();
-  }
-
-  function browseFolder(next: TaskSource[]) {
-    setCatalog(null);
-    setTrail(next);
-  }
-
-  return <div className="my-ai-codex-sources">
-    <div className="my-ai-source-actions" role="group" aria-label="本次任务的检索范围">
-      <div className="my-ai-source-choice">
-        <button ref={warehouseTrigger} type="button" className="my-ai-button my-ai-source-trigger" data-action="configure-codex-starlink"
-          disabled={pickerDisabled} aria-haspopup="dialog" title={sources.warehouse?.name}
-          onClick={() => openPicker("starlink")}>
-          <Orbit size={16} aria-hidden="true" />
-          <span>参考星图{sources.warehouse && <small>{sources.warehouse.name}</small>}</span>
-        </button>
-        {sources.warehouse && <button type="button" className="my-ai-icon-button" data-action="clear-codex-warehouse"
-          disabled={disabled} aria-label="移除星图仓库" title="移除星图仓库"
-          onClick={() => onSourcesChange({ ...sources, warehouse: undefined })}><X size={15} aria-hidden="true" /></button>}
-      </div>
-      <div className="my-ai-source-choice">
-        <button ref={folderTrigger} type="button" className="my-ai-button my-ai-source-trigger" data-action="configure-codex-space"
-          disabled={pickerDisabled} aria-haspopup="dialog" title={sources.folder?.name}
-          onClick={() => openPicker("space")}>
-          <Folder size={16} aria-hidden="true" />
-          <span>空间文件{sources.folder && <small>{sources.folder.name}</small>}</span>
-        </button>
-        {sources.folder && <button type="button" className="my-ai-icon-button" data-action="clear-codex-folder"
-          disabled={disabled} aria-label="移除空间文件夹" title="移除空间文件夹"
-          onClick={() => onSourcesChange({ ...sources, folder: undefined })}><X size={15} aria-hidden="true" /></button>}
-      </div>
-    </div>
-    <Modal open={picker !== null} title={choosingSpace ? "空间文件" : "参考星图"}
-      subtitle={choosingSpace ? "选择一个文件夹，Codex 可以检索其中的文件和子文件夹。" : "选择一个仓库，Codex 可以检索其中的资料。"}
-      className="my-ai-app-chooser my-ai-codex-picker" closeLabel={choosingSpace ? "关闭空间文件选择" : "关闭星图选择"}
-      onClose={closePicker} headerIcon={<PickerIcon size={18} aria-hidden="true" />} closeContent={<X size={18} aria-hidden="true" />}
-      footer={choosingSpace && <button type="button" className="my-ai-button primary" data-action="select-codex-folder"
-        disabled={pickerDisabled || !currentFolder || !catalog} onClick={() => {
-          if (!currentFolder) return;
-          onSourcesChange({ ...sources, folder: currentFolder });
-          closePicker();
-        }}>选择当前文件夹</button>}>
-      {choosingSpace && <nav className="my-ai-codex-trail" aria-label="文件夹路径">
-        <button type="button" disabled={!trail.length || pickerDisabled} onClick={() => browseFolder([])}>空间</button>
-        {trail.map((item, index) => <span key={item.id}>
-          <ChevronRight size={13} aria-hidden="true" />
-          <button type="button" disabled={pickerDisabled || index === trail.length - 1}
-            aria-current={index === trail.length - 1 ? "location" : undefined}
-            onClick={() => browseFolder(trail.slice(0, index + 1))}>{item.name}</button>
-        </span>)}
-      </nav>}
-      {catalogError ? <div>
-        <p className="my-ai-feedback error" role="alert">{catalogError}</p>
-        <button type="button" className="my-ai-button" disabled={pickerDisabled} onClick={() => setAttempt(value => value + 1)}>重试</button>
-      </div> : !catalog ? <p className="my-ai-help" role="status">{choosingSpace ? "正在读取文件夹…" : "正在读取星图仓库…"}</p>
-        : choosingSpace ? <div className="my-ai-warehouse-list">
-          {catalog.folders?.map(item => <button key={item.id} type="button" className="my-ai-warehouse"
-            data-action="browse-codex-folder" disabled={pickerDisabled} aria-label={`打开文件夹 ${item.name}`}
-            onClick={() => browseFolder([...trail, item])}><Folder size={15} aria-hidden="true" /><span>{item.name}</span><ChevronRight size={14} aria-hidden="true" /></button>)}
-          {!catalog.folders?.length && <p className="my-ai-help">{currentFolder ? "没有子文件夹。" : "没有可选的文件夹。"}</p>}
-          {!currentFolder && Boolean(catalog.folders?.length) && <p className="my-ai-help">先打开要检索的文件夹，再确认选择。</p>}
-        </div> : <div className="my-ai-warehouse-list">
-          {catalog.warehouses?.map(item => <button key={item.id} type="button" className="my-ai-warehouse" disabled={pickerDisabled}
-            data-action="select-codex-warehouse" aria-pressed={sources.warehouse?.id === item.id} onClick={() => {
-              onSourcesChange({ ...sources, warehouse: item });
-              closePicker();
-            }}><Orbit size={15} aria-hidden="true" /><span>{item.name}</span>
-            {sources.warehouse?.id === item.id && <Check size={15} aria-hidden="true" />}</button>)}
-          {!catalog.warehouses?.length && <p className="my-ai-help">没有可选的星图仓库。</p>}
-        </div>}
-    </Modal>
-  </div>;
 }

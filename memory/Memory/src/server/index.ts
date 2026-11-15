@@ -18,7 +18,7 @@ import { MEMORY_RUNTIME_BUILD_ID } from "../runtime-build.js";
 import { listenMemoryStartupHttpServer, type MemoryStartupHttpServer, type MemoryStartupState } from "./startup-http.js";
 import { prepareSqliteStorage } from "./storage-startup.js";
 import { MemoryServiceError } from "../utils/error.js";
-import { checkWanxStorageDirectory, commitWanxStoragePath, copyWanxDatabase, prepareWanxRestore, readWanxStoragePath,
+import { bindWanxSourceProfile, checkWanxStorageDirectory, commitWanxStoragePath, copyWanxDatabase, prepareWanxRestore, readWanxStorageSelection,
     type WanxStorageMove, type WanxStorageResult } from "./wanx-storage.js";
 
 const logger = createMemoryLogger("server");
@@ -43,6 +43,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     process.on("SIGTERM", shutdown);
     let migration: StorageMigration | undefined;
     let moveResult: WanxStorageResult | undefined;
+    let boundPort: number | undefined;
     try {
         while (!shuttingDown) {
             try {
@@ -52,8 +53,9 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
                         stopService = stop;
                         if (shuttingDown) stop();
                     }
-                }, migration, moveResult);
+                }, migration, moveResult, boundPort);
                 if (!result.restart) break;
+                boundPort = result.boundPort ?? boundPort;
                 migration = result.migration;
                 moveResult = result.moveResult;
             } catch (error) {
@@ -73,6 +75,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
 interface StorageMigration {
     move: WanxStorageMove;
     databasePath: string;
+    recoveryPath?: string;
     committed?: boolean;
 }
 
@@ -80,10 +83,11 @@ async function runMemoryService(argv: string[], lifecycle: {
     shutdown(): void;
     setStopService(stop: () => void): void;
 }, migration?: StorageMigration,
-previousMoveResult?: WanxStorageResult): Promise<{
+previousMoveResult?: WanxStorageResult, boundPort?: number): Promise<{
     restart: boolean;
     migration?: StorageMigration;
     moveResult?: WanxStorageResult;
+    boundPort?: number;
 }> {
     const startupStartedAt = Date.now();
     const startupStage = (phase: string): void => logger.info("service.startup_stage", {
@@ -94,14 +98,19 @@ previousMoveResult?: WanxStorageResult): Promise<{
     const { config, path: configPath } = loadMemmyConfig(options.configPath);
     const host = options.host ?? process.env.MEMMY_MEMORY_HOST ?? process.env.MEMORY_SERVICE_HOST ?? "127.0.0.1";
     assertLoopbackBindHost(host);
-    const port = options.port ??
+    const port = boundPort ?? options.port ??
         numberEnv("MEMMY_MEMORY_PORT") ??
         numberEnv("MEMORY_SERVICE_PORT") ??
         18960;
     const serviceHome = resolve(dirname(configPath), "memory-service");
     const canMove = config.storage.backend === "sqlite" && Boolean(config.storage.token);
-    const selectedPath = canMove ? await readWanxStoragePath(serviceHome) : undefined;
+    const selection = canMove ? await readWanxStorageSelection(serviceHome) : undefined;
+    const selectedPath = selection?.databasePath;
+    const recoveryPath = migration?.recoveryPath ?? selection?.recoveryPath;
     const sqlitePath = migration?.databasePath ?? selectedPath ?? options.dbPath ?? config.storage.sqlitePath ?? defaultDatabasePath();
+    const sourceProfile = process.env.MEMMY_ISOLATED_CODEX_PROFILE;
+    if (sourceProfile && !["codex-desktop", "codex-cli"].includes(sourceProfile)) throw new Error("Invalid Codex memory source profile");
+    const freshDatabase = !existsSync(sqlitePath);
     if ((selectedPath || migration) && !existsSync(sqlitePath)) {
         throw new Error("The selected local memory database is unavailable");
     }
@@ -161,6 +170,8 @@ previousMoveResult?: WanxStorageResult): Promise<{
             onShutdownRequested: lifecycle.shutdown
         });
         const { url } = startupServer;
+        // The backend holds the first endpoint across an in-process storage restart.
+        boundPort = Number(new URL(url).port);
         startupStage("http.ready");
         if (configPath) await writeCurrentEndpoint(configPath, url);
         writeRuntimeState(serviceHome, {
@@ -211,6 +222,7 @@ previousMoveResult?: WanxStorageResult): Promise<{
             token: config.storage.token,
             skipMigrations: config.storage.backend !== "openmem-cloud-rest"
         });
+        if (backend instanceof SqliteStorageBackend) bindWanxSourceProfile(backend.db, sourceProfile, freshDatabase);
         startupStage("storage.ready");
         startupStage("service.constructing");
         service = new MemoryService({
@@ -227,7 +239,8 @@ previousMoveResult?: WanxStorageResult): Promise<{
             timeZone: config.timeZone,
             onShutdownRequested: lifecycle.shutdown,
             wanxStorage: canMove ? {
-                get: () => ({ dataPath: dirname(resolve(sqlitePath)), configured: Boolean(selectedPath || migration), result: moveResult }),
+                get: () => ({ dataPath: dirname(resolve(sqlitePath)), configured: Boolean(selectedPath || migration),
+                    rollbackAvailable: Boolean(recoveryPath && existsSync(recoveryPath)), sourceProfile, result: moveResult }),
                 async snapshot(input) {
                     if (move || preparingStorage || !(backend instanceof SqliteStorageBackend)) {
                         throw new MemoryServiceError("conflict", "记忆服务正在切换。");
@@ -249,11 +262,13 @@ previousMoveResult?: WanxStorageResult): Promise<{
                     let requestedMove: WanxStorageMove;
                     try {
                         const activeDirectory = dirname(resolve(sqlitePath));
-                        const restoring = fields.restoreFrom !== undefined;
+                        const restoring = fields.restoreFrom !== undefined || fields.rollback === true;
+                        if (fields.rollback === true && !recoveryPath)
+                            throw new MemoryServiceError("invalid_argument", "本机没有可恢复的副本。");
                         const directory = await checkWanxStorageDirectory(restoring ? activeDirectory : fields.directory);
                         if (!restoring && selectedPath && directory === activeDirectory) return { accepted: false };
                         if (startupController.signal.aborted) throw new MemoryServiceError("conflict", "记忆服务正在切换。");
-                        const candidatePath = restoring ? await prepareWanxRestore(fields.restoreFrom, directory) : undefined;
+                        const candidatePath = restoring ? await prepareWanxRestore(fields.rollback === true ? recoveryPath : fields.restoreFrom, directory, sourceProfile) : undefined;
                         requestedMove = { id: fields.id, directory, candidatePath };
                     } finally { preparingStorage = false; }
                     return { accepted: true, afterResponse() {
@@ -278,7 +293,7 @@ previousMoveResult?: WanxStorageResult): Promise<{
         });
         if (migration) {
             if (startupController.signal.aborted) return { restart: false };
-            await commitWanxStoragePath(serviceHome, sqlitePath);
+            await commitWanxStoragePath(serviceHome, { databasePath: resolve(sqlitePath), recoveryPath });
             migration.committed = true;
             moveResult = { id: migration.move.id, failed: false };
         }
@@ -315,7 +330,10 @@ previousMoveResult?: WanxStorageResult): Promise<{
                     const databasePath = move.candidatePath ?? (directory === dirname(resolve(sqlitePath))
                         ? resolve(sqlitePath)
                         : await copyWanxDatabase(backend.db, directory));
-                    migration = { move, databasePath };
+                    // Capture the last committed local state after stopping writes, before activating the replacement.
+                    const beforeRestore = move.candidatePath
+                        ? await copyWanxDatabase(backend.db, dirname(resolve(sqlitePath))) : recoveryPath;
+                    migration = { move, databasePath, recoveryPath: beforeRestore };
                 } catch (error) {
                     migration = undefined;
                     moveResult = { id: move.id, failed: true };
@@ -332,7 +350,7 @@ previousMoveResult?: WanxStorageResult): Promise<{
             }
         }
     }
-    return { restart: restartRequested, migration, moveResult };
+    return { restart: restartRequested, migration, moveResult, boundPort };
 }
 
 const SERVER_USAGE = `Usage: memmy-memory [options]

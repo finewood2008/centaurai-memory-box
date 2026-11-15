@@ -13,6 +13,7 @@ export interface CreateCodexSourceAdapterDeps {
   /** Sessions root. */
   sessionsRoot?: string;
   descriptor?: SourceDescriptor;
+  allowedOrigins?: ReadonlySet<string>;
 }
 
 /** Creates create codex source adapter. */
@@ -49,7 +50,8 @@ export function createCodexSourceAdapter(deps: CreateCodexSourceAdapterDeps = {}
       const sessions = await discoverCodexSessions({
         root: sessionsRoot,
         order: options.order === "recent_first" ? "recent_first" : "path_asc",
-        maxSessions: options.maxScanTargets
+        maxSessions: options.maxScanTargets,
+        allowedOrigins: deps.allowedOrigins
       });
       options.onProgress?.({ sourceId: descriptor.sourceId, phase: "discover", current: sessions.length, total: sessions.length });
 
@@ -68,7 +70,7 @@ export function createCodexSourceAdapter(deps: CreateCodexSourceAdapterDeps = {}
         });
 
         for await (const rawMessage of streamConversationWindow(
-          readCodexRollout(session.sessionFilePath, options.signal),
+          readCodexRollout(session.sessionFilePath, options.signal, undefined, deps.allowedOrigins),
           options.since,
           options.signal,
           remainingMessageCapacity(options.maxMessages, emittedMessages),

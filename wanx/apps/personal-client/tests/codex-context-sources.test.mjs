@@ -14,7 +14,7 @@ const otherFile = id("f");
 const sample = "正文包含防抖验收口径，用于资料检索。";
 const check = () => {};
 
-function fixture({ rootId = root } = {}) {
+function fixture({ rootId = root, annotationDocuments = [] } = {}) {
   const previews = [];
   const spaceCalls = [];
   const starlinkCalls = [];
@@ -29,6 +29,10 @@ function fixture({ rootId = root } = {}) {
   };
   const space = {
     async operation(action, input) {
+      if (action === "stat") {
+        assert.equal(input.space_id, "personal");
+        return files[input.id];
+      }
       assert.equal(action, "list");
       assert.equal(input.space_id, "personal");
       const parent = input.parent || rootId;
@@ -57,7 +61,7 @@ function fixture({ rootId = root } = {}) {
       { id: warehouseId, name: "工程规范", state: "active" }, { id: otherWarehouse, state: "archived" },
     ] };
     assert.equal(input.warehouseId, warehouseId);
-    if (action === "search") return { items: [
+    if (action === "search") return { annotationDocuments, items: [
       { id: "evidence_1", title: "验收标准", text: "检索到的星图证据", warehouse_id: warehouseId },
       { id: "evidence_2", title: "其他仓", text: "其他仓内容", warehouse_id: otherWarehouse },
     ] };
@@ -157,4 +161,139 @@ test("single-source catalogs, validation and tools avoid the other source", asyn
   assert.deepEqual(spaceCalls, previousSpaceCalls);
   await assert.rejects(sources.validate(null, null, check), { status: 400 });
   await assert.rejects(sources.validate(folder, "", check), { status: 400 });
+});
+
+test("annotation-only Space matches retain manual and inherited provenance and read actual text", async () => {
+  const { sources, files, previews } = fixture();
+  const metadata = { tags: ["蓝鹭项目", "内部培训"], description: "合成的项目资料说明", revision: 3, needsReview: false,
+    provenance: [{ tag: "蓝鹭项目", source: "manual", itemId: target }, { tag: "内部培训", source: "inherited", itemId: folder }] };
+  files[target].annotation = structuredClone(metadata);
+  files[otherFile].annotation = structuredClone(metadata);
+  const selected = await sources.validate(folder, null, check);
+  for (const query of ["蓝鹭项目", "内部培训"]) {
+    const result = await sources.call(selected, "space_search", { query }, check);
+    assert.equal(result.matches.length, 1);
+    assert.equal(result.matches[0].fileId, target);
+    assert.equal(result.matches[0].snippet, sample);
+    assert.deepEqual(result.matches[0].annotation, metadata);
+  }
+  const read = await sources.call(selected, "space_read", { fileId: target }, check);
+  assert.equal(read.text, sample);
+  assert.deepEqual(read.annotation, metadata);
+  assert.ok(previews.every(fileId => fileId === target));
+});
+
+test("Space can recall a description without treating annotation text as file content", async () => {
+  const { sources, files } = fixture();
+  files[target].annotation = { tags: [], description: "合成青枫验收会议", revision: 1, needsReview: false, provenance: [] };
+  const selected = await sources.validate(folder, null, check);
+  const result = await sources.call(selected, "space_search", { query: "青枫验收会议" }, check);
+  assert.equal(result.matches[0].fileId, target);
+  assert.equal(result.matches[0].snippet, sample);
+  assert.equal((await sources.call(selected, "space_read", { fileId: target }, check)).text, sample);
+});
+
+test("review-pending annotations stay visible on text matches but cannot create a tag match", async () => {
+  const { sources, files } = fixture();
+  files[target].annotation = { tags: ["过期待复核标签"], description: "旧说明", revision: 4, needsReview: true,
+    provenance: [{ tag: "过期待复核标签", source: "automatic", itemId: target }] };
+  const selected = await sources.validate(folder, null, check);
+  assert.deepEqual((await sources.call(selected, "space_search", { query: "过期待复核标签" }, check)).matches, []);
+  const result = await sources.call(selected, "space_search", { query: "防抖验收口径" }, check);
+  assert.equal(result.matches[0].annotation.needsReview, true);
+  assert.equal(result.matches[0].snippet, sample);
+});
+
+test("removing a tag during the preview cannot leave an annotation-only search match", async () => {
+  const { sources, files, space } = fixture();
+  files[target].annotation = { tags: ["随时可撤回"], description: "", revision: 1, provenance: [] };
+  const selected = await sources.validate(folder, null, check);
+  const preview = space.preview;
+  space.preview = async (...args) => {
+    const value = await preview(...args);
+    files[target].annotation = { tags: [], description: "", revision: 2, provenance: [] };
+    return value;
+  };
+  assert.deepEqual((await sources.call(selected, "space_search", { query: "随时可撤回" }, check)).matches, []);
+});
+
+test("a content fingerprint or version change during preview withholds both tag matches and reads", async t => {
+  for (const field of ["digest", "version", "size"]) await t.test(field, async () => {
+    const { sources, files, space } = fixture();
+    files[target].digest = "0".repeat(64);
+    files[target].annotation = { tags: ["不可跨版本使用"], description: "", revision: 1, provenance: [] };
+    const selected = await sources.validate(folder, null, check);
+    const preview = space.preview;
+    let change = true;
+    space.preview = async (...args) => {
+      const value = await preview(...args);
+      if (change) files[target][field] = field === "digest" ? "1".repeat(64) : files[target][field] + 1;
+      return value;
+    };
+    assert.deepEqual((await sources.call(selected, "space_search", { query: "不可跨版本使用" }, check)).matches, []);
+    change = false;
+    const initial = files[target][field];
+    space.preview = async (...args) => {
+      const value = await preview(...args);
+      files[target][field] = field === "digest" ? "2".repeat(64) : initial + 1;
+      return value;
+    };
+    await assert.rejects(sources.call(selected, "space_read", { fileId: target }, check), { status: 403 });
+  });
+});
+
+test("non-text annotation matches are revalidated after traversal and cannot outlive a move", async () => {
+  const { sources, files, space, previews } = fixture();
+  files[target].name = "synthetic.pdf";
+  files[target].annotation = { tags: ["PDF专用标注"], description: "", revision: 1, provenance: [] };
+  const selected = await sources.validate(folder, null, check);
+  const operation = space.operation;
+  let reads = 0;
+  space.operation = async (action, input) => {
+    if (input.parent === nested && ++reads === 2) files[target].parent = outside;
+    return operation(action, input);
+  };
+  assert.deepEqual((await sources.call(selected, "space_search", { query: "PDF专用标注" }, check)).matches, []);
+  assert.deepEqual(previews, []);
+});
+
+test("Starlink annotation recall exposes real document references separately from native evidence", async () => {
+  const metadata = { tags: ["蓝鹭项目"], description: "合成星图标注", revision: 3, needsReview: false,
+    provenance: [{ tag: "蓝鹭项目", source: "manual", itemId: target }] };
+  const document = { documentId: "document_1", versionId: "version_2", title: "合成星图原文",
+    locator: { start: 0, end: 7 }, text: "来自当前授权文档接口的真实正文", annotation: metadata };
+  const { sources, starlinkCalls } = fixture({ annotationDocuments: [document,
+    { ...document, documentId: "unauthorized", warehouseId: otherWarehouse },
+    { ...document, documentId: "invalid/path" }, { ...document, versionId: "" }, { ...document, text: "" },
+  ] });
+  const selected = await sources.validate(null, warehouseId, check);
+  const result = await sources.call(selected, "starlink_search", { query: "蓝鹭项目" }, check);
+  assert.deepEqual(result.matches[0], { kind: "document", documentId: "document_1", versionId: "version_2",
+    title: "合成星图原文", locator: JSON.stringify(document.locator), snippet: document.text, annotation: metadata });
+  assert.equal(Object.hasOwn(result.matches[0], "evidenceId"), false);
+  assert.deepEqual(result.matches.filter(row => row.evidenceId).map(row => row.evidenceId), ["evidence_1"]);
+  assert.equal(result.matches.length, 2);
+  assert.equal(starlinkCalls.at(-1).input.warehouseId, warehouseId);
+  assert.equal((await sources.call(selected, "starlink_evidence", { evidenceId: "evidence_1" }, check)).text, "星图原文");
+  await assert.rejects(sources.call(selected, "starlink_evidence", { evidenceId: "invalid/path" }, check), { status: 400 });
+});
+
+test("the direct MCP path recalls annotations without a task and drops results after session invalidation", async () => {
+  const { sources, files, space } = fixture();
+  files[target].annotation = { tags: ["无任务合成标签"], description: "", revision: 1, provenance: [] };
+  const result = await sources.direct("space_search", { query: "无任务合成标签" }, check);
+  assert.deepEqual(result.matches.map(row => row.fileId), [target]);
+  const read = await sources.direct("space_read", { fileId: target }, check);
+  assert.equal(read.text, sample);
+  assert.deepEqual(read.annotation.tags, ["无任务合成标签"]);
+  const preview = space.preview;
+  let live = true;
+  space.preview = async (...args) => {
+    const value = await preview(...args);
+    live = false;
+    return value;
+  };
+  await assert.rejects(sources.direct("space_search", { query: "无任务合成标签" }, () => {
+    if (!live) throw Error("合成会话已断开");
+  }), /合成会话已断开/);
 });
