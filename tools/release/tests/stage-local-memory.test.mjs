@@ -138,6 +138,7 @@ test('real electron-builder resolves each native resource once from a complete c
   assert.equal(resolved.forceCodeSigning, false);
   assert.equal(resolved.nsis.include, path.join(client, 'shell/installer.nsh'));
   assert.equal(resolved.nsis.deleteAppDataOnUninstall, false);
+  assert.equal(resolved.nsis.allowToChangeInstallationDirectory, false, 'the welcome page owns folder selection without a second directory page');
   assert.equal(resolved.directories.output, output);
   assert.deepEqual(resolved.extraMetadata, { version, wanxBuild: buildIdentity });
   assert.deepEqual(resolved.files, (await getConfig(client)).files);

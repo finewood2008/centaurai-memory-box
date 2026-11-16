@@ -160,6 +160,7 @@ test("formal Windows build pins certificate, publisher, current-user NSIS scope 
   assert.equal(config.win.verifyUpdateCodeSignature, true);
   assert.deepEqual(config.win.signtoolOptions.publisherName, ["Example Publisher"]);
   assert.equal(config.nsis.perMachine, false); assert.equal(config.nsis.allowElevation, false);
+  assert.equal(config.nsis.allowToChangeInstallationDirectory, false, "folder selection is integrated into the welcome page");
   assert.equal(config.nsis.differentialPackage, true);
   for (const field of ["include", "installerHeader", "installerSidebar", "uninstallerSidebar"])
     assert.ok(config.nsis[field], `formal builds must retain the branded installer ${field}`);

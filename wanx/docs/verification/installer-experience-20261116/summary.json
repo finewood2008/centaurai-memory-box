@@ -1,0 +1,46 @@
+{
+  "tests": 43,
+  "pass": 42,
+  "fail": 0,
+  "skip": 1,
+  "skipReason": "Windows Authenticode native verification is Windows-only; signing configuration contracts pass on Mac.",
+  "commands": [
+    {
+      "name": "installer-layout-and-native-compile",
+      "exit": 0,
+      "log": "/tmp/memobox-installer-redesign-validation-20261116/installer-layout-and-native-compile.log",
+      "args": [
+        "node",
+        "--test",
+        "wanx/apps/personal-client/tests/installer-presentation.test.mjs",
+        "wanx/apps/personal-client/tests/installer-mac-layout.test.mjs",
+        "wanx/apps/personal-client/tests/installer-artwork.test.mjs"
+      ]
+    },
+    {
+      "name": "release-signing-contracts",
+      "exit": 0,
+      "log": "/tmp/memobox-installer-redesign-validation-20261116/release-signing-contracts.log",
+      "args": [
+        "node",
+        "--test",
+        "wanx/apps/personal-client/tests/client-release-tools.test.mjs"
+      ]
+    },
+    {
+      "name": "windows-packaging-contracts",
+      "exit": 0,
+      "log": "/tmp/memobox-installer-redesign-validation-20261116/windows-packaging-contracts.log",
+      "args": [
+        "node",
+        "--test",
+        "tools/release/tests/repair-locked-sqlite.test.mjs",
+        "tools/release/tests/stage-local-memory.test.mjs"
+      ]
+    }
+  ],
+  "macDmgLayoutEvidence": "/tmp/memobox-mac-install-layout-20261116-0wfg799t/mounted-layout-evidence.json",
+  "previewEvidence": "/tmp/memobox-installer-preview-check/results.json",
+  "windowsCompiler": "NSIS bundle3.12-wfwns",
+  "nativeGuiInspection": "CUA runtime unavailable (ENOENT); no Finder UI screenshot claimed."
+}

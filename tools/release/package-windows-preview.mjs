@@ -95,7 +95,7 @@ export async function writePreviewBuildConfig({ configFile, pkg, client, staged,
     win: { ...pkg.build.win, signExecutable: false, executableName: 'WANX', requestedExecutionLevel: 'asInvoker', target: [{ target: 'nsis', arch: ['x64'] }],
       artifactName: `CentaurAI-MemoBox-${version}-windows-x64.exe` },
     nsis: { ...pkg.build.nsis, include: path.join(client, 'shell/installer.nsh'),
-      oneClick: false, perMachine: false, allowElevation: false, allowToChangeInstallationDirectory: true,
+      oneClick: false, perMachine: false, allowElevation: false, allowToChangeInstallationDirectory: false,
       deleteAppDataOnUninstall: false, differentialPackage: false, useZip: true },
   };
   await writeFile(configFile, JSON.stringify(options, null, 2) + '\n');

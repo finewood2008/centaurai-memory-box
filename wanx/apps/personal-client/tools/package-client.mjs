@@ -14,6 +14,7 @@ import { clientTrustFingerprints, validateClientTrust } from "./package-client-t
 import { prepareMacUpdatePermissions } from "./package-client-permissions.mjs";
 import { readPackagedNativeBinaries } from "./package-client-native.mjs";
 import { createClientBlockMap } from "./client-blockmap.mjs";
+import { macDmgPresentation } from "./installer-presentation.mjs";
 import { TEST_APP_ID, TEST_PACKAGE_NAME, TEST_PRODUCT_NAME, testPackageIdentity, validTestRunId } from "../updates/test-build.mjs";
 import { testFeedURL as validateTestFeedURL } from "../updates/test-runtime.mjs";
 
@@ -109,6 +110,7 @@ export async function packageClient({ version, arch = process.arch, out, notaryP
   await writeFile(configurationFile, JSON.stringify({ ...pkg.build, appId, productName: name,
     afterPack: path.join(root, "tools/package-client-native.mjs"),
     forceCodeSigning: true, mac: { ...pkg.build.mac, defaultArch: "x64" },
+    dmg: macDmgPresentation({ appName: name, background: path.join(root, "resources/installer/redesign/mac-dmg.png") }),
     directories: { ...pkg.build.directories, output: outputDir }, extraMetadata: { version, wanxEdition: pkg.wanxEdition, wanxBuild: build,
       ...(test ? { name: TEST_PACKAGE_NAME, productName: TEST_PRODUCT_NAME, main: "updates/test-entry.mjs" } : {}) },
     extraResources: [...pkg.build.extraResources, ...(trust ? [{ from: trustSnapshot, to: "wanx-update-trust.json" }] : []),

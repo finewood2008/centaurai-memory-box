@@ -1,0 +1,78 @@
+{
+  "ok": true,
+  "metrics": [
+    {
+      "label": "windows-ready-736",
+      "width": 736,
+      "scrollWidth": 736,
+      "height": 645,
+      "bad": [],
+      "smallText": [],
+      "images": true
+    },
+    {
+      "label": "windows-installing-736",
+      "width": 736,
+      "scrollWidth": 736,
+      "height": 645,
+      "bad": [],
+      "smallText": [],
+      "images": true
+    },
+    {
+      "label": "windows-complete-736",
+      "width": 736,
+      "scrollWidth": 736,
+      "height": 653,
+      "bad": [],
+      "smallText": [],
+      "images": true
+    },
+    {
+      "label": "mac-dmg-736",
+      "width": 736,
+      "scrollWidth": 736,
+      "height": 654,
+      "bad": [],
+      "smallText": [],
+      "images": true
+    },
+    {
+      "label": "windows-ready-320",
+      "width": 320,
+      "scrollWidth": 320,
+      "height": 651,
+      "bad": [],
+      "smallText": [],
+      "images": true
+    },
+    {
+      "label": "windows-installing-320",
+      "width": 320,
+      "scrollWidth": 320,
+      "height": 651,
+      "bad": [],
+      "smallText": [],
+      "images": true
+    },
+    {
+      "label": "windows-complete-320",
+      "width": 320,
+      "scrollWidth": 320,
+      "height": 574,
+      "bad": [],
+      "smallText": [],
+      "images": true
+    },
+    {
+      "label": "mac-dmg-320",
+      "width": 320,
+      "scrollWidth": 320,
+      "height": 556,
+      "bad": [],
+      "smallText": [],
+      "images": true
+    }
+  ],
+  "pageErrors": []
+}

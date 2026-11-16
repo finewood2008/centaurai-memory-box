@@ -4,7 +4,9 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 test("NSIS artwork uses valid uncompressed 24-bit bitmaps with expected dimensions", async () => {
-  for (const [name, width, height] of [["header", 150, 57], ["sidebar", 164, 314],
+  for (const [name, width, height] of [["redesign/windows-mark", 160, 160],
+    ["redesign/windows-header", 150, 57], ["redesign/windows-sidebar", 164, 314],
+    ["header", 150, 57], ["sidebar", 164, 314],
     ["feature-1", 720, 400], ["feature-2", 720, 400], ["feature-3", 720, 400], ["overview", 720, 190]]) {
     const data = await readFile(new URL(`../resources/installer/${name}.bmp`, import.meta.url));
     assert.equal(data.toString("ascii", 0, 2), "BM", name);
