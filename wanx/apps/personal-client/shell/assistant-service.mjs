@@ -376,11 +376,6 @@ export function createAIDialogue({ client, onEvent = () => {}, selectFiles, save
         const value=await request(key,`${nativePath()}/threads/${tid}/context-usage${max?'?max_tokens='+max:''}`);
         return {scope:key,...value};
       }
-      if (method === 'polish') {
-        input = {...input, model:await turnModel(key,input)};
-        if(typeof input.text!=='string'||!input.text.trim()||input.text.length>32000)throw fail('ASSISTANT_INVALID_INPUT');
-        return {scope:key,...await request(key,`${nativePath()}/chat/polish`,{method:'POST',body:{text:input.text,default_model:input.model}})};
-      }
       if(method==='version-select') {
         const current=await conversation(key,identifier(input.conversationId));
         const value=remember(await request(key,'/api/assistant/conversations/'+current.id,{method:'PATCH',body:{revision:input.revision,active_thread_id:identifier(input.threadId)}}));

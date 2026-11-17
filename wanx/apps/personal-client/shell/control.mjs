@@ -104,7 +104,7 @@ export function registerControlActions({
       if (!management && !(panelActions.has(name) && isControlSender(event, panel, panelURL)))
         throw new Error("此页面无权操作记忆盒子连接。");
       if (["applications-launch", "applications-request-open", "applications-confirm-open", "studio-preview-open"].includes(name) ||
-          /^(?:panel-)?ai-dialogue-(?:send|resume|polish|version)$/.test(name)) updates?.client?.assertUsable?.();
+          /^(?:panel-)?ai-dialogue-(?:send|resume|version)$/.test(name)) updates?.client?.assertUsable?.();
       // Keep validation synchronous; mutations also refresh both trusted windows.
       const result = action(argument);
       if (reads.has(name) || (name.startsWith("ai-dialogue-") || name.startsWith("panel-ai-dialogue-"))) return result;
@@ -141,7 +141,7 @@ export function registerControlActions({
       return { error: error.code ? directoryError[error.code] || "无法处理此本机文件夹。" : error.message };
     }
   });
-  for(const method of ["load","open","send","stop","watch","unwatch","model","legacy-open","upload","release","resume","artifact","history-update","history-export","space-list","space-grant","release-context","knowledge-list","knowledge-grant","knowledge-evidence","usage","polish","version","version-select","handoff","history-list"]) {
+  for(const method of ["load","open","send","stop","watch","unwatch","model","legacy-open","upload","release","resume","artifact","history-update","history-export","space-list","space-grant","release-context","knowledge-list","knowledge-grant","knowledge-evidence","usage","version","version-select","handoff","history-list"]) {
     const name = "panel-ai-dialogue-" + method; panelActions.add(name);
     register(name, input => { if(!panelDialogue) throw Error("DIALOGUE_UNAVAILABLE");return panelDialogue.action(method,input); });
   }
@@ -174,7 +174,7 @@ export function registerControlActions({
     if (!openDeviceTrust) throw new Error("LOCAL_TRUST_UNAVAILABLE");
     return openDeviceTrust();
   });
-  for (const method of ["load","open","send","stop","watch","unwatch","model","legacy-open","upload","release","resume","artifact","history-update","history-export","space-list","space-grant","release-context","knowledge-list","knowledge-grant","knowledge-evidence","usage","polish","version","version-select","handoff","channels-list","channels-detail","channels-save","channels-toggle","channels-delete","channels-test","channels-start","channels-poll","channels-cancel","channels-verification","channels-verify-start","channels-verify-confirm","channels-verify-revoke","history-list"]) register(`ai-dialogue-${method}`, input => {
+  for (const method of ["load","open","send","stop","watch","unwatch","model","legacy-open","upload","release","resume","artifact","history-update","history-export","space-list","space-grant","release-context","knowledge-list","knowledge-grant","knowledge-evidence","usage","version","version-select","handoff","channels-list","channels-detail","channels-save","channels-toggle","channels-delete","channels-test","channels-start","channels-poll","channels-cancel","channels-verification","channels-verify-start","channels-verify-confirm","channels-verify-revoke","history-list"]) register(`ai-dialogue-${method}`, input => {
     if (!aiDialogue) throw new Error("DIALOGUE_UNAVAILABLE");
     return aiDialogue.action(method, input);
   });

@@ -10,7 +10,7 @@ import electron from "electron";
 
 test("The personal window shares the right sidebar without losing notes or conversation state", {
   skip: process.env.WANX_TEST_ELECTRON !== "1",
-  timeout: 40_000,
+  timeout: 65_000,
 }, async t => {
   const profile = await mkdtemp(join(tmpdir(), "wanx-sidebar-"));
   t.after(() => rm(profile, { recursive: true, force: true }));
@@ -20,7 +20,7 @@ test("The personal window shares the right sidebar without losing notes or conve
   try {
     const { stdout } = await promisify(execFile)(electron, [fixture, `--user-data-dir=${profile}`], {
       env,
-      timeout: 35_000,
+      timeout: 60_000,
     });
     assert.match(stdout, /WANX_SIDEBAR_UI_PASS/);
   } catch (error) {

@@ -401,7 +401,9 @@ test("space integrates toolbar, multiselection and folder entry without changing
   const window = { createSpaceAnnotationWorkbench: () => wb, wanxClient: { async action(name) { return { ok: true, value: name === "space.refresh" ? { phase: "ready", tasks: [], annotationAvailable: true } : { items: [folder, data[1]], breadcrumbs: [] } }; }, onSpaceState() {} } };
   vm.runInNewContext(spaceSource, { window, document: { querySelector: () => root, querySelectorAll: () => [], addEventListener() {} }, setInterval() {}, setTimeout, requestAnimationFrame: () => 1, cancelAnimationFrame() {}, queueMicrotask, URL, Blob, atob, TextDecoder });
   const space = window.wanxSpace; space.bind({ render() {} }); space.hostState({ route: "applications", canLaunchApplications: true, account: { accountId: "synthetic" }, activeDeviceId: "box" }); space.activate(true); await tick();
-  assert.match(space.view(), /标注工作台/);
+  assert.match(space.headerActions(), /data-action="space-workbench"[^>]*>标注工作台/);
+  assert.doesNotMatch(space.headerActions(), /clipboard-toggle/);
+  assert.doesNotMatch(space.view(), /data-action="space-workbench"/);
   const click = (name, item = "") => events.get("click")({ target: { closest: () => ({ dataset: { action: `space-${name}`, id: item } }) } });
   await click("workbench"); assert.equal(opens[0].parent, "");
   await click("select", data[1].id); await click("workbench-selected"); assert.deepEqual(Array.from(opens[1].ids), [data[1].id]);

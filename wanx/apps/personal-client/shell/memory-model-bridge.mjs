@@ -7,6 +7,8 @@ import { dataInteractionKey, dataOwnerKey } from "../device-trust/data-context.m
 const LIMIT = 2 * 1024 * 1024;
 const REMOTE = "/api/wanx/memory-model";
 const CATALOG = "/api/providers/resolved";
+const STT_CAPABILITY = "/api/voice/stt/capability";
+const MEDIA_SETTINGS = "/api/admin/media-generation";
 const TEXT_ROLES = ["memory_summary", "memory_evolution"];
 export const OPTIONAL_MODEL_ROLES = ["agent", "asr", "image_generation"];
 const INVENTORY_ROLES = ["embedding", ...OPTIONAL_MODEL_ROLES];
@@ -24,6 +26,28 @@ function catalogModels(rows, requireText = true) {
     provider: row.provider_name,
   })).filter(row => text(row.ref));
   return [...new Map(models.map(model => [model.ref, model])).values()];
+}
+
+function nativeVoiceCatalog({ status, body }) {
+  if (status !== 200 || typeof body?.available !== "boolean") return null;
+  const provider = body.provider_name;
+  const kind = body.provider_kind;
+  if (!body.available || kind === "browser" || !text(provider) || !text(kind)) {
+    return { models: [], defaultRef: null };
+  }
+  return {
+    models: [{ provider_name: provider, model: kind, name: text(body.model) ? body.model : kind }],
+    defaultRef: `${provider}/${kind}`,
+  };
+}
+
+function nativeImageCatalog({ status, body }) {
+  if (status !== 200 || typeof body?.enabled !== "boolean" || !Array.isArray(body.providers)) return null;
+  const models = body.enabled ? body.providers.filter(row => row?.enabled === true &&
+    row.image_enabled === true && row.configured === true && text(row.id) && text(row.image_model))
+    .map(row => ({ provider_name: row.id, model: row.image_model, name: row.image_model })) : [];
+  const active = models.find(row => row.provider_name === body.default_image_provider);
+  return { models, defaultRef: active ? `${active.provider_name}/${active.model}` : null };
 }
 
 export function createMemoryModelBridge({ client, serviceURL, runtimeFile, preferenceFile, protectFile }) {
@@ -50,6 +74,7 @@ export function createMemoryModelBridge({ client, serviceURL, runtimeFile, prefe
   // execution still checks the current model status and box authorization.
   let candidateCatalog = [];
   let roleCatalogs = {};
+  let nativeCatalogs = {};
   let activeModelRef;
   let requestedModels = {};
   let checkingStatus;
@@ -89,6 +114,7 @@ export function createMemoryModelBridge({ client, serviceURL, runtimeFile, prefe
       modelError = null;
       candidateCatalog = [];
       roleCatalogs = {};
+      nativeCatalogs = {};
       activeModelRef = undefined;
       requestedModels = {};
       published = false;
@@ -114,11 +140,11 @@ export function createMemoryModelBridge({ client, serviceURL, runtimeFile, prefe
           text(saved[key]?.[role]) ? saved[key][role] : null]));
         const previous = modelStatus;
         modelStatus = result.status === 200 && result.body && typeof result.body === "object" ? result.body : undefined;
-        modelError = modelStatus ? null : result.body?.detail ?? null;
+        modelError = modelStatus?.error ?? (modelStatus ? null : result.body?.detail ?? null);
         if (modelStatus) roleCatalogs = modelStatus.capabilities ?? {};
+        else if (result.body?.detail === "MEMORY_MODEL_NOT_CONFIGURED") roleCatalogs = result.body.capabilities ?? {};
         else if (result.status === 401 || result.status === 403 ||
-                 result.body?.detail === "MEMORY_MODEL_BOX_UPDATE_REQUIRED" ||
-                 result.body?.detail === "MEMORY_MODEL_NOT_CONFIGURED") roleCatalogs = {};
+                 result.body?.detail === "MEMORY_MODEL_BOX_UPDATE_REQUIRED") roleCatalogs = {};
         if (!published || JSON.stringify(previous) !== JSON.stringify(modelStatus))
           await publish().catch(() => { published = false; });
       });
@@ -138,7 +164,7 @@ export function createMemoryModelBridge({ client, serviceURL, runtimeFile, prefe
 
   function choicesFor(role) {
     const isTextRole = TEXT_ROLES.includes(role);
-    const catalog = roleCatalogs[role];
+    const catalog = roleCatalogs[role] ?? nativeCatalogs[role];
     return catalog ? catalogModels(catalog.models, isTextRole)
       : isTextRole || role === "agent" ? candidateCatalog : [];
   }
@@ -149,18 +175,30 @@ export function createMemoryModelBridge({ client, serviceURL, runtimeFile, prefe
     const [result, active] = await Promise.all([
       remote(CATALOG, "GET", undefined, deadline),
       remote(ACTIVE_MODEL, "GET", undefined, deadline),
+      refreshStatus(),
     ]);
     if (selected !== token) return;
     if (result.status === 200 && Array.isArray(result.body)) candidateCatalog = catalogModels(result.body);
     else if (result.status === 401 || result.status === 403) candidateCatalog = [];
     if (active.status === 200) activeModelRef = `${active.body?.provider_name}/${active.body?.model}`;
+    // Local trust only authorizes the dedicated memory-model route for media metadata.
+    if (client.snapshot().connection?.authorization === "local-trust-v1") return;
+    const [voice, images] = await Promise.all([
+      roleCatalogs.asr ? null : remote(STT_CAPABILITY, "GET", undefined, deadline),
+      roleCatalogs.image_generation ? null : remote(MEDIA_SETTINGS, "GET", undefined, deadline),
+    ]);
+    if (selected !== token) return;
+    nativeCatalogs = {
+      asr: voice && nativeVoiceCatalog(voice),
+      image_generation: images && nativeImageCatalog(images),
+    };
   }
 
   function roleModel(role) {
     const requested = requestedModels[role];
     const catalog = modelStatus?.capabilities?.[role];
     if (!catalog) {
-      return !modelStatus?.capabilities && !requested && text(modelStatus?.model)
+      return !TEXT_ROLES.some(key => modelStatus?.capabilities?.[key]) && !requested && text(modelStatus?.model)
         ? { model: modelStatus.model, name: modelStatus.name, provider: modelStatus.provider } : null;
     }
     const allowed = catalogModels(catalog.models);
@@ -191,7 +229,9 @@ export function createMemoryModelBridge({ client, serviceURL, runtimeFile, prefe
       if (reply.status >= 200 && reply.status < 300) return { status: reply.status, body: result };
       const detail = typeof result.detail === "string" && /^MEMORY_MODEL_[A-Z_]+$/.test(result.detail)
         ? result.detail : "MEMORY_MODEL_UNAVAILABLE";
-      return { status: reply.status, body: { detail } };
+      const capabilities = method === "GET" && route === REMOTE && reply.status === 409 &&
+        detail === "MEMORY_MODEL_NOT_CONFIGURED" ? result.capabilities : undefined;
+      return { status: reply.status, body: { detail, capabilities } };
     } catch {
       return { status: 503, body: { detail: "MEMORY_MODEL_UNAVAILABLE" } };
     } finally {
@@ -291,7 +331,7 @@ export function createMemoryModelBridge({ client, serviceURL, runtimeFile, prefe
       const selectedBox = selectionScope();
       const selectionToken = token;
       if (role && modelRef && !choicesFor(role).some(model => model.ref === modelRef)) {
-        await Promise.all([refreshCatalog(), refreshStatus()]);
+        await refreshCatalog();
       }
       await serialize(async () => {
         if (closed || owner !== scope || scope !== getScope()) throw new Error("context_changed");
@@ -317,10 +357,10 @@ export function createMemoryModelBridge({ client, serviceURL, runtimeFile, prefe
         }
         if (!role && (!published || mode === "custom")) await publish();
       });
-      if (mode === "wanx" && !role) await Promise.all([refreshStatus(), refreshCatalog()]);
+      if (mode === "wanx" && !role) await refreshCatalog();
       return {
         mode,
-        ...(modelStatus
+        ...(text(modelStatus?.model)
           ? { model: modelStatus.model, name: modelStatus.name, provider: modelStatus.provider }
           : { error: modelError }),
         ...(mode === "wanx" && {
@@ -336,8 +376,8 @@ export function createMemoryModelBridge({ client, serviceURL, runtimeFile, prefe
             }];
           })),
           inventory: Object.fromEntries(INVENTORY_ROLES.map(role => {
-            const catalog = modelStatus?.capabilities?.[role];
-            const available = catalog ? catalogModels(catalog.models, false) : choicesFor(role);
+            const catalog = roleCatalogs[role] ?? nativeCatalogs[role];
+            const available = choicesFor(role);
             const defaultRef = catalog?.defaultRef ?? (!catalog && role === "agent" ? activeModelRef : null);
             const defaultModel = available.find(model => model.ref === defaultRef);
             return [role, {

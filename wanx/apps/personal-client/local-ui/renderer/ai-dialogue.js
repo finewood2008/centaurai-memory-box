@@ -194,7 +194,7 @@
     let drawerWatchNeedsSync = false;
     let modelMode = 'auto', managedDefaults = false, modelChoice = 0;
     let recentRequested=compact;
-    let conversationId=null, conversationRevision=0, versions=[], contextUsage=null, polishBusy=false, polishUndo=null, editingId=null;
+    let conversationId=null, conversationRevision=0, versions=[], contextUsage=null, editingId=null;
     const drafts=new Map();
     let threadId = null, messages = [], draft = '', attachments = [], reference = '', historyOpen = !compact && !drawer, query = '', pickerOpen = false, modelQuery = '';
     let busy = false, uploading = false, opening = false, active = false, uncertain = false, pending = null, runModel = null, sequence = 0;
@@ -236,7 +236,7 @@
       historyOpen = !compact && !drawer;
       drawerWatchNeedsSync = false;
       clearTimeout(historyTimer); historyRequest++; clearTimeout(refreshTimer); epoch++; stopWatch(); scope = null; loaded = false; loading = false; models = []; sessions = []; legacySessions = [];
-      modelMode = 'auto'; managedDefaults = false; selected = null; legacy = null; legacyId = null; threadId = null; conversationId=null;conversationRevision=0;versions=[];contextUsage=null;polishUndo=null;editingId=null;drafts.clear(); messages = []; draft = ''; attachments = []; reference = ''; submitted = null;
+      modelMode = 'auto'; managedDefaults = false; selected = null; legacy = null; legacyId = null; threadId = null; conversationId=null;conversationRevision=0;versions=[];contextUsage=null;editingId=null;drafts.clear(); messages = []; draft = ''; attachments = []; reference = ''; submitted = null;
       busy = false; active = false; uncertain = false; uploading = false; opening = false; pending = null; pendingPaint = ''; error = ''; notice = ''; pickerOpen = false;
       if ($('[data-chat-artifact-dialog]')?.open) $('[data-chat-artifact-dialog]').close();
       if ($('[data-chat-history-dialog]')?.open) $('[data-chat-history-dialog]').close();
@@ -401,12 +401,6 @@
       catch(e){if(gen===generation&&turn===epoch){error=errorText(e);try{const restored=await call('open',{threadId:conversationId});if(gen===generation&&turn===epoch){acceptConversation(restored.conversation);threadId=restored.history.thread_id;acceptHistory(restored.history);await call('watch',{threadId});}}catch{}if($('[data-chat-edit-dialog]').open)$('[data-edit-error]').textContent=error;}}
       finally{if(gen===generation&&turn===epoch){busy=false;paint();}}
     }
-    async function polishDraft() {
-      if(polishBusy||!draft.trim()||active||pending)return;
-      const before=draft,gen=generation,turn=epoch;polishBusy=true;paintStatus();
-      try{const result=await call('polish',{model:selected,modelMode,text:before});if(gen!==generation||turn!==epoch)return;if(draft===before){polishUndo=before;draft=result.text;$('[data-chat-input]').value=draft;notice='草稿已润色，检查后再发送。';}else notice='草稿已修改，本次润色结果未覆盖你的输入。';}
-      catch(e){if(gen===generation&&turn===epoch)error=errorText(e);}finally{if(gen===generation&&turn===epoch){polishBusy=false;paintStatus();}}
-    }
     async function openThread(id, choose = true) {
       if (!scope || busy || uploading) return;
       if (conversationId !== id) {stashDraft();}
@@ -435,7 +429,7 @@
       const gen=generation,turn=epoch;
       const defaults=await call('release-context');
       if(gen!==generation||turn!==epoch)return;
-      stashDraft();epoch++; stopWatch(); threadId = null;conversationId=null;conversationRevision=0;versions=[];contextUsage=null;polishUndo=null;spaceEnabled=false;spaceSelection=null;spaceLabel='';knowledgeEnabled=false;knowledgeWarehouses=[]; legacy = null; legacyId = null; legacyAnswer = null;
+      stashDraft();epoch++; stopWatch(); threadId = null;conversationId=null;conversationRevision=0;versions=[];contextUsage=null;spaceEnabled=false;spaceSelection=null;spaceLabel='';knowledgeEnabled=false;knowledgeWarehouses=[]; legacy = null; legacyId = null; legacyAnswer = null;
       messages = []; sourceLinks.clear(); active = false; uncertain = false; pending = null; pendingPaint = ''; draft = ''; attachments = []; reference = ''; submitted = null; hasMore = false;
       error = ''; notice = ''; acceptModelSelection(defaults); acceptSources(defaults.context||{},defaults.validation_errors); if ($('[data-chat-input]')) { $('[data-chat-input]').value = ''; $('[data-chat-input]').style.height = ''; }
       if ($('[data-chat-artifacts]')) $('[data-chat-artifacts]').innerHTML = '';
@@ -795,7 +789,8 @@
       $('[data-chat-knowledge-settings]').hidden = !knowledgeEnabled;
       $('[data-chat-knowledge-settings]').disabled = !knowledgeAvailable || knowledgeBusy || active || busy || Boolean(pending);
       $('[data-chat-knowledge-settings]').textContent = knowledgeWarehouses.length ? (knowledgeWarehouses.length===1?knowledgeWarehouses[0].name:'已选 '+knowledgeWarehouses.length+' 项') + ' ⌄' : '选择数据仓';
-      $('[data-chat-polish]').disabled=!scope||polishBusy||active||busy||pending||!draft.trim();$('[data-chat-polish]').textContent=polishBusy?'正在润色…':'润色草稿';$('[data-chat-polish-undo]').hidden=polishUndo===null;paintVersions();paintUsage();
+      paintVersions();
+      paintUsage();
       $('[data-chat-composer]').hidden = Boolean(legacy);
       $('[data-chat-attachments]').innerHTML = attachments.map(file => `<span class="ai-attachment">▤ ${esc(file.name)}<button type="button" data-chat-action="remove-file" data-id="${esc(file.handle)}" aria-label="移除 ${esc(file.name)}">×</button></span>`).join('');
       $('[data-chat-reference]').hidden = !reference;
@@ -812,7 +807,6 @@
       $('.ai-chat-workspace').insertAdjacentHTML('afterbegin','<div class="ai-source-bar" data-chat-source-bar><div data-top-space></div><div class="ai-composer-context" data-chat-knowledge-entry hidden><label class="ai-space-toggle"><input type="checkbox" data-chat-knowledge-toggle/>' + (compact ? '星图知识库' : '星图记忆') + '</label><button type="button" class="ai-space-scope" data-chat-action="knowledge-settings" data-chat-knowledge-settings hidden>选择数据仓</button></div><details class="ai-context-details"><summary data-context-summary>上下文 · 暂无统计</summary><section data-context-breakdown></section></details></div><div class="ai-version-controls" data-chat-versions hidden></div>');
       $('[data-top-space]').append($('[data-chat-space-toggle]').closest('.ai-composer-context'));
       $('.ai-composer-bottom').insertBefore($('.ai-model-section'),$('.ai-keyboard-hint'));
-      $('.ai-composer-bottom').insertBefore(Object.assign(document.createElement('details'),{className:'ai-composer-more',innerHTML:'<summary aria-label="更多操作" title="更多操作">⋯</summary><div><button type="button" data-chat-action="polish" data-chat-polish>润色草稿</button><button type="button" data-chat-action="polish-undo" data-chat-polish-undo hidden>恢复原文</button></div>'}),$('.ai-keyboard-hint'));
       $('.ai-dialogue').insertAdjacentHTML('beforeend', '<dialog class="ai-space-dialog ai-knowledge-dialog" data-chat-knowledge-dialog aria-labelledby="knowledge-dialog-title"><header><div><h3 id="knowledge-dialog-title">选择星图知识库</h3><p>可同时使用多个已授权数据仓。</p></div><button data-chat-action="knowledge-close" aria-label="关闭知识库选择">×</button></header><input type="search" data-knowledge-search placeholder="搜索数据仓" aria-label="搜索数据仓"/><div class="ai-knowledge-options" data-knowledge-options></div><p class="ai-space-note" data-knowledge-note role="status"></p><footer><button data-chat-action="knowledge-close">取消</button><button data-chat-action="knowledge-confirm" data-knowledge-confirm>使用所选数据仓</button></footer></dialog>');
       $('.ai-dialogue').insertAdjacentHTML('beforeend','<dialog class="ai-history-dialog ai-edit-dialog" data-chat-edit-dialog><header><h3>编辑重发</h3><button type="button" data-chat-action="edit-close" aria-label="关闭编辑">×</button></header><p>保留原消息与回答，修改后生成新版本。</p><textarea data-edit-text rows="7" maxlength="32000" aria-label="修改消息内容"></textarea><div data-edit-files></div><p data-edit-error role="status"></p><footer><button type="button" data-chat-action="edit-close">取消</button><button type="button" data-chat-action="edit-send">保存并发送</button></footer></dialog>');
       $('.ai-chat-workspace').insertAdjacentHTML('beforeend','<button class="ai-scroll-bottom" data-chat-action="scroll-bottom" data-scroll-bottom hidden aria-label="回到底部">↓ 回到底部</button>');
@@ -919,8 +913,6 @@
           if(action==='version-prev')await changeVersion(-1);
           if(action==='version-next')await changeVersion(1);
           if(action==='scroll-bottom'){$('[data-chat-messages]').scrollTop=$('[data-chat-messages]').scrollHeight;paintScroll();}
-          if(action==='polish'){$('.ai-composer-more').open=false;await polishDraft();}
-          if(action==='polish-undo'&&polishUndo!==null){draft=polishUndo;polishUndo=null;$('[data-chat-input]').value=draft;$('.ai-composer-more').open=false;paintStatus();}
           if(action==='edit'&&!active&&!pending&&!busy){const m=messages.find(m=>m.id===id&&m.role==='user');if(m){editingId=id;$('[data-edit-text]').value=m.text;$('[data-edit-files]').textContent=(m.files||[]).map(f=>f.name||f.filename||'附件').join(' · ');$('[data-edit-error]').textContent='';$('[data-chat-edit-dialog]').showModal();}}
           if(action==='edit-close')$('[data-chat-edit-dialog]').close();
           if(action==='edit-send'&&editingId)await revise('edit',editingId,$('[data-edit-text]').value);

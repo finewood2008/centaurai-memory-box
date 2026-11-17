@@ -9,12 +9,38 @@ def memory_model_host() -> dict:
 
     from octop.infra.agents.providers.store import ProviderStore
     from octop.infra.utils.llm_text import llm_text_content
+    from octop.infra.voice.manager import VoiceManager
+
+    def model_inventory(server) -> dict:
+        voice = VoiceManager(
+            settings_repo=server.services.settings_repo,
+            voice_provider_repo=server.services.voice_provider_repo,
+        )
+        media = server.app_runtime.agent_registry.media_generation.load()
+        images = []
+        default_image = None
+        if media.enabled:
+            for provider in media.providers:
+                if not (provider.configured and provider.image_enabled and provider.image_model):
+                    continue
+                images.append({
+                    "provider_name": provider.id,
+                    "model": provider.image_model,
+                    "name": provider.image_model,
+                })
+                if provider.id == media.default_image_provider:
+                    default_image = f"{provider.id}/{provider.image_model}"
+        return {
+            "asr": voice.stt_model_catalog(),
+            "image_generation": {"models": images, "defaultRef": default_image},
+        }
 
     return {
         "providers": ProviderStore,
         "build_chat_model": build_chat_model,
         "close_clients": aclose_session_http_clients,
         "text_content": llm_text_content,
+        "model_inventory": model_inventory,
     }
 
 

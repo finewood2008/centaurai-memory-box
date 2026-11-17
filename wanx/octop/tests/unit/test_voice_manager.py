@@ -132,6 +132,25 @@ def test_stt_capability_checks_builtin_rows_and_effective_credentials(
     assert (result.configuration_id is not None) == result.available
 
 
+def test_stt_model_catalog_excludes_unavailable_services(voice_mgr: VoiceManager) -> None:
+    repo = voice_mgr._repo
+    repo.create(
+        name="transcription", kind="openai", capability="stt",
+        api_key="synthetic-key", extra_json='{"model":"transcription-model"}',
+    )
+    repo.create(name="tts", kind="openai", capability="tts", api_key="synthetic-key")
+    repo.create(name="unconfigured", kind="mimo", capability="both")
+    disabled = repo.create(name="disabled", kind="mimo", capability="both", api_key="synthetic-key")
+    repo.update(disabled, enabled=False)
+    voice_mgr.set_active(stt="transcription")
+    assert voice_mgr.stt_model_catalog() == {
+        "models": [
+            {"provider_name": "transcription", "model": "openai", "name": "transcription-model"},
+        ],
+        "defaultRef": "transcription/openai",
+    }
+
+
 @pytest.mark.asyncio
 async def test_stt_dispatches_same_confirmed_provider_snapshot(
     voice_mgr: VoiceManager,

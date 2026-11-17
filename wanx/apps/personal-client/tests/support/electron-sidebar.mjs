@@ -3,14 +3,20 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { setTimeout as pause } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, ipcMain, nativeTheme } from "electron";
+import { app, BrowserWindow, ipcMain, nativeTheme, screen } from "electron";
 
 const renderer = process.env.WANX_SIDEBAR_RENDERER_DIR ||
   fileURLToPath(new URL("../../local-ui/renderer/", import.meta.url));
-const noteButton = '[data-action="clipboard-toggle"]';
+const noteButton = "#academy-tab-note";
+const assistantTab = "#academy-tab-assistant";
+const workbenchButton = '[data-action="space-workbench"]';
 const uploadControl = 'summary[aria-label="上传到当前文件夹"]';
 const connectControl = '[data-action="show-boxes"]';
 const assistantButton = "#academy-edge-handle";
+function wideViewport() {
+  const { width, height } = screen.getDisplayMatching(window.getBounds()).workAreaSize;
+  return [Math.min(1440, width - 24), Math.min(750, height - 50)];
+}
 const model = { id: "fixture/model", name: "测试模型", provider: "fixture", input: ["text"] };
 const scope = "fixture-dialogue";
 const threadId = "fixture-thread";
@@ -98,10 +104,11 @@ const key = (key, options = {}) => run("(" + function(key, options) {
 
 const shown = panel => run("activeSidebar() === " + JSON.stringify(panel));
 const waitForPanel = panel => until(() => shown(panel), "sidebar " + (panel || "closed"));
-const waitForEditor = () => until(
-  () => run('document.activeElement === document.querySelector(".clipboard-note-editor")'),
-  "note editor focus",
-);
+async function waitForEditor() {
+  await until(() => run('document.querySelector(".clipboard-note-editor")?.isContentEditable === true'), "editable note");
+  await click(".clipboard-note-editor");
+  assert.equal(await run('document.activeElement === document.querySelector(".clipboard-note-editor")'), true);
+}
 const noteText = () => run('document.querySelector(".clipboard-note-editor").textContent');
 const dialogueDraft = () => run('document.querySelector("#academy-drawer [data-chat-input]").value');
 
@@ -170,7 +177,8 @@ function mockIPC() {
       context: { ...context, label: context.module === "space" ? "万象空间" : "应用市场", examples: ["如何操作？"] },
     },
   }));
-  handle("space-refresh", () => ({ phase: "ready", scope: "fixture-space", tasks: [] }));
+  handle("memory-open", () => ({ available: false }));
+  handle("space-refresh", () => ({ phase: "ready", scope: "fixture-space", tasks: [], annotationAvailable: true }));
   handle("space-list", () => ({ items: [], breadcrumbs: [] }));
   handle("space-links-spaces", () => []);
   handle("space-links-requests", () => []);
@@ -270,11 +278,11 @@ async function verifyWorkshopTab() {
   assert.equal(await run("innerWidth"), 760);
   const tabs = await run(`Array.from(document.querySelectorAll('.applications-tabs [data-action="applications-tab"]'),
     tab => [tab.dataset.tab, tab.textContent.trim()])`);
-  assert.deepEqual(tabs, [["wanx", "应用市场"], ["local", "我的应用"], ["workshop", "万象工坊"]]);
+  assert.deepEqual(tabs, [["wanx", "应用市场"], ["local", "我的应用"], ["workshop", "应用工坊"]]);
   assert.equal(await run('Boolean(document.querySelector(".main-nav [data-action=show-workshop]"))'), false);
   await until(() => run('document.querySelector(\'[data-action="market-refresh"]\')?.disabled === false'), "market refresh ready");
   await assertApplicationTabPosition(appsBanner, "#applications-panel-wanx");
-  const marketActions = await assertBannerActions(appsBanner, "market-refresh", "万象应用", "检查更新");
+  const marketActions = await assertBannerActions(appsBanner, "market-refresh", "AI", "检查更新");
   await click(assistantButton);
   await waitForPanel("assistant");
   await assertApplicationTabPosition(appsBanner, "#applications-panel-wanx");
@@ -283,19 +291,18 @@ async function verifyWorkshopTab() {
   await click("#applications-tab-local");
   await until(() => run('Boolean(document.querySelector("#applications-panel-local"))'), "My Apps tab");
   await assertApplicationTabPosition(appsBanner, "#applications-panel-local");
-  assert.deepEqual(await assertBannerActions(appsBanner, "market-refresh", "万象应用", "检查更新"),
+  assert.deepEqual(await assertBannerActions(appsBanner, "market-refresh", "AI", "检查更新"),
     marketActions);
   await click("#applications-tab-wanx");
   await until(() => run('Boolean(document.querySelector("#applications-panel-wanx"))'), "Applications Market tab");
   await click("#applications-tab-workshop");
-  await until(() => run('document.querySelector("#applications-panel-workshop")?.getAttribute("aria-label") === "万象工坊"'),
+  await until(() => run('document.querySelector("#applications-panel-workshop")?.getAttribute("aria-label") === "应用工坊"'),
     "Workshop in Applications");
-  assert.equal(await run('document.querySelector(".main-nav [aria-current=page]").dataset.action'), "show-applications");
   assert.equal(await run('document.querySelector(".applications-tabs [aria-selected=true]").id'), "applications-tab-workshop");
   assert.equal(await run('document.activeElement.id'), "applications-tab-workshop");
   await until(() => run('document.querySelector(\'[data-action="workshop-refresh"]\')?.disabled === false'), "Workshop refresh ready");
   await assertApplicationTabPosition(workshopBanner, "#applications-panel-workshop .workshop-layout");
-  assert.deepEqual(await assertBannerActions(workshopBanner, "workshop-refresh", "万象工坊", "刷新工坊"),
+  assert.deepEqual(await assertBannerActions(workshopBanner, "workshop-refresh", "应用工坊", "刷新工坊"),
     marketActions);
   await click("#applications-tab-wanx");
   await until(() => run('Boolean(document.querySelector("#applications-panel-wanx"))'), "return to Applications market");
@@ -352,11 +359,11 @@ async function verifyMergedExpertApps() {
   assert.equal(await count(crmOffer), 0, "the added app moved to the installed list");
   await scrollClick(`${crmCard} [data-action="applications-launch"]`);
   await until(() => appLaunches.includes(expertAppRecords["ai-crm"].applicationId), "open added application");
-  await click('.main-nav [data-action="show-applications"]');
+  send("navigate", "applications");
   await until(() => find("#applications-panel-wanx"), "return after My Apps verification");
 }
 
-async function assertNotePlacement(adjacentSelector) {
+async function assertWorkbenchPlacement(adjacentSelector) {
   const { geometry, ...placement } = await run("(" + function(noteSelector, adjacentSelector) {
     const entries = [...document.querySelectorAll(noteSelector)];
     const entry = entries[0];
@@ -377,35 +384,38 @@ async function assertNotePlacement(adjacentSelector) {
       count: entries.length,
       inSpaceBanner: Boolean(entry?.closest('.wanx-section-banner[data-section="space"] .wanx-section-actions')),
       adjacent: Boolean(aligned || compactStack),
-      bothClickable: Boolean(hit(entry, noteBounds) && hit(adjacent, actionBounds)),
+      actionsReachable: Boolean((entry?.disabled || hit(entry, noteBounds)) && hit(adjacent, actionBounds)),
       geometry: { width: innerWidth, height: innerHeight, sidebar,
         note: noteBounds?.toJSON(), action: actionBounds?.toJSON() },
     };
-  } + ")(" + JSON.stringify(noteButton) + "," + JSON.stringify(adjacentSelector) + ")");
-  assert.deepEqual(placement, { count: 1, inSpaceBanner: true, adjacent: true, bothClickable: true },
-    "the single Note entry belongs directly before the Space banner action, with both reachable: " +
+  } + ")(" + JSON.stringify(workbenchButton) + "," + JSON.stringify(adjacentSelector) + ")");
+  assert.deepEqual(placement, { count: 1, inSpaceBanner: true, adjacent: true, actionsReachable: true },
+    "the workbench belongs directly before the Space banner action, with both reachable: " +
     JSON.stringify(geometry));
 }
 
 async function verifyAppearance() {
   await click('[data-action="show-space"]');
-  await until(() => run('Boolean(document.querySelector("[data-action=clipboard-toggle]"))'), "Space note entry");
-  for (const [width, height] of [[760, 560], [560, 720], [1440, 750]]) {
+  await until(() => run(`Boolean(document.querySelector(${JSON.stringify(workbenchButton)}))`), "Space workbench entry");
+  for (const [width, height] of [[760, 560], [560, 720], wideViewport()]) {
     window.setContentSize(width, height);
-    await until(() => run(`innerWidth === ${width} && innerHeight === ${height}`), "resized viewport");
-    await assertNotePlacement(uploadControl);
+    await until(() => run(`Math.abs(innerWidth - ${width}) <= 1 && Math.abs(innerHeight - ${height}) <= 1`), "resized viewport");
+    await assertWorkbenchPlacement(uploadControl);
     for (const theme of ["light", "dark"]) {
       nativeTheme.themeSource = theme;
       await until(() => run(`matchMedia("(prefers-color-scheme: dark)").matches === ${theme === "dark"}`), "system theme");
       for (const panel of ["assistant", "note"]) {
-        await click(panel === "assistant" ? assistantButton : noteButton);
+        const bannerRight = await run('document.querySelector(".space-files-page > .wanx-section-banner").getBoundingClientRect().right');
+        await click(assistantButton);
+        if (panel === "note") await click(noteButton);
         await waitForPanel(panel);
         if (panel === "note") {
-          await until(() => run('getComputedStyle(document.querySelector("#super-clipboard")).opacity === "1"'), "note animation");
+          assert.equal(await run('Boolean(document.querySelector("#academy-note > #super-clipboard"))'), true);
         }
-        await assertNotePlacement(uploadControl);
-        const geometry = await run("(" + function(panel) {
-          const element = document.querySelector(panel === "assistant" ? "#academy-drawer" : "#super-clipboard");
+        await until(() => run(`Math.abs(document.querySelector("#academy-drawer").getBoundingClientRect().top -
+          document.querySelector(".topbar").getBoundingClientRect().bottom) <= 1`), "sidebar aligned after resize");
+        const geometry = await run("(" + function() {
+          const element = document.querySelector("#academy-drawer");
           const bounds = element.getBoundingClientRect();
           const topbar = document.querySelector(".topbar").getBoundingClientRect();
           const banner = document.querySelector('.wanx-section-banner[data-section="space"]').getBoundingClientRect();
@@ -414,20 +424,29 @@ async function verifyAppearance() {
           for (let y = bounds.top + 2; y < bounds.bottom - 2; y += 20) {
             uninterrupted.push(element.contains(document.elementFromPoint(x, y)));
           }
-          return { top: bounds.top, bottom: bounds.bottom, headerBottom: topbar.bottom,
-            bannerBottom: banner.bottom, viewportBottom: innerHeight, uninterrupted };
-        } + ")(" + JSON.stringify(panel) + ")");
+          const tabs = document.querySelector("#academy-tabs").getBoundingClientRect();
+          const close = document.querySelector("#academy-close").getBoundingClientRect();
+          return { top: bounds.top, bottom: bounds.bottom, left: bounds.left, headerBottom: topbar.bottom,
+            bannerBottom: banner.bottom, bannerRight: banner.right, viewportBottom: innerHeight,
+            viewportWidth: innerWidth, tabsEndBeforeClose: tabs.right <= close.left, uninterrupted };
+        } + ")()");
         if (process.env.WANX_SIDEBAR_SCREENSHOTS) {
+          await run("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
           await mkdir(process.env.WANX_SIDEBAR_SCREENSHOTS, { recursive: true });
           await writeFile(join(process.env.WANX_SIDEBAR_SCREENSHOTS,
             `fixture-space-${width}x${height}-${theme}-${panel}.png`), (await window.webContents.capturePage()).toPNG());
         }
         assert(geometry.bannerBottom > geometry.headerBottom + 40, "the Space banner is present in the fixture");
-        const expectedTop = geometry.headerBottom + (panel === "note" ? 10 : 0);
+        const expectedTop = geometry.headerBottom;
         assert(Math.abs(geometry.top - expectedTop) <= 1,
           `${panel} starts below the global navigation, not below the Space banner: ${JSON.stringify(geometry)}`);
         assert(geometry.top < geometry.bannerBottom, "the Space banner cannot truncate the right sidebar");
-        assert(Math.abs(geometry.bottom - geometry.viewportBottom + (panel === "note" && width > 600 ? 12 : 0)) <= 1,
+        if (geometry.viewportWidth < 1320) {
+          assert(Math.abs(geometry.bannerRight - bannerRight) <= 1, "Space keeps its normal banner width under the sidebar");
+          assert(geometry.bannerRight > geometry.left, "the sidebar can cover the right side of the banner");
+        }
+        assert(geometry.tabsEndBeforeClose, "the tab group and close button do not overlap");
+        assert(Math.abs(geometry.bottom - geometry.viewportBottom) <= 1,
           "the sidebar continues to the bottom of the viewport");
         assert(geometry.uninterrupted.every(Boolean), "no toolbar, divider or file panel cuts through the sidebar");
         await until(() => run('document.querySelector("#academy-edge-handle img")?.complete === true'), "WANX Logo loading");
@@ -449,34 +468,33 @@ async function verifyAppearance() {
         assert(Math.abs(logo.offsetX) <= 1 && Math.abs(logo.offsetY) <= 1, "the Logo stays centered in the entry");
         assert.equal(logo.visible, true);
         assert.notEqual(logo.background, "rgba(0, 0, 0, 0)", "the Logo has a solid contrasting surface in either system theme");
-        await click(panel === "assistant" ? assistantButton : '[data-clip="close"]');
+        await click("#academy-close");
         await waitForPanel(null);
       }
     }
   }
   await click('[data-action="space-mkdir"]');
   await until(() => run('Boolean(document.querySelector(".space-dialog"))'), "Space folder dialog");
-  const noteBlocked = 'Boolean(document.querySelector(".wanx-section-actions [data-action=clipboard-toggle]:disabled, .wanx-section-actions[inert] [data-action=clipboard-toggle]"))';
-  assert.equal(await run(noteBlocked), true);
+  assert.equal(await run('Boolean(document.querySelector(".wanx-section-actions[inert] [data-action=space-workbench]"))'), true);
   assert.equal(await run('document.querySelector("#academy-edge-handle").hidden'), true);
   await click('[data-action="space-dialog-close"]');
-  await until(() => run(`!${noteBlocked} && !document.querySelector("#academy-edge-handle").hidden`), "sidebar entries after closing the dialog");
+  await until(() => run('!document.querySelector("#academy-edge-handle").hidden'), "sidebar entry after closing the dialog");
+  await click(assistantButton);
   await click(noteButton);
   await waitForPanel("note");
-  await until(() => run('getComputedStyle(document.querySelector("#super-clipboard")).opacity === "1"'), "note animation after the dialog");
-  await click('[data-clip="close"]');
+  await click("#academy-close");
   await waitForPanel(null);
   nativeTheme.themeSource = "system";
   window.setContentSize(760, 560);
   await until(() => run("innerWidth === 760"), "initial viewport");
-  await click('[data-action="show-applications"]');
-  await until(() => run('!document.querySelector("[data-action=clipboard-toggle]")'), "initial Applications page");
+  await click('[data-action="show-my-ai"]');
+  await until(() => run('!document.querySelector(".space-files-page")'), "initial Applications page");
 }
 
 async function verifySwitching() {
   assert.equal(await run('Boolean(document.querySelector("[data-action=clipboard-toggle]"))'), false);
   await click('[data-action="show-space"]');
-  await until(() => run('Boolean(document.querySelector("[data-action=clipboard-toggle]"))'), "Space note entry");
+  await until(() => run(`Boolean(document.querySelector(${JSON.stringify(workbenchButton)}))`), "Space workbench entry");
   await click(assistantButton);
   await waitForPanel("assistant");
   await until(() => run('document.querySelector("#academy-drawer [data-chat-input]")?.disabled === false'), "dialogue input");
@@ -484,7 +502,7 @@ async function verifySwitching() {
   if (expectAcademyBridge) {
     await until(() => run('document.querySelector("#academy-page-help")?.hidden === false'), "default-on help");
     assert.equal(await run('document.querySelector("#academy-help-toggle").getAttribute("aria-pressed")'), "true");
-    assert.equal(await run('document.querySelector("#academy-close-page-help").getAttribute("aria-label")'), "关闭万象帮助");
+    assert.equal(await run('document.querySelector("#academy-close-page-help").getAttribute("aria-label")'), "关闭记忆盒子帮助");
     await click("#academy-close-page-help");
     assert.equal(await run('document.querySelector("#academy-page-help").hidden'), true);
     assert.equal(await run('document.activeElement.id'), "academy-help-toggle");
@@ -498,12 +516,13 @@ async function verifySwitching() {
       "#academy-help-toggle, #academy-page-help, #academy-tab-academy"
     )).every(element => element.getClientRects().length === 0)`), true);
   }
-  await assertNotePlacement(uploadControl);
-  await click(noteButton);
+  await run('document.querySelector("#academy-tab-assistant").focus()');
+  await key("ArrowRight");
   await waitForPanel("note");
+  assert.equal(await run("document.activeElement.id"), "academy-tab-note");
   await waitForEditor();
   await holdNoteSave("便签文字和小助理草稿独立保存");
-  await click(assistantButton);
+  await click(assistantTab);
   assert.equal(await shown("note"), true, "stay on the note until the pending local save succeeds");
   releaseSave();
   await waitForPanel("assistant");
@@ -515,23 +534,23 @@ async function verifySwitching() {
   assert.equal(await noteText(), "便签文字和小助理草稿独立保存");
   await key("Escape");
   await waitForPanel(null);
-  assert.equal(await run('document.activeElement.matches("[data-action=clipboard-toggle]")'), true);
+  assert.equal(await run('document.activeElement.id'), "academy-edge-handle");
 
-  window.setContentSize(1440, 750);
-  await until(() => run("innerWidth >= 1320"), "wide viewport");
+  const [wideWidth, wideHeight] = wideViewport();
+  window.setContentSize(wideWidth, wideHeight);
+  await until(() => run(`Math.abs(innerWidth - ${wideWidth}) <= 1`), "wide viewport");
   await click(assistantButton);
   await waitForPanel("assistant");
-  assert.equal(await run('parseFloat(getComputedStyle(document.querySelector("#app")).paddingRight) > 0'), true);
-  await assertNotePlacement(uploadControl);
+  assert.equal(await run('parseFloat(getComputedStyle(document.querySelector("#app")).paddingRight) > 0'), wideWidth >= 1320);
   await click(noteButton);
   await waitForPanel("note");
   await waitForEditor();
-  assert.equal(await run('getComputedStyle(document.querySelector("#app")).paddingRight'), "0px");
+  assert.equal(await run('parseFloat(getComputedStyle(document.querySelector("#app")).paddingRight) > 0'), wideWidth >= 1320);
 }
 
 async function verifySaveFailure() {
   await holdNoteSave("本机保存失败时仍留在便签");
-  await click(assistantButton);
+  await click(assistantTab);
   releaseSave("SECURE_STORAGE_WRITE_FAILED");
   await until(
     () => run('document.querySelector(".clipboard-note-error").textContent.includes("本机草稿保存失败")'),
@@ -539,7 +558,7 @@ async function verifySaveFailure() {
   );
   assert.equal(await shown("note"), true);
   assert.equal(await noteText(), "本机保存失败时仍留在便签");
-  await click(assistantButton);
+  await click(assistantTab);
   await waitForPanel("assistant");
   assert.deepEqual(noteBlocks, [{ type: "text", text: "本机保存失败时仍留在便签" }]);
 
@@ -547,15 +566,15 @@ async function verifySaveFailure() {
   await waitForPanel("note");
   await waitForEditor();
   await holdNoteSave("离开空间时保留未保存的便签");
-  await click('[data-action="show-applications"]');
+  await click('[data-action="show-my-ai"]');
   releaseSave("SECURE_STORAGE_WRITE_FAILED");
-  await waitForPanel(null);
+  await until(() => run('document.querySelector(".clipboard-note-error").textContent.includes("本机草稿保存失败")'), "save error after navigation");
+  await waitForPanel("note");
   await click('[data-action="show-space"]');
-  await click(noteButton);
   await waitForPanel("note");
   await waitForEditor();
   assert.equal(await noteText(), "离开空间时保留未保存的便签");
-  await click(assistantButton);
+  await click(assistantTab);
   await waitForPanel("assistant");
   assert.deepEqual(noteBlocks, [{ type: "text", text: "离开空间时保留未保存的便签" }]);
 }
@@ -570,7 +589,7 @@ async function verifyCompositionAndLatestIntent() {
   await key("Escape", { isComposing: true });
   await key("K", { ctrlKey: true, shiftKey: true, isComposing: true });
   assert.equal(await shown("note"), true, "IME shortcuts must leave the editor open");
-  await run('document.querySelector("#academy-edge-handle").click()');
+  await run('document.querySelector("#academy-tab-assistant").click()');
   assert.equal(await shown("note"), true, "switching must wait for the current composition");
   assert.equal(noteWrites.length, previousWrites, "do not save unfinished composition");
   await keyboard.sendCommand("Input.insertText", { text: "输入法" });
@@ -581,7 +600,7 @@ async function verifyCompositionAndLatestIntent() {
   await waitForPanel("note");
   await waitForEditor();
   await holdNoteSave("快速切换以后保存");
-  await click(assistantButton);
+  await click(assistantTab);
   await key("Escape");
   releaseSave();
   await waitForPanel(null);
@@ -590,6 +609,12 @@ async function verifyCompositionAndLatestIntent() {
 }
 
 async function verifyHandoffAndOffline() {
+  await click(assistantButton);
+  await waitForPanel("assistant");
+  assert.equal(await run('document.querySelector("#academy-drawer .ai-composer-more") === null'), true);
+  assert.equal(await run(`document.querySelectorAll(
+    '#academy-drawer [data-chat-action="transcribe-file"], #academy-drawer [data-chat-action="generate-image"]'
+  ).length`), 0);
   await enterDraft("");
   await click(noteButton);
   await waitForPanel("note");
@@ -619,20 +644,23 @@ async function verifyHandoffAndOffline() {
   await waitForPanel(null);
   assert.equal(await run('document.activeElement.id'), "academy-edge-handle");
 
+  await click(assistantButton);
   await click(noteButton);
   await waitForPanel("note");
   await key("K", { metaKey: true, shiftKey: true });
-  await waitForPanel("assistant");
-  await click('[data-action="show-applications"]');
-  await until(() => run('!document.querySelector("[data-action=clipboard-toggle]")'), "Space-only note entry");
-  assert.equal(await shown("assistant"), true, "assistant remains available after leaving Space");
+  await waitForPanel(null);
+  await click('[data-action="show-my-ai"]');
+  await click(assistantButton);
+  await click(noteButton);
+  await waitForPanel("note");
+  assert.equal(await run('Boolean(document.querySelector("#academy-note > #super-clipboard"))'), true);
 
   hostState = { ...baseState, phase: "idle", connection: null };
   send("state", hostState);
   await click('[data-action="show-space"]');
   await until(() => run('document.querySelector(".space-connect") !== null'), "offline Space");
-  await assertNotePlacement(connectControl);
-  await click(noteButton);
+  assert.equal(await run(`Boolean(document.querySelector(".wanx-section-actions " + ${JSON.stringify(connectControl)}))`), true);
+  assert.equal(await run(`document.querySelector(${JSON.stringify(workbenchButton)}).disabled`), true);
   await waitForPanel("note");
   await waitForEditor();
   assert.equal(await noteText(), "快速切换以后保存");
@@ -640,7 +668,7 @@ async function verifyHandoffAndOffline() {
 
 async function verifyAccountSwitch() {
   await holdNoteSave("切换账号前的草稿");
-  await click(assistantButton);
+  await click(assistantTab);
   assert.equal(await shown("note"), true);
   hostState = { ...baseState, account: { ...baseState.account, accountId: "other-owner" } };
   send("state", hostState);
@@ -685,12 +713,16 @@ async function verify() {
     await until(() => run('Boolean(document.querySelector("[data-action=show-space]"))'), "main navigation");
     await run("(" + function() {
       window.activeSidebar = () => {
-        const assistant = document.querySelector("#academy-drawer");
+        const drawer = document.querySelector("#academy-drawer");
+        const assistant = document.querySelector("#academy-assistant");
+        const notePanel = document.querySelector("#academy-note");
         const note = document.querySelector("#super-clipboard");
         const open = element => element && !element.hidden && !element.inert;
-        if (open(assistant) && open(note)) return "both";
+        if (!open(drawer)) return null;
+        const noteOpen = open(notePanel) && open(note);
+        if (open(assistant) && noteOpen) return "both";
         if (open(assistant)) return "assistant";
-        if (open(note)) return "note";
+        if (noteOpen) return "note";
         return null;
       };
       window.overlapSeen = false;
@@ -698,6 +730,8 @@ async function verify() {
         if (window.activeSidebar() === "both") window.overlapSeen = true;
       }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ["hidden", "inert"], childList: true });
     } + ")()");
+    send("navigate", "applications");
+    await until(() => run('Boolean(document.querySelector("#applications-panel-wanx"))'), "Applications test view");
     await verifyWorkshopTab();
     await verifyMergedExpertApps();
     await verifyAppearance();

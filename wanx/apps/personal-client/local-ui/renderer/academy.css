@@ -1,8 +1,6 @@
 body {
   --academy-drawer-width: 420px;
 }
-.wanx-section-actions [data-action="clipboard-toggle"] { -webkit-app-region: no-drag; }
-
 #academy-drawer {
   --line: #e6dacb;
   --muted: #6f5e50;
@@ -23,12 +21,32 @@ body {
   font: 14px/1.5 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 #academy-drawer[hidden], #academy-edge-handle[hidden], #academy-drawer [hidden] { display: none !important; }
-#academy-assistant, #academy-dialogue, #academy-dialogue-host {
+#academy-assistant, #academy-dialogue, #academy-dialogue-host, #academy-note {
   display: flex;
   flex: 1 1 auto;
   min-inline-size: 0;
   min-block-size: 0;
 }
+#academy-note .clipboard-notepad {
+  position: relative;
+  inset: auto;
+  z-index: auto;
+  flex: 1;
+  inline-size: 100%;
+  min-inline-size: 0;
+  min-block-size: 0;
+  border: 0;
+  border-radius: 0;
+  background: inherit;
+  box-shadow: none;
+  transform: none;
+  opacity: 1;
+  transition: none;
+  pointer-events: auto;
+}
+#academy-note .clipboard-header h2,
+#academy-note .clipboard-header [data-clip="close"] { display: none; }
+#academy-note .clipboard-connection { margin: 0; }
 #academy-edge-handle {
   position: fixed;
   z-index: 9;
@@ -56,20 +74,6 @@ body {
 #academy-edge-handle:focus-visible { outline: 2px solid #875032; outline-offset: -3px; }
 #academy-edge-handle[aria-expanded="true"] { inset-inline-end: min(var(--academy-drawer-width), calc(100% - 30px)); }
 body.space-note-open #academy-edge-handle { inset-inline-end: calc(var(--space-note-width) + var(--space-note-gap)); }
-
-/* Keep the Space actions reachable beside the full-height sidebar. */
-body:is(.academy-drawer-open, .space-note-open) .space-files-page > .wanx-section-banner { flex-wrap: wrap; }
-body:is(.academy-drawer-open, .space-note-open) .space-files-page .wanx-section-actions {
-  margin-inline-start: auto;
-  max-inline-size: 100%;
-  flex-wrap: wrap;
-}
-body.space-note-open .space-files-page > .wanx-section-banner {
-  margin-inline-end: calc(var(--space-note-width) + var(--space-note-gap));
-}
-@media (width < 1320px) {
-  body.academy-drawer-open .space-files-page > .wanx-section-banner { margin-inline-end: var(--academy-drawer-width); }
-}
 
 @media (min-width: 1320px) {
   body.academy-drawer-open #app { padding-inline-end: var(--academy-drawer-width); }
@@ -206,41 +210,60 @@ body.space-note-open .space-files-page > .wanx-section-banner {
 
   .academy-toolbar {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, max-content) auto;
+    justify-content: space-between;
     align-items: center;
-    gap: 6px;
-    padding: 8px 9px;
-    border-bottom: 1px solid var(--line);
-    background: #fcf5eb;
+    gap: 10px;
+    padding: 10px 14px;
+    border-bottom: 1px solid #ece2d6;
+    background: #fffaf3;
   }
   .academy-icon-button {
-    width: 32px;
+    display: grid;
+    place-items: center;
+    inline-size: 30px;
+    block-size: 30px;
+    min-block-size: 0;
     padding: 0;
+    border-radius: 50%;
     background: transparent;
     color: var(--muted);
-    font-size: 22px;
+    font-size: 20px;
     line-height: 1;
   }
-  .academy-icon-button:hover { background: var(--soft); }
+  .academy-icon-button:hover { background: #f1e7da; color: var(--accent-deep); }
 
   .academy-tabs {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 4px;
+    display: flex;
+    gap: 2px;
+    min-inline-size: 0;
+    padding: 3px;
+    border: 1px solid #eee1d1;
+    border-radius: 999px;
+    background: #f4ebdf;
   }
   .academy-tabs button {
+    flex: 0 1 auto;
+    min-block-size: 30px;
     min-inline-size: 0;
-    padding: 5px 2px;
+    padding: 4px 13px;
+    border-radius: 999px;
     background: transparent;
     color: var(--muted);
     font-size: 13px;
+    font-weight: 500;
+    line-height: 1.4;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
-  .academy-tabs button:hover { background: #fbf5ed; }
+  .academy-tabs button:hover { background: #fbf5eb; color: var(--accent-deep); }
   .academy-tabs button[aria-selected="true"] {
-    border-color: var(--line);
-    background: var(--soft);
+    border-color: #e8d8c7;
+    background: #fffdf9;
     color: var(--accent-deep);
     font-weight: 650;
+    box-shadow: 0 1px 2px #66462b18;
   }
   .content-panel {
     min-height: 0;

@@ -175,6 +175,22 @@ class VoiceManager:
             kind in {"openai", "tencent", "mimo"},
         )
 
+    def stt_model_catalog(self) -> dict:
+        """List usable server-side transcription configurations."""
+        active = self.get_active()["stt"]
+        models = []
+        default_ref = None
+        for row in self._repo.list_all():
+            kind = row.name if is_builtin_preset(row.name) else row.kind
+            if _stt_availability(ResolvedVoiceProvider(row.name, kind, row)) != "ready":
+                continue
+            extra = row.get_extra()
+            name = extra.get("model") if kind == "openai" else None
+            models.append({"provider_name": row.name, "model": kind, "name": name or kind})
+            if row.name == active:
+                default_ref = f"{row.name}/{kind}"
+        return {"models": models, "defaultRef": default_ref}
+
     async def transcribe(
         self,
         audio: bytes,

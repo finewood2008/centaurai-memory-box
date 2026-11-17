@@ -1,4 +1,4 @@
-"""Text model access for the WANX personal memory workspace."""
+"""Model discovery and text completion for the WANX personal memory workspace."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from dataclasses import replace
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 
@@ -26,7 +27,15 @@ class MemoryCompletion(BaseModel):
 
 
 def create_memory_model_router(
-    *, current_user, get_server, application_id, providers, build_chat_model, close_clients, text_content
+    *,
+    current_user,
+    get_server,
+    application_id,
+    providers,
+    build_chat_model,
+    close_clients,
+    text_content,
+    model_inventory=None,
 ):
     router = APIRouter(prefix="/api/wanx/memory-model", tags=["wanx-memory"])
 
@@ -44,8 +53,23 @@ def create_memory_model_router(
 
     @router.get("")
     def status(user=Depends(current_user), server=Depends(get_server)):
-        provider, model = select(server, user)
-        return {"model": model.id, "name": model.name or model.id, "provider": provider.name or provider.id}
+        try:
+            provider, model = select(server, user)
+        except HTTPException as exc:
+            if exc.status_code != 409 or model_inventory is None:
+                raise
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"detail": exc.detail, "capabilities": model_inventory(server)},
+            )
+        result = {
+            "model": model.id,
+            "name": model.name or model.id,
+            "provider": provider.name or provider.id,
+        }
+        if model_inventory is not None:
+            result["capabilities"] = model_inventory(server)
+        return result
 
     @router.post("/complete")
     async def complete(request: Request, user=Depends(current_user), server=Depends(get_server)):

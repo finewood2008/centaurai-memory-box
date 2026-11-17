@@ -5,6 +5,7 @@
     <header class="academy-toolbar">
       <div id="academy-tabs" class="academy-tabs" role="tablist" aria-label="AI 助手板块">
         <button id="academy-tab-assistant" role="tab" aria-selected="true" aria-controls="academy-assistant" type="button">小助理</button>
+        <button id="academy-tab-note" role="tab" aria-selected="false" aria-controls="academy-note" tabindex="-1" type="button">便签</button>
         <button id="academy-tab-academy" role="tab" aria-selected="false" aria-controls="academy-resources" tabindex="-1" type="button">半人马AI学院</button>
       </div>
       <button id="academy-close" class="academy-icon-button" type="button" aria-label="收起 AI 助手" title="收起 AI 助手">×</button>
@@ -14,6 +15,8 @@
         <div id="academy-dialogue-host"></div>
       </section>
     </section>
+
+    <section id="academy-note" role="tabpanel" aria-labelledby="academy-tab-note" hidden></section>
 
     <section id="academy-resources" class="content-panel" role="tabpanel" aria-labelledby="academy-tab-academy" tabindex="0" hidden>
       <section class="resource-card">
@@ -71,7 +74,7 @@
     return lines.join("\n");
   }
 
-  window.createAcademyDrawer = ({ root, request, onSuggestion, onOpenChange, onTabChange, onVisibilityRequest }) => {
+  window.createAcademyDrawer = ({ root, request, onSuggestion, onOpenChange, onTabChange, onSectionRequest, onVisibilityRequest }) => {
     if (!root) return;
     const app = document.getElementById("app");
     const drawer = document.createElement("aside");
@@ -215,7 +218,12 @@
       onTabChange?.(section);
     }
 
-    for (const tab of buttons) tab.addEventListener("click", () => selectPanel(tabSection(tab)));
+    function requestSection(next) {
+      if (onSectionRequest) onSectionRequest(next);
+      else open(next);
+    }
+
+    for (const tab of buttons) tab.addEventListener("click", () => requestSection(tabSection(tab)));
     tabs.addEventListener("keydown", event => {
       const index = buttons.indexOf(event.target);
       if (index < 0 || event.altKey || event.ctrlKey || event.metaKey) return;
@@ -226,8 +234,7 @@
       else if (event.key === "End") next = buttons.at(-1);
       if (!next) return;
       event.preventDefault();
-      selectPanel(tabSection(next));
-      next.focus();
+      requestSection(tabSection(next));
     });
 
     function paintVisibility(wasVisible) {
@@ -244,7 +251,7 @@
 
     function open(next) {
       if (!available || (opened && !next)) return;
-      const nextSection = request && next === "academy" ? "academy" : "assistant";
+      const nextSection = next === "note" || (next === "academy" && request) ? next : "assistant";
       if (opened && section === nextSection) return;
       const wasVisible = visible();
       selectPanel(nextSection);
@@ -344,11 +351,13 @@
       sync, formatPageHelp,
       isPageHelpEnabled: () => pageHelpEnabled,
       dialogueHost: () => $("dialogue-host"),
+      noteHost: () => $("note"),
       mountPageHelp(anchor, actions) {
         if (anchor && pageHelpControl.nextElementSibling !== anchor) anchor.before(pageHelpControl);
         if (actions && helpToggle.parentElement !== actions) actions.append(helpToggle);
       },
       isDialogueVisible: () => visible() && section === "assistant",
+      isNoteVisible: () => visible() && section === "note",
     };
   };
 })();

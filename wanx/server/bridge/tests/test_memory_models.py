@@ -87,3 +87,48 @@ def test_memory_model_local_trust_routes_are_host_only():
         classify_octop("POST", route + "/complete", "http", "centaurai.wanx.dialogue")
     with pytest.raises(DataProtocolError):
         classify_octop("GET", route + "?model=other", "http", "wanx-host")
+
+
+def test_media_model_catalog_is_available_without_a_default_text_model():
+    services = SimpleNamespace(
+        settings_repo=SimpleNamespace(get_active_model=lambda: (None, None)),
+        provider_repo=object(),
+    )
+    capabilities = {
+        "asr": {
+            "models": [{"provider_name": "voice", "model": "mimo", "name": "mimo"}],
+            "defaultRef": "voice/mimo",
+        },
+        "image_generation": {
+            "models": [{"provider_name": "images", "model": "draw", "name": "draw"}],
+            "defaultRef": "images/draw",
+        },
+    }
+    calls = []
+
+    def inventory(server):
+        calls.append(server)
+        return capabilities
+
+    app = FastAPI()
+    app.include_router(create_memory_model_router(
+        current_user=lambda request: request,
+        get_server=lambda: SimpleNamespace(services=services),
+        application_id=lambda identity: identity,
+        providers=lambda _: SimpleNamespace(build_harness_configs=lambda: []),
+        build_chat_model=None,
+        close_clients=None,
+        text_content=None,
+        model_inventory=inventory,
+    ))
+    client = TestClient(app)
+    route = "/api/wanx/memory-model"
+    assert client.get(route, params={"request": "other"}).status_code == 403
+    assert not calls
+    response = client.get(route, params={"request": "wanx"})
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": "MEMORY_MODEL_NOT_CONFIGURED",
+        "capabilities": capabilities,
+    }
+    assert len(calls) == 1

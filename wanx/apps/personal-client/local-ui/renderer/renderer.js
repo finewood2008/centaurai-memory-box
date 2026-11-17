@@ -304,8 +304,9 @@ academyDrawer = window.createAcademyDrawer?.({
   root: document.querySelector("#academy-drawer-root"),
   request: academyApi && ((method, input) => academyApi.action(method, input)),
   onSuggestion: text => aiDialogueView?.fillSuggestion(text),
-  onOpenChange: syncAcademyDialogue,
-  onTabChange: syncAcademyDialogue,
+  onOpenChange: syncAcademyContents,
+  onTabChange: syncAcademyContents,
+  onSectionRequest: section => void requestSidebar(true, { section }),
   onVisibilityRequest: requestAssistantSidebar,
 });
 const noteSidebar = window.wanxClipboard;
@@ -316,33 +317,24 @@ let pendingDialogueOpen = false;
 let pendingDialogueHandoff = null;
 let sidebarIntent = null;
 
-async function requestSidebar(panel, { restoreFocus = true, section, handoff } = {}) {
-  if (panel === "assistant" && !academyAvailable) return;
-  if (panel === "note" && (page !== "space" || !academyAvailable)) return;
+async function requestSidebar(show, { restoreFocus = true, section, handoff } = {}) {
+  if (show && (!academyAvailable || academyDrawer?.isAvailable?.() === false)) return;
 
-  const intent = { panel };
+  const intent = { show };
   sidebarIntent = intent;
   try {
-    if (panel === "note") {
-      academyDrawer?.close?.({ restoreFocus: false });
-      noteSidebar?.open?.();
-      return;
-    }
-
-    const noteWasOpen = noteSidebar?.isOpen?.();
-    if (noteWasOpen || panel === "assistant") {
-      const closed = noteSidebar?.close?.({
-        immediate: panel === "assistant",
-        restoreFocus: panel === null && restoreFocus,
+    if (noteSidebar?.isOpen?.() && (!show || section !== "note")) {
+      const closed = await noteSidebar.close({
+        immediate: true,
+        restoreFocus: false,
         shouldClose: () => sidebarIntent === intent,
       });
-      if (noteWasOpen && !(await closed)) return;
-      if (sidebarIntent !== intent) return;
+      if (!closed || sidebarIntent !== intent) return;
     }
 
-    if (panel === "assistant") {
+    if (show) {
       if (!academyAvailable) return;
-      academyDrawer?.open(section);
+      academyDrawer?.open(section ?? "assistant");
       if (handoff) aiDialogueView?.event(handoff);
     } else {
       academyDrawer?.close?.({ restoreFocus });
@@ -353,17 +345,17 @@ async function requestSidebar(panel, { restoreFocus = true, section, handoff } =
 }
 
 function requestAssistantSidebar(show) {
-  const selected = sidebarIntent ? sidebarIntent.panel === "assistant" : academyDrawer?.isOpen?.();
-  void requestSidebar((show ?? !selected) ? "assistant" : null);
+  const selected = sidebarIntent?.show ?? academyDrawer?.isOpen?.();
+  void requestSidebar(show ?? !selected);
 }
 
 function requestNoteSidebar(show, options) {
-  const selected = sidebarIntent ? sidebarIntent.panel === "note" : noteSidebar?.isOpen?.();
-  if (show ?? !selected) void requestSidebar("note");
-  else if (selected || noteSidebar?.isOpen?.()) void requestSidebar(null, options);
+  if (show ?? !noteSidebar?.isOpen?.()) return requestSidebar(true, { section: "note" });
+  return requestSidebar(false, options);
 }
 
-function syncAcademyDialogue() {
+function syncAcademyContents() {
+  if (academyDrawer?.isNoteVisible?.()) noteSidebar?.open?.({ focus: false });
   const visible = academyDrawer?.isDialogueVisible() === true;
   if (visible && !academyDialogueMounted) {
     const host = academyDrawer.dialogueHost();
@@ -380,7 +372,7 @@ function openAcademyDialogue(handoff) {
     pendingDialogueHandoff = handoff ?? pendingDialogueHandoff;
     return;
   }
-  void requestSidebar("assistant", { section: "dialogue", handoff });
+  void requestSidebar(true, { section: "dialogue", handoff });
 }
 
 function getAcademyContext() {
@@ -409,6 +401,7 @@ function resolveAcademyPageHelp() {
 
 function syncAcademyContext(available) {
   academyAvailable = available;
+  noteSidebar?.setActive?.(available);
   academyDrawer?.setAvailable(available);
   if (!available) {
     academyContextKey = "";
@@ -431,9 +424,7 @@ function syncAcademyContext(available) {
 function syncAcademyModal() {
   const blocked = Boolean(app.querySelector?.('[aria-modal="true"], dialog[open]'));
   academyDrawer?.setBlocked(blocked);
-  const noteEntry = app.querySelector?.('.wanx-section-actions [data-action="clipboard-toggle"]');
-  if (noteEntry) noteEntry.disabled = blocked;
-  syncAcademyDialogue();
+  syncAcademyContents();
 }
 
 const dialogueModelSettings = window.createDialogueModelSettingsView?.({
@@ -3147,6 +3138,9 @@ app.addEventListener("submit", async (event) => {
 });
 
 function acceptRemoteState(state) {
+  const noteWasOpen = noteSidebar?.isOpen?.();
+  noteSidebar?.hostState?.(state);
+  if (noteWasOpen && !noteSidebar.isOpen()) academyDrawer?.close?.({ restoreFocus: false });
   window.wanxSpace?.hostState(state);
   const cloudAuthenticated = state.dataIdentity?.profileId ? state.account?.phase === "authenticated" : state.route !== "auth";
   const creditsIdentity = cloudAuthenticated ? JSON.stringify([state.account.accountId, state.account.clientId]) : null;
@@ -3280,7 +3274,7 @@ window.wanxSetup?.onReady?.(() => {
   }).catch(() => {});
 });
 window.wanxSpace?.bind({ compactActions: true, render: () => { if (currentState && ["space", "boxes"].includes(page)) render(currentState); } });
-noteSidebar?.bindSidebar?.(requestNoteSidebar);
+noteSidebar?.bindSidebar?.(requestNoteSidebar, academyDrawer?.noteHost?.());
 window.wanxClient.getLocalState().then(acceptRemoteState);
 
 app.addEventListener("error", event => {

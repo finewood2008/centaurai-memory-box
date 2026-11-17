@@ -406,6 +406,7 @@ test("memory uses the selected WANX box by default and supports a persisted cust
     { provider_name: "test", model: "visual-only", input: ["image"] },
   ];
   let supportsRouting = false;
+  let hasTextModel = true;
   const calls = [];
   const client = {
     snapshot: () => state,
@@ -415,18 +416,24 @@ test("memory uses the selected WANX box by default and supports a persisted cust
         if (input.path === "/api/providers/resolved") return { status: 200, body: JSON.stringify(catalog) };
         if (input.path === "/api/providers/active-model")
           return { status: 200, body: JSON.stringify({ provider_name: "test", model: "summary" }) };
-        const capabilities = supportsRouting ? Object.fromEntries(
+        if (input.path !== "/api/wanx/memory-model" && input.path !== "/api/wanx/memory-model/complete")
+          return { status: 404 };
+        const capabilities = supportsRouting && hasTextModel ? Object.fromEntries(
           ["memory_summary", "memory_evolution"].map(role => [role, {
             defaultRef: "test/summary", models: catalog.slice(0, 2),
-          }])) : undefined;
-        if (capabilities) {
+          }])) : {};
+        if (supportsRouting) {
           capabilities.asr = { defaultRef: "voice/speech", models: [{ provider_name: "voice", model: "speech", input: ["audio"] }] };
           capabilities.image_generation = { defaultRef: null, models: [{ provider_name: "image", model: "draw" }] };
         }
         return {
-          status: 200,
+          status: input.method === "GET" && !hasTextModel ? 409 : 200,
           body: JSON.stringify(input.method === "GET"
-            ? { model: defaultModel, name: defaultModel, provider: "test", capabilities } : { text: "result" }),
+            ? {
+              ...(hasTextModel ? { model: defaultModel, name: defaultModel, provider: "test" }
+                : { detail: "MEMORY_MODEL_NOT_CONFIGURED" }),
+              capabilities,
+            } : { text: "result" }),
         };
       },
     }),
@@ -494,6 +501,16 @@ test("memory uses the selected WANX box by default and supports a persisted cust
     messages, max_tokens: 256, json_mode: true, role: "memory_evolution", model_ref: "test/evolution",
   });
 
+  hasTextModel = false;
+  const countBeforeMediaOnly = calls.length;
+  const mediaOnly = await settings();
+  assert.equal(mediaOnly.error, "MEMORY_MODEL_NOT_CONFIGURED");
+  assert.equal(mediaOnly.roles.memory_summary.ready, false);
+  assert.equal(mediaOnly.inventory.asr.defaultModel.ref, "voice/speech");
+  assert.equal(mediaOnly.inventory.image_generation.models[0].ref, "image/draw");
+  assert.ok(!calls.slice(countBeforeMediaOnly).some(call =>
+    ["/api/voice/stt/capability", "/api/admin/media-generation"].includes(call.path)));
+
   state = { ...state, phase: "disconnected", connection: null };
   workspace.sync();
   assert.equal((await complete(descriptor.token)).status, 403);
@@ -510,6 +527,8 @@ test("box model assignments save from displayed candidates and survive restartin
   const preferenceFile = path.join(root, "model-source");
   const summary = "admin-managed-deepseek/deepseek-flash";
   const evolution = "admin-managed-deepseek/deepseek-v4-pro";
+  const asr = "voice/openai";
+  const image = "images/image-model";
   const catalog = ["deepseek-flash", "deepseek-v4-pro"].map(model => ({ provider_name: "admin-managed-deepseek", model }));
   let state = { ...signedIn("one"), phase: "ready", connection: { deviceId: "old-box", gatewayURL: "https://box" } };
   let failReads = false;
@@ -517,11 +536,27 @@ test("box model assignments save from displayed candidates and survive restartin
   const client = {
     snapshot: () => state,
     applicationConnection: async () => ({
-      async request({ path }) {
+      async request({ path, method }) {
         requests++;
+        assert.equal(method, "GET");
         if (failReads) throw new Error("box transport interrupted");
-        return path === "/api/providers/resolved"
-          ? { status: 200, body: JSON.stringify(catalog) } : { status: 404 };
+        if (path === "/api/providers/resolved") return { status: 200, body: JSON.stringify(catalog) };
+        if (path === "/api/voice/stt/capability") return { status: 200, body: JSON.stringify({
+          available: true, provider_name: "voice", provider_kind: "openai", configuration_id: "opaque",
+        }) };
+        if (path === "/api/admin/media-generation") {
+          const provider = { enabled: true, image_enabled: true, configured: true, image_model: "image-model" };
+          return { status: 200, body: JSON.stringify({
+            enabled: true, default_image_provider: "images",
+            providers: [
+              { ...provider, id: "images" },
+              { ...provider, id: "video-only", image_enabled: false },
+              { ...provider, id: "no-credentials", configured: false },
+              { ...provider, id: "disabled", enabled: false },
+            ],
+          }) };
+        }
+        return { status: 404 };
       },
     }),
   };
@@ -545,10 +580,16 @@ test("box model assignments save from displayed candidates and survive restartin
   const initial = await settings();
   assert.equal(initial.error, "MEMORY_MODEL_BOX_UPDATE_REQUIRED");
   assert.deepEqual(initial.roles.memory_summary.models.map(model => model.ref), [summary, evolution]);
+  assert.deepEqual(initial.inventory.asr.models, [{ ref: asr, provider: "voice", model: "openai", name: "openai" }]);
+  assert.equal(initial.inventory.asr.defaultModel.ref, asr);
+  assert.deepEqual(initial.inventory.image_generation.models.map(model => model.ref), [image]);
+  assert.equal(initial.inventory.image_generation.defaultModel.ref, image);
   failReads = true;
   const before = requests;
   assert.equal((await settings({ role: "memory_summary", modelRef: summary })).roles.memory_summary.selectedRef, summary);
   assert.equal((await settings({ role: "memory_evolution", modelRef: evolution })).roles.memory_evolution.selectedRef, evolution);
+  assert.equal((await settings({ role: "asr", modelRef: asr })).inventory.asr.selectedRef, asr);
+  assert.equal((await settings({ role: "image_generation", modelRef: image })).inventory.image_generation.selectedRef, image);
   assert.equal(requests, before);
 
   await workspace.close();
@@ -559,12 +600,16 @@ test("box model assignments save from displayed candidates and survive restartin
   assert.equal(restored.roles.memory_evolution.selectedRef, evolution);
   assert.equal(restored.roles.memory_summary.ready, false);
   assert.equal(restored.roles.memory_evolution.ready, false);
+  assert.equal(restored.inventory.asr.selectedRef, asr);
+  assert.equal(restored.inventory.image_generation.selectedRef, image);
 
   state = { ...state, connection: { deviceId: "other-box", gatewayURL: "https://box-two" } };
   workspace.sync();
   const other = await settings();
   assert.equal(other.roles.memory_summary.selectedRef, null);
   assert.equal(other.roles.memory_evolution.selectedRef, null);
+  assert.equal(other.inventory.asr.selectedRef, null);
+  assert.equal(other.inventory.image_generation.selectedRef, null);
 });
 
 test("automatic backup preference is authenticated, account-scoped and writable while offline", async t => {

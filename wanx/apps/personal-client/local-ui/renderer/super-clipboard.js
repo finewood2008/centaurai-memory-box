@@ -4,7 +4,7 @@
   const icon=name=>`<svg viewBox="0 0 24 24" aria-hidden="true">${({close:'<path d="m6 6 12 12M6 18 18 6"/>',image:'<rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 5-5 4 4 4-6 5 7"/>',back:'<path d="m14 5-7 7 7 7"/>',more:'<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>'})[name]||''}</svg>`;
   const messages={CLIPBOARD_IMAGES_ONLY:'这里只接收文字和图片，普通文件请上传到空间。',CLIPBOARD_LIMIT:'一次最多20张图片，单张最大20 MB；本批内容未加入。',CLIPBOARD_NOTE_LIMIT:'便签文字和结构最多1 MB，请精简后继续。',CLIPBOARD_NOTE_BUSY:'请等待当前内容同步完成后再操作。',CLIPBOARD_VIRTUAL_FILE:'请粘贴截图或已保存到本机的图片。',CLIPBOARD_EMPTY:'没有可粘贴的文字或图片。',SPACE_CONTEXT_CHANGED:'账号或盒子已切换，本次操作已停止。',ACCOUNT_LOGIN_REQUIRED:'请先登录并选择盒子。',BOX_CONNECTION_REQUIRED:'请先选择要保存到的盒子。',CLIPBOARD_NOTE_CONFLICT:'其他设备已修改便签，本机草稿已保留。',CLIPBOARD_CACHE_FULL:'本机缓存已满，请先完成图片同步。',SECURE_STORAGE_WRITE_FAILED:'本机草稿保存失败，请保持窗口打开后重试。',CLIPBOARD_QUOTA:'盒子便签空间不足，本机草稿仍保留。'};
   let host=null,state={items:[],tasks:[]},container=null,opened=false,active=false,poll=null,closeTimer=null,writing=Promise.resolve(true),localEdits=0,renderedScope=null,rendered='',composing=null,selection=null,error='',returnFocus=null;
-  let requestSidebar=null,viewGeneration=0,resolveComposition=null,saveError='';
+  let requestSidebar=null,sidebarHost=null,viewGeneration=0,resolveComposition=null,saveError='';
   const pendingInsertions=new Set();
   const urls=new Map(),imageLoads=new Set();let lastPersist='',modalAction=null,contextGeneration=0,imageDialog=null,imageMenu=null;
   const message=e=>messages[e.code||e.message]||'暂未同步到盒子，本机草稿会保留并自动重试。';
@@ -179,15 +179,15 @@
   }
   function reflect(){
     if(panelMode)window.dispatchEvent(new CustomEvent('wanx-note-view',{detail:{opened}}));
-    else document.body.classList.toggle('space-note-open',active&&opened);
+    else if(!sidebarHost)document.body.classList.toggle('space-note-open',active&&opened);
     if(!container)return;
     for(const b of document.querySelectorAll('[data-action="clipboard-toggle"]')){b.setAttribute('aria-expanded',String(opened));b.setAttribute('aria-controls','super-clipboard');b.classList.toggle('clipboard-trigger-active',opened);}
   }
-  function position(){if(container&&opened&&!panelMode)container.style.setProperty('--space-note-top',`${Math.max(0,document.querySelector('.topbar')?.getBoundingClientRect().bottom||0)}px`);}
+  function position(){if(container&&opened&&!panelMode&&!sidebarHost)container.style.setProperty('--space-note-top',`${Math.max(0,document.querySelector('.topbar')?.getBoundingClientRect().bottom||0)}px`);}
   function mount(){
     if(container)return;container=document.createElement('aside');container.id='super-clipboard';container.className='clipboard-drawer clipboard-notepad'+(panelMode?' clipboard-panel-note':'');container.hidden=true;container.inert=true;container.setAttribute('aria-label','共享图文便签');
     container.innerHTML=`<header class="clipboard-header"><div class="clipboard-title">${panelMode?'<button class="note-back" data-clip="close" aria-label="返回快捷面板">'+icon('back')+'<span>返回</span></button>':''}<div><h2>便签</h2><p class="clipboard-connection"></p></div></div><div class="clipboard-header-actions"><button class="clipboard-icon-button" data-clip="choose" title="插入图片" aria-label="插入图片">${icon('image')}</button><details class="clipboard-note-menu"><summary class="clipboard-icon-button" aria-label="更多便签操作">${icon('more')}</summary><div><button data-clip="clear">清空便签…</button><button data-clip="restore" hidden>恢复清空前内容</button><button data-clip="recover-local" hidden>恢复本机保留稿</button></div></details><button class="clipboard-icon-button" data-clip="close" title="收起 · Esc" aria-label="关闭便签">${icon('close')}</button></div></header><div class="clipboard-note-conflict" hidden><p>其他设备已修改便签。本机草稿已保留，请选择要继续编辑的版本。</p><button data-clip="remote">使用盒子内容</button><button data-clip="local">使用本机草稿…</button></div><div class="clipboard-note-scroll"><div class="clipboard-note-editor is-empty" role="textbox" aria-label="共享图文便签内容" aria-multiline="true" contenteditable="true" spellcheck="false" data-placeholder="在这里写点什么，或粘贴文字、图片…"></div></div><footer class="clipboard-note-footer"><div class="clipboard-note-transfers"></div><p class="clipboard-note-error" role="status"></p><div><span class="clipboard-note-status" aria-live="polite"></span><span title="同账号、同盒子的已审批 Agent 可读取这张共享便签">Agent 可读</span></div></footer><div class="clipboard-note-modal"></div>`;
-    (panelMode?document.querySelector('#panel'):document.body).append(container);const e=editor();
+    (panelMode?document.querySelector('#panel'):sidebarHost||document.body).append(container);const e=editor();
     e.addEventListener('input',()=>{rememberSelection();if(!composing||panelMode)void persistEditor();paint(false);});
     e.addEventListener('compositionstart',()=>{if(!composing)composing=new Promise(resolve=>{resolveComposition=resolve;});});
     e.addEventListener('compositionend',()=>{if(!composing)return;finishComposition();void persistEditor(true);});
@@ -278,7 +278,7 @@
   }
   document.addEventListener('click',event=>{
     if(event.target.closest('[data-action="clipboard-toggle"]')){event.preventDefault();event.stopPropagation();void requestView();}
-    else if(opened&&!panelMode&&!container.contains(event.target)&&!event.target.closest('#academy-edge-handle,[data-action="show-ai-dialogue"]')&&!composing){
+    else if(opened&&!panelMode&&!sidebarHost&&!container.contains(event.target)&&!event.target.closest('#academy-edge-handle,[data-action="show-ai-dialogue"]')&&!composing){
       void requestView(false,{restoreFocus:false});
     }
   },true);
@@ -307,7 +307,7 @@
       active=value;reflect();
       if(!active&&opened)void requestView(false,{restoreFocus:false});
     },
-    bindSidebar(request){if(!panelMode)requestSidebar=request;},
+    bindSidebar(request, target){if(!panelMode){requestSidebar=request;sidebarHost=target;}},
     isOpen:()=>opened,
     open,close,toggle:requestView,
   };
