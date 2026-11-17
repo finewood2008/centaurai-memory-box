@@ -60,7 +60,7 @@ async function versionOfApplication(application) {
 
 export function createMyAiTask({
   protocolRegistered = () => false, applicationForProtocol, openExternal, openApplication, revealApplication,
-  copyText, starlink, polish, boxScope, codexContext, agentAccess, openLongWindowsDraft,
+  copyText, starlink, polish, boxScope, codexContext, agentAccess, openLongWindowsDraft, windowsCodex,
   commandInstalled, resolveCommand, findApplication, launcher, installations, integrationUnavailable,
   platform = process.platform, env = process.env, home = homedir(), version = runFile,
 }) {
@@ -90,6 +90,11 @@ export function createMyAiTask({
       const command = await commandInfo(agent);
       ({ executable, version: cliVersion, channel, managed = false } = command);
       installed = command.installed;
+    } else if (agent.id === "codex" && platform === "win32" && windowsCodex) {
+      const desktop = await windowsCodex.detect();
+      installed = protocol = Boolean(desktop);
+      cliVersion = desktop?.version;
+      channel = installed ? "desktop" : undefined;
     } else {
       protocol = agent.protocol ? Boolean(await protocolRegistered(agent.protocol)) : false;
       if (protocol && applicationForProtocol) {
@@ -168,6 +173,7 @@ export function createMyAiTask({
   }
 
   async function openDesktop(agent, detected, mode) {
+    if (agent.id === "codex" && detected.protocol && platform === "win32" && windowsCodex) return windowsCodex.open(NEW_CODEX_CHAT);
     if (agent.id === "claude_desktop" && detected.protocol) return openExternal(`claude://${mode === "code" ? "code" : mode === "cowork" ? "cowork" : "claude.ai"}/new`);
     if (agent.id === "codex" && detected.protocol) return openExternal(NEW_CODEX_CHAT);
     if (detected.application && openApplication) {
@@ -276,6 +282,11 @@ export function createMyAiTask({
             url.searchParams.set(agent.id === "codex" ? "path" : "folder", input.workspacePath);
           }
           const limit = platform === "win32" ? WINDOWS_EXTERNAL_URL_LIMIT : OTHER_EXTERNAL_URL_LIMIT;
+          if (agent.id === "codex" && platform === "win32" && windowsCodex) {
+            await windowsCodex.open(url.href);
+            assertScope();
+            return { opened: true, delivery: "draft" };
+          }
           if (url.href.length <= limit && (agent.id !== "claude_desktop" || prompt.length <= 14_000)) {
             await openExternal(url.href);
             assertScope();

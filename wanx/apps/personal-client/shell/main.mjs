@@ -95,6 +95,7 @@ import { createMyAiInstallations } from "./my-ai-install.mjs";
 import { createMyAiMemoryTransfer } from "./my-ai-memory-transfer.mjs";
 import { createCodexContext } from "./codex-context.mjs";
 import { createCodexContextConfig, findCodexCli } from "./codex-context-config.mjs";
+import { detectWindowsCodex, openWindowsCodex } from "./windows-codex.mjs";
 import { createCodexContextSources } from "./codex-context-sources.mjs";
 import { createMyAiAccess, createMyAiMemoryAccess } from "./my-ai-access.mjs";
 import { configurableAgents, createMyAiMcpConfig } from "./my-ai-mcp-config.mjs";
@@ -726,10 +727,7 @@ if (process.argv.includes("--wanx-managed-app")) {
           protocolRegistered: url => Boolean(app.getApplicationNameForProtocol(url).trim()),
           applicationForProtocol: url => app.getApplicationInfoForProtocol(url),
           openExternal: url => shell.openExternal(url),
-          openLongWindowsDraft: process.platform === "win32" ? async (prompt) => {
-            const { openWindowsCodexDraft } = await import("./windows-codex-draft.mjs");
-            return openWindowsCodexDraft(prompt);
-          } : undefined,
+          windowsCodex: process.platform === "win32" ? { detect: detectWindowsCodex, open: openWindowsCodex } : undefined,
           openApplication: file => shell.openPath(file),
           revealApplication: file => shell.showItemInFolder(file),
           copyText: text => clipboard.writeText(text),

@@ -63,6 +63,31 @@ test("long drafts and guided clients copy the entire prompt and explicitly repor
   assert.deepEqual(await guided("handoff", { agent: "qwenwork", text: "Task" }, check), { opened: true, copied: true, delivery: "copy-open", reason: "manual" });
 });
 
+test("Windows detects the registered Codex package and sends the full draft to that package", async () => {
+  const opened = [];
+  const task = createMyAiTask(options({
+    platform: "win32",
+    applicationForProtocol: async () => { throw new Error("No executable exposed for the packaged handler"); },
+    windowsCodex: {
+      detect: async () => ({ version: "26.1111.2228.0" }),
+      open: async url => { opened.push(new URL(url)); },
+    },
+  }));
+  const desktop = (await task("status", {}, check)).agents.find(agent => agent.id === "codex");
+  assert.equal(desktop?.version, "26.1111.2228.0");
+  assert.equal(desktop?.prefill, true);
+  await task("launch", { agent: "codex" }, check);
+  const text = "检查测试草稿 & 保留原文。".repeat(200);
+  const workspacePath = import.meta.dirname;
+  assert.deepEqual(await task("handoff", { agent: "codex", text, workspacePath }, check), { opened: true, delivery: "draft" });
+  assert.equal(opened[0].href, "codex://threads/new");
+  assert.equal(opened[1].searchParams.get("prompt"), text);
+  assert.equal(opened[1].searchParams.get("path"), workspacePath);
+  assert.equal(opened[1].searchParams.has("send"), false);
+  const missing = createMyAiTask(options({ platform: "win32", protocolRegistered: () => true, windowsCodex: { detect: async () => null } }));
+  assert.equal((await missing("status", {}, check)).agents.some(agent => agent.id === "codex"), false);
+});
+
 test("CLI tasks use resolved executable, preserve arguments literally and delegate review before start", async () => {
   const prepared = [], launched = [];
   const task = createMyAiTask(options({
