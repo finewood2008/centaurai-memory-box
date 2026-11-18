@@ -268,15 +268,30 @@ test("Starlink annotation recall exposes real document references separately fro
   ] });
   const selected = await sources.validate(null, warehouseId, check);
   const result = await sources.call(selected, "starlink_search", { query: "蓝鹭项目" }, check);
-  assert.deepEqual(result.matches[1], { kind: "document", documentId: "document_1", versionId: "version_2",
-    title: "空间标签命中的资料" });
-  assert.equal(Object.hasOwn(result.matches[1], "evidenceId"), false);
+  assert.deepEqual(result.relatedDocuments, [{ kind: "document", documentId: "document_1", versionId: "version_2",
+    title: "空间标签命中的资料" }]);
   assert.doesNotMatch(JSON.stringify(result), /来自当前授权文档接口的真实正文|合成星图原文|合成星图标注/);
   assert.deepEqual(result.matches.filter(row => row.evidenceId).map(row => row.evidenceId), ["evidence_1"]);
-  assert.equal(result.matches.length, 2);
+  assert.equal(result.matches.length, 1);
   assert.equal(starlinkCalls.at(-1).input.warehouseId, warehouseId);
   assert.equal((await sources.call(selected, "starlink_evidence", { evidenceId: "evidence_1" }, check)).text, "星图原文");
   await assert.rejects(sources.call(selected, "starlink_evidence", { evidenceId: "invalid/path" }, check), { status: 400 });
+});
+
+test("Starlink keeps annotation matches when native evidence fills its limit", async () => {
+  const items = Array.from({ length: 10 }, (_, index) => ({
+    id: `evidence_${index}`, text: "星图正文片段", warehouse_id: warehouseId,
+  }));
+  const annotationMatch = { tags: ["蓝鹭项目"], description: "项目说明命中" };
+  const sources = createCodexContextSources({ async starlink() {
+    return { items, annotationDocuments: [{ documentId: "tag_document", versionId: "version_1", annotationMatch }] };
+  } });
+  const result = await sources.call({ warehouseId }, "starlink_search", { query: "蓝鹭项目" }, check);
+  assert.deepEqual(result.matches.map(item => item.evidenceId), items.map(item => item.id));
+  assert.deepEqual(result.relatedDocuments, [{
+    kind: "document", documentId: "tag_document", versionId: "version_1",
+    title: "空间标签命中的资料", annotationMatch,
+  }]);
 });
 
 test("the direct MCP path recalls annotations without a task and drops results after session invalidation", async () => {

@@ -165,7 +165,7 @@ export async function packageWindowsPreview({ version, out, repo = repositoryRoo
     '半人马AI记忆盒子 Windows x64 预览版',
     '',
     `- 来源提交 \`${sourceCommit}\`。`,
-    '- Codeup Memobox 源码提交 `a4bb8c68fa7c640a886a0b203d18798d02935fc7`。',
+    '- Codeup Memobox 源码提交 `363effe73dc597e1a6a5d864237ca43eafafe4ea`。',
     '- 个人星图可从 3D 连线打开引用版本并定位原文。资料库默认进入阅读台，待核对时展开知识栏。',
     '- 规则调整向导支持直接编辑和发布业务范围，沿用现行规则。范围发布需要匹配的盒端组件。',
     '- 安装包未签名，预览版不启用正式自动更新。',

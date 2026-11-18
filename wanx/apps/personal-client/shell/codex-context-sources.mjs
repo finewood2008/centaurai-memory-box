@@ -38,6 +38,7 @@ function starlinkEvidence(item) {
   const id = item?.evidence_id ?? item?.id;
   const content = excerpt(item?.text || item?.excerpt || item?.content, readLength);
   if (!evidenceId(id) || !content) return null;
+  const match = starlinkAnnotationMatch(item.annotation_match);
   return {
     evidenceId: id,
     title: excerpt(item.document_name || item.original_name || item.document?.original_name || item.title, 240) || "星图资料",
@@ -45,13 +46,22 @@ function starlinkEvidence(item) {
     versionId: evidenceId(item.document_version_id || item.version_id) ? (item.document_version_id || item.version_id) : undefined,
     locator: locator(item.source_locator || item.locator_json || item.locator),
     text: content,
+    ...(match && {annotationMatch:match}),
   };
 }
 
+function starlinkAnnotationMatch(value) {
+  const tags = Array.isArray(value?.tags) ? value.tags.slice(0, 30).map(tag => excerpt(tag, 80)).filter(Boolean) : [];
+  const description = excerpt(value?.description, 2000);
+  return tags.length || description ? {tags, description} : null;
+}
+
 function starlinkDocument(item) {
+  const match = starlinkAnnotationMatch(item?.annotationMatch);
   if (!evidenceId(item?.documentId) || !evidenceId(item?.versionId)) return null;
   return { kind: "document", documentId: item.documentId, versionId: item.versionId,
-    title: "空间标签命中的资料" };
+    title: "空间标签命中的资料",
+    ...(match && {annotationMatch:match}) };
 }
 
 function matchQuery(value, terms) {
@@ -319,7 +329,7 @@ export function createCodexContextSources({ space, starlink }) {
       ).slice(0, 10).map(starlinkDocument).filter(Boolean) : [];
       const evidence = items.slice(0, 10).filter(item => !item?.warehouse_id || item.warehouse_id === selectedId)
         .map(starlinkEvidence).filter(Boolean).map(({ text, ...metadata }) => ({ ...metadata, snippet: text.slice(0, 900) }));
-      return {matches: [...evidence, ...documents].slice(0, 10)};
+      return { matches: evidence, relatedDocuments: documents };
     }
     if (tool === "starlink_evidence") {
       if (!evidenceId(args.evidenceId)) throw error(400, "星图证据标识无效。");

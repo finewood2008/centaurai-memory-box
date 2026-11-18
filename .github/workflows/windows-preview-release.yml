@@ -134,7 +134,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Client contract validation failed' }
       - name: Validate Starlink reading and warehouse scope
         run: |
-          node --test wanx/apps/starlink/tests/onboarding-scope-editor.test.mjs wanx/apps/starlink/tests/material-import.test.mjs wanx/apps/starlink/tests/graph-exploration-tools.test.mjs wanx/apps/personal-client/tests/starlink-workbench-gateway.test.mjs
+          node --test wanx/apps/starlink/tests/onboarding-scope-editor.test.mjs wanx/apps/starlink/tests/material-import.test.mjs wanx/apps/starlink/tests/graph-exploration-tools.test.mjs wanx/apps/personal-client/tests/starlink-space-annotations.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Starlink workspace validation failed' }
+          node --test --test-name-pattern='^personal' wanx/apps/personal-client/tests/starlink-workbench-gateway.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Starlink validation failed' }
       - name: Validate mixed local collection and per-device backups
         working-directory: wanx/apps/personal-client
