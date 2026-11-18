@@ -194,3 +194,33 @@ async def test_automatic_readiness_keeps_prd_sync_and_admin_guards(launch):
  svc.team=Team()
  with pytest.raises(StudioError,match='STUDIO_ADMIN_REQUIRED'):
   await svc.preparation.ensure_development('alice',pid)
+
+
+@pytest.mark.parametrize('existing_legacy',[False,True])
+async def test_team_launch_http_defaults_new_projects_to_standard_without_migrating_legacy(launch,existing_legacy):
+ from fastapi import APIRouter,FastAPI
+ from httpx import ASGITransport,AsyncClient
+ from wanx_studio.client_launch import mount_client_launch
+ from wanx_studio import devkit_build
+ svc,pid,calls,bridge,provider=launch
+ app=FastAPI();router=APIRouter()
+ mount_client_launch(router,svc,lambda:'alice');app.include_router(router)
+ request=body(pid if existing_legacy else None)
+ async with AsyncClient(transport=ASGITransport(app=app),base_url='http://test') as client:
+  response=await client.post('/_client/launch/configure',json=request)
+  assert response.status_code==200
+  created=response.json();project_id=created['id']
+  assert created['devKit'] is (not existing_legacy)
+  assert devkit_build.enabled(svc.store.get('alice',project_id)) is (not existing_legacy)
+  # The same normal Team configuration request remains idempotent.
+  duplicate=await client.post('/_client/launch/configure',json=request)
+  assert duplicate.status_code==200 and duplicate.json()['id']==project_id
+  for _ in range(2):
+   started=await client.post('/_client/launch/'+project_id+'/start',json={})
+   assert started.status_code==200
+   assert started.json()['id']==project_id
+   assert started.json()['devKit'] is (not existing_legacy)
+   assert started.json()['confirmation'] is None and not started.json()['tasks']
+  if existing_legacy:assert project_id==pid
+  else:assert project_id!=pid
+ assert svc.store.get('alice',pid)['devKit'] is False

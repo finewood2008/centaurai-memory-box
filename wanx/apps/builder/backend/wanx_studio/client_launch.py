@@ -85,7 +85,7 @@ class ClientLaunch:
             if p['preparation']['revision'] != body['expectedRevision']: raise StudioError('INTAKE_CHANGED', 409)
             if p['preparation']['phase'] != 'intake' or p['tasks']: raise StudioError('INTAKE_ALREADY_HANDED_OFF', 409)
         else:
-            p = self.svc.store.create(owner, text.splitlines()[0].removeprefix('目标：')[:30] or '新应用', body['original'].strip(), body['operationId'])
+            p = self.svc.store.create(owner, text.splitlines()[0].removeprefix('目标：')[:30] or '新应用', body['original'].strip(), body['operationId'], dev_kit=True)
             pid = p['id']
             self.svc.preparation.enable(owner, pid)
         async with self.svc.preparation.lock(owner, pid):

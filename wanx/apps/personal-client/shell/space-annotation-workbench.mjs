@@ -282,7 +282,14 @@ export async function createAnnotationWorkbench({ store, scope, owner = scope, i
       const execute = async () => {
       available(); const input = validateWorkbenchInput(raw); await queue.catch(() => {});
       if (input.op === "models") return models();
-      if (input.op === "schemes") return copy({ items: state.schemes.filter(item => item.owner === owner()).map(({ owner, ...scheme }) => scheme) });
+      if (input.op === "schemes") {
+        const items = state.schemes.filter(item => item.owner === owner()).map(({ owner, ...scheme }) => scheme);
+        const tags = items.flatMap(item => item.tags || []);
+        for (const job of state.jobs) if (namespace(job.space_id) && job.scope === namespace(job.space_id)) {
+          for (const row of job.rows) tags.push(...(row.annotation?.manual?.tags || []), ...(row.draft?.tags || []));
+        }
+        return copy({ items, tags: uniqueTags(tags).slice(0, 500) });
+      }
       if (["save-scheme", "delete-scheme"].includes(input.op)) {
         if (!owner()) throw fail("SPACE_CONTEXT_CHANGED");
         const who = owner();

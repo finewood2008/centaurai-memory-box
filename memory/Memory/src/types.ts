@@ -620,6 +620,8 @@ export interface RawTurnRedactRequest extends RequestEnvelope {
   mode?: "redact" | "delete";
 }
 
+export type MemoryPipelineBlocker = "summary-model" | "evolution-model" | "model-budget";
+
 export interface HealthResponse {
   ok: boolean;
   status?: "starting" | "upgrading" | "ready" | "failed";
@@ -630,6 +632,7 @@ export interface HealthResponse {
   viewerUrl: string;
   version: string;
   uptimeMs: number;
+  pipelineBlockers?: MemoryPipelineBlocker[];
   mode: "local" | "cloud" | "dev";
   storage: {
     backend: "sqlite" | "openmem-cloud-rest";

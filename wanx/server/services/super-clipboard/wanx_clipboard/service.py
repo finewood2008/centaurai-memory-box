@@ -126,11 +126,14 @@ class ClipboardService:
                 self.connection = None
                 db.close()
 
-    def note_get(self, since=None):
-        return note.SharedNote(self).get(since)
+    def note_list(self):
+        return note.SharedNote(self).list()
 
-    def note_save(self, expected, operation, blocks, action="save"):
-        return note.SharedNote(self).save(expected, operation, blocks, action)
+    def note_get(self, since=None, note_id=None):
+        return note.SharedNote(self, note_id).get(since)
+
+    def note_save(self, expected, operation, blocks, action="save", note_id=None):
+        return note.SharedNote(self, note_id).save(expected, operation, blocks, action)
 
     def _object(self, item_id):
         return valid_id(item_id)
@@ -447,7 +450,11 @@ class ClipboardService:
             if any(r["version"] != t["expected"] for r, t in zip(rows, targets, strict=True)):
                 raise SpaceError("SPACE_VERSION_CONFLICT", 409)
             if any(
-                db.execute("SELECT 1 FROM clipboard_note_assets WHERE id=?", (r["id"],)).fetchone()
+                db.execute(
+                    "SELECT 1 FROM clipboard_note_assets WHERE id=? UNION ALL "
+                    "SELECT 1 FROM clipboard_extra_note_assets WHERE id=?",
+                    (r["id"], r["id"]),
+                ).fetchone()
                 for r in rows
             ):
                 raise SpaceError("CLIPBOARD_NOTE_REFERENCED", 409)

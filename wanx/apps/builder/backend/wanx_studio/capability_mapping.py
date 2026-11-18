@@ -17,7 +17,12 @@ PRODUCT_MAP = {
 def resolve(capabilities: list[str], *, expert: bool = False, backend: dict[str, Any] | None = None) -> dict[str, Any]:
     host: list[str] = ["identity.read"]
     gaps: list[dict[str, str]] = []
+    managed=bool(backend and backend.get("mode")=="existing" and backend.get("connectionRef")=="wanx.expert-app.v1")
     for product in dict.fromkeys(capabilities):
+        if managed:
+            if product in {"data","foundation","model"}:host.append("http.request")
+            elif product:gaps.append({"id":product,"reason":"NO_PUBLIC_HOST_CONTRACT"})
+            continue
         mapped = PRODUCT_MAP.get(product)
         if mapped:
             host.extend(mapped)
@@ -27,7 +32,7 @@ def resolve(capabilities: list[str], *, expert: bool = False, backend: dict[str,
             gaps.append({"id": product, "reason": "UNKNOWN_PRODUCT_CAPABILITY"})
     if backend and backend.get("mode") != "none":
         host.append("http.request")
-    if expert:
+    if expert and not managed:
         host.extend(("experts.read", "experts.select"))
     return {"hostCapabilities": list(dict.fromkeys(host)), "gaps": gaps}
 
@@ -41,3 +46,18 @@ def validate_manifest_capabilities(manifest: dict[str, Any]) -> list[dict[str, s
         for index, value in enumerate(values)
         if value not in HOST_CAPABILITIES
     ]
+
+
+def runtime_gaps(capabilities: list[str], *, expert: bool = False, backend: dict[str, Any] | None = None) -> list[dict[str, str]]:
+    """A public permission alone does not provide a callable template adapter.
+
+    The standard-host template exposes expertInvoke/listFiles, but no chat or
+    file-upload renderer method. Managed expert model calls use expertInvoke.
+    Keep this separate from the public manifest permission vocabulary.
+    """
+    gaps = resolve(capabilities, expert=expert, backend=backend)["gaps"]
+    managed = bool(backend and backend.get("mode") == "existing" and backend.get("connectionRef") == "wanx.expert-app.v1")
+    if not managed:
+        gaps += [{"id": cap, "reason": "STANDARD_HOST_ADAPTER_UNAVAILABLE"}
+                 for cap in dict.fromkeys(capabilities) if cap in PRODUCT_MAP]
+    return gaps

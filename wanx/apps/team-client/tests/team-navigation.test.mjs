@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFile} from 'node:fs/promises';
 import {rendererEvents} from './support/renderer-events.mjs';
-const index=new URL('../local-ui/renderer/index.html',import.meta.url),html=await readFile(index,'utf8');
+const index=new URL('../build/app/local-ui/renderer/index.html',import.meta.url),html=await readFile(index,'utf8');
 const scripts=[...html.matchAll(/<script src="([^"]+)"><\/script>/g)].map(m=>m[1]).filter(s=>s!=='./device-setup.bundle.js');
 const source=(await Promise.all(scripts.map(s=>readFile(new URL(s,index),'utf8')))).join('\n');
 const admin={permissions:['applications.manage'],displayName:'测试管理员'};

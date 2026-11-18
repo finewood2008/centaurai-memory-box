@@ -69,6 +69,10 @@ missing local components are reported as unavailable without remote fallback.
 
 OPENAPI_TAGS: list[dict[str, str]] = [
     {
+        "name": "wanx-memory",
+        "description": "Authenticated WANX access to the connected box's active text model for local memory processing.",
+    },
+    {
         "name": "personal-space",
         "description": "Current-user drive shared by WANX applications; files stay on the connected box.",
     },

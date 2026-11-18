@@ -43,9 +43,9 @@ async function verifyPasswords() {
     });
     client = createPlatformClient({ account, readPreference: async () => false });
     await client.initialize();
-    const index = new URL("../../local-ui/renderer/index.html", import.meta.url);
+    const index = new URL("../../build/app/local-ui/renderer/index.html", import.meta.url);
     window = new BrowserWindow({ show: false, width: 1180, height: 900, webPreferences: {
-      preload: fileURLToPath(new URL("../../local-ui/remote-preload.cjs", import.meta.url)),
+      preload: fileURLToPath(new URL("../../build/app/local-ui/remote-preload.cjs", import.meta.url)),
       contextIsolation: true, nodeIntegration: false, sandbox: true,
     } });
     window.webContents.on("console-message", event => { if (event.level === "error") rendererErrors.push(event.message); });

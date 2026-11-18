@@ -12,17 +12,22 @@ const identifier = value => {
   return value;
 };
 const MAX_BYTES = 100 * 1024 * 1024;
+const ZHIJUN_MODES = new Set(['ask', 'craft']);
 const publicModel = m => ({ id: `${m.provider_name}/${m.model}`, name: m.name || m.model,
   provider: m.provider_name, kind: m.provider_kind, input: m.input || ['text'], contextWindow: m.context_window });
 const publicUpload = (handle, data, size) => ({ handle, name: data.filename, mediaType: data.media_type, size });
 
 // This service owns the fixed native routes and scoped WebSocket. The renderer
 // never supplies an agent, local path, upstream URL, token, or arbitrary API route.
-export function createAIDialogue({ client, onEvent = () => {}, selectFiles, saveFile, edition = 'personal', preferenceStore, sharedUploads, resolveDataContext } = {}) {
+export function createAIDialogue({ client, onEvent = () => {}, selectFiles, saveFile, edition = 'personal', preferenceStore, sharedUploads, resolveDataContext, assistantPersona, readMemmy, readZhijunSources, openZhijunSource, listZhijunSources } = {}) {
   let closed = false, channelCache = null, profile = null, watcher = null;
+  let memmyQuery = null;
   let catalog = [], generation = 0, configuration = {};
   let preferenceWrites = Promise.resolve(), preferenceMemory = {};
   const modelChoices = new Map(), modelRequests = new Map();
+  const isZhijun = edition === 'personal' && assistantPersona === 'zhijun';
+  const supportsConversationModes = () => isZhijun && profile?.sidebar_conversation_modes === true;
+  let channelActivity = new Map(), activityRequest = 0;
   const newDraft = () => ({nextChoice:0,acceptedChoice:0,turn:null});
   let draftState = newDraft();
   const conversationCache = new Map(), threadRoots = new Map(), spaceGrants = new Map(), knowledgeGrants = new Map(), fences = new Map();
@@ -80,6 +85,33 @@ export function createAIDialogue({ client, onEvent = () => {}, selectFiles, save
     });
     preferenceWrites = pending; return pending;
   }
+  async function rememberConversationMode(key, id, mode) {
+    const pending = preferenceWrites.catch(() => {}).then(async () => {
+      assertScope(key);
+      const owner = ownerPreferenceKey();
+      const stored = preferenceStore ? await preferenceStore.load() || {} : preferenceMemory;
+      assertScope(key);
+      const modes = stored.zhijunConversationModes || {};
+      const value = { ...stored, zhijunConversationModes: { ...modes, [owner]: { ...modes[owner], [id]: mode } } };
+      if (preferenceStore) await preferenceStore.save(value); else preferenceMemory = value;
+      assertScope(key);
+    });
+    preferenceWrites = pending;
+    return pending;
+  }
+  async function conversationMode(key, value) {
+    if (!isZhijun) return 'ask';
+    if (supportsConversationModes() && value.conversation_mode != null) {
+      return value.conversation_mode === 'craft' ? 'craft' : 'ask';
+    }
+    await preferenceWrites.catch(() => {});
+    assertScope(key);
+    const owner = ownerPreferenceKey();
+    const stored = preferenceStore ? await preferenceStore.load() || {} : preferenceMemory;
+    assertScope(key);
+    const selected = stored.zhijunConversationModes?.[owner]?.[value.id];
+    return selected === 'craft' ? 'craft' : 'ask';
+  }
   async function ensureKnowledge(key, tid, config) {
     if (!config.knowledge?.enabled) throw fail('ASSISTANT_KNOWLEDGE_DENIED');
     const existing = knowledgeGrants.get(tid), revision = fence(tid);
@@ -111,6 +143,12 @@ export function createAIDialogue({ client, onEvent = () => {}, selectFiles, save
     const context = resolveDataContext?.(client.snapshot());
     return context?.ownerKey ? createHash('sha256').update(context.ownerKey).digest('hex') : key;
   }
+  function ownerPreferenceKey() {
+    const state = client.snapshot();
+    return createHash('sha256').update(JSON.stringify([
+      state.account?.accountId, state.account?.clientId, state.connection?.deviceId, resolveDataContext?.(state)?.ownerKey,
+    ])).digest('hex');
+  }
   let currentScope = scope();
   const assertScope = key => { if (!key || scope() !== key) throw fail('DIALOGUE_CONTEXT_CHANGED'); };
   const channelLinks = new Map();
@@ -122,7 +160,10 @@ export function createAIDialogue({ client, onEvent = () => {}, selectFiles, save
     previous?.socket?.terminate();
   }
   function invalidate() {
+    channelActivity.clear();
+    activityRequest++;
     assistantChannels.reset(); channelLinks.clear();
+    memmyQuery?.abort(); memmyQuery = null;
     generation++; unwatch();
     const oldChannel=channelCache, oldGrants=[...spaceGrants.values()].map(g=>['space',g]).concat([...knowledgeGrants.values()].map(g=>['knowledge',g]));
     if(oldChannel) void oldChannel.then(async link=>{try {for(const [kind,g]of oldGrants) await link.request({path:'/api/assistant/'+kind+'-grant',method:'POST',headers:{'content-type':'application/json','x-wanx-data-context':edition},body:JSON.stringify({enabled:false,grant_id:g.grant_id}),signal:AbortSignal.timeout(10000)}).catch(()=>{});} finally {link.close?.();}}).catch(()=>{});
@@ -147,12 +188,13 @@ export function createAIDialogue({ client, onEvent = () => {}, selectFiles, save
     }
     const result = await channelCache; assertScope(key); return result;
   }
-  async function request(key, route, { method = 'GET', body, headers, stream = false, upload = false, timeout = 30_000 } = {}) {
+  async function request(key, route, { method = 'GET', body, headers, stream = false, upload = false, timeout = 30_000, signal } = {}) {
     const link = await channel(key), controller = new AbortController();
+    signal?.throwIfAborted();
     requests.add(controller); let streaming = false;
     try {
       const response = await link.request({ path: route, method, stream,
-        signal: stream ? controller.signal : AbortSignal.any([controller.signal, AbortSignal.timeout(upload ? 300_000 : timeout)]),
+        signal: stream ? controller.signal : AbortSignal.any([controller.signal, AbortSignal.timeout(upload ? 300_000 : timeout), ...(signal ? [signal] : [])]),
         headers: { accept: stream ? '*/*' : 'application/json', ...(body && !upload ? { 'content-type': 'application/json' } : {}), ...headers,
           ...(route.startsWith('/api/assistant/knowledge') ? { 'x-wanx-data-context': edition === 'team' ? 'team' : 'personal' } : {}) },
         ...(body ? { body: upload ? body : JSON.stringify(body) } : {}) });
@@ -180,13 +222,51 @@ export function createAIDialogue({ client, onEvent = () => {}, selectFiles, save
     return Buffer.concat(chunks);
   }
   function nativePath() { if (!profile) throw fail('ASSISTANT_NOT_READY'); return `/api/agents/${identifier(profile.agent_id)}`; }
+  const activityTime = row => {
+    const value = Number(row.last_active || row.updated_at || row.created_at);
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  };
+  const externalChannel = kind => typeof kind === 'string' && Boolean(kind) &&
+    !['dashboard', 'client', 'cli', 'legacy', 'unknown'].includes(kind);
+  function channelReadState(key, baseline, opened) {
+    const pending = preferenceWrites.catch(() => {}).then(async () => {
+      assertScope(key);
+      const stored = preferenceStore ? await preferenceStore.load() || {} : preferenceMemory;
+      assertScope(key);
+      const owner = ownerPreferenceKey();
+      const existing = stored.assistantChannelReads?.[owner];
+      const reads = existing ?? baseline;
+      if (!reads) return null;
+      if (existing && (!opened || (reads[opened.id] ?? 0) >= opened.time)) return reads;
+      const next = opened ? { ...reads, [opened.id]: opened.time } : reads;
+      const value = { ...stored, assistantChannelReads: { ...stored.assistantChannelReads, [owner]: next } };
+      if (preferenceStore) await preferenceStore.save(value); else preferenceMemory = value;
+      assertScope(key);
+      return next;
+    });
+    preferenceWrites = pending;
+    return pending.catch(() => { assertScope(key); return null; });
+  }
   async function listing(key) {
+    const ticket = ++activityRequest;
     const result=await request(key,'/api/assistant/conversations');
     if(result.items.some(row=>!row.channel_type)){
       // Older boxes already expose native channel metadata. Keep routing keys in main.
       const native=await optional(key,`${nativePath()}/threads?limit=10000`,[]).catch(()=>{assertScope(key);return [];});
       const origins=new Map(native.map(row=>[row.thread_id,row.channel_type]));
       result.items=result.items.map(row=>({...row,channel_type:row.channel_type||origins.get(row.thread_id)||'unknown'}));
+    }
+    if (isZhijun) {
+      const activity = new Map(result.items.filter(row => externalChannel(row.channel_type) && activityTime(row))
+        .map(row => [row.thread_id, activityTime(row)]));
+      const baseline = Object.fromEntries(result.items.filter(row => activityTime(row))
+        .map(row => [row.thread_id, activityTime(row)]));
+      const reads = await channelReadState(key, baseline);
+      assertScope(key);
+      if (ticket === activityRequest) channelActivity = activity;
+      if (reads) result.items = result.items.map(row => ({
+        ...row, unread: activity.has(row.thread_id) && activity.get(row.thread_id) > (reads[row.thread_id] ?? 0),
+      }));
     }
     return result;
   }
@@ -229,8 +309,9 @@ export function createAIDialogue({ client, onEvent = () => {}, selectFiles, save
     });
     await new Promise((resolve, reject) => socket.send(JSON.stringify({ type: 'subscribe', thread_id: tid }), error => error ? reject(error) : resolve()));
   }
-  async function sendFrame(key, tid, frame) {
+  async function sendFrame(key, tid, frame, check = () => {}) {
     await watch(key, tid); assertScope(key);
+    check();
     const socket = watcher.socket;
     await new Promise((resolve, reject) => socket.send(JSON.stringify(frame), error => error ? reject(fail('ASSISTANT_SEND_UNCERTAIN')) : resolve()));
     assertScope(key);
@@ -240,7 +321,7 @@ export function createAIDialogue({ client, onEvent = () => {}, selectFiles, save
     catalog = (await request(key, '/api/providers/resolved')).map(publicModel);
     if (!catalog.some(m => m.id === ref)) throw fail('MODEL_UNAVAILABLE');
   }
-  async function modelSelection(key, { modelMode = configuration.modelMode, model = configuration.model } = {}) {
+  async function modelSelection(key, { modelMode = configuration.modelMode, model = configuration.model } = {}, profileDefault = profile?.default_model) {
     const [resolved, defaults] = await Promise.all([
       request(key, '/api/providers/resolved'),
       optional(key, '/api/providers/application-defaults', { managed: false, defaults: {} }),
@@ -254,7 +335,7 @@ export function createAIDialogue({ client, onEvent = () => {}, selectFiles, save
         selected = entry?.available === true && catalog.some(m => m.id === entry.model_ref) ? entry.model_ref : null;
       } else {
         const [prefs, active] = await Promise.all([request(key, '/api/preferences'), optional(key, '/api/providers/active-model', {})]);
-        const candidates = [prefs.preferred_model, profile?.default_model, active?.provider_name && `${active.provider_name}/${active.model}`];
+        const candidates = [prefs.preferred_model, profileDefault, active?.provider_name && `${active.provider_name}/${active.model}`];
         selected = candidates.find(ref => catalog.some(m => m.id === ref)) || catalog[0]?.id || null;
       }
     }
@@ -273,6 +354,55 @@ export function createAIDialogue({ client, onEvent = () => {}, selectFiles, save
     if (!selected.defaultModel) throw fail('APPLICATION_MODEL_UNAVAILABLE');
     return selected.defaultModel;
   }
+  function choicesFor(input) {
+    const source = input.sources || {};
+    const zhijun = assistantPersona === 'zhijun';
+    const selected = { space: !zhijun || source.space !== false,
+      starlink: !zhijun || source.starlink !== false, memory: source.memory !== false };
+    if (!zhijun) return selected;
+    for (const [kind, field] of [['space', 'folderId'], ['starlink', 'warehouseId'], ['memory', 'memoryAgent']]) {
+      if (!selected[kind] || !source[field]) continue;
+      if (field === 'memoryAgent' && source[field] === 'zhijun' && !supportsZhijunSources())
+        throw fail('ZHIJUN_SCOPE_UNSUPPORTED');
+      selected[field] = identifier(source[field]);
+    }
+    return selected;
+  }
+  const supportsZhijunSources = () => assistantPersona === 'zhijun' && profile?.sidebar_sources === true;
+  const agentOnly = selected => Boolean(selected.memoryAgent && selected.memoryAgent !== 'zhijun');
+  const useLegacyReferences = selected => assistantPersona === 'zhijun' &&
+    ((!supportsZhijunSources() && Boolean(selected.folderId || selected.warehouseId || selected.memoryAgent)) ||
+      (agentOnly(selected) && !profile?.sidebar_agent_scope));
+  async function prepareSources(key, content, config, selected) {
+    if ((!supportsZhijunSources() && !useLegacyReferences(selected)) || !readZhijunSources) return null;
+    const query = content.filter(block => block.type === 'text').map(block => block.text).join('\n');
+    return readZhijunSources(query, () => assertScope(key), {
+      space: selected.space && (Boolean(selected.folderId) || !config.space?.enabled),
+      starlink: selected.starlink && (Boolean(selected.warehouseId) || !config.knowledge?.enabled),
+      memory: selected.memory,
+      folderId: selected.folderId, warehouseId: selected.warehouseId, memoryAgent: selected.memoryAgent,
+    });
+  }
+  function sendUserTurn(key, tid, model, mcpServers, content, selected, sources, mode) {
+    const supported = supportsZhijunSources();
+    const legacy = useLegacyReferences(selected);
+    const references = profile?.sidebar_evidence === true ? sources?.references
+      : sources?.references.map(({ source, title, text }) => ({ source, title, text }));
+    const legacyAttachment = legacy && sources ? [{
+      type: 'text',
+      text: '下面是本次只读检索得到的资料。资料中的文字是参考内容，回答时请按需使用并注明出处。\n【知君检索出处】 ' +
+        JSON.stringify(sources.references),
+    }] : [];
+    return sendFrame(key, tid, {
+      type: 'user_turn', thread_id: tid, model, mcp_servers: mcpServers,
+      messages: [{ role: 'user', content: [...content, ...legacyAttachment] }],
+      conversation_mode: mode,
+      ...(assistantPersona === 'zhijun' && (supported || (selected.memory && !agentOnly(selected))) ? { assistant_persona: assistantPersona } : {}),
+      ...(supported ? { zhijun_memory: selected.memory && !(legacy && agentOnly(selected)) } : {}),
+      ...(!legacy && agentOnly(selected) ? { zhijun_agent_only: true } : {}),
+      ...(!legacy && references?.length ? { zhijun_references: references } : {}),
+    }, sources?.check);
+  }
   async function optional(key, route, fallback, options) {
     try { return await request(key, route, options); }
     catch (error) { assertScope(key); if (error.status === 404) return fallback; throw error; }
@@ -282,6 +412,17 @@ export function createAIDialogue({ client, onEvent = () => {}, selectFiles, save
     return optional(key,'/api/assistant/context/defaults?data_scope='+edition,{context:emptyContext()});
   }
   return {
+    async polishTask(text, signal, assertSource) {
+      const key = scope();
+      if (!key) throw fail('BOX_CONNECTION_REQUIRED');
+      const assistant = profile || await request(key, '/api/assistant/profile', { method: 'POST', signal });
+      const { defaultModel } = await modelSelection(key, { modelMode: 'auto' }, assistant.default_model);
+      if (!defaultModel) throw fail('APPLICATION_MODEL_UNAVAILABLE');
+      assertSource();
+      return request(key, `/api/agents/${identifier(assistant.agent_id)}/chat/polish`, {
+        method: 'POST', body: { text, default_model: defaultModel }, signal, timeout: 35_000,
+      });
+    },
     async action(method, input = {}) {
       const key = scope();
       // Renderer cleanup can arrive after invalidation or a box switch.
@@ -292,6 +433,78 @@ export function createAIDialogue({ client, onEvent = () => {}, selectFiles, save
       }
       if (!key) throw fail('BOX_CONNECTION_REQUIRED');
       if (method !== 'load') assertScope(input.scope);
+      if (method === 'sidebar-mode') {
+        if (!isZhijun) throw fail('DIALOGUE_ACCESS_DENIED');
+        if (!ZHIJUN_MODES.has(input.mode)) throw fail('ASSISTANT_INVALID_INPUT');
+        let value = await conversation(key, identifier(input.conversationId));
+        if (supportsConversationModes()) {
+          value = remember(await request(key, '/api/assistant/conversations/' + value.id, {
+            method: 'PATCH', body: { revision: value.revision, conversation_mode: input.mode },
+          }));
+          if (value.conversation_mode !== input.mode) throw fail('ZHIJUN_MODE_UNCONFIRMED');
+        } else {
+          await rememberConversationMode(key, value.id, input.mode);
+        }
+        return { scope: key, conversation: value, conversationMode: input.mode };
+      }
+      if (method === 'sidebar-memory') {
+        if (assistantPersona !== 'zhijun') throw fail('DIALOGUE_ACCESS_DENIED');
+        const { action, query, limit, offset, requestId, id, text, threadId, messageId, conversationId } = input;
+        const route = '/api/assistant/sidebar-memory';
+        if (action !== 'search') {
+          if (!supportsConversationModes()) throw fail('ZHIJUN_MODE_UNCONFIRMED');
+          const current = conversationId || threadId;
+          const mode = current ? (await conversation(key, identifier(current))).conversation_mode : input.conversationMode;
+          if (mode !== 'craft') throw fail('ZHIJUN_ADVANCED_REQUIRED');
+        }
+        const result = action === 'search'
+          ? request(key, route + '?' + new URLSearchParams({ query: query ?? '', limit: limit ?? 20, offset: offset ?? 0 }))
+          : request(key, route, { method: 'POST', body: { action, requestId, id, text, threadId, messageId,
+            conversation_id: conversationId || threadId, conversation_mode: 'craft' } });
+        const value = await result.catch(error => {
+          if (error.status === 409) throw fail('ZHIJUN_MEMORY_CHANGED');
+          if (error.status === 404) throw fail('ZHIJUN_MEMORY_NOT_FOUND');
+          throw error;
+        });
+        return { scope: key, ...value };
+      }
+      if (method === 'sidebar-memory-cancel') {
+        memmyQuery?.abort(); memmyQuery = null;
+        return { scope: key };
+      }
+      if (method === 'sidebar-source') {
+        if (assistantPersona !== 'zhijun' || !openZhijunSource) throw fail('DIALOGUE_ACCESS_DENIED');
+        const result = await openZhijunSource(input, () => assertScope(key));
+        assertScope(key);
+        return { scope: key, title: result.name || result.title, text: result.text,
+          truncated: result.nextStart != null };
+      }
+      if (method === 'sidebar-source-list') {
+        if (assistantPersona !== 'zhijun' || !profile || !listZhijunSources || !['space', 'starlink', 'memory'].includes(input.kind))
+          throw fail('ZHIJUN_SCOPE_UNSUPPORTED');
+        let value;
+        try {
+          value = await listZhijunSources(input.kind, input.parent || '', () => assertScope(key));
+        } catch (error) {
+          assertScope(key);
+          if (input.kind !== 'memory') throw error;
+          value = { agents: [], agentCatalogUnavailable: true };
+        }
+        assertScope(key);
+        return { scope: key, savedMemoryAvailable: supportsZhijunSources(), ...value };
+      }
+      if (method === 'sidebar-memmy') {
+        if (assistantPersona !== 'zhijun' || !readMemmy) throw fail('DIALOGUE_ACCESS_DENIED');
+        memmyQuery?.abort();
+        const controller = new AbortController();
+        memmyQuery = controller;
+        try {
+          const value = await readMemmy(input, () => assertScope(key), controller.signal);
+          return { scope: key, ...value };
+        } finally {
+          if (memmyQuery === controller) memmyQuery = null;
+        }
+      }
       if (method.startsWith('channels-')) {
         channelLinks.set(key,await channel(key));
         return {scope:key,...await assistantChannels.action(method,input,key)};
@@ -333,6 +546,8 @@ export function createAIDialogue({ client, onEvent = () => {}, selectFiles, save
         return { scope: key, agentId: profile.agent_id, models: catalog, recentConversationId,
           ...selection,
           sessions: recent.items, legacySessions: legacy.sessions || [], legacyUnavailable: legacy.unavailable === true,
+          sidebarSources: supportsZhijunSources(),
+          sidebarConversationModes: supportsConversationModes(),
           organization: organization.entries, historyManagementAvailable: !organization.unavailable, timezone: timezone.timezone || 'UTC',
           capabilities: resolveDataContext?.(client.snapshot())
             ? { knowledge: false, space: false, channels: false, attachments: false }
@@ -372,7 +587,7 @@ export function createAIDialogue({ client, onEvent = () => {}, selectFiles, save
       if(method==='version-select') {
         const current=await conversation(key,identifier(input.conversationId));
         const value=remember(await request(key,'/api/assistant/conversations/'+current.id,{method:'PATCH',body:{revision:input.revision,active_thread_id:identifier(input.threadId)}}));
-        return {scope:key,conversation:value,history:await history(key,value.active_thread_id),modelSelection:await threadModelSelection(key,value.active_thread_id)};
+        return {scope:key,conversation:value,history:await history(key,value.active_thread_id),modelSelection:await threadModelSelection(key,value.active_thread_id),conversationMode:await conversationMode(key,value)};
       }
       if(method==='version') {
         input = {...input, model:await turnModel(key,input)};
@@ -383,13 +598,17 @@ export function createAIDialogue({ client, onEvent = () => {}, selectFiles, save
         let dispatching=false;
         try {
           if(content.some(b=>b.type==='image')&&!catalog.find(m=>m.id===input.model)?.input.includes('image'))throw fail('ASSISTANT_MODEL_NEEDS_IMAGE');
-          let turnMcp=[];
-          if(value.context.space?.enabled)turnMcp.push((await ensureSpace(key,tid,value.context)).mcp_server);
-          if(value.context.knowledge?.enabled)turnMcp.push((await ensureKnowledge(key,tid,value.context)).mcp_server);
+          const selected = choicesFor(input);
+          const turnMcp = [];
+          if (selected.space && !selected.folderId && value.context.space?.enabled) turnMcp.push((await ensureSpace(key, tid, value.context)).mcp_server);
+          if (selected.starlink && !selected.warehouseId && value.context.knowledge?.enabled) turnMcp.push((await ensureKnowledge(key, tid, value.context)).mcp_server);
+          const sources = await prepareSources(key, content, value.context, selected);
           if (input.modelMode === 'auto') await saveConfiguration(key, input, tid);
+          const mode = await conversationMode(key, value);
+          sources?.check();
           dispatching=true;
-          await sendFrame(key,tid,{type:'user_turn',thread_id:tid,model:input.model,mcp_servers:turnMcp,messages:[{role:'user',content}],conversation_mode:'ask'});
-          return {scope:key,conversation:value,history:await history(key,tid),model:input.model};
+          await sendUserTurn(key, tid, input.model, turnMcp, content, selected, sources, mode);
+          return {scope:key,conversation:value,history:await history(key,tid),model:input.model,conversationMode:mode};
         } catch(error) {
           if(!dispatching) await request(key,'/api/assistant/conversations/'+cid,{method:'PATCH',body:{revision:value.revision,active_thread_id:source}}).then(remember).catch(()=>{});
           throw error;
@@ -431,9 +650,15 @@ export function createAIDialogue({ client, onEvent = () => {}, selectFiles, save
         return { scope: key, saved: Boolean(filePath) };
       }
       if (method === 'open') {
-        let value=await conversation(key,identifier(input.threadId));
+        const id = rootFor(identifier(input.threadId));
+        const readThrough = input.trackOpened ? channelActivity.get(id) : undefined;
+        let value=await conversation(key,id);
         if(input.trackOpened) value=remember(await request(key,'/api/assistant/conversations/'+value.id+'/open',{method:'POST'}));
-        return {scope:key,conversation:value,history:await history(key,value.active_thread_id,Number.isInteger(input.offset)&&input.offset>=0?input.offset:0),modelSelection:await threadModelSelection(key,value.active_thread_id)};
+        const transcript = await history(key,value.active_thread_id,Number.isInteger(input.offset)&&input.offset>=0?input.offset:0);
+        const model = await threadModelSelection(key,value.active_thread_id);
+        const reads = readThrough ? await channelReadState(key, null, { id, time: readThrough }) : null;
+        return {scope:key,conversation:value,history:transcript,modelSelection:model,conversationMode:await conversationMode(key,value),
+          ...(reads && { channelReadThrough: reads[id] })};
       }
       if (method === 'watch') { await watch(key, identifier(input.threadId)); return { scope: key }; }
       if (method === 'legacy-open') return { scope: key, session: await request(key, `/api/dialogue/sessions/${identifier(input.sessionId)}`) };
@@ -464,6 +689,10 @@ export function createAIDialogue({ client, onEvent = () => {}, selectFiles, save
         return { scope:key, ...await modelSelection(key, input) };
       }
       if (method === 'send') {
+        if (isZhijun && input.conversationMode !== undefined && !ZHIJUN_MODES.has(input.conversationMode))
+          throw fail('ASSISTANT_INVALID_INPUT');
+        const draftMode = isZhijun ? input.conversationMode ?? 'ask' : 'ask';
+        const syncModes = supportsConversationModes();
         const choice = modelChoices.get(input.threadId)||0;
         const draft = input.threadId ? null : draftState;
         const pendingTurn = draft ? {threadId:null,selection:null,choice} : null;
@@ -479,7 +708,10 @@ export function createAIDialogue({ client, onEvent = () => {}, selectFiles, save
         if (pendingTurn) pendingTurn.threadId = tid;
         if (!threads.has(tid)) await history(key, tid);
         let saved=await conversation(key,tid);
-        if(!input.threadId) saved=remember(await request(key,'/api/assistant/conversations/'+tid,{method:'PATCH',body:{revision:saved.revision,context:{space:configuration.space,knowledge:configuration.knowledge}}}));
+        if(!input.threadId) saved=remember(await request(key,'/api/assistant/conversations/'+tid,{method:'PATCH',body:{
+          revision:saved.revision,context:{space:configuration.space,knowledge:configuration.knowledge},
+          ...(syncModes && {conversation_mode:draftMode}),
+        }}));
         if(saved.validation_errors?.length)throw fail(saved.validation_errors[0].code);
         const config=saved.context;
         if(input.threadId&&Number.isInteger(input.revision)&&input.revision!==saved.revision)throw fail('ASSISTANT_CONVERSATION_CONFLICT');
@@ -487,11 +719,12 @@ export function createAIDialogue({ client, onEvent = () => {}, selectFiles, save
         if(input.knowledgeEnabled&&!config.knowledge?.enabled)throw fail('ASSISTANT_KNOWLEDGE_DENIED');
         const state = await history(key, tid);
         if (state.turn_active || state.hitl_pending) throw fail('ASSISTANT_TURN_ACTIVE');
+        const selected = choicesFor(input);
         let turnMcp = [];
-        if (config.space?.enabled) {
+        if (selected.space && !selected.folderId && config.space?.enabled) {
           turnMcp = [(await ensureSpace(key, tid, config)).mcp_server];
         }
-        if (config.knowledge?.enabled) turnMcp.push((await ensureKnowledge(key, tid, config)).mcp_server);
+        if (selected.starlink && !selected.warehouseId && config.knowledge?.enabled) turnMcp.push((await ensureKnowledge(key, tid, config)).mcp_server);
         const content = [...(prompt ? [{ type: 'text', text: prompt }] : []), ...files.map(file => file.media_type?.startsWith('image/') ? {
           type: 'image', source: { type: 'url', url: file.url, media_type: file.media_type }, preview_url: file.url, workspace_path: file.workspace_path, filename: file.filename,
         } : { type: 'file', filename: file.filename, media_type: file.media_type, workspace_path: file.workspace_path })];
@@ -499,12 +732,14 @@ export function createAIDialogue({ client, onEvent = () => {}, selectFiles, save
           if (pendingTurn?.selection) await saveConfiguration(key, pendingTurn.selection, tid);
           else if (input.modelMode === 'auto') await saveConfiguration(key, input, tid);
         }
+        const sources = await prepareSources(key, content, config, selected);
+        const mode = input.threadId || syncModes ? await conversationMode(key, saved) : draftMode;
+        if (!input.threadId && syncModes && saved.conversation_mode !== draftMode) throw fail('ZHIJUN_MODE_UNCONFIRMED');
+        if (!input.threadId && isZhijun && !syncModes) await rememberConversationMode(key, saved.id, mode);
         emit(key, { type: 'turn-submitting', threadId: tid, model: input.model });
-        await sendFrame(key, tid, { type: 'user_turn', thread_id: tid, model: input.model,
-          mcp_servers: turnMcp,
-          messages: [{ role: 'user', content }], conversation_mode: 'ask' });
+        await sendUserTurn(key, tid, input.model, turnMcp, content, selected, sources, mode);
         await request(key,'/api/assistant/conversations/'+saved.id+'/open',{method:'POST'}).catch(()=>{});
-        return { scope: key, threadId: tid, conversation:saved, model:input.model };
+        return { scope: key, threadId: tid, conversation:saved, model:input.model, conversationMode:mode };
         } finally { if (draft?.turn === pendingTurn) draft.turn = null; }
       }
       if (method === 'stop') {

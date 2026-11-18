@@ -506,6 +506,48 @@ async def test_wanx_inferred_metadata_does_not_trigger_repeated_reload():
 
 
 @pytest.mark.asyncio
+async def test_verified_gateway_reasoning_is_projected_and_reconcile_is_idempotent():
+    rt, catalog, admin = runtime()
+    catalog.value["providers"][0].update(baseUrl="https://token.qeeshu.com/v1",
+                                          allowedModels=["deepseek-flash"])
+    try:
+        await rt.reconcile()
+        model = admin.rows[0]["models"][0]
+        assert model["reasoning"] is True
+        assert model["reasoning_config"]["toggle"] is True
+        before = len(admin.writes)
+        await rt.reconcile()
+        assert len(admin.writes) == before
+    finally:
+        await rt.close()
+
+
+@pytest.mark.asyncio
+async def test_withdrawn_reasoning_metadata_is_removed_even_after_runtime_restart():
+    advertised = True
+    async def discover(request):
+        model = {'id': 'chat-model'}
+        if advertised:
+            model['reasoning_config'] = {'adapter': 'thinking', 'supported': True, 'toggle': True}
+        return httpx.Response(200, json={'data': [model]})
+    rt, catalog, admin = runtime(discover)
+    catalog.value['providers'][0]['allowedModels'] = []
+    try:
+        await rt.reconcile()
+        assert admin.rows[0]['models'][0]['reasoning_config']['toggle'] is True
+        advertised = False
+        # A restarted worker cannot rely on its previous in-memory discovery result.
+        rt.entries.clear()
+        await rt.reconcile()
+        assert not admin.rows[0]['models'][0].get('reasoning_config')
+        before = len(admin.writes)
+        await rt.reconcile()
+        assert len(admin.writes) == before
+    finally:
+        await rt.close()
+
+
+@pytest.mark.asyncio
 async def test_owner_change_rotates_key_and_disabled_provider_stops_calls():
     rt, catalog, admin = runtime()
     try:

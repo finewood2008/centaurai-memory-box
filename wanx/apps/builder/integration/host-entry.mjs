@@ -4,6 +4,8 @@ import {exportStudioPackage} from './export-package.mjs';
 import {createDeploymentDelivery} from './personal-client/deployment-delivery.mjs';
 
 const fail = code => Object.assign(new Error(code), { code });
+// HTTP details stay inside the trusted Host, never on IPC-facing Error objects.
+const responseMetadata = new WeakMap();
 const projectId = id => typeof id === 'string' && /^[a-f0-9]{32}$/.test(id);
 const scope = context => JSON.stringify([context.accountId, context.boxId, context.user.id]);
 const connectionScope=context=>context&&['accountId','clientId','boxId'].every(key=>typeof context[key]==='string'&&context[key])?JSON.stringify([context.accountId,context.clientId,context.boxId]):'';
@@ -44,7 +46,27 @@ export function createStudioEntry({ createConnection, applications, assets, open
     if(!deploymentRoot||!applications.installDeployment)return;
     // /context is also readable by published-app users. Only this server-side
     // management check can authorize the main-process deployment worker.
-    const capability=await s.request('/deployment/capabilities');
+    let capability;
+    try{capability=await s.request('/deployment/capabilities')}
+    catch(error){
+      const response=responseMetadata.get(error);
+      if(response?.status!==404||!response.routeMissing||error.code!=='STUDIO_REQUEST_FAILED')throw error;
+      if(closed||revision!==authorizationRevision)throw fail('HOST_SESSION_EXPIRED');
+      s.assertLive();
+      // Older boxes may lack deployment routes. Opening the workbench still
+      // requires the existing server-side management gate; no worker is enabled.
+      let management;
+      try{management=await s.request('/_builder/context')}
+      catch(error){
+        const response=responseMetadata.get(error);
+        if(response?.status===404&&response.routeMissing&&error.code==='STUDIO_REQUEST_FAILED')throw fail('STUDIO_BOX_UPDATE_REQUIRED');
+        throw error;
+      }
+      if(closed||revision!==authorizationRevision)throw fail('HOST_SESSION_EXPIRED');
+      s.assertLive();
+      if(management?.protocolVersion!==1||management.iterativeBuild!==1)throw fail('STUDIO_RESPONSE_INVALID');
+      return;
+    }
     if(closed||revision!==authorizationRevision)throw fail('HOST_SESSION_EXPIRED');
     s.assertLive();if(capability?.available!==true||capability.schemaVersion!==1||!Array.isArray(capability.operations)||!capability.operations.includes('deploy'))return;
     authorized=s;
@@ -91,7 +113,7 @@ export function createStudioEntry({ createConnection, applications, assets, open
       if ((response.status === 404 || response.status === 503) && !route.includes('/context') && !route.includes('/intake') && !route.includes('/capabilities')) throw fail('STUDIO_UNAVAILABLE');
       try { const value=JSON.parse(Buffer.isBuffer(raw) ? raw.toString('utf8') : typeof raw === 'string' ? raw : JSON.stringify(raw));
         const accepted=response.status===202&&method==='POST'&&/^\/(?:deployment\/operations(?:\/[a-f0-9]{32}\/resume)?|deployment\/directory-releases\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\/submit|projects\/[a-f0-9]{32}\/deployment\/submit)$/.test(route);
-        if(response.status!==200&&!accepted){const code=value.code||value.detail?.code;throw fail(typeof code==='string'&&/^[A-Z_]{4,80}$/.test(code)?code:'STUDIO_REQUEST_FAILED')}return value; }
+        if(response.status!==200&&!accepted){const code=value.code||value.detail?.code,error=fail(typeof code==='string'&&/^[A-Z_]{4,80}$/.test(code)?code:'STUDIO_REQUEST_FAILED');if(method==='GET'&&['/deployment/capabilities','/_builder/context'].includes(route))responseMetadata.set(error,{status:response.status,routeMissing:value.detail==='Not Found'});throw error}return value; }
       catch(error) { if(error.code)throw error;throw fail('STUDIO_RESPONSE_INVALID'); }
     }
     return { key, request, assertLive,active:{link:connection} };

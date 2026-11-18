@@ -54,5 +54,13 @@
     "png_color_type": 6,
     "bytes": 1711940,
     "sha256": "22c9d2fd4ae3b73dca32ecded0370d15ef8838eef77d3e8a528371cc60243c4b"
+  },
+  {
+    "file": "memory.png",
+    "width": 288,
+    "height": 288,
+    "png_color_type": 6,
+    "bytes": 65780,
+    "sha256": "ec05c0c1b2bffd96b5b35d73b04581022deb6c87eab29aa0749c1e8550e5b4e0"
   }
 ]

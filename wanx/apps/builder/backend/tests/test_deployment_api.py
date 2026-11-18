@@ -113,6 +113,39 @@ async def test_accepted_operations_are_durable_and_resume_preserves_original_req
     assert environment.json()["generation"] == 0
 
 
+async def test_event_api_keeps_wait_reason_after_success_and_reads_legacy_events(api):
+    client, deployments, _, _ = api
+    operation = await create_operation(client)
+    journal = deployments.journal
+    url = PREFIX + "/operations/" + operation["id"]
+    accepted = (await client.get(url + "/events?limit=1")).json()["items"][0]
+    assert "errorCode" not in accepted
+
+    op = journal.claim(operation["id"], "fixture", 100, 30)
+    op.update(state="waiting_box", phase="prepare_backend", errorCode="DEPENDENCY_UNAVAILABLE")
+    op = journal.save(op, "fixture", op["fence"], 100,
+                      event={"type": "progress", "state": "waiting_box"})
+    waiting = (await client.get(url + "/events?after=1&limit=1")).json()["items"][0]
+    assert waiting["errorCode"] == "DEPENDENCY_UNAVAILABLE"
+    assert waiting["phase"] == "prepare_backend"
+    assert set(waiting) == {"type", "state", "phase", "errorCode", "sequence", "operationId",
+                            "operationRevision", "createdAt"}
+
+    op.update(state="succeeded", phase="verify_active", errorCode=None)
+    receipt = {"receiptId": "receipt-demo", "operationId": op["id"], "operationRevision": op["revision"] + 1,
+               "kind": op["request"]["kind"], "target": op["target"], "outcome": "succeeded",
+               "commitStatus": op["commitStatus"], "committedGeneration": None, "previousGeneration": 0,
+               "environmentRevision": journal.get_environment(op["target"])["revision"]}
+    journal.save(op, "fixture", op["fence"], 100, receipt=receipt)
+    response = await client.get(url + "/events")
+    assert response.status_code == 200
+    history = response.json()["items"]
+    assert history[:2] == [accepted, waiting]
+    assert history[-1]["state"] == "succeeded"
+    assert "errorCode" not in history[-1]
+    assert (await client.get(url)).json()["errorCode"] is None
+
+
 async def test_default_adapter_reports_unavailable_without_accepting_side_effects(api):
     client, deployments, _, _ = api
     deployments.adapter = UnavailableAdapter()

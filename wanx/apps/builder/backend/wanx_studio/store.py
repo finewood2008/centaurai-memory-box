@@ -153,7 +153,8 @@ class Store:
             import re
             slug = re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-') or 'app'
             slug = slug[:40].rstrip('-') or 'app'
-            p = {"id": uuid4().hex, "appId": "dev.wanx." + slug + "." + uuid4().hex[:8], "owner": owner, "name": name,
+            if not slug[0].isalpha():slug = "app-" + slug
+            p = {"id": uuid4().hex, "appId": "dev.wanx." + slug + ".a" + uuid4().hex[:8], "owner": owner, "name": name,
                  "nameMode":"auto", "autoName":None, "originalGoal": goal, "stage": "discovery", "createdAt": time.time(), "updatedAt": time.time(),
                  "messages": [{"id": uuid4().hex,"role":"user","text":goal}],
                  "solution": {"audience":"","workflow":"","inputs":"","outputs":"","fields":[],"acceptance":[],"capabilities":["data","model"],"dependencies":[],"prd":ProductRequirement().model_dump()},

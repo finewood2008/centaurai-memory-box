@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wanx-thread-create/1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "thread_id",
+    "session_key"
+  ],
+  "properties": {
+    "thread_id": {
+      "type": "string"
+    },
+    "session_key": {
+      "type": "string"
+    }
+  }
+}

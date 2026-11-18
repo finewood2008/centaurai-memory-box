@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wanx-model-list/1",
+  "type": "object",
+  "required": ["models"],
+  "properties": {
+    "models": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "source": {"type": "string"},
+          "name": {"type": "string"},
+          "provider": {"type": "string"},
+          "input_units": {"type": "string"},
+          "output_units": {"type": "string"},
+          "max_output_tokens": {"type": "integer", "minimum": 1},
+          "max_input_bytes": {"type": "integer", "minimum": 1}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

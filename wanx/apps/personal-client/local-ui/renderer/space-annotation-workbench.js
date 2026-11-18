@@ -1,6 +1,6 @@
 (() => {
   const esc = value => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
-  const parseTags = value => [...new Set(String(value || "").split(/[,，;；\n]+/).map(tag => tag.trim()).filter(Boolean))];
+  const parseTags = value => [...new Map((Array.isArray(value) ? value : String(value || "").split(/[,，;；\n]+/)).map(tag => tag.trim()).filter(Boolean).map(tag => [tag.toLocaleLowerCase(), tag])).values()];
   const ownTags = row => row?.annotation?.manual?.tags ?? row?.annotation?.automatic?.tags ?? [];
   const ownDescription = row => row?.annotation?.manual?.description ?? row?.annotation?.automatic?.description ?? "";
   const effectiveDescription = row => row?.annotation?.description ?? ownDescription(row);
@@ -22,6 +22,7 @@
     let cache = new Map(), drafts = new Map(), draftTimers = new Map(), draftWrites = new Map(), draftError = new Set(), committingDrafts = new Map();
     let scrollTop = 0, poll = null, queryTimer = null, loadingList = false, nextAfterApply = null;
     let schemesLoading = false;
+    let reusableTags = [], tagInputs = new Map(), tagFocus = "", tagRepaint = false;
     let tab = "edit", schemes = [], scheme = "", instructions = "", schemeName = "";
     let bulk = { tagMode: "keep", tags: "", descriptionMode: "keep", description: "", inherit: "keep" };
     let suggestionPolicy = { tagMode: "add", descriptionMode: "fill-empty" };
@@ -82,7 +83,7 @@
     async function loadSchemes() {
       if (schemesLoading) return;
       const revision = epoch; schemesLoading = true; emit();
-      try { schemes = (await invoke({ op: "schemes" })).items || []; }
+      try { const value = await invoke({ op: "schemes" }); schemes = value.items || []; reusableTags = value.tags || []; }
       catch (cause) { if (visible && revision === epoch) error = errorText(cause); }
       finally { if (revision === epoch) { schemesLoading = false; emit(); } }
     }
@@ -93,7 +94,7 @@
       selected = new Set(input.ids || []); activeId = input.ids?.[0] || ""; error = ""; emit();
       try { consume(await invoke({ op: "open", space_id: input.space_id || "personal", parent: input.parent || "", ...(input.ids?.length ? { ids: input.ids } : {}), recursive: input.recursive === true, ...(input.fresh ? { fresh: true } : {}) })); }
       catch (cause) { if (visible && revision === epoch) error = errorText(cause); }
-      finally { if (revision === epoch) { loading = false; emit(); } }
+      finally { if (revision === epoch) { loading = false; emit(); void loadSchemes(); } }
     }
     function reset() {
       visible = false; epoch++; clearTimeout(poll); clearTimeout(queryTimer); poll = queryTimer = null;
@@ -104,6 +105,7 @@
       summary = {}; filteredSummary = null; resumableJobs = []; query = type = state = ""; previewOpen = composing = false;
       scopeHistory = []; pendingFocus = focusedPlan = "";
       schemesLoading = false; scheme = schemeName = instructions = ""; schemes = []; tab = "edit"; leftHidden = true;
+      reusableTags = []; tagInputs.clear(); tagFocus = ""; tagRepaint = false;
       bulk = { tagMode: "keep", tags: "", descriptionMode: "keep", description: "", inherit: "keep" };
       suggestionPolicy = { tagMode: "add", descriptionMode: "fill-empty" };
     }
@@ -129,7 +131,10 @@
     }
     async function focusRow(id, event = {}) {
       if (id === activeId) return;
+      const revision = epoch;
+      if (!commitTags(tagField(), false)) return;
       if (activeId) try { await flushDraft(activeId); } catch { return; }
+      if (!visible || revision !== epoch) return;
       const before = activeId; activeId = id;
       pendingFocus = id;
       if (event.shiftKey) {
@@ -156,8 +161,33 @@
       return { tagMode: bulk.tagMode, tags: parseTags(bulk.tags), descriptionMode: bulk.descriptionMode, description: bulk.description,
         ...(bulk.inherit !== "keep" ? { inherit: bulk.inherit === "on" } : {}) };
     }
+    const tagField = () => isBatch() || tab === "schemes" ? "bulk-tag-input" : "item-tag-input";
+    const tagKey = field => field === "bulk-tag-input" ? "bulk" : activeId;
+    const tagValues = field => field === "bulk-tag-input" ? parseTags(bulk.tags) : [...draftFor(current()).tags];
+    const tagWritable = field => !isBusy() && (field === "bulk-tag-input" && tab === "schemes" || writable() && (field !== "item-tag-input" || current()?.writable !== false));
+    function setTags(field, values, focus = true) {
+      if (!tagWritable(field)) return false;
+      const tags = [...new Map(values.map(tag => [tag.trim().toLocaleLowerCase(), tag.trim()]).filter(([tag]) => tag)).values()];
+      if (tags.length > 30 || tags.some(tag => tag.length > 80)) { error = "最多添加 30 个标签，每个标签最多 80 个字符。"; tagRepaint = true; if (focus) tagFocus = field; emit(); return false; }
+      input(field === "bulk-tag-input" ? "bulk-tags" : "item-tags", tags);
+      error = ""; tagRepaint = true; if (focus) tagFocus = field; return true;
+    }
+    function commitTags(field = tagField(), focus = true) {
+      const text = tagInputs.get(tagKey(field)) || "";
+      if (!text.trim()) return true;
+      if (!setTags(field, [...tagValues(field), ...parseTags(text)], focus)) return false;
+      tagInputs.delete(tagKey(field)); return true;
+    }
+    function availableTags() {
+      return parseTags([...drafts.values()].reverse().flatMap(draft => draft.tags).concat((summary.tagCounts || []).map(item => item.tag), reusableTags, schemes.flatMap(item => item.tags || []))).slice(0, 500);
+    }
+    function tagsEditor(field, tags, label, disabled) {
+      const selected = new Set(tags.map(tag => tag.toLocaleLowerCase())), choices = availableTags().filter(tag => !selected.has(tag.toLocaleLowerCase()));
+      return `<div class="awb-tag-editor"><label for="awb-tag-input">${esc(label)}</label><div class="awb-tag-field">${tags.map(tag => `<span class="awb-tag-token">${esc(tag)}<button type="button" data-action="space-wb-tag-remove" data-field="${field}" data-tag="${esc(tag)}" aria-label="移除标签 ${esc(tag)}" ${disabled ? "disabled" : ""}>×</button></span>`).join("")}<input id="awb-tag-input" data-wb-field="${field}" list="awb-tag-options" value="${esc(tagInputs.get(tagKey(field)) || "")}" maxlength="2400" placeholder="输入或选择已有标签" aria-label="${esc(label)}，按回车添加" ${disabled ? "disabled" : ""}></div><datalist id="awb-tag-options">${choices.map(tag => `<option value="${esc(tag)}"></option>`).join("")}</datalist><small class="awb-hint">回车或逗号添加，支持多个标签。</small>${choices.length ? `<div class="awb-quick-tags"><span>已有标签</span>${choices.slice(0, 8).map(tag => `<button type="button" class="awb-chip" data-action="space-wb-chip" data-tag="${esc(tag)}" ${disabled ? "disabled" : ""}>+ ${esc(tag)}</button>`).join("")}</div>` : ""}</div>`;
+    }
     async function prepare(kind, forCurrent = false) {
       if (!job || !selectedCount() || !writable() || isBusy() || ((forCurrent || ["single", "next"].includes(kind)) && current()?.writable === false)) return;
+      if (!commitTags(tagField(), false)) return;
       error = ""; loading = true; emit();
       try {
         if (kind === "single" || kind === "next") await flushDraft(activeId, true);
@@ -184,23 +214,33 @@
       finally { loading = false; emit(); }
     }
     async function close() {
+      const revision = epoch;
+      if (!commitTags(tagField(), false)) return;
       try { for (const id of drafts.keys()) await flushDraft(id); await Promise.all([...draftWrites.values()]); }
       catch { return; }
+      if (!visible || revision !== epoch) return;
       reset(); onClose(); changed();
     }
     async function changeScope(input, push = true) {
+      const revision = epoch;
+      if (!commitTags(tagField(), false)) return;
       for (const id of drafts.keys()) await flushDraft(id);
       await Promise.all([...draftWrites.values()]);
+      check(revision);
       if (push) scopeHistory.push({ ...origin });
       await open(input, true);
     }
     async function changeJob(id) {
       if (!id || id === job?.id || loading) return;
+      const revision = epoch;
+      if (!commitTags(tagField(), false)) return;
       for (const draftId of drafts.keys()) await flushDraft(draftId);
       await Promise.all([...draftWrites.values()]);
+      check(revision);
       epoch++; loadingList = false; schemesLoading = false;
       clearTimeout(poll); clearTimeout(queryTimer); poll = queryTimer = null;
       drafts.clear(); draftWrites.clear(); draftError.clear(); committingDrafts.clear(); cache.clear(); releasePreview();
+      tagInputs.clear(); tagFocus = ""; tagRepaint = false;
       selected.clear(); allMatching = null; activeId = anchor = ""; items = []; offset = scrollTop = 0; plan = null; nextAfterApply = null; previewOpen = false; filteredSummary = null;
       suggestionPolicy = { tagMode: "add", descriptionMode: "fill-empty" };
       bulk = { tagMode: "keep", tags: "", descriptionMode: "keep", description: "", inherit: "keep" };
@@ -208,7 +248,14 @@
     }
     async function action(name, data = {}, event = {}) {
       if (!visible) return;
+      const revision = epoch;
       try {
+        if (["check", "page-select", "matching-select", "clear", "tab", "use-scheme", "filter", "previous-page", "next-page", "scope-parent"].includes(name)) {
+          const field = tagField();
+          if (!commitTags(field, false)) return;
+          if (field === "item-tag-input" && activeId) await flushDraft(activeId);
+          check(revision);
+        }
         if (name === "close") return await close();
         if (name === "focus") return await focusRow(data.id, event);
         if (name === "check") {
@@ -240,7 +287,7 @@
           if (isBatch()) bulk.tagMode = "add";
           else {
             const row = current(); if (!row || row.writable === false) return;
-            const draft = draftFor(row); draft.tags = [...new Set([...draft.tags, ...parseTags(bulk.tags)])]; draft._fields.add("tags");
+            const draft = draftFor(row); draft.tags = parseTags([...draft.tags, ...parseTags(bulk.tags)]); draft._fields.add("tags");
             if (bulk.inherit !== "keep") { draft.inherit = bulk.inherit === "on"; draft._fields.add("inherit"); }
             draft._dirty = draft._edited = true; draft._serial++; await flushDraft(row.id);
           }
@@ -266,31 +313,45 @@
         if (name === "scope-parent" && scopeHistory.length) { const previous = scopeHistory.pop(); return await changeScope(previous, false); }
         if (name === "scope-folder") return await changeScope({ space_id: origin.space_id, parent: data.id || "", recursive: origin.recursive, scopeName: data.name || "文件夹" });
         if (name === "source") return await changeScope({ space_id: origin.space_id, parent: "", ids: [data.id], scopeName: data.name || "来源文件夹" });
-        if (name === "chip") { if (!writable() || isBusy()) return; if (isBatch()) { bulk.tagMode = "add"; bulk.tags = [...new Set([...parseTags(bulk.tags), data.tag])].join("，"); } else { const value = draftFor(current()); value.tags = [...new Set([...value.tags, data.tag])]; value._fields.add("tags"); value._dirty = value._edited = true; value._serial++; if (!value._conflict) void flushDraft(activeId).catch(() => {}); } emit(); return; }
+        if (name === "chip" || name === "tag-remove") {
+          const field = tagField(), tags = tagValues(field);
+          if (name === "tag-remove" && data.field !== field) return;
+          if (typeof data.tag !== "string") return;
+          if (setTags(field, name === "chip" ? [...tags, data.tag] : tags.filter(tag => tag !== data.tag)) && name === "chip") tagInputs.delete(tagKey(field)); emit(); return;
+        }
         if (name === "save-scheme") {
+          if (!commitTags("bulk-tag-input", false)) return;
           if (!schemeName.trim()) { error = "请为方案填写名称。"; emit(); return; }
           if (schemeName.trim().length > 80) { error = "方案名称最多 80 个字符。"; emit(); return; }
           await invoke({ op: "save-scheme", scheme: { ...(scheme ? { id: scheme } : {}), name: schemeName.trim(), tags: parseTags(bulk.tags), instructions, ...(bulk.inherit !== "keep" ? { inherit: bulk.inherit === "on" } : {}) } });
           schemes = (await invoke({ op: "schemes" })).items || []; message = "方案已保存，可在其他批次复用。"; emit(); return;
         }
         if (name === "delete-scheme" && scheme) { await invoke({ op: "delete-scheme", id: scheme }); scheme = ""; schemes = (await invoke({ op: "schemes" })).items || []; emit(); return; }
-      } catch (cause) { error = errorText(cause); loading = false; emit(); }
+      } catch (cause) { if (visible && revision === epoch) { error = errorText(cause); loading = false; emit(); } }
     }
     function input(name, value) {
       if (!visible) return;
+      if (["item-tag-input", "bulk-tag-input"].includes(name)) {
+        if (!tagWritable(name)) return;
+        tagInputs.set(tagKey(name), String(value));
+        if (!composing && /[,，;；\n]/.test(value)) { commitTags(name); emit(); }
+        return;
+      }
       if (["item-tags", "item-description", "item-inherit"].includes(name)) {
         const row = current(); if (!row || row.writable === false || isBusy()) return;
         const draft = draftFor(row), key = name === "item-tags" ? "tags" : name === "item-description" ? "description" : "inherit"; draft[key] = name === "item-tags" ? parseTags(value) : value; draft._fields.add(key);
         draft._dirty = draft._edited = true; draft._serial++; clearTimeout(draftTimers.get(row.id)); if (!draft._conflict) draftTimers.set(row.id, setTimeout(() => { void flushDraft(row.id).catch(() => {}); }, 250)); return;
       }
+      if (["query", "status", "type", "bulk-tagMode"].includes(name) && !commitTags(tagField(), false)) return;
       if (name === "query") { query = value; offset = scrollTop = 0; allMatching = null; filteredSummary = null; clearTimeout(queryTimer); queryTimer = setTimeout(() => { void loadPage(); }, 250); return; }
       if (name === "status") { if (value && !Object.hasOwn(stateNames, value)) return; state = value; offset = scrollTop = 0; allMatching = null; filteredSummary = null; void loadPage(); return; }
       if (name === "type") { type = value; offset = scrollTop = 0; allMatching = null; filteredSummary = null; void loadPage(); return; }
       if (name === "recursive") { void changeScope({ ...origin, recursive: value, fresh: true }, false).catch(cause => { error = errorText(cause); emit(); }); return; }
       if (name === "job") { void changeJob(value).catch(cause => { error = errorText(cause); emit(); }); return; }
       if (name === "scheme") {
+        tagInputs.delete("bulk");
         scheme = value; const chosen = schemes.find(item => item.id === value);
-        if (chosen) { bulk.tags = (chosen.tags || []).join("，"); bulk.tagMode = "add"; instructions = chosen.instructions || ""; bulk.inherit = chosen.inherit === undefined ? "keep" : chosen.inherit ? "on" : "off"; schemeName = chosen.name; }
+        if (chosen) { bulk.tags = [...(chosen.tags || [])]; bulk.tagMode = "add"; instructions = chosen.instructions || ""; bulk.inherit = chosen.inherit === undefined ? "keep" : chosen.inherit ? "on" : "off"; schemeName = chosen.name; }
         else schemeName = "";
         emit(); return;
       }
@@ -307,6 +368,8 @@
     }
     async function keydown(event) {
       if (!visible || composing || event.isComposing) return false;
+      const field = event.target?.dataset?.wbField;
+      if (["item-tag-input", "bulk-tag-input"].includes(field) && event.key === "Enter" && !event.metaKey && !event.ctrlKey) { event.preventDefault(); commitTags(field); emit(); return true; }
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { if (tab === "schemes" && !plan) return false; event.preventDefault(); if (plan) await submitPlan(); else await prepare(isBatch() ? "batch" : "next"); return true; }
       if (plan) { if (event.key === "Escape") { event.preventDefault(); plan = null; emit(); } return true; }
       if (event.key === "Escape" && !leftHidden) { event.preventDefault(); leftHidden = true; emit(); return true; }
@@ -349,8 +412,7 @@
         <div class="awb-panel-heading"><h3>${batch ? `批量处理 ${selectedCount()} 项` : esc(row.name)}</h3>${row?.writable === false ? '<span class="awb-badge">只读</span>' : ""}</div>
         ${batch ? '<p class="awb-hint">默认追加标签、只填空说明，未修改的内容保留。</p>' : ""}
         ${row?.annotation?.needsReview ? '<p class="awb-alert">文件内容已变化，保存前请复核原标注。</p>' : ""}
-        <label>${tagLabel}<input data-wb-field="${batch ? "bulk-tags" : "item-tags"}" value="${esc(batch ? bulk.tags : draft.tags.join("，"))}" maxlength="2400" placeholder="输入标签，用逗号分隔" ${disabled ? "disabled" : ""}></label>
-        ${(summary.tagCounts || []).length ? `<div class="awb-quick-tags"><span>常用</span>${summary.tagCounts.slice(0, 8).map(item => `<button type="button" class="awb-chip" data-action="space-wb-chip" data-tag="${esc(item.tag)}" ${disabled ? "disabled" : ""}>+ ${esc(item.tag)}</button>`).join("")}</div>` : ""}
+        ${tagsEditor(batch ? "bulk-tag-input" : "item-tag-input", batch ? parseTags(bulk.tags) : draft.tags, tagLabel, disabled)}
         <label>${descriptionLabel}<textarea data-wb-field="${batch ? "bulk-description" : "item-description"}" rows="5" maxlength="2000" placeholder="简单说明这份资料的内容或用途" ${disabled ? "disabled" : ""}>${esc(batch ? bulk.description : draft.description)}</textarea></label>
         ${scheme && instructions ? `<p class="awb-hint">填写提示：${esc(instructions)}</p>` : ""}
         ${!batch && row?.kind === "folder" ? '<p class="awb-hint">文件夹标注可由子文件继承，无需逐项填写。</p>' : ""}
@@ -369,7 +431,7 @@
         ${schemesLoading ? '<p class="awb-hint" role="status">正在读取方案…</p>' : ""}
         <label>选择方案<select data-wb-field="scheme"><option value="">新建方案</option>${schemes.map(item => `<option value="${esc(item.id)}" ${item.id === scheme ? "selected" : ""}>${esc(item.name)}</option>`).join("")}</select></label>
         <label>方案名称<input data-wb-field="scheme-name" maxlength="80" value="${esc(schemeName)}" placeholder="例如：客户项目资料"></label>
-        <label>常用标签<input data-wb-field="bulk-tags" maxlength="2400" value="${esc(bulk.tags)}" placeholder="客户资料，项目归档"></label>
+        ${tagsEditor("bulk-tag-input", parseTags(bulk.tags), "常用标签", isBusy())}
         <label>说明填写提示<textarea data-wb-field="instructions" rows="3" maxlength="4000" placeholder="提醒自己需要填写哪些内容">${esc(instructions)}</textarea></label>
         <details class="awb-details"><summary>继承偏好</summary><label><select aria-label="方案继承偏好" data-wb-field="bulk-inherit"><option value="keep" ${bulk.inherit === "keep" ? "selected" : ""}>保留各项设置</option><option value="on" ${bulk.inherit === "on" ? "selected" : ""}>开启继承</option><option value="off" ${bulk.inherit === "off" ? "selected" : ""}>关闭继承</option></select></label></details>
         <div class="awb-editor-actions">${scheme ? button("使用此方案", "use-scheme", "", loading || schemesLoading || !selectedCount() || !writable(), true) : ""}${button("保存方案", "save-scheme", "", loading || schemesLoading, !scheme)}${scheme ? button("删除此方案", "delete-scheme", "", loading || schemesLoading) : ""}</div>
@@ -436,6 +498,8 @@
       </section>`;
     }
     function mounted(root = document) {
+      tagRepaint = false;
+      if (tagFocus) { const field = tagFocus; tagFocus = ""; root.querySelector?.(`[data-wb-field="${field}"]`)?.focus?.({ preventScroll: true }); }
       const viewport = root.querySelector?.("[data-wb-scroll]");
       if (viewport) { if (Math.abs(viewport.scrollTop - scrollTop) > 2) viewport.scrollTop = scrollTop; }
       for (const node of root.querySelectorAll?.(".awb-top, .awb-layout, .awb-bottom") || []) node.inert = !!plan;
@@ -444,7 +508,7 @@
     }
     function onScroll(top) { if (Math.floor(top / rowHeight) === Math.floor(scrollTop / rowHeight)) { scrollTop = top; return; } scrollTop = top; emit(); }
     function retainEditor() {
-      if (!visible || plan || drafts.get(activeId)?._conflict || isBusy()) return false;
+      if (!visible || plan || tagRepaint || drafts.get(activeId)?._conflict || isBusy()) return false;
       const field = document.activeElement;
       return !!field?.dataset?.wbField && !["type", "status", "recursive", "job", "scheme", "suggestion-tags", "suggestion-description", "bulk-tagMode", "bulk-descriptionMode", "bulk-inherit"].includes(field.dataset.wbField);
     }

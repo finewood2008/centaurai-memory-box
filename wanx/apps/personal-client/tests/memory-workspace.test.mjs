@@ -407,6 +407,7 @@ test("memory uses the selected WANX box by default and supports a persisted cust
   ];
   let supportsRouting = false;
   let hasTextModel = true;
+  let hasDefault = true;
   const calls = [];
   const client = {
     snapshot: () => state,
@@ -420,7 +421,7 @@ test("memory uses the selected WANX box by default and supports a persisted cust
           return { status: 404 };
         const capabilities = supportsRouting && hasTextModel ? Object.fromEntries(
           ["memory_summary", "memory_evolution"].map(role => [role, {
-            defaultRef: "test/summary", models: catalog.slice(0, 2),
+            defaultRef: hasDefault ? "test/summary" : null, models: catalog.slice(0, 2),
           }])) : {};
         if (supportsRouting) {
           capabilities.asr = { defaultRef: "voice/speech", models: [{ provider_name: "voice", model: "speech", input: ["audio"] }] };
@@ -430,7 +431,8 @@ test("memory uses the selected WANX box by default and supports a persisted cust
           status: input.method === "GET" && !hasTextModel ? 409 : 200,
           body: JSON.stringify(input.method === "GET"
             ? {
-              ...(hasTextModel ? { model: defaultModel, name: defaultModel, provider: "test" }
+              ...(hasTextModel ? hasDefault ? { model: defaultModel, name: defaultModel, provider: "test" }
+                : { error: "MEMORY_MODEL_NOT_CONFIGURED" }
                 : { detail: "MEMORY_MODEL_NOT_CONFIGURED" }),
               capabilities,
             } : { text: "result" }),
@@ -500,6 +502,13 @@ test("memory uses the selected WANX box by default and supports a persisted cust
   assert.deepEqual(JSON.parse(calls.at(-1).body), {
     messages, max_tokens: 256, json_mode: true, role: "memory_evolution", model_ref: "test/evolution",
   });
+
+  hasDefault = false;
+  assert.equal((await settings()).roles.memory_summary.ready, false);
+  const separatelyAssigned = await settings({ role: "memory_summary", modelRef: "test/summary" });
+  assert.equal(separatelyAssigned.roles.memory_summary.ready, true);
+  assert.equal(separatelyAssigned.roles.memory_evolution.ready, true);
+  assert.equal(separatelyAssigned.error, null);
 
   hasTextModel = false;
   const countBeforeMediaOnly = calls.length;

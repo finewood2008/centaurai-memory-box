@@ -6,10 +6,10 @@ import { readFile } from "node:fs/promises";
 const source = await readFile(new URL("../local-ui/renderer/personal-space.js", import.meta.url), "utf8");
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const connected = box => ({ route: "applications", canLaunchApplications: true, account: { accountId: "owner" }, activeDeviceId: box, devices: [{ deviceId: box, name: box }] });
-function harness(action, uploadDroppedFiles, tilePositions = [], dom = {}, surface = {}) {
+function harness(action, uploadDroppedFiles, tilePositions = [], dom = {}, surface = {}, globals = {}) {
   const events = new Map(), documentEvents = new Map(); let onState;
   const root = { focus() {}, addEventListener: (type, handler) => events.set(type, handler), ...surface };
-  const window = { wanxClient: { action, uploadDroppedFiles, onSpaceState: handler => { onState = handler; } } };
+  const window = { wanxClient: { action, uploadDroppedFiles, onSpaceState: handler => { onState = handler; } }, ...globals };
   vm.runInNewContext(source, { window, document: { querySelector: selector => dom.nodes?.get(selector) || root, querySelectorAll: selector => selector === ".space-file-row" ? tilePositions.map(offsetTop => ({ offsetTop })) : [], addEventListener: (type, handler) => documentEvents.set(type, handler) , ...dom }, setInterval() {}, setTimeout, requestAnimationFrame: () => 1, cancelAnimationFrame() {}, queueMicrotask, URL, Blob, atob, TextDecoder });
   const space = window.wanxSpace;
   space.bind({ render() {} });
@@ -18,6 +18,16 @@ function harness(action, uploadDroppedFiles, tilePositions = [], dom = {}, surfa
 }
 const listed = name => ({ items: [{ id: "a".repeat(32), name, kind: "file", size: 10, modified: 0 }], breadcrumbs: [] });
 const ok = value => ({ ok: true, value });
+
+function workspaceFixture(disks = [{ id: 'personal', name: '我的空间', root: '', writable: true }]) {
+  let current = disks[0];
+  return {
+    current: () => current, root: () => current.root, spaces: () => disks, blocked: () => false,
+    storageScope() {}, refresh: async () => {}, reconcile: async value => { current = disks.find(disk => disk.id === value.space); return value; },
+    observe: async () => {}, reset() {}, bind() {}, invalidated() {},
+    sidebar: () => '', footerNavigation: () => '', navigation: () => '', menuView: () => '', dialogView: () => '', recycled: () => '',
+  };
+}
 
 test("an early box event clears private content and late results cannot refill the new account", async () => {
   let resolveList, block = false;
@@ -563,4 +573,128 @@ test('compact personal actions follow the current folder and omit write controls
  await h.click('recycle');assert.doesNotMatch(h.space.headerActions(),/space-upload|space-mkdir/);
  h.emit({accountId:'owner',boxId:'box',phase:'unsupported',tasks:[]});assert.doesNotMatch(h.space.headerActions(),/space-upload|space-mkdir/);
  h.space.hostState({...connected('box'),canLaunchApplications:false});assert.match(h.space.headerActions(),/连接盒子/);
+});
+
+test('permanent deletion waits for confirmation, supports cancellation and retains failures for retry', async () => {
+  const file = entry('a', 'important.txt');
+  let purges = 0, fail = true;
+  const h = harness(async action => {
+    if (action === 'space.purge') { purges++; return fail ? { ok: false, code: 'SPACE_REQUEST_FAILED' } : ok(); }
+    return ok(action === 'space.refresh' ? { phase: 'ready', tasks: [] } : { items: [file], breadcrumbs: [] });
+  });
+  h.space.hostState(connected('box')); h.space.activate(true); await tick();
+  await h.click('recycle'); await h.click('purge', file.id);
+  assert.equal(purges, 0);
+  assert.match(h.space.view(), /无法恢复/);
+  assert.match(h.space.view(), /data-action="space-dialog-confirm"[^>]*>彻底删除/);
+  await h.click('dialog-close'); assert.equal(purges, 0);
+  await h.click('purge', file.id); await h.click('dialog-confirm');
+  assert.equal(purges, 1); assert.match(h.space.view(), /1 项未完成/);
+  fail = false; await h.click('dialog-confirm');
+  assert.equal(purges, 2); assert.doesNotMatch(h.space.view(), /role="dialog"/);
+});
+
+test('move destination ignores late folder reads and cannot submit while loading or after a failed read', async () => {
+  const file = entry('a', 'file.txt'), first = entry('b', 'first', 'folder'), latest = entry('c', 'latest', 'folder');
+  const pending = new Map(), moved = [];
+  const h = harness(async (action, input) => {
+    if (action === 'space.refresh') return ok({ phase: 'ready', tasks: [] });
+    if (action === 'space.move') { moved.push(input); return ok(); }
+    if (input.parent) return new Promise(resolve => pending.set(input.parent, resolve));
+    return ok({ items: [file, first, latest], breadcrumbs: [] });
+  });
+  h.space.hostState(connected('box')); h.space.activate(true); await tick();
+  await h.click('move', file.id);
+  const old = h.click('move-folder', first.id); await tick();
+  const newest = h.click('move-folder', latest.id); await tick();
+  assert.match(h.space.view(), /data-action="space-dialog-confirm"[^>]*disabled/);
+  await h.click('dialog-confirm'); assert.equal(moved.length, 0);
+  pending.get(latest.id)(ok({ items: [], breadcrumbs: [{ id: latest.id, name: 'chosen-latest' }] })); await newest;
+  pending.get(first.id)(ok({ items: [], breadcrumbs: [{ id: first.id, name: 'stale-first' }] })); await old;
+  assert.match(h.space.view(), /chosen-latest/); assert.doesNotMatch(h.space.view(), /stale-first/);
+  const failed = h.click('move-folder', first.id); await tick();
+  pending.get(first.id)({ ok: false, code: 'SPACE_REQUEST_FAILED' }); await failed;
+  await h.click('dialog-confirm'); assert.equal(moved.length, 0);
+  assert.match(h.space.view(), /data-action="space-dialog-confirm"[^>]*disabled/);
+  const retry = h.click('move-folder', latest.id); await tick();
+  pending.get(latest.id)(ok({ items: [], breadcrumbs: [{ id: latest.id, name: latest.name }] })); await retry;
+  await h.click('dialog-confirm'); assert.equal(moved[0].parent, latest.id);
+});
+
+test('changing destination spaces does not combine a new space with an old folder response', async () => {
+  const file = entry('a', 'file.txt'), pending = new Map(), transfers = [];
+  const disks = [
+    { id: 'personal', name: '我的空间', root: '', writable: true },
+    { id: 'b'.repeat(32), name: 'Space B', root: 'c'.repeat(32), writable: true },
+    { id: 'd'.repeat(32), name: 'Space D', root: 'e'.repeat(32), writable: true },
+  ];
+  const h = harness(async (action, input) => {
+    if (action === 'space.refresh') return ok({ phase: 'ready', tasks: [] });
+    if (action === 'space.links-file-transfer') { transfers.push(input); return ok(); }
+    if (input.space_id !== 'personal') return new Promise(resolve => pending.set(input.space_id, resolve));
+    return ok({ items: [file], breadcrumbs: [] });
+  }, undefined, [], {}, {}, { wanxWorkspaces: workspaceFixture(disks) });
+  h.space.hostState(connected('box')); h.space.activate(true); await tick(); await h.click('copy', file.id);
+  const old = h.click('move-space', disks[1].id); await tick();
+  const newest = h.click('move-space', disks[2].id); await tick();
+  pending.get(disks[2].id)(ok({ items: [], breadcrumbs: [] })); await newest;
+  pending.get(disks[1].id)(ok({ items: [], breadcrumbs: [] })); await old;
+  await h.click('dialog-confirm');
+  assert.equal(transfers.length, 1); assert.equal(transfers[0].space_id, disks[2].id); assert.equal(transfers[0].parent, disks[2].root);
+});
+
+for (const key of ['F2', 'Delete']) test(`read-only space blocks ${key}, selected write buttons and file drops`, async () => {
+  const disk = { id: 'personal', name: 'Read only', root: '', writable: false }, file = entry('a', 'file.txt');
+  const uploaded = [];
+  const h = harness(async action => ok(action === 'space.refresh' ? { phase: 'ready', tasks: [] } : { items: [file], breadcrumbs: [] }),
+    async (...args) => { uploaded.push(args); return ok(); }, [], {}, {}, { wanxWorkspaces: workspaceFixture([disk]) });
+  h.space.hostState(connected('box')); h.space.activate(true); await tick(); await h.click('select', file.id);
+  await h.keydown({ key, target: fileTarget(file), preventDefault() {} });
+  assert.doesNotMatch(h.space.view(), /role="dialog"|data-action="space-batch-(move|trash)"/);
+  const event = { preventDefault() {}, dataTransfer: { types: ['Files'], files: [{ name: 'local.txt' }] } };
+  h.event('dragover', event); assert.equal(event.dataTransfer.dropEffect, 'none');
+  await h.event('drop', event); assert.equal(uploaded.length, 0);
+  h.space.bind({ render() {}, compactActions: true });
+  assert.doesNotMatch(h.space.view(), /所选文件更多操作|data-action="space-batch-(move|trash)"/);
+});
+
+test('rename rechecks write permission when the form is submitted', async () => {
+  const disk = { id: 'personal', name: '我的空间', root: '', writable: true }, file = entry('a', 'file.txt'), moved = [];
+  const h = harness(async (action, input) => {
+    if (action === 'space.move') { moved.push(input); return ok(); }
+    return ok(action === 'space.refresh' ? { phase: 'ready', tasks: [] } : { items: [file], breadcrumbs: [] });
+  }, undefined, [], {}, {}, { wanxWorkspaces: workspaceFixture([disk]) });
+  h.space.hostState(connected('box')); h.space.activate(true); await tick(); await h.click('rename', file.id);
+  disk.writable = false; await h.click('dialog-confirm');
+  assert.equal(moved.length, 0); assert.match(h.space.view(), /只读/);
+});
+
+test('read-only destinations reject sidebar drops and are omitted from the move picker', async () => {
+  const disks = [{ id: 'personal', name: '我的空间', root: '', writable: true }, { id: 'b'.repeat(32), name: 'Read only', root: 'c'.repeat(32), writable: false }];
+  const uploads = [], calls = [];
+  const h = harness(async (action, input) => { calls.push([action, input]); return ok(action === 'space.refresh' ? { phase: 'ready', tasks: [] } : listed('file.txt')); },
+    async (...args) => { uploads.push(args); return ok(); }, [], {}, {}, { wanxWorkspaces: workspaceFixture(disks) });
+  h.space.hostState(connected('box')); h.space.activate(true); await tick();
+  const event = { preventDefault() {}, target: { closest: () => ({ dataset: { space: disks[1].id, id: disks[1].root } }) }, dataTransfer: { types: ['Files'], files: [{ name: 'local.txt' }] } };
+  h.event('dragover', event); assert.equal(event.dataTransfer.dropEffect, 'none');
+  await h.event('drop', event); assert.equal(uploads.length, 0);
+  await h.click('move', 'a'.repeat(32));
+  assert.doesNotMatch(h.space.view(), new RegExp('data-action="space-move-space" data-id="' + disks[1].id + '"'));
+  const before = calls.length; await h.click('move-space', disks[1].id); assert.equal(calls.length, before);
+});
+
+test('sidebar rename checks the source space instead of the currently displayed space', async () => {
+  const disks = [{ id: 'personal', name: '我的空间', root: '', writable: false }, { id: 'b'.repeat(32), name: 'Writable', root: 'c'.repeat(32), writable: true }];
+  const folder = { ...entry('d', 'folder', 'folder'), space_id: disks[1].id }, moved = [];
+  const manager = workspaceFixture(disks); let fileAction;
+  manager.bind = options => { fileAction = options.fileAction; };
+  const h = harness(async (action, input) => {
+    if (action === 'space.stat') return ok(folder);
+    if (action === 'space.move') { moved.push(input); return ok(); }
+    return ok(action === 'space.refresh' ? { phase: 'ready', tasks: [] } : { items: [], breadcrumbs: [] });
+  }, undefined, [], {}, {}, { wanxWorkspaces: manager });
+  h.space.hostState(connected('box')); h.space.activate(true); await tick();
+  await fileAction('rename', folder); await h.click('dialog-confirm'); assert.equal(moved.length, 1);
+  disks[0].writable = true; disks[1].writable = false;
+  await assert.rejects(fileAction('rename', folder), /MCP_DRIVE_READ_ONLY/);
 });

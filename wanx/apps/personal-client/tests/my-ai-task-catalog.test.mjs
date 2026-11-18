@@ -11,6 +11,23 @@ const options = overrides => ({
   polish: async () => ({ text: "Optimized task" }), ...overrides,
 });
 
+test('Windows protocol handlers recognize known executables and reject foreign or network paths', async () => {
+  let handler = 'C:\\Apps\\Codex\\Codex.exe';
+  const task = createMyAiTask(options({platform:'win32',home:'C:\\Users\\fixture',
+    protocolRegistered:()=>true,applicationForProtocol:async()=>({path:handler})}));
+  const inspect = async id => (await task('status',{},check)).apps.find(agent=>agent.id===id);
+  assert.equal((await inspect('codex')).installed,true);
+  assert.equal((await inspect('codex')).prefill,true);
+  handler='C:\\Apps\\Claude\\Claude.exe';
+  assert.equal((await inspect('claude_desktop')).installed,true);
+  handler='C:\\Apps\\WorkBuddy\\WorkBuddy.exe';
+  assert.equal((await inspect('workbuddy')).installed,true);
+  for (const rejected of ['C:\\Windows\\System32\\cmd.exe','\\\\server\\share\\Codex.exe','//server/share/Codex.exe','Codex.exe']) {
+    handler=rejected;
+    assert.equal((await inspect('codex')).installed,false,rejected);
+  }
+});
+
 test("catalog contains exactly eight runtime entries and shares product context identities", async () => {
   assert.deepEqual(managedAgentIds, ["codex", "codex_cli", "claude_code", "claude_desktop", "gemini", "workbuddy", "qwenwork", "deepseek_harness"]);
   assert.equal(new Set(agentCatalog.map(agent => agent.product)).size, 6);

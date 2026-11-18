@@ -3,6 +3,42 @@
 import re
 
 
+def private_search_error(status: int, error: dict) -> str | None:
+    nested = error.get("error")
+    if status == 409 and isinstance(nested, dict):
+        code = nested.get("code")
+        if code in ("INDEX_REQUIRED", "INDEX_STALE", "NO_PARSED_CONTENT", "EMBEDDING_NOT_CONFIGURED"):
+            return f"SEMANTICA_{code}"
+    return None
+
+
+_INVALID_IMPORT_CONTENT = frozenset({
+    "文件类型与 Content-Type 不匹配",
+    "文件内容不是有效的 DOCX",
+    "文件内容不是有效的 PDF",
+    "文件内容不是有效的 XLS",
+    "图片内容与文件扩展名不匹配",
+    "图片内容与 Content-Type 不匹配",
+    "音频内容与文件扩展名不匹配",
+    "音频内容与 Content-Type 不匹配",
+    "Office 文件内容与扩展名不匹配",
+    "Office 文件损坏或不是有效的 ZIP",
+})
+
+
+def private_import_error(status: int, error: dict) -> str | None:
+    # Existing boxes return these known refusals as strings. Only the stable
+    # code crosses the desktop boundary.
+    detail = error.get("detail")
+    if not isinstance(detail, str):
+        return None
+    if status == 415 and detail in _INVALID_IMPORT_CONTENT:
+        return "SEMANTICA_FILE_CONTENT_MISMATCH"
+    if status == 422 and detail == "DOCX 已加密，无法解析":
+        return "SEMANTICA_FILE_ENCRYPTED"
+    return None
+
+
 def operation_timeout(path: str) -> int:
     if (
         path == "/workbench/ontology-suggestions/generate"

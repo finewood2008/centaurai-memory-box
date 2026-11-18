@@ -9,7 +9,7 @@ try {
   window = new BrowserWindow({ show: false, width: 1280, height: 900,
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true } });
   const htmlPath = app.getPath('userData') + '/wallet-test.html';
-  await writeFile(htmlPath, `<!doctype html><html><head><base href="${new URL('../../local-ui/renderer/', import.meta.url).href}"></head><body><div id="app"></div></body></html>`);
+  await writeFile(htmlPath, `<!doctype html><html><head><base href="${new URL('../../build/app/local-ui/renderer/', import.meta.url).href}"></head><body><div id="app"></div></body></html>`);
   await window.loadFile(htmlPath);
   const js = source => window.webContents.executeJavaScript(source);
   await js(`
@@ -31,6 +31,8 @@ try {
         if (action === 'wallet.catalog') data = { recharge_enabled: true, payment_channels: ['alipay', 'wechat'], timezone: 'Asia/Shanghai', tiers: [],
           custom_recharge: { enabled: true, version: 'cny-100-v1', min_amount_fen: 1, max_amount_fen: 10000000000, points_per_yuan: '100' },
           products: [1, 100, 200].map(amount => ({ product_id: 'product-' + amount, version: 'v1', name: '充值商品 ' + amount, enabled: true, amount_fen: amount, grant_credit_atoms: String(amount * 200000) })) };
+        if (action === 'wallet.catalog' && window.customV2) data = { view_version: '2', currency_rule_id: 'usd-credit-100-v2', recharge_enabled: true, payment_channels: ['alipay'], products: [{ product_id: 'p50', version: 'v2', name: '50元充值', enabled: true, amount_fen: 5000, grant_credit_atoms: '5000000000' }], custom_amount: { min_fen: window.oldRechargePolicy ? 1000 : 100, max_fen: 10000000000, step_fen: 100 } };
+        if (action === 'wallet.quote') data = { view_version: '2', currency_rule_id: 'usd-credit-100-v2', rule_id: 'v2', credit_scale: 6, amount_fen: input.amount_fen, grant_credit_atoms: String(input.amount_fen * 1000000) };
         if (action === 'wallet.balance') data = { balance_credit_atoms: activeOrder?.display_state === 'credited' ? activeOrder.grant_credit_atoms : '0', debt_credit_atoms: '0', ledger_sequence: activeOrder?.display_state === 'credited' ? 1 : 0, execution_slot_state: 'none', pending_call_count: 0 };
         if (action === 'wallet.balance' && window.qeeMode) data.billing_backend = 'qeetoken';
         if (action === 'wallet.wallet') data = { account_id: snapshot.account.accountId, billing_backend: 'qeetoken', currency_rule_id: 'usd-credit-1-v1', usd_per_credit: '1', credit_scale: 6, currency: 'USD', currency_scale: 8, balance_credit_atoms: '1999999999', balance_usd_atoms: '199999999940', spent_usd_atoms: '60', remote_sequence: '2', sync_state: 'synced', synced_at: window.walletSyncedAt || '2026-10-19T12:00:00Z', pending_executions: 1 };
@@ -49,13 +51,14 @@ try {
         }
         if (action === 'wallet.createOrder') {
           const custom = input.custom_amount_fen !== undefined;
-          check(!('amount_fen' in input), 'purchase must use the configured product or custom contract');
+          const v2 = input.currency_rule_id === 'usd-credit-100-v2';
+          check(v2 || !('amount_fen' in input), 'purchase must use the configured product or custom contract');
           if (custom) check(input.custom_recharge_version === 'cny-100-v1' && !('product_id' in input), 'custom purchase contract missing');
-          else check(input.product_version === 'v1', 'purchase must use server-owned product price');
-          const amountFen = custom ? input.custom_amount_fen : Number(input.product_id.replace('product-', ''));
+          else if (!v2) check(input.product_version === 'v1', 'purchase must use server-owned product price');
+          const amountFen = v2 ? input.amount_fen : custom ? input.custom_amount_fen : Number(input.product_id.replace('product-', ''));
           createCount++;
           activeOrder = { payment_channel: input.payment_channel, order_id: 'test-order-' + createCount, purchase_intent_id: input.purchase_intent_id, amount_fen: amountFen,
-            grant_credit_atoms: String(amountFen * (custom ? 1000000 : 200000)), created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 60000).toISOString(),
+            grant_credit_atoms: String(amountFen * (custom || v2 ? 1000000 : 200000)), created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 60000).toISOString(),
             payment_state: 'pending', fulfillment_state: 'not_due', review_state: 'none', display_state: 'pending',
             payment_action: { type: 'qr', payload: input.payment_channel === 'wechat' ? 'weixin://wxpay/bizpayurl?pr=isolated-test-not-payable' : 'isolated-test-not-payable', expires_at: new Date(Date.now() + 60000).toISOString() } };
           if (createCount === 1) await new Promise(resolve => { window.resolveCreate = resolve; });
@@ -84,11 +87,13 @@ try {
     };
     void 0;
   `);
-  const entry = await readFile(new URL('../../local-ui/renderer/index.html', import.meta.url), 'utf8');
+  const entry = await readFile(new URL('../../build/app/local-ui/renderer/index.html', import.meta.url), 'utf8');
   const files = [...entry.matchAll(/<script src="\.\/([^\"]+)"/g)].map(match => match[1]);
-  const source = (await Promise.all(files.map(name => readFile(new URL(`../../local-ui/renderer/${name}`, import.meta.url), 'utf8')))).join('\n');
-  await window.webContents.insertCSS(await readFile(new URL('../../local-ui/renderer/styles.css', import.meta.url), 'utf8'));
+  const source = (await Promise.all(files.map(name => readFile(new URL(`../../build/app/local-ui/renderer/${name}`, import.meta.url), 'utf8')))).join('\n');
+  await window.webContents.insertCSS(await readFile(new URL('../../build/app/local-ui/renderer/styles.css', import.meta.url), 'utf8'));
   await js(source);
+  // Hidden windows need renderer focus to emit real DOM focusin events.
+  window.webContents.focus();
   await js(`(async () => {
     await until(() => !!button('profile-menu'));
     button('profile-menu').click();
@@ -350,6 +355,53 @@ try {
     await js(`document.querySelector('[data-action="credits-tab"][data-tab="orders"]').click()`);
     await writeFile(join(process.env.WALLET_SCREENSHOT_DIR, 'credits-v2-orders-narrow.png'), (await window.webContents.capturePage()).toPNG());
   }
+  await js(`(async () => {
+    window.customV2 = true; window.oldRechargePolicy = true;
+    snapshot = { ...snapshot, account: { ...snapshot.account, accountId: 'custom-v2-user' } }; publish(snapshot);
+    await until(() => !!button('profile-menu')); button('profile-menu').click();
+    await until(() => !!button('show-credits')); button('show-credits').click();
+    await until(() => !!button('credits-open'));
+    button('credits-open').click();
+    await until(() => !!document.getElementById('wallet-custom-amount') && !document.getElementById('wallet-custom-amount').disabled);
+    const creates = createCount;
+    enterAmount('1');
+    check(dialog().textContent.includes('服务器仍使用旧充值规则'), 'old server range was reported as an invalid integer');
+    button('credits-dismiss').click(); window.oldRechargePolicy = false;
+    button('credits-open').click();
+    await until(() => dialog().textContent.includes('支付 ¥1 · 到账 100 积分'));
+    check(!button('credits-pay').disabled, 'one yuan cannot be purchased');
+    document.getElementById('wallet-custom-amount').focus();
+    enterAmount('10'); enterAmount('100'); enterAmount('1001');
+    await until(() => dialog().textContent.includes('支付 ¥1001'));
+    check(!button('credits-quote') && !button('credits-custom-buy'), 'manual quote step remains');
+    check(createCount === creates, 'automatic quote created an order');
+    enterAmount('13');
+    await until(() => dialog().textContent.includes('支付 ¥13'));
+    product('p50').click();
+    check(dialog().querySelector('.wallet-checkout-total').textContent.includes('¥50'), 'fixed product was not selected');
+    const quoteCount = requests.filter(item => item.action === 'wallet.quote').length;
+    document.getElementById('wallet-custom-amount').click();
+    check(document.querySelector('.wallet-custom').dataset.selected === 'true' && button('credits-pay').disabled, 'focusing custom draft did not deselect fixed product');
+    await until(() => dialog().textContent.includes('支付 ¥13'));
+    await new Promise(resolve => realTimeout(resolve, 400));
+    check(requests.filter(item => item.action === 'wallet.quote').length === quoteCount + 1, 'focus restoration repeatedly quoted the same amount');
+    check(dialog().querySelector('.wallet-checkout-total').textContent.includes('¥13'), 'focus retained fixed-product total');
+    enterAmount(''); product('p50').focus(); product('p50').click();
+    document.getElementById('wallet-custom-amount').blur();
+    await new Promise(resolve => realTimeout(resolve, 10));
+    document.getElementById('wallet-custom-amount').focus();
+    await new Promise(resolve => realTimeout(resolve, 10));
+    check(document.querySelector('.wallet-custom').dataset.selected === 'true' && button('credits-pay').disabled, 'empty custom focus retained payable fixed product');
+    enterAmount('0');
+    check(document.getElementById('wallet-custom-amount').getAttribute('aria-invalid') === 'true' && button('credits-pay').disabled, 'nonpositive amount was accepted');
+    enterAmount('13'); await until(() => dialog().textContent.includes('支付 ¥13'));
+    product('p50').focus(); product('p50').click(); document.getElementById('wallet-custom-amount').focus();
+    await until(() => dialog().textContent.includes('支付 ¥13'));
+    button('credits-pay').click();
+    await until(() => createCount === creates + 1);
+    check(activeOrder.amount_fen === 1300, 'custom focus submitted the fixed-product amount');
+    check(requests.filter(item => item.action === 'wallet.createOrder').at(-1).input.amount_fen === 1300, 'custom purchase request was not 13 yuan');
+  })()`);
   console.log('WALLET_ELECTRON_PASS');
 } catch (error) {
   console.error(error);

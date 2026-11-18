@@ -10,6 +10,14 @@ import { createPlatformSession } from "../octop/platform.mjs";
 import { createDashboardGateway } from "../octop/gateway.mjs";
 import { createTunnelAgent } from "../network/tunnel.mjs";
 
+async function waitFor(check, description, timeout = 5000) {
+  const deadline = performance.now() + timeout;
+  while (!check()) {
+    assert.ok(performance.now() < deadline, description);
+    await delay(10);
+  }
+}
+
 async function fixture(t, { lease = 120, tunnel = false, failure } = {}) {
   const state = { exchanges: 0, fail: false, expired: 0, calls: [], cloud: [] };
   const sockets = new Set();
@@ -128,8 +136,9 @@ async function fixture(t, { lease = 120, tunnel = false, failure } = {}) {
     account,
     device: { deviceId: "box-a" },
     networkSessionId: "network-a",
-    onExpired: () => {
+    onExpired: (reason) => {
       state.expired++;
+      state.expiryReason = reason;
     },
   };
   t.after(async () => {
@@ -386,15 +395,21 @@ test("platform profile edits and avatar uploads require a current session and pr
 });
 
 test("session renews before lease end and gateway close cancels renewals", async (t) => {
-  const { options, state } = await fixture(t, { lease: 0.2 });
+  const lease = 2;
+  const { options, state } = await fixture(t, { lease });
   const session = await createPlatformSession(options);
   t.after(() => session.close());
-  await delay(140);
+  const firstToken = session.getToken();
+  await waitFor(() => {
+    const token = session.getToken();
+    assert.ok(token, "the original lease expired before renewal completed");
+    return token !== firstToken;
+  }, "the token was not renewed", lease * 1000);
   assert.ok(state.exchanges >= 2);
   assert.match(session.getToken(), /private-box-jwt-[2-9]/);
   session.close();
   const count = state.exchanges;
-  await delay(180);
+  await delay(lease * 1000);
   assert.equal(state.exchanges, count);
   assert.equal(state.expired, 0);
 });
@@ -404,20 +419,22 @@ test("renewal outage expires original lease and clears token exactly once", asyn
   const session = await createPlatformSession(options);
   t.after(() => session.close());
   state.fail = true;
-  await delay(260);
+  await waitFor(() => state.expired > 0, "the original lease did not expire");
   assert.equal(session.getToken(), "");
   assert.equal(state.expired, 1);
 });
 
 test("denied grant expires immediately; cancellation never exchanges a delayed cloud grant", async (t) => {
-  const { options, state } = await fixture(t, { lease: 0.2 });
+  const { options, state } = await fixture(t, { lease: 2 });
   const session = await createPlatformSession(options);
+  t.after(() => session.close());
   options.account.request = async () => {
     throw Object.assign(new Error("denied"), { status: 403 });
   };
-  await delay(140);
+  await waitFor(() => state.expired > 0, "the denied grant did not expire the session");
   assert.equal(session.getToken(), "");
   assert.equal(state.expired, 1);
+  assert.equal(state.expiryReason, "denied");
   const controller = new AbortController();
   let release;
   options.account.request = () =>
@@ -428,7 +445,7 @@ test("denied grant expires immediately; cancellation never exchanges a delayed c
     ...options,
     signal: controller.signal,
   });
-  while (!release) await delay(5);
+  await waitFor(() => release, "the pending grant request was not started");
   controller.abort();
   release({ grant: "cancelled-grant" });
   await assert.rejects(pending, { name: "AbortError" });

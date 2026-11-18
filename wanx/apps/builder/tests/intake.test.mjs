@@ -20,3 +20,12 @@ test('suspending intake preserves text and selected resources and rejects a late
  const html=h.view.render();assert.match(html,/保留断线前的会议需求/);assert.match(html,/会议项目/);assert.doesNotMatch(html,/过期的补全|正在补全/);
  h.view.sync('another-account/box');assert.doesNotMatch(h.view.render(),/保留断线前的会议需求/);
 });
+
+
+test('old box update requirement retains confirmed demand, storage and engine for retry',async()=>{
+ const h=harness({'studio.launch.start':()=>{throw Error('STUDIO_BOX_UPDATE_REQUIRED')}});
+ await h.view.open();h.view.field('original','保留合成验收需求');await h.view.action('studio-intake-confirm');await storage(h);
+ await h.view.action('studio-intake-handoff');
+ const html=h.view.render();assert.match(html,/当前盒子的开物服务版本较旧/);assert.match(html,/保留合成验收需求/);assert.match(html,/会议项目/);assert.match(html,/Codex/);
+ await h.view.action('studio-intake-handoff');assert.equal(h.calls.filter(c=>c[0]==='studio.launch.configure').length,1);
+});

@@ -3,15 +3,18 @@ from copy import deepcopy
 import time
 
 from .contracts import StudioError, digest
+from .capability_gaps import expert_gap_resolutions
 
 
 def scope_state(p):
     prep = p['preparation']
+    resolutions = expert_gap_resolutions(p)
     return {
         'dependencies': [{**d, 'decision': p['decisions'].get(d['id'])}
                          for d in p['solution']['dependencies']],
         'capabilityGaps': [{'id': digest(g), 'requirement': g,
-                            'decision': prep.get('gapDecisions', {}).get(digest(g))}
+                            'decision': prep.get('gapDecisions', {}).get(digest(g)),
+                            **({'technicalResolution': resolutions[g]} if g in resolutions else {})}
                            for g in prep.get('gaps', [])],
     }
 

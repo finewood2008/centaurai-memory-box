@@ -161,7 +161,17 @@ export async function packageWindowsPreview({ version, out, repo = repositoryRoo
   await writeFile(verification, JSON.stringify(report, null, 2) + '\n');
   const sums = await Promise.all([installers[0], path.basename(verification)].map(async file => `${await checksum(path.join(output,file))}  ${file}`));
   await writeFile(path.join(output, 'SHA256SUMS.txt'), sums.join('\n') + '\n');
-  await writeFile(path.join(output, 'release-notes.md'), `半人马AI记忆盒子 Windows x64 预览版\n\n- 来源提交：${sourceCommit}\n- 包含已完成的本机混合记忆采集、半人马AI品牌界面和手工批量标注工作台。\n- 安装包未签名；预览版不启用正式自动更新。\n- 原生依赖、本机服务启动与未认证请求拒绝均已在 Windows CI 验证。\n- 本轮未验证真实盒子登录、备份恢复和跨设备行为。\n`);
+  await writeFile(path.join(output, 'release-notes.md'), [
+    '半人马AI记忆盒子 Windows x64 预览版',
+    '',
+    `- 来源提交 \`${sourceCommit}\`。`,
+    '- 知君提供普通与高级模式选择，高级模式写入长期记忆需要盒端支持。',
+    '- 星图引用可定位到对应版本的正文，「本体与关系」入口已精简。',
+    '- 安装包未签名，预览版不启用正式自动更新。',
+    '- 安装包内的原生依赖和本机记忆服务已在 Windows CI 验证。',
+    '- 真实盒子登录、备份恢复和跨设备行为待实机联测。',
+    '',
+  ].join('\n'));
   return { output, installer: installers[0], version, sourceCommit };
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

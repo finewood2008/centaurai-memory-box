@@ -58,7 +58,9 @@ export async function readClientIdentity({ app, platform = process.platform, arc
       productVersion.length <= 128 && !/[\x00-\x1f\x7f]/.test(productVersion) ? productVersion : "unknown";
   } else if (platform === "win32") facts.windowsProductType = await windowsProductType(osVersion, execFile);
   return Object.freeze({
-    productVersion: app.getVersion(), buildId, edition, channel: build.channel || (edition === "team" ? "stable-studio" : "stable"),
+    productVersion: app.getVersion(),
+    ...(pkg.wanxInternalVersion && { internalVersion: pkg.wanxInternalVersion }),
+    buildId, edition, channel: build.channel || (edition === "team" ? "stable-studio" : "stable"),
     distributionClass: app.isPackaged ? build.distributionClass || "unverified" : "development",
     platform, osVersion, ...facts, arch, electronVersion: versions.electron || null,
     nodeVersion: versions.node, hostProtocol: 1, securityEpoch: build.securityEpoch || 0,

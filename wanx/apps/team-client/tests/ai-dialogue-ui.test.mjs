@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import electron from 'electron';
-const source = await readFile(new URL('../local-ui/renderer/ai-dialogue.js', import.meta.url), 'utf8');
+const source = await readFile(new URL('../build/app/local-ui/renderer/ai-dialogue.js', import.meta.url), 'utf8');
 
 test('dialogue transcript follows only chosen ancestors and generated content stays text', () => {
   const window = {}; vm.runInNewContext(source, { window });

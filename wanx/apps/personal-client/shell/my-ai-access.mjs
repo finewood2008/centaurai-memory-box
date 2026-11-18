@@ -6,6 +6,9 @@ const hash = value => value ? createHash("sha256").update(value).digest("hex") :
 const shorten = (value, size) => typeof value === "string" ? value.slice(0, size).toWellFormed() : undefined;
 const environmentNote = "这条记忆描述来源设备和记录时的环境。执行操作前，请在当前设备核实路径、工作目录、分支和环境。";
 const defaults = () => ({ memoryEnabled: false });
+export const validMemoryAgent = value => value === undefined || value === null ||
+  (typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value));
+const sourceKey = value => typeof value === "string" ? value.trim().toLowerCase().replace(/[\s-]+/g, "_") : "";
 const object = value => value && typeof value === "object" && !Array.isArray(value);
 
 export function accessAgentId(agent, mode) {
@@ -27,19 +30,49 @@ export function createMyAiMemoryAccess({ runtimeFile, request = fetch }) {
       headers: { "x-memmy-local-token": token, ...(body && { "content-type": "application/json" }) },
       body: body && JSON.stringify(body), redirect: "error", signal: AbortSignal.timeout(30_000),
     });
-    if (!response.ok) throw failure(route === "/api/v1/memory/add"
+    if (!response.ok) throw Object.assign(failure(route === "/api/v1/memory/add"
       ? response.status === 409 ? "保存标识已用于不同内容，请使用新的保存标识。" : "记忆保存未完成，请检查记忆服务和当前授权后重试。"
-      : "记忆服务暂不可用，或该记忆已不可读取。");
+      : "记忆服务暂不可用，或该记忆已不可读取。"), { httpStatus: response.status });
     const result = await response.json();
     check();
     return result;
   }
+  async function searchSource(query, source, check) {
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(source)) throw failure("记忆来源无效。");
+    const words = [...new Intl.Segmenter("zh", { granularity: "word" }).segment(query)]
+      .filter(word => word.isWordLike && word.segment.length >= 2 &&
+        !["知君", "记得", "上次", "帮我", "什么", "我们", "一下", "之前", "哪里", "哪个"].includes(word.segment))
+      .map(word => word.segment);
+    const terms = [...new Set([query, ...words])].slice(0, 5);
+    const results = await Promise.all(terms.map(q => read("/api/v1/panel/items?" +
+      new URLSearchParams({ q, sourceAgent: source, status: "activated" }), undefined, check)));
+    const items = new Map(results.flatMap(result => result.items ?? []).map(item => [item.id, item]));
+    return { matches: [...items.values()].slice(0, 10).map(item => ({
+      memoryId: item.id, title: shorten(item.title, 300), snippet: shorten(item.sourceText || item.summary || item.content, 900),
+    })) };
+  }
   return {
+    async sourceCatalog(check) {
+      const validId = id => typeof id === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(id);
+      try {
+        const result = await read("/api/v1/agent-sources", undefined, check);
+        return (result.sources ?? []).filter(source => validId(source.sourceId) &&
+            (source.available || source.messageCount > 0 || source.lastScannedAt))
+          .map(source => ({ id: source.sourceId, name: source.displayName || source.sourceId }));
+      } catch (error) {
+        if (error.httpStatus !== 404) throw error;
+        const { sourceDistribution = [] } = await read("/api/v1/panel/overview", undefined, check);
+        const names = { codex: "Codex", claude_code: "Claude Code", claude_desktop: "Claude 客户端", gemini: "Gemini CLI" };
+        return sourceDistribution.filter(row => row.count > 0 && validId(row.source))
+          .map(row => ({ id: row.source, name: Object.hasOwn(names, row.source) ? names[row.source] : row.source }));
+      }
+    },
+    searchSource,
     async ready(check) {
       const health = await read("/api/v1/health", undefined, check);
       if (health?.ok !== true || health?.storage?.ready !== true) throw failure("请先连接本机记忆服务。");
     },
-    async call(tool, args, check, agent, binding = "") {
+    async call(tool, args, check, agent, binding = "", memoryAgent) {
       if (tool === "memory_save") {
         if (typeof args.content !== "string" || !args.content.trim() || args.content.length > 12_000 || args.content.includes("\0") ||
             (args.title !== undefined && (typeof args.title !== "string" || args.title.length > 300)) ||
@@ -57,7 +90,13 @@ export function createMyAiMemoryAccess({ runtimeFile, request = fetch }) {
         return { saved: true, memoryId: result.id, duplicate: result.duplicate === true };
       }
       if (tool === "memory_search") {
-        const result = await read("/api/v1/memory/search", { query: args.query.trim(), source: agent, limit: 10, verbose: true }, check);
+        if (typeof memoryAgent === "string") {
+          const { matches } = await searchSource(args.query.trim(), memoryAgent, check);
+          return { environmentNote, matches, memoryIds: matches.map(item => item.memoryId) };
+        }
+        const result = await read("/api/v1/memory/search", {
+          query: args.query.trim(), ...(memoryAgent === undefined && agent && { source: agent }), limit: 10, verbose: true,
+        }, check);
         return {
           environmentNote,
           context: shorten(result.injectedContext, 12_000),
@@ -72,6 +111,8 @@ export function createMyAiMemoryAccess({ runtimeFile, request = fetch }) {
       const result = await read("/api/v1/memory/" + encodeURIComponent(args.memoryId), undefined, check);
       const item = result.item ?? result;
       if (item.id !== args.memoryId) throw failure("该记忆不可读取。");
+      if (typeof memoryAgent === "string" && (sourceKey(item.metadata?.source) !== sourceKey(memoryAgent) ||
+        item.status !== "activated")) throw failure("该记忆不在所选 Agent 的范围内。");
       return {
         environmentNote, memoryId: item.id, layer: item.memoryLayer, title: shorten(item.title, 300),
         summary: shorten(item.summary, 1500), body: shorten(item.body ?? item.content ?? item.sourceText, 12_000),
@@ -94,6 +135,8 @@ export function createMyAiAccess({ makeContext, agents, sources, memory, store, 
       ...(typeof selection?.folderId === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(selection.folderId) && { folderId: selection.folderId }),
       ...(typeof selection?.warehouseId === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(selection.warehouseId) && { warehouseId: selection.warehouseId }),
       memoryEnabled: selection?.memoryEnabled === true,
+      ...(selection?.memoryEnabled === true && selection.memoryAgent !== undefined && validMemoryAgent(selection.memoryAgent) &&
+        { memoryAgent: selection.memoryAgent }),
     };
   };
   function guard(assertScope) {
@@ -111,8 +154,9 @@ export function createMyAiAccess({ makeContext, agents, sources, memory, store, 
     return change;
   }
   async function resolveSelection(selection, check) {
-    if (!object(selection) || Object.keys(selection).some(key => !["folderId", "warehouseId", "memoryEnabled"].includes(key)) ||
+    if (!object(selection) || Object.keys(selection).some(key => !["folderId", "warehouseId", "memoryEnabled", "memoryAgent"].includes(key)) ||
         (selection.memoryEnabled !== undefined && typeof selection.memoryEnabled !== "boolean") ||
+        !validMemoryAgent(selection.memoryAgent) || (selection.memoryAgent !== undefined && selection.memoryEnabled !== true) ||
         [selection.folderId, selection.warehouseId].some(value => value !== undefined &&
           (typeof value !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(value))))
       throw failure("资料范围无效，请重新选择。");
@@ -137,7 +181,7 @@ export function createMyAiAccess({ makeContext, agents, sources, memory, store, 
         const selected = taskSelection ?? chosen(agent);
         if (name.startsWith("memory_")) {
           if (name !== "memory_save" && !selected.memoryEnabled) throw failure("请先在「我的 AI」开启历史记忆读取。");
-          return memory.call(name, args, check, agent, binding());
+          return memory.call(name, args, check, agent, binding(), selected.memoryAgent);
         }
         const { resolved } = await resolveSelection({
           ...(selected.folderId && { folderId: selected.folderId }),
@@ -163,7 +207,7 @@ export function createMyAiAccess({ makeContext, agents, sources, memory, store, 
     const authorized = matching(agent) && records[agent].connected !== false && Boolean(scope());
     const selection = chosen(agent);
     const required = [selection.folderId && ["space", selection.folderId], selection.warehouseId && ["starlink", selection.warehouseId],
-      selection.memoryEnabled && ["memory", true]].filter(Boolean);
+      selection.memoryEnabled && ["memory", selection.memoryAgent ?? true]].filter(Boolean);
     const retrievalVerified = Boolean(authorized && required.length && required.every(([source, id]) => running?.verifiedScopes?.[source] === id));
     return {
       authorized, connected: Boolean(authorized && running?.configured), configured: Boolean(authorized && running?.configured),
@@ -240,6 +284,9 @@ export function createMyAiAccess({ makeContext, agents, sources, memory, store, 
     supports: (agent, mode) => access.has(accessAgentId(agent, mode)),
     connect: (agent, check) => action(agent, "connect", check),
     disconnect: (agent, check) => access.has(accessAgentId(agent)) && action(agent, "disconnect", check),
+    async memoryCatalog(assertScope) {
+      return { agents: await memory.sourceCatalog(guard(assertScope)) };
+    },
     async selection(agent, input, assertScope = () => {}) {
       agent = accessAgentId(agent);
       if (!access.has(agent)) throw failure("此 Agent 不在当前管理目录。");
@@ -252,7 +299,7 @@ export function createMyAiAccess({ makeContext, agents, sources, memory, store, 
         const check = guard(assertScope);
         const { selection, resources } = await resolveSelection(input, check);
         const previousChoice = chosen(agent);
-        if (matching(agent) && ["folderId", "warehouseId", "memoryEnabled"].every(key => previousChoice[key] === selection[key]))
+        if (matching(agent) && ["folderId", "warehouseId", "memoryEnabled", "memoryAgent"].every(key => previousChoice[key] === selection[key]))
           return { selection, resources };
         const preferences = { ...records.$selections, [agent]: { ...records.$selections?.[agent], [binding()]: selection } };
         const previous = records;

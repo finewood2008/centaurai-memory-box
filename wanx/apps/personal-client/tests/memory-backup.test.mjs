@@ -12,6 +12,23 @@ const hash = bytes => createHash("sha256").update(bytes).digest("hex");
 const rootId = "";
 const json = (value, status = 200) => ({ status, headers: {}, body: Buffer.from(JSON.stringify(value)) });
 
+test("defaults to hourly backups and preserves a saved interval", async () => {
+  const scope = "test-account";
+  const key = "settings:" + hash(scope);
+  for (const [preferences, expected] of [[{}, 60], [{ [key]: { intervalMinutes: 5 } }, 5]]) {
+    const backup = createMemoryBackup({
+      client: { subscribe: () => () => {} },
+      space: { snapshot: () => ({ scope, dataContextId: null }) },
+      store: { load: async () => preferences },
+    });
+    try {
+      assert.equal((await backup.action("status")).intervalMinutes, expected);
+    } finally {
+      await backup.close();
+    }
+  }
+});
+
 test("independent installations keep history, recover a selected version, and retain legacy snapshots", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "wanx-backup-flow-"));
   const uploads = new Map();

@@ -1,0 +1,136 @@
+.od-inline {
+  --setup-action: #5b4636;
+  --setup-selected: #f1e5d3;
+  width: min(100%, 960px);
+  margin-inline: auto;
+  container-type: inline-size;
+  color: var(--fg);
+}
+.od-inline[data-stage=review] { width: min(100%, 1120px); }
+.od-inline .od-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 0 0 8px;
+}
+.od-inline .od-heading h1 {
+  margin: 4px 0;
+  font: 650 clamp(21px, 2.2vw, 27px)/1.3 var(--font-body);
+  overflow-wrap: anywhere;
+}
+.od-inline .od-heading p { margin: 0; }
+.od-inline .od-crumb { font-size: 12px; color: var(--muted); }
+.od-inline .od-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 11px;
+  margin: 0 0 14px;
+  padding: 0 0 12px;
+  border-bottom: 1px solid var(--border);
+  list-style: none;
+  font-size: 12px;
+  color: var(--muted);
+}
+.od-inline .od-steps li + li::before { content: "›"; margin-right: 11px; color: var(--muted); }
+.od-inline .od-steps [aria-current] { color: var(--setup-action); font-weight: 650; }
+.od-inline .wp-content { max-width: none; height: auto; padding: 0 0 12px; overflow: visible; }
+.od-inline .wp-name-card { width: min(100%, 510px); padding: 0; border: 0; background: transparent; }
+.od-inline .wp-name-card > label { display: block; margin: 0 0 6px; font-weight: 650; }
+.od-inline .wp-name-card > label small { margin-left: 4px; font-weight: 400; }
+.od-inline .wp-name-card > .form-input { margin-bottom: 14px; }
+.od-inline .wp-name-card > textarea { resize: vertical; }
+.od-inline .od-name-error { margin: -8px 0 12px; color: #963c29; font-size: 12px; }
+.od-inline .od-templates { margin: 0 0 10px; }
+.od-inline .od-templates summary { color: var(--setup-action); }
+.od-inline .od-template-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 110px), 1fr)); }
+.od-inline .wp-info, .od-inline .wp-error {
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  margin: 0;
+  background: var(--setup-selected);
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+.od-inline .wp-info button, .od-inline .wp-error button { margin-left: 4px; }
+.od-inline .btn-primary { background: var(--setup-action); border-color: var(--setup-action); color: #fffdf8; }
+.od-inline .btn-primary:hover:not(:disabled) { background: #49382c; }
+.od-inline .od-chat-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.od-inline .od-panel-switch { display: flex; flex-wrap: wrap; gap: 4px; }
+.od-inline .od-panel-switch button { border-color: transparent; background: none; color: var(--muted); }
+.od-inline .od-panel-switch [aria-pressed=true] { background: var(--setup-selected); color: var(--setup-action); font-weight: 650; }
+.od-inline .od-review .wp-grid {
+  display: grid;
+  grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr);
+  gap: 16px;
+  min-height: 0;
+}
+.od-inline .wp-chat, .od-inline .wp-preview { height: auto; max-height: none; }
+.od-inline .wp-chat[hidden], .od-inline .od-session-selector[hidden] { display: none; }
+.od-inline .wp-chat > header, .od-inline .wp-preview > header { padding: 10px 13px; }
+.od-inline .wp-badge { white-space: normal; }
+.od-inline .wp-messages, .od-inline .wp-preview-body, .od-inline .wp-composer,
+.od-inline .od-sessions, .od-inline .od-current-wrap { padding: 12px clamp(12px, 3cqw, 24px); }
+.od-inline .wp-messages, .od-inline .wp-preview-body { overflow: visible; }
+.od-inline .wp-current { margin: 0; padding: 0; border: 0; background: transparent; }
+.od-inline .wp-current .od-question > p { font-size: clamp(15px, 2cqw, 19px); font-weight: 650; margin: 0; }
+.od-inline .wp-current .od-question > small { display: none; }
+.od-inline .wp-current .wp-choices { margin: 10px 0 0; }
+.od-inline .wp-current .wp-choices .ob-button { padding: 5px 9px; }
+.od-inline .od-latest-answer {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  color: var(--muted);
+  line-height: 1.65;
+  margin: 0 0 10px;
+}
+.od-inline .od-turn-error { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; color: var(--accent); }
+.od-inline .od-turn-error p { margin: 0; }
+.od-inline .wp-composer { border: 0; overflow: visible; padding-top: 0; }
+.od-inline .wp-composer > .od-question-actions { max-height: 105px; }
+.od-inline .wp-composer > textarea { width: 100%; min-height: 62px; padding: 9px 11px; border-radius: 8px; }
+.od-inline .od-compose-actions { margin-top: 8px; justify-content: space-between; }
+.od-inline .od-compose-actions .od-input-mode { margin: 0; }
+.od-inline .od-compose-actions .ob-primary { margin-left: auto; }
+.od-inline .od-compose-actions small { margin: 0; }
+.od-inline .od-sessions { border-top: 1px solid var(--border); }
+.od-inline .od-sessions summary { cursor: pointer; color: var(--muted); font-weight: 550; }
+.od-inline .od-session-selector { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.od-inline .od-session-selector select { border: 1px solid var(--border); border-radius: 7px; padding: 5px 8px; background: var(--surface); color: var(--fg); }
+.od-inline .od-sessions .wp-messages { padding: 14px 0 0; }
+.od-inline .od-sessions .wp-assistant:last-child { margin-bottom: 0; }
+.od-inline .wp-assistant p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.od-inline .od-review .wp-grid { align-items: start; margin-bottom: 12px; }
+.od-inline .od-review .wp-confirm-card { padding: 12px; min-width: 0; }
+.od-inline .od-review h2 { margin: 0 0 8px; font-size: 15px; }
+.od-inline .od-review .wp-preview { max-height: none; }
+.od-inline .od-review-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+}
+.od-inline .od-publication { max-width: 620px; padding: 14px; }
+.od-inline .od-publication h2 { margin: 0 0 7px; font-size: 15px; }
+.od-inline .od-quick { background: transparent; border-color: transparent; }
+#app.is-setting-up #crumb-warehouse,
+#app.is-setting-up .topbar .crumb > [data-icon=folder] { display: none; }
+#app.is-setting-up .page-content { padding: clamp(12px, 2.2vw, 28px); }
+#app.is-setting-up .topbar { display: none; }
+@media (max-width: 900px) {
+  #app.is-setting-up .topbar { display: flex; height: auto; min-height: 34px; padding-block: 3px; }
+}
+@media (max-height: 570px) {
+  #app.is-setting-up .page-content { padding-block: 12px; }
+  .od-inline .od-steps { margin-bottom: 9px; padding-bottom: 7px; }
+  .od-inline .od-current-wrap { padding-block: 10px; }
+}
+@container (max-width: 700px) {
+  .od-inline .od-review .wp-grid { grid-template-columns: minmax(0, 1fr); }
+}

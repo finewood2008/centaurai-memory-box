@@ -12,13 +12,13 @@ import { installElectronBluetoothPicker } from "@nexusaos/device-discovery-elect
 import { registerControlActions } from "../shell/control.mjs";
 import { BOX_SESSION_ERROR_CODES } from "../octop/platform.mjs";
 
-const indexURL = new URL("../local-ui/renderer/index.html", import.meta.url);
+const indexURL = new URL("../build/app/local-ui/renderer/index.html", import.meta.url);
 const html = await readFile(indexURL, "utf8");
 const rendererScripts = [...html.matchAll(/<script src="([^"]+)"><\/script>/g)]
   .map(match => match[1]).filter(src => !["./device-setup.bundle.js", "./academy-drawer.js"].includes(src));
 const source = (await Promise.all(rendererScripts.map(src => readFile(new URL(src, indexURL), "utf8")))).join("\n");
 const preload = await readFile(new URL("../local-ui/remote-preload.cjs", import.meta.url), "utf8");
-const transportBundle = await readFile(new URL("../local-ui/renderer/device-setup.bundle.js", import.meta.url), "utf8");
+const transportBundle = await readFile(new URL("../build/app/local-ui/renderer/device-setup.bundle.js", import.meta.url), "utf8");
 const application = { applicationId: "centaurai.wanx.zhijun", name: "知君", version: "0.4.3", description: "你的私人空间" };
 const devices = ["102", "103"].map((id) => ({
   deviceId: `box-${id}`, displayName: `CentuarAI-AMD-${id}`, accessState: "ready", canOpen: true,
@@ -142,7 +142,8 @@ async function harness(initial = state(), installed = [application], options = {
   };
   const applications = {
       listInstalled: async () => records,
-      uninstall: async () => { records = []; },
+      uninstall: async () => { calls.push(["ordinary-uninstall"]); records = []; },
+      uninstallLocal: async () => { calls.push(["local-uninstall-manager"]); if (options.localUninstallError) throw new Error(options.localUninstallError); records = []; },
       rollback: async () => { records = records.map(item => ({ ...item, version: "0.4.2" })); },
       selectCurrent: async (id, version) => {
         calls.push(["selected-current", id, version]);
@@ -169,7 +170,7 @@ async function harness(initial = state(), installed = [application], options = {
         release: { version: application.version },
       },
       install: async () => { const result = options.install ? await options.install() : application; records = [...records.filter((item) => item.applicationId !== result.applicationId), result]; return result; },
-      uninstall: async () => { records = []; },
+      uninstall: async () => { calls.push(["market-uninstall-manager"]); records = []; },
       rollback: async () => { records = [{ ...application, version: "0.4.2" }]; },
     },
     credits: options.credits,
@@ -181,7 +182,12 @@ async function harness(initial = state(), installed = [application], options = {
   });
   let bluetoothStatus = { status: options.bluetoothStatus || "available" }, bluetoothListener;
   const academy = { available: false, mode: null };
-  const window = { wanxAcademyCopilot: {
+  const windowEvents = new EventTarget();
+  const window = {
+    addEventListener: windowEvents.addEventListener.bind(windowEvents),
+    removeEventListener: windowEvents.removeEventListener.bind(windowEvents),
+    dispatchEvent: windowEvents.dispatchEvent.bind(windowEvents),
+    wanxAcademyCopilot: {
     async action(method, input) {
       assert.equal(method, "context");
       const context = { ...input };
@@ -240,7 +246,7 @@ async function harness(initial = state(), installed = [application], options = {
     window, setInterval() {}, clearInterval() {},
     Date, URL, crypto: globalThis.crypto,
     setTimeout, clearTimeout, TextEncoder, queueMicrotask,
-    document: { body:{dataset:{},classList:{toggle(){}},append(){}},createElement:()=>({dataset:{},setAttribute(){}}),addEventListener() {}, querySelector: (selector) => selector === "#app" ? app : selector === "#account-name" ? { value: forms.get("auth")?.values.username || "" } : null },
+    document: { body:{dataset:{},classList:{toggle(){}},append(){}},createElement:()=>({dataset:{},setAttribute(){}}),addEventListener() {}, getElementById: (id) => id === "app" ? app : null, querySelector: (selector) => selector === "#app" ? app : selector === "#account-name" ? { value: forms.get("auth")?.values.username || "" } : null },
     FormData: class { constructor(form) { return Object.entries(form.values || {}); } },
   });
   await new Promise((resolve) => setImmediate(resolve));
@@ -314,17 +320,11 @@ test("login opens My AI while the network prepares, with registration available 
   assert.doesNotMatch(h.app.innerHTML, /account-1/);
 });
 
-test("memory models and budget stay in settings while My AI has a top-level tab", async () => {
+test("global settings omit memory settings while My AI and Memory keep their tabs", async () => {
   const h = await harness();
   assert.match(h.app.innerHTML, /class="memory-host" data-memory-section="my-ai"/);
   await h.click("show-settings");
-  assert.doesNotMatch(h.app.innerHTML, /来源与本机数据|data-section="sources"/);
-  for (const section of ["models", "budget"]) {
-    assert.match(h.app.innerHTML, new RegExp(`data-action="memory-settings" data-section="${section}"`));
-    await h.click("memory-settings", { section });
-    assert.match(h.app.innerHTML, new RegExp(`class="memory-host" data-memory-section="${section}"`));
-    await h.click("show-settings");
-  }
+  assert.doesNotMatch(h.app.innerHTML, /来源与本机数据|记忆模型|记忆预算|data-action="memory-settings"/);
   await h.click("show-my-ai");
   assert.match(h.app.innerHTML, /data-action="show-my-ai" aria-current="page"\s*>我的 AI<\/button>/);
   assert.match(h.app.innerHTML, /wanx-section-banner my-ai-banner/);
@@ -333,7 +333,22 @@ test("memory models and budget stay in settings while My AI has a top-level tab"
   assert.doesNotMatch(h.app.innerHTML, /个人版/);
   assert.match(h.app.innerHTML, /class="memory-host" data-memory-section="my-ai"/);
   await h.click("show-memory");
+  assert.match(h.app.innerHTML, /data-action="show-memory" aria-current="page"\s*>记忆<\/button>/);
+  assert.match(h.app.innerHTML, /wanx-section-banner memory-banner/);
+  assert.match(h.app.innerHTML, /智能体记忆.*agent memory/);
   assert.match(h.app.innerHTML, /class="memory-host" data-memory-section=""/);
+});
+
+test("My AI shortcuts open Boxes and deep-link to backup without changing ordinary Memory navigation", async () => {
+  const h = await harness();
+  const open = destination => h.window.dispatchEvent(new CustomEvent("wanx:my-ai-destination", { detail: destination }));
+  open("backup");
+  assert.match(h.app.innerHTML, /data-memory-section="" data-memory-agent="" data-memory-page="backup"/);
+  await h.click("show-memory");
+  assert.match(h.app.innerHTML, /data-memory-page=""/);
+  await h.click("show-my-ai");
+  open("boxes");
+  assert.match(h.app.innerHTML, /data-action="show-boxes" aria-current="page"/);
 });
 
 test("a staged first installation offers continuation without claiming the app is usable", async () => {
@@ -3110,15 +3125,15 @@ test('personal Starlink is embedded and keeps individual knowledge separate from
   const calls=[];
   const h=await harness(state('ready','ready','box-102'),[],{personalDataService:{action:async(action,input)=>{calls.push([action,input]);return action==='warehouses'?{items:[{id:'12345678-1234-1234-1234-123456789abc',name:'个人仓库',entity_count:1}]}:action==='graph'?{nodes:[{entity_id:'real',canonical_name:'真实个人知识',entity_type:'CONCEPT'}],edges:[]}:{hostBase:'/api/semantica/open/v1',keys:[]}}}});
   await h.click('show-data');await new Promise(r=>setImmediate(r));
-  await h.dataClick("graph-isolated");
   assert.match(h.app.innerHTML,/data-action="show-data" aria-current="page"/);
-  assert.match(h.app.innerHTML,/个人数据仓/);assert.match(h.app.innerHTML,/真实个人知识/);
+  assert.match(h.app.innerHTML,/id="starlink-panel-region"/);
+  assert.doesNotMatch(h.app.innerHTML,/精简版|打开完整版/);
   assert.doesNotMatch(h.app.innerHTML,/团队管理员共同维护|助理授权/);
   assert.doesNotMatch(h.app.innerHTML, /data-action="show-workshop"/);
   assert.doesNotMatch(h.app.innerHTML.match(/data-action="show-data"[^>]*>[\s\S]*?<\/button>/)[0],/feature-beta/);
-  assert.equal(h.launches.length,0);assert(calls.some(([action])=>action==='warehouses'));
+  assert.equal(h.launches.length,0);assert.equal(calls.length,0);
   h.update(state('ready','ready','box-103'));await new Promise(r=>setImmediate(r));
-  assert(calls.filter(([action])=>action==='warehouses').length>=2);
+  assert.equal(calls.length,0, 'the old simplified service no longer loads the panel');
 });
 
 
@@ -3172,11 +3187,14 @@ test("personal Workshop follows My Apps and keeps its existing project workflow"
 
 test('personal module banners retain consistent bilingual identity when disconnected', async () => {
   const h=await harness();
-  for(const [route,key,name,english] of [['workshop','workshop','应用工坊','App Workshop'],['data','starlink','知识星图','STARLINK'],['space','space','文件空间','Files'],['boxes','boxes','我的设备','Devices']]) {
+  for(const [route,key,name,english] of [['workshop','workshop','应用工坊','App Workshop'],['space','space','私有云空间','Private Cloud'],['boxes','boxes','我的设备','Devices']]) {
     await h.click('show-'+route);
     assert.match(h.app.innerHTML,new RegExp('wanx-section-banner[^>]*data-section="'+key+'"'));
     assert.match(h.app.innerHTML,new RegExp('<h2>'+name+' '+(key==='workshop'?'<span class="feature-beta">Beta</span> ':key==='starlink'?'<small class="data-edition-label">精简版</small> ':'')+'<span class="wanx-section-english">'+english+'</span></h2>'));
   }
+  await h.click('show-data');
+  assert.match(h.app.innerHTML,/连接盒子后，创建知识仓/);
+  assert.doesNotMatch(h.app.innerHTML,/精简版|打开完整版/);
   assert.equal(h.calls.some(call=>call[0]==='workshop'),false);
 });
 
@@ -3325,3 +3343,50 @@ test("Workshop updates the Academy with a step and standard error, omitting proj
   assert.deepEqual(updates.at(-1), { module: "space" });
   assert.doesNotMatch(JSON.stringify(updates), new RegExp(projectId + "|" + privateName));
 });
+
+test("box overview hides cached storage capacity until connected", async () => {
+  const h = await harness(state("ready", "ready", "box-102"));
+  h.window.wanxSpace.overview = () => ({ volume: { free: 601 * 1024 ** 3, total: 936 * 1024 ** 3 } });
+  await h.click("show-boxes");
+  assert.match(h.app.innerHTML, /可用存储<\/span><strong>601.0 GB<\/strong><small>总容量 936.0 GB/);
+  for (const next of [state(), { ...state(), phase: "connecting" }]) {
+    h.update(next);
+    assert.match(h.app.innerHTML, /可用存储<\/span><strong>—<\/strong><small>连接后显示实际状态/);
+    assert.doesNotMatch(h.app.innerHTML, /601.0 GB|936.0 GB/);
+  }
+  h.update(state("ready", "ready", "box-102"));
+  assert.match(h.app.innerHTML, /可用存储<\/span><strong>601.0 GB/);
+});
+
+
+test("deployed local apps use local removal and keep version management in 工坊", async () => {
+ const deployed = { ...application, applicationId: "ai.wanx.selfmade." + "a".repeat(32), name: "Deployed local fixture", installationSource: "selfmade", previous: "0.4.2", managedLocal: true };
+ const h = await harness(state(), [deployed], { list: async () => ({ items: [] }) });
+ h.update(state());
+ await h.click("applications-tab", { tab: "local" });
+ assert.match(h.app.innerHTML, /Deployed local fixture/);
+ assert.match(h.app.innerHTML, /由工坊管理版本/);
+ assert.doesNotMatch(h.app.innerHTML, /data-action="(?:local|market)-rollback"/);
+ assert.match(h.app.innerHTML, /data-action="local-uninstall"/);
+ await h.click("local-rollback", { applicationId: deployed.applicationId });
+ assert.doesNotMatch(h.app.innerHTML, /data-action="market-confirm"/);
+ await h.click("local-uninstall", { applicationId: deployed.applicationId });
+ assert.match(h.app.innerHTML, /仅移除此电脑/);
+ assert.match(h.app.innerHTML, /盒端服务/);
+ await h.click("market-confirm");
+ assert.ok(h.calls.some(([name]) => name === "local-uninstall-manager"));
+ assert.ok(!h.calls.some(([name]) => name === "ordinary-uninstall" || name === "market-uninstall-manager"));
+ assert.doesNotMatch(h.app.innerHTML, /Deployed local fixture|暂时无法完成应用市场操作/);
+});
+
+for (const code of ["APPLICATION_MANAGED_DEPLOYMENT_REQUIRED", "APPLICATION_DEPLOYMENT_USER_REMOVED"]) {
+ test(`local deployment errors explain removal and version management: ${code}`, async () => {
+  const local = { ...application, name: "Local removal failure fixture", installationSource: "local" };
+  const h = await harness(state(), [local], { list: async () => ({ items: [] }), localUninstallError: code });
+  await h.click("applications-tab", { tab: "local" });
+  await h.click("local-uninstall", { applicationId: local.applicationId });
+  await h.click("market-confirm");
+  assert.match(h.app.innerHTML, /工坊/);
+  assert.doesNotMatch(h.app.innerHTML, /暂时无法完成应用市场操作/);
+ });
+}

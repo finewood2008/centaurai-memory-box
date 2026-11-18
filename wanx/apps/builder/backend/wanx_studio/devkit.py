@@ -15,11 +15,12 @@ import os
 import re
 import subprocess
 import tempfile
+import tarfile
 from pathlib import Path
 from typing import Any
 
 from .contracts import StudioError, digest
-from .capability_mapping import resolve
+from .capability_mapping import resolve, runtime_gaps
 
 
 PROJECT_REF = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*(?:[./-][a-zA-Z0-9][a-zA-Z0-9_-]*)*$")
@@ -33,6 +34,47 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _sdk_tree_digest(root: Path, artifact: dict[str, Any]) -> str | None:
+    # App Kit's declared digest is digestTree, not the npm tarball checksum.
+    # Preserve its manifest order (JS locale ordering differs from Python's).
+    names = artifact.get("files")
+    relative=artifact.get("path")
+    if not isinstance(relative,str) or Path(relative).is_absolute() or ".." in Path(relative).parts:return None
+    directory = root / relative
+    if not isinstance(names, list) or not names or not all(isinstance(x,str) for x in names) or len(set(names)) != len(names):
+        return None
+    if not directory.is_dir() or directory.is_symlink():return None
+    actual = {p.relative_to(directory).as_posix() for p in directory.rglob("*") if p.is_file()}
+    if actual != set(names):return None
+    h = hashlib.sha256()
+    for name in names:
+        if not isinstance(name, str) or Path(name).is_absolute() or ".." in Path(name).parts:return None
+        path = directory / name
+        if any(p.is_symlink() for p in [path, *path.parents] if p != root.parent):return None
+        h.update(name.encode());h.update(b"\0");h.update(path.read_bytes());h.update(b"\0")
+    return h.hexdigest()
+
+
+def _sdk_archive_matches(path: Path, root: Path, artifact: dict[str, Any]) -> bool:
+    # The tarball has no separately published checksum. Verify the exact npm
+    # package contents against the independently declared SDK tree instead.
+    try:
+        if path.stat().st_size>32*1024*1024:return False
+        expected={"package/"+name:(root/artifact["path"]/name).read_bytes() for name in artifact["files"]}
+        with tarfile.open(path,"r:gz") as archive:
+            seen=set();total=0
+            for member in archive:
+                if member.isdir():continue
+                if not member.isfile() or member.name not in expected or member.name in seen:return False
+                total+=member.size
+                if total>32*1024*1024 or member.size!=len(expected[member.name]):return False
+                stream=archive.extractfile(member)
+                if stream is None or stream.read()!=expected[member.name]:return False
+                seen.add(member.name)
+            return seen==set(expected)
+    except (OSError,ValueError,tarfile.TarError,KeyError,TypeError):return False
 
 
 def _kit_root(project_root: Path | None = None) -> Path | None:
@@ -99,6 +141,9 @@ def kit_info(project_root: Path | None = None) -> dict[str, Any]:
         return {"available": False, "code": "DEVKIT_SDK_PACKAGE_MISSING", "version": kit_version, "kitSha256": None, "sdk": None}
     schema_hash = _sha256(schema_path)
     sdk_hash = _sha256(sdk_file)
+    sdk_tree_hash = _sdk_tree_digest(manifest_path.parent, sdk_artifact)
+    if sdk_tree_hash is None or sdk_tree_hash!=sdk_artifact.get("sha256") or not _sdk_archive_matches(sdk_file,manifest_path.parent,sdk_artifact):
+        return {"available":False,"code":"DEVKIT_SDK_INTEGRITY_FAILED","version":kit_version,"kitSha256":None,"sdk":None}
     contract_hash = str(next((x.get("sha256") for x in artifacts if x.get("kind") == "contract"), ""))
     kit_hash = digest({"kitVersion": kit_version, "packageVersion": package.get("version"), "sdkSha256": sdk_hash, "schemaSha256": schema_hash, "contractSha256": contract_hash})
     return {
@@ -111,7 +156,8 @@ def kit_info(project_root: Path | None = None) -> dict[str, Any]:
             "version": sdk_artifact.get("version"),
             "sha256": sdk_hash,
             "declaredSha256": sdk_artifact.get("sha256"),
-            "hashMatches": sdk_artifact.get("sha256") in {None, sdk_hash},
+            "treeSha256": sdk_tree_hash,
+            "hashMatches": sdk_tree_hash is not None and sdk_artifact.get("sha256") == sdk_tree_hash,
         },
         "projectSchemaSha256": schema_hash,
         "contractSha256": contract_hash,
@@ -131,8 +177,17 @@ def _reference(value: str) -> bool:
     return bool(isinstance(value, str) and 1 <= len(value) <= 160 and PROJECT_REF.fullmatch(value))
 
 
+def _managed_expert(project: dict[str, Any]) -> bool:
+    value=project.get("deploymentExpert")
+    if value is None:return False
+    if not isinstance(value,dict) or value.get("profile")!="wanx-expert-app-v1":
+        raise StudioError("EXPERT_CONTRACT_INVALID",422)
+    return True
+
+
 def _backend(project: dict[str, Any]) -> dict[str, Any]:
     solution = project.get("solution") or {}
+    if _managed_expert(project):return {"mode":"existing","connectionRef":"wanx.expert-app.v1"}
     selected = project.get("devKitBackend") or solution.get("devKitBackend")
     if isinstance(selected, dict):
         return selected
@@ -147,6 +202,7 @@ def project_spec(project: dict[str, Any]) -> dict[str, Any]:
     slug = _slug(str(project.get("name") or ""), "wanx-app-" + project_id[:8])
     application_id = str(project.get("appId") or "")
     if not APPLICATION_ID.fullmatch(application_id):
+        if project.get("devKit") and application_id:raise StudioError("PROJECT_IDENTITY_INVALID",409)
         application_id = "dev.wanx." + slug
     capability_items = []
     for capability in dict.fromkeys(solution.get("capabilities") or []):
@@ -158,7 +214,7 @@ def project_spec(project: dict[str, Any]) -> dict[str, Any]:
         "slug": slug,
         "applicationId": application_id,
         "backend": _backend(project),
-        "expert": project.get("devKitExpert") if isinstance(project.get("devKitExpert"), dict) else {"enabled": False},
+        "expert": {"enabled":True,"definitionRef":"wanx.expert-app.v1"} if _managed_expert(project) else project.get("devKitExpert") if isinstance(project.get("devKitExpert"), dict) else {"enabled": False},
         "capabilities": capability_items,
     }
 
@@ -276,6 +332,8 @@ def compatibility_report(project: dict[str, Any], project_root: Path | None = No
         "business": {"status": "not-run", "errors": []},
     }
     mapping = resolve((project.get("solution") or {}).get("capabilities") or [], expert=bool((spec.get("expert") or {}).get("enabled")), backend=spec.get("backend"))
+    runtime_errors = [{"code": gap["reason"], "path": "/capabilities/" + gap["id"]} for gap in runtime_gaps((project.get("solution") or {}).get("capabilities") or [], expert=bool(spec["expert"].get("enabled")), backend=spec["backend"])]
+    stages["runtime"] = {"status": "blocked" if runtime_errors else "passed", "errors": runtime_errors}
     return {
         "protocolVersion": 1,
         "kit": info,
@@ -285,5 +343,5 @@ def compatibility_report(project: dict[str, Any], project_root: Path | None = No
         "dryRun": {k: v for k, v in dry_run.items() if k != "output"},
         "stages": stages,
         "legacy": legacy,
-        "valid": not legacy and not errors and info["available"] and dry_run["valid"],
+        "valid": not legacy and not errors and not runtime_errors and info["available"] and dry_run["valid"],
     }

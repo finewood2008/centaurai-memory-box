@@ -29,7 +29,7 @@ function parse(content, yaml) {
   return { value };
 }
 
-export function createMyAiMcpConfig(agent, { executable = process.execPath, stdioPath, descriptorPath, env = process.env, home = homedir() }) {
+export function createMyAiMcpConfig(agent, { executable = process.execPath, stdioPath, descriptorPath, env = process.env, home = homedir(), platform = process.platform }) {
   const args = [stdioPath, descriptorPath];
   const entry = { command: executable, args, env: { ELECTRON_RUN_AS_NODE: "1" } };
   const absolute = (candidate, fallback) => candidate && path.isAbsolute(candidate) ? candidate : fallback;
@@ -38,7 +38,9 @@ export function createMyAiMcpConfig(agent, { executable = process.execPath, stdi
   const openCodeDir = path.join(absolute(env.XDG_CONFIG_HOME, underHome(".config")), "opencode");
   const locations = {
     claude_code: [path.join(absolute(env.CLAUDE_CONFIG_DIR, home), ".claude.json"), ["mcpServers"]],
-    claude_desktop: [underHome("Library", "Application Support", "Claude", "claude_desktop_config.json"), ["mcpServers"]],
+    claude_desktop: [platform === "win32"
+      ? path.join(absolute(env.APPDATA, underHome("AppData", "Roaming")), "Claude", "claude_desktop_config.json")
+      : underHome("Library", "Application Support", "Claude", "claude_desktop_config.json"), ["mcpServers"]],
     gemini: [path.join(absolute(env.GEMINI_CLI_HOME, home), ".gemini", "settings.json"), ["mcpServers"]],
     cursor: [underHome(".cursor", "mcp.json"), ["mcpServers"]],
     opencode: [path.join(openCodeDir, "opencode.json"), ["mcp"]],

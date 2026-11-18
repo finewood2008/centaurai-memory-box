@@ -9,3 +9,5 @@
 @container(max-width:780px){.deployment-grid{grid-template-columns:1fr}.deployment-summary{display:none}.deployment-history-layout{grid-template-columns:1fr}.deployment-operation-detail{border-left:0;border-top:1px solid var(--line);padding:20px 0 0}.deployment-operation-list{max-height:260px}}
 @container(max-width:480px){.deployment-form-row,.deployment-details{grid-template-columns:1fr}.deployment-detail-heading{align-items:flex-start;flex-direction:column}.deployment-header{align-items:flex-start}.deployment-header h2{font-size:21px}}
 @media(max-width:800px){.continuous-workbench.stage-deployment.mobile-workspace .unified-chat{display:none!important}}
+
+.deployment-waiting{color:#42678a;font-size:12px;padding:12px 14px;border:1px solid #d8e5f2;background:#f0f5fb;border-radius:8px;line-height:1.7}.deployment-waiting strong,.deployment-waiting span{display:block}.deployment-event-reason{color:var(--muted,#687683);font-size:11px;line-height:1.6;margin:6px 0 0}

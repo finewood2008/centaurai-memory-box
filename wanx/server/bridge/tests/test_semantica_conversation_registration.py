@@ -63,22 +63,6 @@ async def test_budget_failure_diagnostics_pass_through_without_private_text(desk
 
 
 BODIES = {
-    contract.OntologyEditInitialize: {**OP, "base_ontology_id": "base"},
-    contract.OntologyEditSave: {**REV, "draft_digest": "c" * 64, "name": "规则", "schema": SCHEMA},
-    contract.OntologyEditTurn: {
-        **REV,
-        "draft_digest": "c" * 64,
-        "instruction": "修改显示名",
-        "selected": [],
-    },
-    contract.OntologyEditPreview: {**REV, "draft_digest": "c" * 64},
-    contract.OntologyEditExecute: {
-        **OP,
-        "preview_id": "preview",
-        "preview_digest": "c" * 64,
-        "confirmed": True,
-        "mode": "publish_only",
-    },
     contract.OnboardingStart: {**OP, "expected_revision": 0, "draft_digest": "c" * 64},
     contract.OnboardingTurn: {
         **OP,
@@ -245,7 +229,7 @@ def test_ontology_copilot_has_bounded_generation_and_shared_change_scenario():
     )
     path = W + concrete(contract.ONE) + "/ontology-edit"
     assert resolve("POST", path + "/turns").timeout == 285
-    assert resolve("POST", path + "/draft").timeout == 45
+    assert resolve("POST", path + "/preview").timeout == 45
     assert resolve("POST", path + "/execute").timeout == 45
 
 
@@ -276,7 +260,7 @@ async def test_ontology_edit_rejects_untrusted_scope_and_invalid_selection(deskt
     response = await client.post(
         BASE + W + concrete(contract.ONE) + "/ontology-edit/turns",
         headers=AUTH,
-        json=BODIES[contract.OntologyEditTurn] | changes,
+        json=BODIES[contract.ontology_edit_contract.Turn] | changes,
     )
     assert response.status_code in (403, 422)
     assert seen == []

@@ -1,0 +1,216 @@
+.memory-workspace--embedded .memory-page-sidebar {
+  padding-block: 12px;
+}
+.memory-workspace--embedded .memory-page-nav-group {
+  margin-bottom: 12px;
+}
+.memory-workspace--embedded .memory-page-nav-group:last-child {
+  margin-bottom: 0;
+}
+.memory-workspace--embedded .memory-page-nav-group + .memory-page-nav-group {
+  position: relative;
+  padding-block-start: 11px;
+}
+.memory-workspace--embedded .memory-page-nav-group + .memory-page-nav-group::before {
+  content: "";
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline: 12px;
+  height: 1px;
+  background: color-mix(in srgb, var(--color-sidebar-divider) 65%, transparent);
+}
+.memory-workspace--embedded .memory-page-section-header {
+  padding-inline: 17px 8px;
+  margin-bottom: 3px;
+}
+.memory-workspace--embedded .memory-page-section-label {
+  color: var(--centaur-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+.memory-workspace--embedded .memory-page-nav-group nav > div {
+  margin-block: 0 2px;
+}
+.memory-workspace--embedded .app-frame-nav-button {
+  width: calc(100% - 16px);
+  min-height: 32px;
+  margin-inline: 8px;
+  padding: 4px 8px;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.memory-workspace--embedded .app-frame-content-topbar:not(:has(.memory-token-budget-capsule)) {
+  display: none;
+}
+.memory-workspace--embedded .app-frame-content-topbar:has(.memory-token-budget-capsule) {
+  position: relative;
+}
+.memory-workspace--embedded .app-frame-page-content {
+  padding: 12px clamp(12px, 1.7vw, 20px) 16px;
+}
+.memory-workspace--embedded .memory-page-section > header:first-child,
+.memory-workspace--embedded .memory-panel > .memory-panel__header {
+  margin-bottom: 10px;
+  padding: 5px 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+}
+.memory-workspace--embedded :is(.memory-page-content-title, .memory-panel__title) {
+  font-size: 16px;
+}
+.memory-workspace--embedded .memory-panel__header {
+  align-items: center;
+}
+.memory-workspace--embedded .memory-panel__subtitle {
+  margin-top: 3px;
+}
+.memory-workspace--embedded .memory-panel__header-actions {
+  align-self: center;
+}
+
+.memory-workspace--embedded .memory-overview {
+  --memory-overview-columns: repeat(5, minmax(0, 1fr));
+  --memory-overview-stat-height: 69px;
+}
+.memory-workspace--embedded .memory-overview__counts {
+  gap: 1px;
+  margin-bottom: 12px;
+  border: 1px solid var(--border-content-panel);
+  border-radius: var(--radius-card);
+  overflow: hidden;
+  background: var(--border-content-panel);
+}
+.memory-workspace--embedded .memory-overview__counts button {
+  justify-content: flex-start;
+  gap: 4px;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.memory-workspace--embedded .memory-overview__counts button:hover {
+  background: var(--color-canvas-oat);
+}
+.memory-workspace--embedded .memory-overview__stat-label {
+  flex-direction: row-reverse;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+}
+.memory-workspace--embedded .memory-overview__stat-label > span {
+  width: 16px;
+  height: 16px;
+  background: none;
+}
+.memory-workspace--embedded .memory-overview__stat-label svg {
+  width: 14px;
+  height: 14px;
+}
+.memory-workspace--embedded .memory-overview__stat-value {
+  font-size: 21px;
+  font-weight: 700;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+.memory-workspace--embedded .memory-overview__stat-hint {
+  display: none;
+}
+
+.memory-workspace--embedded .memory-overview__charts {
+  display: grid;
+  align-items: start;
+  gap: 12px;
+}
+.memory-workspace--embedded .memory-overview__charts article {
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+}
+.memory-workspace--embedded .memory-overview__charts article > :first-child {
+  margin-bottom: 8px;
+}
+.memory-workspace--embedded .memory-overview__charts article h4 {
+  font-weight: 650;
+}
+.memory-workspace--embedded .memory-overview__sources {
+  display: grid;
+  gap: 6px;
+}
+.memory-workspace--embedded .memory-overview__sources > div {
+  margin: 0;
+}
+.memory-workspace--embedded [data-source-distribution-row] > .rounded-pill {
+  height: 7px;
+}
+
+.memory-workspace--embedded .memory-toolbar {
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.memory-workspace--embedded .memory-source-search-control {
+  height: 36px;
+}
+.memory-workspace--embedded .memory-source-search-control :is(.memory-search__input, .memory-source-filter__button) {
+  height: 34px;
+  min-height: 34px;
+}
+.memory-workspace--embedded .memory-source-search-control .memory-source-filter__button {
+  border-left: 1px solid var(--border-content-panel);
+}
+.memory-workspace--embedded .memory-list {
+  gap: 6px;
+}
+.memory-workspace--embedded .memory-card {
+  padding: 9px 11px;
+  border-radius: var(--radius-btn);
+  box-shadow: none;
+}
+.memory-workspace--embedded .memory-card:hover {
+  transform: none;
+}
+.memory-workspace--embedded .memory-card__meta {
+  margin-top: 5px;
+  gap: 4px 7px;
+}
+.memory-workspace--embedded .memory-card__summary {
+  margin-top: 2px;
+}
+.memory-workspace--embedded .memory-panel--memories .memory-list:has(> .memory-card) {
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-content-panel);
+  border-radius: var(--radius-card);
+}
+.memory-workspace--embedded .memory-panel--memories .memory-card {
+  border: 0;
+  border-radius: 0;
+}
+.memory-workspace--embedded .memory-panel--memories .memory-card + .memory-card {
+  border-top: 1px solid var(--border-content-panel);
+}
+.memory-workspace--embedded .memory-panel--memories .memory-card__title {
+  color: var(--color-text-ink);
+  font-weight: 600;
+}
+.memory-workspace--embedded .memory-pagination {
+  margin-top: 6px;
+  padding-top: 5px;
+}
+.memory-workspace--embedded :is(.app-frame-nav-button, .memory-card, [data-overview-target], .memory-refresh-button):focus-visible {
+  outline: 2px solid var(--color-action-sky);
+  outline-offset: -2px;
+}
+
+@media (min-width: 1220px) {
+  .memory-workspace--embedded .memory-overview__charts {
+    grid-template-columns: minmax(0, 2fr) minmax(220px, 1fr);
+  }
+}
+@media (max-width: 720px) {
+  .memory-workspace--embedded .memory-overview {
+    --memory-overview-columns: repeat(3, minmax(0, 1fr));
+  }
+}

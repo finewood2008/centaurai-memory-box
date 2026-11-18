@@ -18,6 +18,53 @@ from .api import create_router
 from .contracts import StudioError, TEXT_EXTENSIONS
 from .runner import Runner
 from .service import StudioService
+from .upgrade_guard import request_admission
+
+
+def standard_runtime_identity(service, current_user):
+    """Bind public runtime authority to a verified native or server-issued launch."""
+    async def identity(request: Request, user=Depends(current_user)):
+        from centuarai_local_data_gate import get_context
+
+        scope = request.scope
+        route = (scope.get('method'), scope.get('path'))
+        if (scope.get('type') != 'http' or route not in {
+                ('GET', '/api/wanx-expert-app/v1/context'),
+                ('POST', '/api/wanx-expert-app/v1/invoke')}
+                or scope.get('query_string') or any(c in scope.get('raw_path', b'') for c in [b'?', b'%'])):
+            raise StudioError('EXPERT_OPERATION_DENIED', 403)
+        context = get_context(scope)
+        if context is not None:
+            claims = context.claims
+            application = claims.get('applicationId')
+            launch = claims.get('launchId')
+            if (not isinstance(application, str) or not re.fullmatch(r'ai\.wanx\.selfmade\.[a-f0-9]{32}', application)
+                    or not isinstance(launch, str) or not re.fullmatch(r'[A-Za-z0-9_-]{43}', launch)
+                    or claims.get('audience') != 'octop'
+                    or claims.get('resourceId') != 'team:application:' + application):
+                raise StudioError('EXPERT_OPERATION_DENIED', 403)
+            try:
+                context.check_cached()
+            except Exception:
+                raise StudioError('STUDIO_AUTHORIZATION_EXPIRED', 403) from None
+        elif service.local_authority.required() or getattr(user, 'application_id', None) != 'wanx':
+            raise StudioError('EXPERT_OPERATION_DENIED', 403)
+        owner = canonical_owner(user)
+        token = service.local_authority.enter(user)
+        try:
+            if context is not None:
+                principal = {'owner': owner, 'applicationId': application, 'launchId': launch}
+            else:
+                from .deployment.standard_runtime import StandardRuntime
+                # Only the server may recover slot/generation from this opaque
+                # main-process credential. No caller supplies audience claims.
+                principal = StandardRuntime(service).sso_principal(owner, request.headers.get('x-wanx-expert-launch'))
+            # Context creates a persistent runtime pin, despite using GET.
+            async with request_admission(service, 'POST'):
+                yield principal
+        finally:
+            service.local_authority.reset(token)
+    return identity
 
 
 def output_budget(body,model):
@@ -247,6 +294,8 @@ def mount_wanx(app,server,project_root:Path,*,catalog_services=None):
     if service is None or getattr(service,'closing',False):
         service=StudioService(server.paths.root/'.wanx-app-studio',project_root,models,files)
         server._wanx_studio_service=service
+    from .ota_live import register as register_ota_probe
+    register_ota_probe(app, server)
     service.runner=Runner(service)
     service.engines.provider=lambda owner:models.codex_runners(server.app_runtime.agent_registry.acp_settings,int(owner.split(":",1)[1]))
     from .context_sources import WanxContextSources
@@ -281,7 +330,8 @@ def mount_wanx(app,server,project_root:Path,*,catalog_services=None):
                 if not allowed:raise StudioError('STUDIO_ADMIN_REQUIRED',403)
                 if service.local_authority.required() and request.method=='GET' and path in {'/context','/projects'}:
                     raise StudioError('STUDIO_ADMIN_REQUIRED',403)
-            yield owner
+            async with request_admission(service, request.method):
+                yield owner
         finally:
             service.local_authority.reset(token)
 
@@ -296,6 +346,8 @@ def mount_wanx(app,server,project_root:Path,*,catalog_services=None):
     async def failure(_request,error):
         return JSONResponse({'code':error.code},error.status)
 
+    from .deployment.standard_runtime import mount as mount_standard_runtime
+    mount_standard_runtime(app, service, standard_runtime_identity(service, current_user))
     app.include_router(router)
     app.state.app_studio=service
     return service

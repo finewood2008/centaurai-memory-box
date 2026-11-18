@@ -4200,6 +4200,18 @@ export class RuntimeRepository {
     return counts;
   }
 
+  hasDueJobs(jobTypes: readonly string[], now: string): boolean {
+    if (!jobTypes.length) return false;
+    return Boolean(this.db.prepare(
+      `SELECT 1 FROM evolution_jobs
+       WHERE status IN ('queued', 'failed') AND failure_count < max_attempts
+         AND job_type IN (SELECT value FROM json_each(?))
+         AND (available_at IS NULL OR available_at <= ?)
+         AND COALESCE(CAST(json_extract(payload_json, '$.runAfter') AS TEXT), '') <= ?
+       LIMIT 1`
+    ).get(JSON.stringify(jobTypes), now, now));
+  }
+
   nextWorkerRunAt(options?: {
     jobType?: string;
     jobTypes?: readonly string[];

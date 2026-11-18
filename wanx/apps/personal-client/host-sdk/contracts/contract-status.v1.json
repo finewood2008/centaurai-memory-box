@@ -105,6 +105,24 @@
         "version-registration",
         "session-revocation-evidence"
       ]
+    },
+    {
+      "id": "wanx.expert-app.v1",
+      "version": "1.0.0",
+      "status": "ready-for-acceptance",
+      "contractFiles": [
+        "expert-app-api.md",
+        "octop-modules/expert-app.openapi.json",
+        "schemas/expert-app-context.v1.schema.json",
+        "schemas/expert-app-invoke.v1.schema.json",
+        "schemas/expert-app-result.v1.schema.json"
+      ],
+      "requiredBeforeOpen": [
+        "real-box-acceptance",
+        "version-registration",
+        "session-revocation-evidence",
+        "generation-fencing-evidence"
+      ]
     }
   ],
   "permissionModel": "permissions.v1.json"

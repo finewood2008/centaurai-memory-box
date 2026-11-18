@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createSpaceLinkBridge } from "../shell/space-links.mjs";
+import { createSpaceLinkBridge } from "../build/app/shell/space-links.mjs";
 
 function fixture() {
   let listener, saved, account = "owner", box = "box-a", response;

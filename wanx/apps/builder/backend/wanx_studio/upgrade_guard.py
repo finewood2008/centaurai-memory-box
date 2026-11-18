@@ -7,6 +7,7 @@ failed upgrade. Only Linux images advertise this capability.
 from __future__ import annotations
 
 import argparse
+from contextlib import asynccontextmanager
 import asyncio
 import json
 import os
@@ -60,6 +61,19 @@ async def background_lock(root: Path):
         if not pending.cancelled() and pending.exception() is None:
             pending.result().close()
         raise
+
+
+@asynccontextmanager
+async def request_admission(service, method):
+    """Fence HTTP state admission as well as its eventual background effects."""
+    lock = None
+    if os.name == "posix" and method not in {"GET", "HEAD", "OPTIONS"}:
+        lock = await background_lock(service.store.root)
+    try:
+        yield
+    finally:
+        if lock is not None:
+            lock.close()
 
 
 def main(argv=None):

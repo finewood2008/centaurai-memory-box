@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {createAssistantChannels} from '../shell/assistant-channels.mjs';
-import {createAIDialogue} from '../shell/assistant-service.mjs';
+import {createAssistantChannels} from '../build/app/shell/assistant-channels.mjs';
+import {createAIDialogue} from '../build/app/shell/assistant-service.mjs';
 
 function fixture(){
   let scope='owner-box', next=1; const bindings=new Map(), rows=new Map(),routes=[],overrides=new Map(),cleanups=[];

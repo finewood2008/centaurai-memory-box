@@ -49,12 +49,9 @@ function starlinkEvidence(item) {
 }
 
 function starlinkDocument(item) {
-  const content = excerpt(item?.text, readLength);
-  if (!evidenceId(item?.documentId) || !evidenceId(item?.versionId) || !content) return null;
-  const metadata = annotation(item.annotation);
+  if (!evidenceId(item?.documentId) || !evidenceId(item?.versionId)) return null;
   return { kind: "document", documentId: item.documentId, versionId: item.versionId,
-    title: excerpt(item.title, 240) || "星图资料", locator: locator(item.locator), snippet: content.slice(0, 900),
-    ...(metadata && { annotation: metadata }) };
+    title: "空间标签命中的资料" };
 }
 
 function matchQuery(value, terms) {
@@ -114,7 +111,7 @@ export function createCodexContextSources({ space, starlink }) {
 
   async function catalog(parent = "", check, kind) {
     const [page, available] = await Promise.all([
-      kind !== "starlink" ? listing(parent, check) : undefined,
+      kind !== "starlink" ? folderWithin("", parent, check) : undefined,
       kind !== "space" ? warehouses(check) : undefined,
     ]);
     check();
@@ -149,8 +146,8 @@ export function createCodexContextSources({ space, starlink }) {
 
   async function folderWithin(root, folderId, check) {
     const page = await listing(folderId, check);
+    if (page.crumbs[0]?.name === managedBackupFolder) throw error(403, "此目录由记忆备份管理。");
     if (root === "") {
-      if (page.crumbs[0]?.name === managedBackupFolder) throw error(403, "此目录由记忆备份管理。");
       const items = page.parent === page.root
         ? page.items.filter(item => item.kind !== "folder" || item.name !== managedBackupFolder)
         : page.items;
@@ -226,7 +223,10 @@ export function createCodexContextSources({ space, starlink }) {
 
   async function spaceSearch(root, args, check) {
     const query = queryText(args.query, 300).toLowerCase();
-    const terms = [...new Set([query, ...query.split(/[^\p{L}\p{N}_-]+/u).filter(term => term.length >= 2)])].slice(0, 9);
+    const extra = Array.isArray(args.keywords) ? args.keywords
+      .filter(term => typeof term === "string" && /^[\p{L}\p{N}_-]{2,40}$/u.test(term))
+      .map(term => term.toLowerCase()) : [];
+    const terms = [...new Set([query, ...extra, ...query.split(/[^\p{L}\p{N}_-]+/u).filter(term => term.length >= 2)])].slice(0, 9);
     const { files, truncated } = await collect(root, check);
     const candidates = files.map(file => ({ file, score: matchQuery(file.path, terms) * 2 + annotationScore(annotation(file.annotation), terms) }));
     candidates.sort((a, b) => b.score - a.score);
@@ -317,10 +317,9 @@ export function createCodexContextSources({ space, starlink }) {
       const documents = Array.isArray(reply.annotationDocuments) ? reply.annotationDocuments.filter(item =>
         (!item?.warehouse_id || item.warehouse_id === selectedId) && (!item?.warehouseId || item.warehouseId === selectedId)
       ).slice(0, 10).map(starlinkDocument).filter(Boolean) : [];
-      return {
-        matches: [...documents, ...items.slice(0, 10).filter(item => !item?.warehouse_id || item.warehouse_id === selectedId)
-          .map(starlinkEvidence).filter(Boolean).map(({ text, ...metadata }) => ({ ...metadata, snippet: text.slice(0, 900) }))].slice(0, 10),
-      };
+      const evidence = items.slice(0, 10).filter(item => !item?.warehouse_id || item.warehouse_id === selectedId)
+        .map(starlinkEvidence).filter(Boolean).map(({ text, ...metadata }) => ({ ...metadata, snippet: text.slice(0, 900) }));
+      return {matches: [...evidence, ...documents].slice(0, 10)};
     }
     if (tool === "starlink_evidence") {
       if (!evidenceId(args.evidenceId)) throw error(400, "星图证据标识无效。");

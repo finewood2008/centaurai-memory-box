@@ -116,6 +116,12 @@
 .awb-diffs ins { background: #edf2e5; color: #64794b; }
 .awb-confirm footer { justify-content: flex-end; }
 .space-files-page:has(.annotation-workbench)>.wanx-section-banner { display: none; }
+.awb-tag-field { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 7px; border: 1px solid var(--awb-line); border-radius: 9px; background: #fffdf8; }
+.awb-tag-field:focus-within { outline: 2px solid #ad855c55; border-color: #a67c52; }
+.awb-tag-token { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 3px 7px; border-radius: 6px; background: #f0e7d9; color: #795b3e; font-size: 12px; overflow-wrap: anywhere; }
+.awb-tag-token button { flex: none; border: 0; background: transparent; padding: 0 2px; color: inherit; font-size: 16px; line-height: 1; }
+.awb-editor .awb-tag-field input { flex: 1 1 135px; width: 0; min-width: 100px; border: 0; padding: 3px; background: transparent; box-shadow: none; outline: none; }
+.awb-tag-editor > label { margin-bottom: 6px; }
 .personal-space-browser:has(>.annotation-workbench) { border: 0; background: transparent; }
 @media(max-width:1100px) { .awb-layout { grid-template-columns: minmax(300px,1fr) 300px; } .awb-main, .awb-editor { padding: 16px; } .awb-list-tools { gap: 6px; } .awb-row-tags .awb-chip:nth-child(n+2) { display: none; } }
 @media(max-width:760px) { .awb-top { padding: 12px; } .awb-top h2 { font-size: 19px; } .awb-context { max-width: 230px; } .awb-layout { grid-template-columns: minmax(0,1fr); overflow: auto; } .awb-main { min-height: 390px; overflow: visible; } .awb-virtual { flex: none; height: 260px; min-height: 0; } .awb-right { overflow: visible; border-left: 0; border-top: 1px solid var(--awb-line); } .awb-table-head,.awb-file { grid-template-columns: 22px minmax(100px,1fr) 60px 55px; gap: 6px; } .awb-bottom { gap: 5px; } .awb-left { display: block; position: absolute; bottom: auto; max-height: min(560px,100%); min-height: 280px; } }

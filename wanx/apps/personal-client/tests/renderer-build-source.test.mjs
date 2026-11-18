@@ -20,7 +20,7 @@ async function fixture(directory, alwaysStrict) {
     name: "renderer-source-fixture", version: "1.0.0", private: true, type: "module",
     scripts: { "build:studio": 'node -e "void 0"', "build:renderer": manifest.scripts["build:renderer"] },
   }));
-  await writeFile(path.join(directory, ".gitignore"), "/node_modules\n");
+  await writeFile(path.join(directory, ".gitignore"), "/node_modules\n/build/\n");
   await writeFile(path.join(directory, "local-ui/renderer/device-setup-entry.ts"),
     'const message: string = "renderer fixture"; globalThis.rendererFixture = message;\n');
   await writeFile(path.join(directory, "local-ui/renderer/wallet-entry.mjs"),
@@ -44,7 +44,7 @@ function build(directory) {
 }
 
 async function outputs(directory) {
-  return Promise.all(outputNames.map(name => readFile(path.join(directory, "local-ui/renderer", name), "utf8")));
+  return Promise.all(outputNames.map(name => readFile(path.join(directory, "build/app/local-ui/renderer", name), "utf8")));
 }
 
 test("renderer rebuilds stay identical across checkout paths and ambient TypeScript settings", async t => {
@@ -89,7 +89,7 @@ test("generated artwork metadata stays outside source proof while canonical meta
   const client = path.join(directory, "apps/personal-client");
   const records = ["material-v1/manifest.json", "section-icons-v2/prompts.json"].map(name => ({
     canonical: path.join(directory, "apps/builder/integration/personal-client/assets", name),
-    generated: path.join(client, "local-ui/renderer/assets", name),
+    generated: path.join(client, "build/app/local-ui/renderer/assets", name),
   }));
   await copyFile(path.join(clientRoot, "../../.gitignore"), path.join(directory, ".gitignore"));
   for (const record of records) for (const file of [record.canonical, record.generated]) {
@@ -110,6 +110,7 @@ test("generated artwork metadata stays outside source proof while canonical meta
     assert.throws(() => clientBuildSource(client), /CLIENT_SOURCE_TREE_DIRTY/);
     await writeFile(record.canonical, "{}\n");
   }
+  await mkdir(path.join(client, "local-ui/renderer/assets/material-v1"), { recursive: true });
   await writeFile(path.join(client, "local-ui/renderer/assets/material-v1/unreviewed.json"), "{}\n");
   assert.throws(() => clientBuildSource(client), /CLIENT_SOURCE_TREE_DIRTY/);
 });

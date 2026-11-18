@@ -91,3 +91,23 @@ for (const [edition, create] of Object.entries({ personal, team, builder })) {
     assert.deepEqual(restarted.center.snapshot().items, [allowed]);
   });
 }
+
+test('memory pipeline blockers alert once until the existing backlog resumes', async t => {
+  const f = await fixture(personal, { connected: false });
+  const report = (center, blockers, accountId = 'a') => center.memoryPipeline({ accountId, blockers });
+  report(f.center, []);
+  report(f.center, ['summary-model'], 'b');
+  assert.equal(f.center.snapshot().unreadCount, 0);
+  report(f.center, ['summary-model']);
+  assert.equal(f.center.snapshot().items[0].title, '记忆摘要已暂停');
+  await f.center.markRead({ all: true });
+  await f.center.close();
+
+  const restarted = await fixture(personal, { connected: false, disk: f.saved() });
+  t.after(() => restarted.center.close());
+  report(restarted.center, ['summary-model']);
+  assert.equal(restarted.center.snapshot().unreadCount, 0);
+  report(restarted.center, []);
+  report(restarted.center, ['summary-model', 'evolution-model']);
+  assert.equal(restarted.center.snapshot().unreadCount, 2);
+});

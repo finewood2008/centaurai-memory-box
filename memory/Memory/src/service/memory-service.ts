@@ -84,6 +84,7 @@ import type { SerializedMemoryVector } from "../storage/sqlite-vec-store.js";
 import type {
   FeedbackRequest,
   HealthResponse,
+  MemoryPipelineBlocker,
   InjectedContext,
   JobRef,
   L3WorldModelBoundaryRequest,
@@ -217,7 +218,7 @@ import {
   type ClosedEpisodeTrigger,
   type EnqueueJobInput
 } from "./worker/job-handlers.js";
-import { WorkerRunner, type WorkerRunExecution } from "./worker/worker-runner.js";
+import { SUMMARY_JOBS_REQUIRING_MODEL, WorkerRunner, type WorkerRunExecution } from "./worker/worker-runner.js";
 import { WorkerConcurrencyController, providerDescriptor, workerModelBatchKey, type PreparedWorkerExecution } from "./worker/worker-concurrency.js";
 import { observeWorker, readWorkerQueueMetrics, WorkerObservability } from "./worker/worker-observability.js";
 import { jobPolicyRegistry, UnknownJobPolicyError } from "./worker/job-policy-registry.js";
@@ -1235,6 +1236,23 @@ export class MemoryService {
     this.viewerEndpoint = endpoint;
   }
 
+  private pipelineBlockers(models: HealthResponse["models"]): MemoryPipelineBlocker[] {
+    const evolutionJobs = ["l2_induction", "l3_world_model_update", "skill_crystallization", "skill_batch_evolve"];
+    const now = nowIso();
+    const hasDueWork = (jobTypes: readonly string[]) => this.repos.runtime.hasDueJobs(jobTypes, now);
+    const blockers: MemoryPipelineBlocker[] = [];
+    if ((!models.summary.configured || models.summary.lastError) && hasDueWork(SUMMARY_JOBS_REQUIRING_MODEL)) {
+      blockers.push("summary-model");
+    }
+    if ((!models.evolution.configured || models.evolution.lastError) && hasDueWork(evolutionJobs)) {
+      blockers.push("evolution-model");
+    }
+    if (this.isMemoryBudgetPaused() && hasDueWork(
+      [...SUMMARY_JOBS_REQUIRING_MODEL, ...evolutionJobs].filter(job => this.memoryBudgetJobConsumes(job))
+    )) blockers.push("model-budget");
+    return blockers;
+  }
+
   health(routes: string[] = []): HealthResponse {
     const schema = this.schemaVersion();
     const backend = this.storageCapabilities();
@@ -1298,6 +1316,9 @@ export class MemoryService {
               l3WorldModelProtocolVersions: [2]
             }
           }
+        : {}),
+      ...(backend.backendId === "sqlite-local" && schema.version > 0
+        ? { pipelineBlockers: this.pipelineBlockers({ summary, evolution, embedding }) }
         : {}),
       serverTime: nowIso()
     };

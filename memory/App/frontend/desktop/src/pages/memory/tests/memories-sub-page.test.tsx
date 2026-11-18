@@ -26,6 +26,32 @@ import {
 } from "../memory-agent-filter.js";
 
 describe("MemoriesSubPage", () => {
+  it("摘要模型未配置时待处理记忆明确等待配置，不假称正在生成摘要", () => {
+    const item = { ...memoryListItemFixture, processing: processingRecord(memoryListItemFixture.id, "summary_pending", "summary") };
+    const html = renderMemories({ status: "ready", data: panelItemsOutput([item]), detail: null }, "zh-CN", { summaryModelConfigured: false });
+    expect(html).toContain("等待配置记忆模型");
+    expect(html).not.toContain("摘要总结中");
+    const english = renderMemories({ status: "ready", data: panelItemsOutput([item]), detail: null }, "en-US", { summaryModelConfigured: false });
+    expect(english).toContain("Waiting for a Memory model");
+    const detail = { ...memoryDetailFixture, item: { ...memoryDetailFixture.item, summary: "", processing: item.processing } };
+    const drawer = renderMemories({ status: "ready", data: panelItemsOutput([]), detail: { status: "ready", data: detail } }, "zh-CN", { summaryModelConfigured: false });
+    expect(drawer).toContain("等待配置记忆模型");
+    expect(drawer).not.toContain("摘要总结中");
+  });
+
+  it("模型未知或已配置时保留等待摘要状态，已领取的摘要不被缺模型状态覆盖", () => {
+    for (const configured of [undefined, true]) {
+      const html = renderMemories({ status: "ready", data: panelItemsOutput([{ ...memoryListItemFixture,
+        processing: processingRecord(memoryListItemFixture.id, "summary_pending", "summary") }]), detail: null }, "zh-CN", { summaryModelConfigured: configured });
+      expect(html).toContain("摘要总结中");
+      expect(html).not.toContain("等待配置记忆模型");
+    }
+    const running = renderMemories({ status: "ready", data: panelItemsOutput([{ ...memoryListItemFixture,
+      processing: processingRecord(memoryListItemFixture.id, "summarizing", "summary") }]), detail: null }, "zh-CN", { summaryModelConfigured: false });
+    expect(running).toContain("摘要总结中");
+    expect(running).not.toContain("等待配置记忆模型");
+  });
+
   it("uses the canonical detail summary when legacy trace metadata still has a placeholder", () => {
     const detail = { ...memoryDetailFixture, item: { ...memoryDetailFixture.item,
       summary: "有效存储摘要", processing: undefined,
@@ -1107,6 +1133,7 @@ function renderMemories(
     onRetryProcessing?: (id: string) => void;
     onOpenSettings?: () => void;
     retryFeedback?: NonNullable<Parameters<typeof MemoriesSubPageView>[0]["retryFeedback"]>;
+    summaryModelConfigured?: boolean;
   } = {}
 ): string {
   return renderToString(
@@ -1125,6 +1152,7 @@ function renderMemories(
         onRetryProcessing={actions.onRetryProcessing}
         onOpenSettings={actions.onOpenSettings}
         retryFeedback={actions.retryFeedback}
+        summaryModelConfigured={actions.summaryModelConfigured}
         onCloseDetail={vi.fn()}
       />
     </I18nProvider>

@@ -408,3 +408,32 @@ async def test_acp_expert_recheck_covers_data_intake_with_empty_prd_capabilities
  await prep.handoff('alice',pid,{'expectedRevision':p['preparation']['revision']})
  assert svc.store.get('alice',pid)['solution']['capabilities']==[]
  assert not svc.runtime_sessions
+
+async def test_expert_capability_mismatch_can_be_discussed_but_not_built(env,monkeypatch,tmp_path):
+ from test_studio_expert_delivery import wire,configure
+ svc,pid,_=env;prep=svc.preparation
+ manager,_=wire(svc,tmp_path);configure(manager,svc.store.get('alice',pid))
+ original=prep.probe_runtime
+ async def probe(owner,project_id,cap):
+  if cap=='foundation':
+   if 'files' in svc.store.get(owner,project_id)['solution']['capabilities']:
+    raise StudioError('EXPERT_CLIENT_CAPABILITY_UNSUPPORTED',409)
+   return {'status':'passed'}
+  return await original(owner,project_id,cap)
+ monkeypatch.setattr(prep,'probe_runtime',probe)
+ p=await prep.check('alice',pid,{'operationId':op()})
+ await prep.handoff('alice',pid,{'expectedRevision':p['preparation']['revision']})
+ p=svc.store.get('alice',pid);p['solution']['capabilities']=['data','files','foundation']
+ p['preparation']['interview'].update(state='completed',sync='saved');svc.store.save(p)
+ p=await prep.check('alice',pid,{'operationId':op()})
+ assert p['preparation']['report']['results']['foundation']['code']=='EXPERT_CLIENT_CAPABILITY_UNSUPPORTED'
+ await prep.guard_async('alice',p,planning=True)
+ await prep.handoff('alice',pid,{'expectedRevision':p['preparation']['revision']})
+ p=svc.store.get('alice',pid);p['preparation']['interview'].update(state='completed',sync='saved');svc.store.save(p)
+ with pytest.raises(StudioError,match='CAPABILITY_CHECK_REQUIRED'):
+  await prep.guard_async('alice',p,development=True)
+ # A correction never turns the failed dependency result into a passed probe.
+ assert p['preparation']['report']['results']['foundation']['status']=='failed'
+ p['solution']['capabilities']=['data','foundation'];svc.store.save(p)
+ p=await prep.check('alice',pid,{'operationId':op()})
+ await prep.guard_async('alice',p,development=True)

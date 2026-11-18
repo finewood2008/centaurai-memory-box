@@ -82,3 +82,103 @@ test('trusted account switch fences a cached old context during managed file cop
  h.connect();await copied;h.switchAccount();release();
  await new Promise(r=>setTimeout(r,30));assert.deepEqual(await h.installer.list(),[]);assert.equal(h.acks.length,0);assert.equal(h.launched.length,0);assert.equal(h.listenerCount(),0);
 });
+
+
+const jsonResponse=(status,value)=>({status,body:JSON.stringify(value)});
+async function compatibilityFixture(t,{capability=jsonResponse(404,{detail:'Not Found'}),management=jsonResponse(200,{protocolVersion:1,iterativeBuild:1,directEdits:1}),contextResponse=jsonResponse(200,{protocolVersion:2})}={}){
+ const root=await mkdtemp(path.join(os.tmpdir(),'studio-capability-compat-'));t.after(()=>rm(root,{recursive:true,force:true}));
+ const requests=[];let selected='box-old',installed=0;
+ const reply=async(value,input)=>typeof value==='function'?await value(input):value;
+ const entry=createStudioEntry({deploymentRoot:path.join(root,'journal'),deploymentIntervalMs:100000,
+  applications:{installDeployment(){installed++;throw Error('compatibility must never install')}},
+  createConnection:async()=>{const box=selected;return{context:()=>({accountId:'synthetic',boxId:box,user:{id:1}}),async request(input){
+   requests.push({box,path:input.path});
+   if(input.path==='/api/app-studio/context')return reply(contextResponse,{box,...input});
+   if(input.path==='/api/app-studio/deployment/capabilities')return reply(capability,{box,...input});
+   if(input.path==='/api/app-studio/_builder/context')return reply(management,{box,...input});
+   if(input.path.endsWith('/client-deliveries'))return jsonResponse(200,{items:[]});
+   throw Error('unexpected route '+input.path);
+  }}}});
+ t.after(()=>entry.close());return{entry,requests,installed:()=>installed,switchBox:()=>{selected='box-new'}};
+}
+test('a missing optional deployment endpoint permits legacy workspace only after real management authorization',async t=>{
+ const h=await compatibilityFixture(t);const assertLive=await h.entry.authorize();assertLive();
+ await new Promise(r=>setImmediate(r));
+ assert.deepEqual(h.requests.map(r=>r.path),['/api/app-studio/context','/api/app-studio/deployment/capabilities','/api/app-studio/_builder/context']);
+ assert.equal(h.installed(),0);assert.equal(h.requests.some(r=>r.path.includes('client-deliveries')),false);
+});
+test('legacy fallback cannot authorize a published-app user or enable the deployment worker',async t=>{
+ const h=await compatibilityFixture(t,{management:jsonResponse(403,{code:'STUDIO_ADMIN_REQUIRED'})});
+ await assert.rejects(h.entry.authorize(),{code:'STUDIO_ADMIN_REQUIRED'});
+ assert.equal(h.requests.at(-1).path,'/api/app-studio/_builder/context');assert.equal(h.installed(),0);
+ assert.equal(h.requests.some(r=>r.path.includes('client-deliveries')),false);
+});
+test('permission, service, network and malformed capability failures are never treated as legacy compatibility',async t=>{
+ const cases=[
+  [jsonResponse(401,{code:'AUTH_FAILED'}),'AUTH_FAILED'],
+  [jsonResponse(403,{code:'STUDIO_ADMIN_REQUIRED'}),'STUDIO_ADMIN_REQUIRED'],
+  [jsonResponse(503,{detail:'Service unavailable'}),'STUDIO_REQUEST_FAILED'],
+  [jsonResponse(404,{code:'STUDIO_IDENTITY_FORBIDDEN'}),'STUDIO_IDENTITY_FORBIDDEN'],
+  [jsonResponse(404,{}),'STUDIO_REQUEST_FAILED'],
+  [jsonResponse(404,{detail:'Deployment resource not found'}),'STUDIO_REQUEST_FAILED'],
+  [{status:404,body:'<html>Not found</html>'},'STUDIO_RESPONSE_INVALID'],
+  [{status:200,body:'broken-json'},'STUDIO_RESPONSE_INVALID'],
+  [()=>{throw Object.assign(Error('network error'),{code:'NETWORK_FAILED'})},'NETWORK_FAILED'],
+  [()=>{throw Object.assign(Error('spoofed transport status'),{code:'STUDIO_REQUEST_FAILED',status:404})},'STUDIO_REQUEST_FAILED'],
+ ];
+ for(const [capability,code] of cases){const h=await compatibilityFixture(t,{capability});await assert.rejects(h.entry.authorize(),{code});
+  assert.equal(h.requests.some(r=>r.path.includes('/_builder/context')||r.path.includes('client-deliveries')),false);assert.equal(h.installed(),0);h.entry.close();}
+});
+test('only the deployment capability route may use the legacy fallback',async t=>{
+ const h=await compatibilityFixture(t,{contextResponse:jsonResponse(404,{detail:'Not Found'})});
+ await assert.rejects(h.entry.authorize(),{code:'STUDIO_REQUEST_FAILED'});
+ assert.deepEqual(h.requests.map(r=>r.path),['/api/app-studio/context']);assert.equal(h.installed(),0);
+});
+test('fallback requires a valid supported management response rather than any HTTP 200',async t=>{
+ for(const management of [jsonResponse(200,{}),jsonResponse(200,{protocolVersion:2,iterativeBuild:1}),jsonResponse(200,{protocolVersion:1,iterativeBuild:0}),{status:200,body:'invalid-json'}]){
+  const h=await compatibilityFixture(t,{management});await assert.rejects(h.entry.authorize(),{code:'STUDIO_RESPONSE_INVALID'});
+  assert.equal(h.installed(),0);assert.equal(h.requests.some(r=>r.path.includes('client-deliveries')),false);h.entry.close();
+ }
+});
+test('HTTP status remains private rather than appearing on propagated renderer-facing errors',async t=>{
+ const h=await compatibilityFixture(t,{capability:jsonResponse(503,{detail:'private server response'})});
+ let caught;try{await h.entry.authorize()}catch(error){caught=error}
+ assert.equal(caught.code,'STUDIO_REQUEST_FAILED');assert.deepEqual(Object.keys(caught),['code']);
+ assert.equal(Object.hasOwn(caught,'status'),false);assert.equal(Object.hasOwn(caught,'statusCode'),false);
+ assert.doesNotMatch(JSON.stringify(caught),/private server response|503/);
+});
+test('closing during legacy management authorization rejects a late success without starting a worker',async t=>{
+ let finish;const gate=new Promise(resolve=>finish=resolve);
+ const h=await compatibilityFixture(t,{management:()=>gate});const pending=h.entry.authorize();pending.catch(()=>{});
+ await until(()=>h.requests.some(r=>r.path.endsWith('/_builder/context')));h.entry.close();finish(jsonResponse(200,{protocolVersion:1,iterativeBuild:1}));
+ await assert.rejects(pending,{code:'HOST_SESSION_EXPIRED'});assert.equal(h.installed(),0);assert.equal(h.requests.some(r=>r.path.includes('client-deliveries')),false);
+});
+test('a late legacy management response from an older box cannot authorize the new scope',async t=>{
+ let finish;const gate=new Promise(resolve=>finish=resolve);
+ const h=await compatibilityFixture(t,{management:({box})=>box==='box-old'?gate:jsonResponse(200,{protocolVersion:1,iterativeBuild:1})});
+ const pending=h.entry.authorize();pending.catch(()=>{});await until(()=>h.requests.some(r=>r.box==='box-old'&&r.path.endsWith('/_builder/context')));
+ h.switchBox();const assertLive=await h.entry.authorize();assertLive();finish(jsonResponse(200,{protocolVersion:1,iterativeBuild:1}));
+ await assert.rejects(pending,{code:'HOST_SESSION_EXPIRED'});assert.equal(h.installed(),0);assert.equal(h.requests.some(r=>r.path.includes('client-deliveries')),false);
+});
+
+
+test('a box missing both deployment and management routes requires an explicit box update without opening',async t=>{
+ const h=await compatibilityFixture(t,{management:jsonResponse(404,{detail:'Not Found'})});
+ await assert.rejects(h.entry.authorize(),{code:'STUDIO_BOX_UPDATE_REQUIRED'});
+ assert.deepEqual(h.requests.map(r=>r.path),['/api/app-studio/context','/api/app-studio/deployment/capabilities','/api/app-studio/_builder/context']);
+ assert.equal(h.installed(),0);assert.equal(h.requests.some(r=>r.path.includes('client-deliveries')),false);
+});
+test('only an exact ordinary management route 404 becomes the box-update error',async t=>{
+ const cases=[
+  [jsonResponse(401,{code:'AUTH_FAILED'}),'AUTH_FAILED'],
+  [jsonResponse(403,{code:'STUDIO_ADMIN_REQUIRED'}),'STUDIO_ADMIN_REQUIRED'],
+  [jsonResponse(503,{detail:'Service unavailable'}),'STUDIO_REQUEST_FAILED'],
+  [jsonResponse(404,{code:'STUDIO_IDENTITY_FORBIDDEN'}),'STUDIO_IDENTITY_FORBIDDEN'],
+  [jsonResponse(404,{detail:'Other resource not found'}),'STUDIO_REQUEST_FAILED'],
+  [{status:404,body:'<html>Not Found</html>'},'STUDIO_RESPONSE_INVALID'],
+  [()=>{throw Object.assign(Error('network error'),{code:'NETWORK_FAILED'})},'NETWORK_FAILED'],
+  [()=>{throw Object.assign(Error('fake route status'),{code:'STUDIO_REQUEST_FAILED',status:404})},'STUDIO_REQUEST_FAILED'],
+ ];
+ for(const [management,code]of cases){const h=await compatibilityFixture(t,{management});await assert.rejects(h.entry.authorize(),{code});
+  assert.equal(h.installed(),0);assert.equal(h.requests.some(r=>r.path.includes('client-deliveries')),false);h.entry.close();}
+});

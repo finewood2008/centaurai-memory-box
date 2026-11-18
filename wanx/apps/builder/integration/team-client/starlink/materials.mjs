@@ -97,8 +97,7 @@ export function createMaterialBrowser({call,changed,getContext,personal=false}){
     <p>${esc(w.actions.edit_source.allowed?'':w.actions.edit_source.reason||'当前材料不允许编辑正文。')}</p>
     <p>${esc(w.actions.prepare_automatic.allowed?'':w.actions.prepare_automatic.reason||'当前材料不允许自动处理。')}</p>
     ${links.map(l=>`<button class="button primary" data-data-action="material-dialogue" data-conversation="${esc(l.conversation_id)}" data-intent="${esc(l.intent_id)}">在星图继续对话</button>`).join('')}
-    ${!links.length?`<button class="button" data-data-action="material-dialogue">${w.actions.start_dialogue?.allowed?'在星图开始对话核对':'在星图查看材料'}</button>`:''}
-    <p>跳转只打开材料；抽取、修改和发布仍需在星图中确认。</p></section>`;
+    ${links.length?'<p>跳转只打开材料；抽取、修改和发布仍需在星图中确认。</p>':''}</section>`;
  }
  async function dialogue(data){
   const captured=context(),id=active,warehouseId=getContext().warehouseId;

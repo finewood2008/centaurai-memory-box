@@ -162,7 +162,7 @@ async def test_callback_forwards_initialization_output_budget(relay, kind):
         ) == expected
 
 
-@pytest.mark.parametrize("budget", [True, "1024", 0, -1, 8193])
+@pytest.mark.parametrize("budget", [True, "1024", 0, -1, 16385])
 async def test_callback_rejects_invalid_budget_before_model_call(relay, budget):
     response = await call(relay, max_output_tokens=budget)
     assert response.status_code == 422, response.text

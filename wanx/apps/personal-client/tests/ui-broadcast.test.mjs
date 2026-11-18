@@ -46,6 +46,19 @@ function harness() {
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
+test("broadcast preserves local deployment management without environment badges", async () => {
+  const h = harness(), applicationId = 'ai.wanx.selfmade.' + 'a'.repeat(32);
+  h.broadcaster.publish(); await tick();
+  h.reads[0].resolve([{applicationId, installationSource:'selfmade',
+    presentation:{environment:'prod',label:'正式'},
+    deployment:{schemaVersion:1,profile:'wanx-miniapp-v1',slotApplicationId:applicationId,generation:1}}]);
+  await tick();
+  const [value] = h.panel.sent.at(-1)[1].applications;
+  assert.equal(value.managedLocal, true);
+  assert.equal(Object.hasOwn(value, 'presentation'), false);
+  h.broadcaster.dispose();
+});
+
 test("connection, UI, and startup changes publish before the asynchronous app read", async () => {
   const h = harness();
   h.broadcaster.publish();

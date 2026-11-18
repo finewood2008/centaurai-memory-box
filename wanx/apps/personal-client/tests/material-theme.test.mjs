@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
-const root=new URL('../local-ui/',import.meta.url);
+const root=new URL('../build/app/local-ui/',import.meta.url);
 test('personal windows load the local material theme without adding scripts or permissions',async()=>{
  for(const surface of ['renderer','panel','device-trust']){
   const html=await readFile(new URL(surface+'/index.html',root),'utf8');
@@ -11,9 +11,9 @@ test('personal windows load the local material theme without adding scripts or p
   assert(html.includes('data-wanx-surface='));
  }
 });
-test('all six local artwork files match canonical sources and decode as wide PNGs',async()=>{
+test('all local artwork files match canonical sources and decode as wide PNGs',async()=>{
  const manifest=JSON.parse(await readFile(new URL('../../builder/integration/personal-client/assets/material-v1/manifest.json',import.meta.url),'utf8'));
- assert.equal(manifest.assets.length,6);
+ assert.equal(manifest.assets.length,7);
  for(const item of manifest.assets){
   const bytes=await readFile(new URL('renderer/assets/material-v1/'+item.file,root));
   assert.equal(bytes.subarray(1,4).toString(),'PNG');

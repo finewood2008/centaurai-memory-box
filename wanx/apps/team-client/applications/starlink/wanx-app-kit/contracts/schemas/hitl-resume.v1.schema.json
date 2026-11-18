@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wanx-hitl-resume/1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "thread_id",
+    "decisions"
+  ],
+  "properties": {
+    "thread_id": {
+      "type": "string"
+    },
+    "decisions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "approve",
+              "edit",
+              "reject",
+              "respond"
+            ]
+          },
+          "edited_action": {
+            "type": "object"
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 8000
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "hitl_policy": {
+      "type": [
+        "object",
+        "null"
+      ]
+    }
+  }
+}

@@ -9,7 +9,7 @@ try {
   await writeFile(html,'<html><body><main id="host"></main></body></html>');
   await control.loadFile(html);
   control.webContents.on('console-message',event=>{if(event.level==='error')console.error(event.message);});
-  await control.webContents.executeJavaScript((await readFile(new URL('../../local-ui/renderer/ai-dialogue.js',import.meta.url),'utf8'))+'\n;void 0;');
+  await control.webContents.executeJavaScript((await readFile(new URL('../../build/app/local-ui/renderer/ai-dialogue.js',import.meta.url),'utf8'))+'\n;void 0;');
   await control.webContents.executeJavaScript(`(async()=>{
     const check=(value,message)=>{if(!value)throw Error(message)};
     const until=async condition=>{for(let i=0;i<100;i++){if(condition())return;await new Promise(r=>setTimeout(r,10));}throw Error('UI timeout: '+condition)};

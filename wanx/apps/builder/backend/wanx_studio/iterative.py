@@ -10,6 +10,7 @@ from fastapi import Depends
 from pydantic import Field
 
 from .contracts import Operation, StudioError, check_manifest, digest, readiness
+from .capability_gaps import unresolved_capability_gaps
 from .foundation import foundation_policy
 from .versions import state
 from .visual_review import VisualReview, authorize_visual
@@ -21,7 +22,22 @@ def data_intent(p):
                    'capabilities':sorted(solution['capabilities'])})
 
 
+def standard_contract(artifact):
+    """A standard Host package has no legacy miniapp collections schema."""
+    from .versions import verify
+    verify(artifact)
+    return {'format':'wanx-app-dev-kit',
+        'capabilities':sorted(artifact['snapshot']['solution']['capabilities']),
+        'hostCapabilities':deepcopy(artifact['manifest']['capabilities']),
+        'backendContracts':deepcopy(artifact['manifest'].get('compatibility',{}).get('backendContracts',[])),
+        'expertContractDigest':artifact.get('expertContractDigest'),
+        'visibility':'application-access'}
+
+
 def contract(p):
+    base=baseline(p)
+    if base and base.get('devKitPackage'):
+        return planned_standard_contract(p,base)
     draft=p.get('_iterative',{}).get('contractDraft')
     if draft and draft['dataIntent']==data_intent(p):
         return deepcopy(draft['contract'])
@@ -37,6 +53,27 @@ def contract(p):
         return {'collections':{},'capabilities':sorted(p['solution']['capabilities']),
                 'visibility':'application-access'}
     return None
+
+
+def planned_standard_contract(project, base):
+    """Regenerate reduced permissions through the trusted generator, never app code.
+
+    Expanding capabilities or changing a backend still requires explicit planning
+    and authorization; a direct edit can only remove product capabilities.
+    """
+    from .capability_mapping import resolve
+    from .devkit import project_spec
+    fixed = standard_contract(base)
+    requested = sorted(set(project['solution']['capabilities']))
+    if requested == fixed['capabilities']:
+        return fixed
+    if not set(requested) <= set(fixed['capabilities']):
+        return None
+    spec = project_spec(project)
+    mapping = resolve(requested, expert=bool(spec['expert'].get('enabled')), backend=spec['backend'])
+    if mapping['gaps'] or not set(mapping['hostCapabilities']) <= set(fixed['hostCapabilities']):
+        return None
+    return {**fixed, 'capabilities':requested, 'hostCapabilities':mapping['hostCapabilities']}
 
 
 def baseline(p):
@@ -60,11 +97,11 @@ def proposal(p, *, require_review=True):
     if unresolved:missing.append('能力缺口尚未记录取舍：'+'、'.join(unresolved))
     if c is None:missing.append('数据保存方式（由产品经理整理）')
     prep=p.get('preparation',{})
-    gaps=[g.split('：',1)[0] for g in prep.get('gaps',[]) if digest(g) not in prep.get('gapDecisions',{})]
+    gaps=[g.split('：',1)[0] for g in unresolved_capability_gaps(p)]
     if gaps:missing.append('现有 WANX 能力尚不支持，尚未记录本轮范围决定：'+'、'.join(gaps))
-    old=base.get('checkpoint',{}).get('contract') if base else None
+    old=(standard_contract(base) if base.get('devKitPackage') else base.get('checkpoint',{}).get('contract')) if base else None
     if base and not old:
-        old={'collections':base['manifest']['collections'],'capabilities':sorted(base['manifest']['capabilities']),'visibility':'application-access'}
+        old=standard_contract(base) if base.get('devKitPackage') else {'collections':base['manifest']['collections'],'capabilities':sorted(base['manifest']['capabilities']),'visibility':'application-access'}
     spec={'schemaVersion':1,'hash':digest(s),'intent':p['originalGoal'],'foundationConstraints':foundation_policy(),
           'behavior':deepcopy(s),'contract':c,'decisions':deepcopy(p['decisions'])}
     impact=digest({'spec':spec,'base':base['hash'] if base else None})
@@ -84,6 +121,8 @@ def propose_contract(svc,owner,pid,args):
     if set(args)!={'expectedHash','collections'}:raise StudioError('CONTRACT_INPUT_INVALID')
     def change(p):
         if args['expectedHash']!=digest(p['solution']):raise StudioError('SOLUTION_CHANGED',409)
+        base=baseline(p)
+        if base and base.get('devKitPackage'):raise StudioError('STANDARD_CONTRACT_FIXED',409)
         m=check_manifest({'schemaVersion':1,'name':p['name'],'entry':'src/app.js',
                           'collections':args['collections'],'capabilities':p['solution']['capabilities']})
         if bool(m['collections'])!=('data' in m['capabilities']):raise StudioError('CONTRACT_DATA_POLICY_REQUIRED',409)

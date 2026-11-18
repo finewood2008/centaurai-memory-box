@@ -170,6 +170,32 @@ def test_event_pagination_uses_durable_sequence_and_owner(journal):
     assert journal.events("alice", op["id"], after=4)["nextCursor"] == 4
 
 
+@pytest.mark.parametrize("reason,expected", [
+    ("DEPENDENCY_UNAVAILABLE", "DEPENDENCY_UNAVAILABLE"),
+    ("private-adapter-detail", "ADAPTER_UNCERTAIN"),
+    ({"private": "adapter-detail"}, "ADAPTER_UNCERTAIN"),
+    (None, None),
+])
+def test_events_snapshot_only_public_operation_reason(journal, reason, expected):
+    op = journal.claim(submit(journal)["id"], "worker", 101, 30)
+    legacy = journal.events("alice", op["id"])["items"][0]
+    assert "errorCode" not in legacy
+    op.update(state="waiting_box", phase="prepare_backend", errorCode=reason)
+    op = journal.save(op, "worker", op["fence"], 102,
+                      event={"type": "progress", "state": "waiting_box", "errorCode": "raw-event-detail"})
+    event = journal.events("alice", op["id"], after=1)["items"][0]
+    assert event["phase"] == "prepare_backend"
+    assert event.get("errorCode") == expected
+    assert "private" not in str(event)
+    assert "raw-event-detail" not in str(event)
+    assert journal.events("alice", op["id"])["items"][0] == legacy
+    # A stale diagnostic must not label a successful completion as an error.
+    finish(journal, op, now=103)
+    completed = journal.events("alice", op["id"], after=event["sequence"])["items"][0]
+    assert completed["state"] == "succeeded"
+    assert "errorCode" not in completed
+
+
 def test_save_atomicity_and_terminal_immutability(journal):
     op = journal.claim(submit(journal)["id"], "worker", 101, 30)
     before = deepcopy(op)

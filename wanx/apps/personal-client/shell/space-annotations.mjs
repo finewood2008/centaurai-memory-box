@@ -333,11 +333,23 @@ export async function createSpaceAnnotations({ store } = {}) {
       if (!scopeValid(scope) || !warehouseValid(warehouseId)) throw fail("SPACE_ANNOTATION_INVALID");
       return structuredClone([...pendingImports.values()].filter(receipt => receipt.scope === scope && receipt.warehouseId === warehouseId));
     },
-    async imports(scope, warehouseId) {
+    async imports(scope, warehouseId, query) {
       if (!store) return [];
       await queue.catch(() => {}); available();
       if (!scopeValid(scope) || !warehouseValid(warehouseId)) throw fail("SPACE_ANNOTATION_INVALID");
-      return structuredClone([...bindings.values()].filter(binding => binding.scope === scope && binding.warehouseId === warehouseId));
+      const selected = [...bindings.values()].filter(binding => binding.scope === scope && binding.warehouseId === warehouseId);
+      const needle = typeof query === "string" ? query.trim().toLocaleLowerCase() : "";
+      if (!needle) return structuredClone(selected);
+      // Use current local labels to prioritize what to verify on the box. Older
+      // imports and files whose local metadata has changed remain candidates.
+      const matching = [], remaining = [];
+      for (const binding of selected) {
+        const annotation = effective(scope, binding.id);
+        const matches = annotation && !annotation.needsReview &&
+          [...annotation.tags, annotation.description].some(value => value.toLocaleLowerCase().includes(needle));
+        (matches ? matching : remaining).push(binding);
+      }
+      return structuredClone([...matching, ...remaining]);
     },
     async close() { await queue.catch(() => {}); },
   };

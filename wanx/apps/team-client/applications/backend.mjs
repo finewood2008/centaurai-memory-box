@@ -18,6 +18,38 @@ function preparationResponse(response) {
   return value;
 }
 
+// Only the main-owned installer/manager passes this separately from public
+// package metadata. Public manifests cannot opt into managed readiness.
+function standardManagedRecord({manifest,descriptor,managedDeployment:record}) {
+  if (record === undefined) return null;
+  const binding=record?.deployment, standard=record?.standardDeployment;
+  const hex=value=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
+  const positive=value=>Number.isSafeInteger(value)&&value>0;
+  const features=value=>Array.isArray(value)&&value.length===3&&['context','expert','data'].every(item=>value.includes(item));
+  const exact=(value,keys)=>value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).sort().join(',')===[...keys].sort().join(',');
+  const runtime=standard?.runtimeContract;
+  const runtimeValid=exact(runtime,['id','version','collections'])&&runtime.id==='wanx.expert-app.v1'&&runtime.version==='1.0.0'&&exact(runtime.collections,['state'])&&exact(runtime.collections.state,['json'])&&runtime.collections.state.json==='string';
+  const compatibility=validateCompatibility(manifest?.compatibility,3);
+  const contract=compatibility.backendContracts;
+  if (!record||manifest.protocolVersion!==3||record.protocolVersion!==3||
+      !binding||binding.schemaVersion!==1||binding.profile!=='wanx-expert-app-v1'||
+      !/^ai\.wanx\.selfmade\.[a-f0-9]{32}$/.test(binding.slotApplicationId)||
+      typeof binding.baseApplicationId!=='string'||!/^[a-z][a-z0-9._-]{1,63}$/.test(binding.baseApplicationId)||
+      binding.baseApplicationId===binding.slotApplicationId||
+      record.applicationId!==binding.slotApplicationId||manifest.applicationId!==binding.slotApplicationId||record.packageApplicationId!==binding.baseApplicationId||
+      !['dev','prod'].includes(binding.environment)||typeof binding.boxId!=='string'||!binding.boxId||
+      !positive(binding.generation)||!positive(binding.fence)||!/^[a-f0-9]{32}$/.test(binding.operationId)||
+      !hex(binding.artifactHash)||!hex(binding.scopeId)||!/^[a-f0-9]{32}$/.test(binding.ticketId)||!/^sha256:[a-f0-9]{64}$/.test(binding.payloadDigest)||
+      standard?.schemaVersion!==1||standard.format!=='wanx-standard-expert-client-v1'||standard.runtimeNamespace!=='studio'||!hex(standard.packageSha256)||
+      !runtimeValid||
+      descriptor?.schemaVersion!==3||descriptor.applicationId!==binding.baseApplicationId||descriptor.manifest?.applicationId!==binding.baseApplicationId||
+      descriptor.version!==record.version||descriptor.artifactId!==record.artifactId||descriptor.sha256!==standard.packageSha256||
+      compatibility.backendProductId!=='wanx'||compatibility.resourceDependencies.length!==0||contract.length!==1||
+      contract[0].id!=='wanx.expert-app.v1'||contract[0].range!=='>=1.0.0 <2.0.0'||!features(contract[0].features)||
+      JSON.stringify(validateCompatibility(descriptor.manifest.compatibility,3))!==JSON.stringify(compatibility)) throw fail('APPLICATION_DEPLOYMENT_INVALID');
+  return record;
+}
+
 /** No credentials or readiness evidence survive the authenticated box connection. */
 export function createApplicationBackend({ client, account, clientVersion }) {
   function identityKey(current) {
@@ -37,9 +69,9 @@ export function createApplicationBackend({ client, account, clientVersion }) {
         (current.authorization !== 'local-trust-v1' && account.getIdentity()?.accountId !== current.accountId) || current.connection !== "ready") throw fail("UPDATE_SESSION_CHANGED");
     return current;
   }
-  async function fixedConnection(applicationId, compatibility) {
+  async function fixedConnection(applicationId, compatibility, forceApplication = false) {
     if (client.snapshot().phase !== "ready") throw fail("NETWORK_NOT_READY");
-    const local = client.snapshot().connection?.authorization === 'local-trust-v1';
+    const local = !forceApplication && client.snapshot().connection?.authorization === 'local-trust-v1';
     // Resource preparation is a fixed main-owned host operation. Launch derives
     // an independent app session only after real native readiness succeeds.
     const connection = await client.applicationConnection(local ? undefined : applicationId,
@@ -138,11 +170,67 @@ export function createApplicationBackend({ client, account, clientVersion }) {
     // publishes its pointer. Preparing successfully is not a durable grant.
     return { status: "ready", ...validateBinding(result, input, fixed), assertCurrent: fixed.check };
   }
-  async function getCompatibilityContext({ manifest, descriptor, phase, bindingSetId = manifest?.bindingSetId, bindingScope = manifest?.bindingScope }) {
+  async function managedReadiness(record, compatibility, result) {
+    const local=client.snapshot().connection?.authorization==='local-trust-v1';
+    const fixed=await fixedConnection(local?record.applicationId:'wanx',compatibility,true);
+    const principal=fixed.current.user?.id;
+    let launchToken=null,expiresAt=Infinity;
+    const check=()=>{
+      const current=fixed.check(),state=client.snapshot();
+      if(local!==(current.authorization==='local-trust-v1')||!local&&(!Number.isSafeInteger(principal)||principal<1||current.user?.id!==principal)||
+          current.boxId!==record.deployment.boxId||state.phase!=='ready'||state.connection?.deviceId!==record.deployment.boxId||
+          local&&current.applicationId!==undefined&&current.applicationId!==record.applicationId)throw fail('UPDATE_SESSION_CHANGED');
+      if(Date.now()/1000>=expiresAt)throw fail('RUNTIME_SESSION_EXPIRED');
+      return current;
+    };
+    check();
+    if(!local){
+      const opened=await fixed.post('/api/app-studio/deployment/apps/'+record.applicationId+'/runtime',{
+        artifactHash:record.deployment.artifactHash,environment:record.deployment.environment,generation:record.deployment.generation,
+      });
+      check();
+      if(!opened||Object.keys(opened).sort().join(',')!=='expiresAt,launchToken,schemaVersion,transport'||opened.schemaVersion!==1||
+          opened.transport!=='wanx-expert-app-v1'||typeof opened.launchToken!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(opened.launchToken)||
+          !Number.isFinite(opened.expiresAt)||opened.expiresAt<=Date.now()/1000||opened.expiresAt>Date.now()/1000+3660)throw fail('APPLICATION_PREPARATION_INVALID');
+      launchToken=opened.launchToken;expiresAt=opened.expiresAt;
+    }
+    const response=await fixed.connection.request({path:'/api/wanx-expert-app/v1/context',method:'GET',headers:launchToken?{'x-wanx-expert-launch':launchToken}:{}});
+    check();
+    const actual=preparationResponse(response),binding=record.deployment,standard=record.standardDeployment;
+    const backend=actual?.backend,contract=actual?.contract;
+    if(actual?.schemaVersion!==1||actual.applicationId!==binding.baseApplicationId||actual.baseApplicationId!==binding.baseApplicationId||
+        actual.slotApplicationId!==binding.slotApplicationId||actual.boxId!==binding.boxId||actual.environment!==binding.environment||
+        actual.generation!==binding.generation||actual.operationId!==binding.operationId||actual.artifactHash!==binding.artifactHash||
+        actual.packageSha256!==standard.packageSha256||actual.scopeId!==binding.scopeId||actual.runtimeNamespace!=='studio'||
+        contract?.id!=='wanx.expert-app.v1'||contract.version!=='1.0.0'||!Array.isArray(contract.features)||contract.features.length!==3||!['context','expert','data'].every(feature=>contract.features.includes(feature))||
+        backend?.schemaVersion!==1||backend.productId!=='wanx'||backend.deviceId!==binding.boxId||
+        !Array.isArray(backend.resources)||backend.resources.length||!Array.isArray(backend.bindings)||backend.bindings.length)throw fail('APPLICATION_PREPARATION_INVALID');
+    const evidence=evaluateApplicationCompatibility(record,{...result,backend});
+    if(evidence.status!=='ready')throw fail(evidence.checks[0]?.code||'APPLICATION_PREPARATION_INVALID');
+    if(backend.status==='blocked'||Array.isArray(backend.checks)&&backend.checks.length)throw fail('BACKEND_CONTRACT_INCOMPATIBLE');
+    const request=async({path,method='GET',headers={},body,signal,stream}={})=>{
+      check();
+      const publicRoute=method==='GET'&&path==='/api/wanx-expert-app/v1/context'||method==='POST'&&path==='/api/wanx-expert-app/v1/invoke';
+      if(!publicRoute&&!(method==='GET'&&path==='/api/auth/me'))throw fail('APPLICATION_ROUTE_DENIED');
+      const safeHeaders=Object.fromEntries(Object.entries(headers).filter(([key])=>['accept','content-type'].includes(key.toLowerCase())));
+      if(launchToken&&publicRoute)safeHeaders['x-wanx-expert-launch']=launchToken;
+      const response=await fixed.connection.request({path,method,headers:safeHeaders,body,signal,stream});check();
+      return {...response,headers:Object.fromEntries(Object.entries(response.headers||{}).filter(([key])=>key.toLowerCase()!=='x-wanx-expert-launch'))};
+    };
+    const denied=async()=>{throw fail('APPLICATION_ROUTE_DENIED')};
+    const applicationConnection={...fixed.connection,request,openStream:denied,openWebSocket:denied,businessRequest:denied,
+      context:()=>({...check(),applicationId:record.applicationId,artifactId:record.artifactId,resourceBindings:[]})};
+    if(!local)delete applicationConnection.deriveApplication;
+    return {...result,backend,assertCurrent:check,applicationConnection};
+  }
+  async function getCompatibilityContext({ manifest, descriptor, phase, managedDeployment, bindingSetId = manifest?.bindingSetId, bindingScope = manifest?.bindingScope }) {
+    const managed=standardManagedRecord({manifest,descriptor,managedDeployment});
     const state = client.snapshot(), compatibility = manifest?.compatibility || descriptor?.manifest?.compatibility;
     const backendRequired = ["launch", "rollback"].includes(phase) || phase === "candidate" && (manifest.protocolVersion !== 3 || state.phase === "ready") && Boolean(state.connection?.deviceId);
     const result = { clientVersion, hostProtocol: 1, backendRequired, expectedDeviceId: state.connection?.deviceId || null };
+    if (managed && !["launch","rollback"].includes(phase)) return {...result,backendRequired:false};
     if (!backendRequired || !compatibility) return result;
+    if (managed) return managedReadiness(managed,compatibility,result);
     if (manifest.protocolVersion !== 3) {
       if (state.connection?.authorization === 'local-trust-v1') {
         const fixed = await fixedConnection(manifest.applicationId, compatibility);

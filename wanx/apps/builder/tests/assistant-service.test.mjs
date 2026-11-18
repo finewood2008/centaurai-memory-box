@@ -3,8 +3,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
 import { createAIDialogue } from '../integration/team-client/assistant-service.mjs';
-import { createAIDialogue as createPersonalDialogue } from '../../personal-client/shell/assistant-service.mjs';
-import { createAIDialogue as createTeamDialogue } from '../../team-client/shell/assistant-service.mjs';
+import { createZhijunSourceReader } from '../../personal-client/shell/zhijun-sources.mjs';
 
 function fixture(options = {}) {
   let state = { phase: 'ready', account: { phase: 'authenticated', accountId: 'synthetic-owner', clientId: 'synthetic-client' }, connection: { deviceId: 'synthetic-box', gatewayURL: 'http://127.0.0.1' } };
@@ -52,7 +51,196 @@ function fixture(options = {}) {
   const service = (options.serviceFactory || createAIDialogue)({ client, onEvent: event => events.push(event), selectFiles: async () => [], ...options });
   return { service, routes, sockets, events, history, respond(route, handler) { responses.set(route, handler); }, setModels(value) { modelRows = value; }, recoverNetwork(phase) { state.phase = phase; for (const fn of listeners) fn(); }, switchBox() { state.connection.deviceId = 'different-box'; for (const fn of listeners) fn(); } };
 }
-for (const [edition, serviceFactory] of [['source', createAIDialogue], ['personal', createPersonalDialogue], ['team', createTeamDialogue]]) {
+test('mobile unread activity persists per box and clears only after opening a conversation', async t => {
+  let saved;
+  const preferenceStore = { async load() { return saved; }, async save(value) { saved = structuredClone(value); } };
+  const f = fixture({ assistantPersona: 'zhijun', preferenceStore });
+  t.after(() => f.service.close());
+  const wx = { thread_id: 'thread-1', channel_type: 'weixin', last_active: 100 };
+  const cli = { thread_id: 'cli-1', channel_type: 'cli', last_active: 110 };
+  const future = { thread_id: 'future-1', channel_type: 'wecom', last_active: 120 };
+  let items = [wx, cli];
+  f.respond('/api/assistant/conversations', async () => ({ status: 200, body: Buffer.from(JSON.stringify({ items })) }));
+  const { scope, sessions } = await f.service.action('load');
+  assert.deepEqual(sessions.map(row => row.unread), [false, false]);
+  items = [{ ...wx, last_active: 115 }, { ...cli, last_active: 116 }, future];
+  const unread = async state => (await f.service.action('history-list', { scope: state })).sessions.filter(row => row.unread).map(row => row.thread_id);
+  assert.deepEqual(await unread(scope), ['thread-1', 'future-1']);
+  await f.service.action('open', { scope, threadId: 'thread-1', trackOpened: false });
+  assert.deepEqual(await unread(scope), ['thread-1', 'future-1']);
+  assert.equal((await f.service.action('open', { scope, threadId: 'thread-1', trackOpened: true })).channelReadThrough, 115);
+  assert.deepEqual(await unread(scope), ['future-1']);
+  const next = fixture({ assistantPersona: 'zhijun', preferenceStore });
+  t.after(() => next.service.close());
+  next.respond('/api/assistant/conversations', async () => ({ status: 200, body: Buffer.from(JSON.stringify({ items })) }));
+  assert.deepEqual((await next.service.action('load')).sessions.filter(row => row.unread).map(row => row.thread_id), ['future-1']);
+  f.switchBox();
+  assert.deepEqual((await f.service.action('load')).sessions.filter(row => row.unread), []);
+});
+
+test('Zhijun stores a draft mode per conversation on older boxes and restores it on reopen', async t => {
+  let saved;
+  const preferenceStore = { async load() { return saved; }, async save(value) { saved = structuredClone(value); } };
+  const f = fixture({ assistantPersona: 'zhijun', preferenceStore });
+  t.after(() => f.service.close());
+  const { scope, sidebarConversationModes } = await f.service.action('load');
+  assert.equal(sidebarConversationModes, false);
+  await assert.rejects(f.service.action('sidebar-memory', { scope, action: 'remember', conversationMode: 'craft' }), { code: 'ZHIJUN_MODE_UNCONFIRMED' });
+  const sent = await f.service.action('send', { scope, conversationMode: 'craft', prompt: '整理线索', model: 'fixture/one' });
+  assert.equal(sent.conversationMode, 'craft');
+  assert.equal(f.sockets.at(-1).sent.at(-1).conversation_mode, 'craft');
+  const { conversation } = await f.service.action('sidebar-mode', { scope, conversationId: 'thread-1', mode: 'ask' });
+  assert.equal(conversation.id, 'thread-1');
+  assert.equal((await f.service.action('open', { scope, threadId: 'other' })).conversationMode, 'ask');
+  assert.ok(f.routes.filter(row => row.method === 'PATCH').every(row => !('conversation_mode' in JSON.parse(row.body))));
+  const next = fixture({ assistantPersona: 'zhijun', preferenceStore });
+  t.after(() => next.service.close());
+  const load = await next.service.action('load');
+  assert.equal((await next.service.action('open', { scope: load.scope, threadId: 'thread-1' })).conversationMode, 'ask');
+  await next.service.action('send', { scope: load.scope, threadId: 'thread-1', conversationMode: 'craft', prompt: '继续', model: 'fixture/one' });
+  assert.equal(next.sockets.at(-1).sent.at(-1).conversation_mode, 'ask');
+  await next.service.action('sidebar-mode', { scope: load.scope, conversationId: 'thread-1', mode: 'craft' });
+  next.switchBox();
+  const switched = await next.service.action('load');
+  assert.equal((await next.service.action('open', { scope: switched.scope, threadId: 'thread-1' })).conversationMode, 'ask');
+});
+
+test('Zhijun uses the confirmed conversation mode from a compatible box for all versions', async t => {
+  const f = fixture({ assistantPersona: 'zhijun' });
+  t.after(() => f.service.close());
+  const ok = value => ({ status: 200, body: Buffer.from(JSON.stringify(value)) });
+  const original = { id: 'thread-1', active_thread_id: 'thread-1', revision: 0,
+    context: { space: { enabled: false }, knowledge: { enabled: false } }, versions: [{ thread_id: 'thread-1' }] };
+  let current = original;
+  f.respond('/api/assistant/profile', async () => ok({ agent_id: 'private-default', sidebar_conversation_modes: true }));
+  f.respond('/api/assistant/conversations/thread-1', async input => {
+    if (input.method === 'PATCH') {
+      const delta = JSON.parse(input.body);
+      assert.equal(delta.revision, current.revision);
+      current = { ...current, ...delta, revision: current.revision + 1 };
+    }
+    return ok(current);
+  });
+  f.respond('/api/assistant/conversations/thread-1/versions', async () => ok({
+    ...current, active_thread_id: 'thread-2', versions: [...current.versions, { thread_id: 'thread-2' }],
+    prepared_content: [{ type: 'text', text: '整理好的线索' }],
+  }));
+  const { scope, sidebarConversationModes } = await f.service.action('load');
+  assert.equal(sidebarConversationModes, true);
+  await f.service.action('send', { scope, conversationMode: 'ask', prompt: '整理线索', model: 'fixture/one' });
+  assert.equal(current.conversation_mode, 'ask');
+  const record = { scope, action: 'remember', conversationId: 'thread-1',
+    requestId: '00000000-0000-4000-8000-000000000101', text: '一条测试记忆', conversationMode: 'craft' };
+  await assert.rejects(f.service.action('sidebar-memory', record), { code: 'ZHIJUN_ADVANCED_REQUIRED' });
+  assert.ok(!f.routes.some(route => route.path === '/api/assistant/sidebar-memory'));
+  assert.equal(f.sockets.at(-1).sent.at(-1).conversation_mode, 'ask');
+  const changed = await f.service.action('sidebar-mode', { scope, conversationId: 'thread-1', mode: 'craft' });
+  assert.equal(changed.conversation.revision, 2);
+  assert.equal(changed.conversationMode, 'craft');
+  f.respond('/api/assistant/sidebar-memory', async input => {
+    const body = JSON.parse(input.body);
+    assert.equal(body.conversation_id, 'thread-1');
+    assert.equal(body.conversation_mode, 'craft');
+    return ok({ applied: true });
+  });
+  assert.equal((await f.service.action('sidebar-memory', record)).applied, true);
+  await f.service.action('version', { scope, conversationId: 'thread-1', threadId: 'thread-1', revision: 2,
+    kind: 'regenerate', messageId: 'message-1', model: 'fixture/one' });
+  assert.equal(f.sockets.at(-1).sent.at(-1).conversation_mode, 'craft');
+  assert.equal((await f.service.action('open', { scope, threadId: 'thread-2' })).conversationMode, 'craft');
+  await assert.rejects(f.service.action('sidebar-mode', { scope, conversationId: 'thread-1', mode: 'plan' }), { code: 'ASSISTANT_INVALID_INPUT' });
+});
+
+test('Zhijun starts with all three sources and omits unchecked sources', async t => {
+  const calls = [];
+  const readZhijunSources = createZhijunSourceReader({
+    interaction: () => 'personal-connection',
+    sources: {
+      async direct(tool) {
+        if (tool === 'space_search') {
+          calls.push('space');
+          return { matches: [{ name: '空间文件', snippet: '空间片段' }] };
+        }
+        return { warehouses: [{ id: 'available', name: '青禾' }, { id: 'secondary', name: '备用' }] };
+      },
+      async call(selection, tool) {
+        if (tool === 'space_search') {
+          calls.push(selection.folderId);
+          return { matches: [{ name: '选定目录文件', snippet: '只读选定文件夹' }] };
+        }
+        if (selection.warehouseId === 'secondary') return { matches: [] };
+        calls.push('starlink');
+        return { matches: [{ title: '星图资料', snippet: '星图片段' }] };
+      },
+    },
+    async memory(query, check, agent) {
+      if (agent) calls.push(agent);
+      calls.push('memory');
+      return { matches: [{ title: '历史', snippet: '记忆片段' }] };
+    },
+  });
+  const f = fixture({ assistantPersona: 'zhijun', readZhijunSources });
+  t.after(() => f.service.close());
+  f.respond('/api/assistant/profile', async () => ({
+    status: 200, body: Buffer.from('{"agent_id":"private-default","sidebar_sources":true,"sidebar_agent_scope":true}'),
+  }));
+  const { scope } = await f.service.action('load');
+  const send = async sources => {
+    await f.service.action('send', { scope, prompt: '关于青禾', model: 'fixture/one', sources });
+    return f.sockets[0].sent.at(-1);
+  };
+  const initial = await send();
+  assert.equal(initial.conversation_mode, 'ask');
+  assert.deepEqual(initial.zhijun_references.map(item => item.source), ['space', 'starlink', 'memmy']);
+  assert.equal(initial.zhijun_memory, true);
+  assert.deepEqual(initial.messages, [{ role: 'user', content: [{ type: 'text', text: '关于青禾' }] }]);
+  const filtered = await send({ space: false, starlink: true, memory: false });
+  assert.deepEqual(filtered.zhijun_references.map(item => item.source), ['starlink']);
+  assert.equal(filtered.zhijun_memory, false);
+  assert.deepEqual(calls.sort(), ['memory', 'space', 'starlink', 'starlink']);
+  calls.length = 0;
+  const scoped = await send({ folderId: 'folder-a', warehouseId: 'secondary', memoryAgent: 'claude_code' });
+  assert.equal(scoped.conversation_mode, 'ask');
+  assert.equal(scoped.zhijun_agent_only, true);
+  assert.deepEqual(scoped.zhijun_references.map(item => item.title), ['选定目录文件', '历史']);
+  assert.deepEqual(calls.sort(), ['claude_code', 'folder-a', 'memory']);
+  assert.deepEqual((await send({ space: false, starlink: false, memoryAgent: 'zhijun' })).zhijun_references, undefined);
+});
+
+test('an older box can browse scopes and receives only the selected lookup as turn context', async t => {
+  const calls = [];
+  const f = fixture({
+    assistantPersona: 'zhijun',
+    async listZhijunSources(kind, parent, check) {
+      check();
+      return kind === 'memory' ? { agents: [{ id: 'codex', name: 'Codex' }] }
+        : { folders: [{ id: 'folder-a', name: '资料' }] };
+    },
+    async readZhijunSources(query, check, sources) {
+      check();
+      calls.push(sources);
+      return { references: [{ source: 'memmy', title: 'Codex 记录', text: '测试片段' }], check };
+    },
+  });
+  t.after(() => f.service.close());
+  const { scope, sidebarSources } = await f.service.action('load');
+  assert.equal(sidebarSources, false);
+  assert.deepEqual((await f.service.action('sidebar-source-list', { scope, kind: 'memory' })).agents,
+    [{ id: 'codex', name: 'Codex' }]);
+  assert.equal((await f.service.action('sidebar-source-list', { scope, kind: 'space' })).folders[0].id, 'folder-a');
+  await f.service.action('send', { scope, prompt: '查找项目', model: 'fixture/one',
+    sources: { space: false, starlink: false, memoryAgent: 'codex' } });
+  const turn = f.sockets[0].sent.at(-1);
+  assert.equal(calls[0].memoryAgent, 'codex');
+  assert.equal(calls[0].space, false);
+  assert.equal(calls[0].starlink, false);
+  assert.equal(turn.assistant_persona, undefined);
+  assert.equal(turn.zhijun_references, undefined);
+  assert.equal(turn.messages[0].content[0].text, '查找项目');
+  assert.match(turn.messages[0].content[1].text, /Codex 记录/);
+});
+
+for (const [edition, serviceFactory] of [['source', createAIDialogue]]) {
   test(`${edition} unwatch is idempotent after disconnect and service close`, async t => {
     const f = fixture({ serviceFactory });
     t.after(() => f.service.close());

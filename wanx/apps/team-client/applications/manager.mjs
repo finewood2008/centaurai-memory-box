@@ -18,6 +18,7 @@ import { inspectZhijunData } from "./zhijun-data.mjs";
 import { inspectAiBrowserData } from "./ai-browser-data.mjs";
 import { inspectCentaurloopData } from "./centaurloop-data.mjs";
 import { applicationProfilePath, localApplicationProfile } from "./data-profile.mjs";
+import {isStandardDeployment,verifyStandardDeploymentInstallation} from './standard-deployment.mjs';
 
 export async function createApplicationManager({
   applicationRoot,
@@ -216,6 +217,16 @@ export async function createApplicationManager({
   });
   await installer.recover();
   const mutations = new Map();
+  const mutationAdmissions = new Map();
+  const localRemovalRevisions = new Map();
+  function deploymentSession(id, assertSession) {
+    const revision = localRemovalRevisions.get(id) || 0;
+    return () => {
+      if ((localRemovalRevisions.get(id) || 0) !== revision)
+        throw Object.assign(new Error("APPLICATION_DEPLOYMENT_USER_REMOVED"), { code: "APPLICATION_DEPLOYMENT_USER_REMOVED" });
+      assertSession?.();
+    };
+  }
   const dismissedDefaults = new Set();
   function assertOpen() {
     if (closed) throw Object.assign(new Error("APPLICATIONS_CLOSED"), { code: "APPLICATIONS_CLOSED" });
@@ -229,22 +240,29 @@ export async function createApplicationManager({
     assertOpen();
     if (mutations.has(id)) return Promise.reject(Object.assign(new Error("MARKET_OPERATION_BUSY"), { code: "MARKET_OPERATION_BUSY" }));
     const check = () => { controller.signal.throwIfAborted(); assertSession(); };
+    let admit;
+    const admission=new Promise(resolve=>{admit=resolve});
+    mutationAdmissions.set(id,admission);
     const pending = Promise.resolve().then(async () => {
       check();
       // A rejected ordinary action must not stop or dismiss a managed app.
-      await installer.assertUnmanaged(id);
+      if (operation !== installer.uninstallLocal) await installer.assertUnmanaged(id);
       check();
-      if (operation === installer.uninstall) dismissedDefaults.add(id);
+      if (operation === installer.uninstall || operation === installer.uninstallLocal) dismissedDefaults.add(id);
       if (operation === installer.rollback) await installer.assertRollbackCompatible(id);
       check();
+      // Release a late session only after knowing whether this action is
+      // admissible. A rejected managed-app action must not cancel its launch.
+      if (operation === installer.uninstallLocal) localRemovalRevisions.set(id, (localRemovalRevisions.get(id) || 0) + 1);
+      admit(true);
       await launcher.stop(id);
       check();
       // Preserve explicit removal even if the process exits during uninstall.
       // Default delivery must not reinstall an application the user removed.
-      if (operation === installer.uninstall) await defaultApplicationDeliveryStore.dismiss(id, check);
+      if (operation === installer.uninstall || operation === installer.uninstallLocal) await defaultApplicationDeliveryStore.dismiss(id, check);
       check();
       return operation(id, check);
-    }).finally(() => mutations.delete(id));
+    }).finally(() => {admit(false);mutationAdmissions.delete(id);mutations.delete(id)});
     mutations.set(id, pending);
     return track(pending);
   }
@@ -258,6 +276,8 @@ export async function createApplicationManager({
       const launchScope = storageContext();
       let record = await installer.resolveCurrent(id);
       launchScope.assertLive();
+      const managed=isStandardDeployment(record);
+      if(managed)await verifyStandardDeploymentInstallation(record,{active:true,assertSession:launchScope.assertLive});
       if (record.protocolVersion < 2) return {...record,launchContext:typeof input === "object" ? input.launchContext : undefined};
       // Derive identity from the envelope again, not the mutable descriptor
       // copy in the local install record.
@@ -274,7 +294,7 @@ export async function createApplicationManager({
         // Reject incompatible local data/Host requirements before preparing
         // remote resources. Launch repeats these checks after preparation.
         await assertApplicationCompatibility(record, {
-          getCompatibilityContext: input => compatibilityContext(input, previousWriter), descriptor, phase: "import",
+          getCompatibilityContext: input => compatibilityContext({...input,...(managed?{managedDeployment:record}:{})}, previousWriter), descriptor, phase: "import",
           trustedDataContinuity: sameWriter(previousWriter, writer),
         });
         // A binding is scoped to an account, device and ownership epoch. Keep
@@ -293,7 +313,7 @@ export async function createApplicationManager({
       let preparedConnection, launchDataSchemaVersion;
       await assertApplicationCompatibility(record, {
         getCompatibilityContext: async input => {
-          const supplied = await compatibilityContext(input, previousWriter);
+          const supplied = await compatibilityContext({...input,...(managed?{managedDeployment:record}:{})}, previousWriter);
           launchDataSchemaVersion = supplied.localDataSchemaVersion;
           if (record.protocolVersion === 3) preparedConnection = supplied.applicationConnection;
           return supplied;
@@ -334,14 +354,18 @@ export async function createApplicationManager({
           studioControl: record.applicationId === STUDIO_ID ? studioControl : undefined,
           capabilities: record.capabilities,
           createConnection: async options => {
+            let connection;
             if (record.preparedConnection?.kind === "local-trust-v1") {
               if (!record.preparedConnection.deriveApplication) throw Object.assign(new Error("APPLICATION_DATA_CONTEXT_REQUIRED"), { code: "APPLICATION_DATA_CONTEXT_REQUIRED" });
-              return record.preparedConnection.deriveApplication(options);
-            }
-            if (record.launchContext) return createConnection?.(record.applicationId, { launchContext: record.launchContext, launchId: options.launchId, capabilities: options.capabilities });
-            return record.preparedConnection || await createConnection?.(record.applicationId, {
+              connection=await record.preparedConnection.deriveApplication(options);
+            }else if (record.launchContext)connection=await createConnection?.(record.applicationId, { launchContext: record.launchContext, launchId: options.launchId, capabilities: options.capabilities });
+            else connection=record.preparedConnection || await createConnection?.(record.applicationId, {
               launchId: options.launchId, ...(options.capabilities ? { capabilities: options.capabilities } : {}),
             }) || { context, request, openStream: stream };
+            const admission=mutationAdmissions.get(record.applicationId);
+            if(admission)await admission;
+            try{signal?.throwIfAborted()}catch(error){if(connection?.kind==='local-trust-v1')connection.close?.();throw error}
+            return connection;
           },
           authorizeRelease: record.authorizeRelease,
           signal,
@@ -365,12 +389,31 @@ export async function createApplicationManager({
       if (mutations.size) throw Object.assign(new Error("MARKET_OPERATION_BUSY"), { code: "MARKET_OPERATION_BUSY" });
       return track(installer.installStandardPackage(input, { signal: controller.signal }));
     },
+    async restoreStandardPackage(input) {
+      assertOpen();
+      if(mutations.size)throw Object.assign(new Error('MARKET_OPERATION_BUSY'),{code:'MARKET_OPERATION_BUSY'});
+      const check=input?.assertSession;
+      return track(installer.restoreStandardPackage({...input,assertSession:()=>{assertOpen();assertClientUsable();check?.()}},{signal:controller.signal}));
+    },
     // Trusted main-process delivery only; renderer actions never accept bindings.
     async installDeployment(input, {signal}={}) {
-      assertOpen();assertClientUsable();
+      assertOpen();
+      if (mutations.has(input?.binding?.slotApplicationId)) throw Object.assign(new Error("MARKET_OPERATION_BUSY"), { code: "MARKET_OPERATION_BUSY" });
+      assertClientUsable();
       const combined=signal?AbortSignal.any([controller.signal,signal]):controller.signal;
-      const check=input?.assertSession;
+      const check=deploymentSession(input?.binding?.slotApplicationId,input?.assertSession);
       return track(installer.installDeployment({...input,assertSession:()=>{assertOpen();assertClientUsable();check?.()}},{signal:combined}));
+    },
+    async installStandardDeployment(input,{signal}={}) {
+      assertOpen();assertClientUsable();
+      if (mutations.has(input?.binding?.slotApplicationId)) throw Object.assign(new Error("MARKET_OPERATION_BUSY"), { code: "MARKET_OPERATION_BUSY" });
+      const combined=signal?AbortSignal.any([controller.signal,signal]):controller.signal,check=deploymentSession(input?.binding?.slotApplicationId,input?.assertSession);
+      return track(installer.installStandardDeployment({...input,assertSession:()=>{assertOpen();assertClientUsable();check?.()}},{signal:combined}));
+    },
+    async validateStandardDeployment(input,{signal}={}) {
+      assertOpen();assertClientUsable();
+      const combined=signal?AbortSignal.any([controller.signal,signal]):controller.signal,check=input?.assertSession;
+      return track(installer.installStandardDeployment({...input,assertSession:()=>{assertOpen();assertClientUsable();check?.()}},{signal:combined,validateOnly:true}));
     },
     async installVerifiedPackage(input) {
       assertOpen();
@@ -392,6 +435,7 @@ export async function createApplicationManager({
       return track(installer.installVerifiedPackage(input, { signal: controller.signal }));
     },
     uninstall: (id, check) => mutate(id, installer.uninstall, check),
+    uninstallLocal: (id, check) => mutate(id, installer.uninstallLocal, check),
     rollback: (id, check) => mutate(id, installer.rollback, check),
     async selectCurrent(id, version) {
       assertOpen();
@@ -411,7 +455,10 @@ export async function createApplicationManager({
         check();
         const current = await installer.resolveCurrent(id);
         check();
-        const descriptor = current.envelope ? verifyEnvelope(current.envelope, trustedKeys) : undefined;
+        const managed=isStandardDeployment(current);
+        if(managed)await verifyStandardDeploymentInstallation(current,{active:true,assertSession:check});
+        const descriptor = current.envelope ? verifyEnvelope(current.envelope, trustedKeys) : managed?current.descriptor:undefined;
+        const observed=input=>compatibilityContext({...input,...(managed?{managedDeployment:current}:{})});
         const continuity = sameWriter(await readDataAccess(id), writerFor(descriptor));
         check();
         let permit;
@@ -424,13 +471,13 @@ export async function createApplicationManager({
           if (!permit) throw Object.assign(new Error("MARKET_RELEASE_ACCESS_REQUIRED"), { code: "MARKET_RELEASE_ACCESS_REQUIRED" });
           permit.assertLive();
         }
-        await assertApplicationCompatibility(current, { getCompatibilityContext: compatibilityContext, descriptor,
+        await assertApplicationCompatibility(current, { getCompatibilityContext: observed, descriptor,
           phase: "import", trustedDataContinuity: continuity });
         check();
         const result = await installer.prepareCurrent(id, { assertSession, signal: controller.signal });
         check();
         if (!result.resourcePreparation || result.resourcePreparation.status === "ready") {
-          await assertApplicationCompatibility(result, { getCompatibilityContext: compatibilityContext, descriptor,
+          await assertApplicationCompatibility(result, { getCompatibilityContext: observed, descriptor,
             phase: "launch", trustedDataContinuity: continuity });
         }
         check();

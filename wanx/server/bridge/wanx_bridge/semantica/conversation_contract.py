@@ -164,39 +164,6 @@ class OnboardingPublish(NativeOperation):
         return self
 
 
-class OntologyEditInitialize(NativeOperation):
-    base_ontology_id: str = Field(min_length=1, max_length=120)
-    ontology_draft_id: str | None = Field(default=None, min_length=1, max_length=120)
-    name: str = Field(default="本体编辑草稿", min_length=1, max_length=120)
-
-
-class OntologySelection(StrictBody):
-    kind: Literal["entity", "relation", "property"]
-    type_kind: Literal["entity", "relation"]
-    type_name: str = Field(pattern=r"^[A-Z][A-Z0-9_]{0,63}$")
-    property_name: str | None = Field(default=None, pattern=r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
-
-
-class OntologyEditTurn(OnboardingStart):
-    instruction: str = Field(min_length=1, max_length=8000)
-    selected: list[OntologySelection] = Field(default_factory=list, max_length=20)
-
-
-class OntologyEditSave(OnboardingStart):
-    name: str = Field(min_length=1, max_length=120)
-    schema_definition: dict = Field(alias="schema")
-
-
-class OntologyEditPreview(OnboardingStart):
-    document_ids: list[str] | None = Field(default=None, min_length=1, max_length=20)
-    offset: int = Field(default=0, ge=0, le=9007199254740991)
-    limit: int = Field(default=20, ge=1, le=20)
-
-
-class OntologyEditExecute(OnboardingPublish):
-    mode: Literal["publish_only", "current", "selected"]
-
-
 class SendMessage(NativeRevision):
     content: str = Field(min_length=1, max_length=8000)
 
@@ -327,43 +294,6 @@ ROUTES = [
     *source_preparation_contract.ROUTES,
     ("GET", C + "/materials", "List warehouse material workflows", None, PAGE),
     ("GET", C + "/materials/{document_id}", "Read material workflow and actions", None, {}),
-    ("GET", ONE + "/ontology-edit", "Read shared ontology editing draft and history", None, PAGE),
-    (
-        "POST",
-        ONE + "/ontology-edit/initialize",
-        "Bind an ontology editing conversation to a version or draft",
-        OntologyEditInitialize,
-        {},
-    ),
-    (
-        "POST",
-        ONE + "/ontology-edit/draft",
-        "Save manual changes to the shared ontology draft",
-        OntologyEditSave,
-        {},
-    ),
-    (
-        "POST",
-        ONE + "/ontology-edit/turns",
-        "Generate validated ontology patches from conversation",
-        OntologyEditTurn,
-        {},
-    ),
-    ("GET", ONE + "/ontology-edit/turns/{turn_id}", "Recover an ontology editing turn", None, {}),
-    (
-        "POST",
-        ONE + "/ontology-edit/preview",
-        "Preview ontology and material impact bound to draft version",
-        OntologyEditPreview,
-        {},
-    ),
-    (
-        "POST",
-        ONE + "/ontology-edit/execute",
-        "Confirm publication and optionally process selected materials",
-        OntologyEditExecute,
-        {},
-    ),
     ("GET", ONE + "/onboarding", "Read warehouse onboarding scope and round history", None, PAGE),
     (
         "POST",

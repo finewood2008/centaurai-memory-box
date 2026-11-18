@@ -15,12 +15,14 @@ function fixture() {
   let entry = {id:fileId, name:'test.txt', digest:'digest-1', kind:'file', space_id:'personal', annotation};
   let detail = {document:{id:documentId, original_name:'test.txt', active_version_id:versionId, status:'ready', warehouse_id:warehouseId},
     version:{id:versionId}, segments:[{id:'segment_1', text, source_locator:{page:1}}]};
-  let active = true, failBinding = false, failStage = false, detailHook = null, textVersion = versionId, denied = false;
+  let active = true, failBinding = false, failStage = false, detailHook = null, denied = false;
   let uploadResult = {document:{id:documentId, active_version_id:versionId}};
   const records = [], receipts = [], calls = [];
   const check = () => { if (!active) throw Object.assign(Error('HOST_SESSION_EXPIRED'), {code:'HOST_SESSION_EXPIRED'}); };
   const space = {async operation(action, input) {
     calls.push({kind:'space', action, input});
+    if (action === 'search-annotations') return {items:[{...structuredClone(entry),folder_path:'nested'}],nextCursor:fileId,scanLimited:true};
+    if (action === 'list') return {items:[structuredClone(entry)]};
     if (action === 'stat') { if (denied) throw Object.assign(Error('SPACE_FORBIDDEN'), {code:'SPACE_FORBIDDEN', status:403}); return structuredClone(entry); }
     if (action === 'annotation-imports') return structuredClone(records);
     if (action === 'annotation-pending-imports') return structuredClone(receipts);
@@ -36,13 +38,14 @@ function fixture() {
     throw Error(action);
   }};
   const service = {
+    describeSpaceItem({id,name,kind,digest}) { return {id,name,kind,digest,format:'txt',problem:null}; },
     async call(action, input) {
       calls.push({kind:'starlink', action, input});
       assert.equal(action, 'document');
       if (detailHook) await detailHook();
       return structuredClone(detail);
     },
-    async api(path) { calls.push({kind:'starlink', path}); return {version_id:textVersion, text}; },
+    async api(path) { calls.push({kind:'starlink', path}); throw Error('Unexpected raw source read'); },
   };
   const create = () => createStarlinkSpaceAnnotations({space, service, check});
   let decorator = create();
@@ -51,7 +54,6 @@ function fixture() {
     setEntry(value) { entry = {...entry, ...value}; }, setDetail(value) { detail = value; }, get detail() { return detail; },
     failBinding(value) { failBinding = value; }, detailHook(value) { detailHook = value; }, expire() { active = false; },
     failStage(value) { failStage = value; }, deny(value) { denied = value; },
-    textVersion(value) { textVersion = value; },
     uploadResponse(value) { uploadResult = value; },
     async select() {
       return decorator.run('select-space-files', {warehouseId, entries:[{id:fileId, digest:'digest-1'}]},
@@ -61,6 +63,59 @@ function fixture() {
     async search(query = tag, input = {}) { return decorator.run('search', {warehouseId, query, ...input}, async () => ({items:[]})); },
   };
 }
+
+test('the Space picker only shows annotations from matching current entries', async () => {
+  const f = fixture();
+  const matching = {id:fileId, name:'test.txt', digest:'digest-1', kind:'file'};
+  const stale = {...matching, digest:'old-digest'};
+  const other = {...matching, id:'c'.repeat(32)};
+  const items = [matching, stale, other];
+  const result = await f.decorator.run('space-list', {parent:'folder-1'}, async () => ({items}));
+  assert.deepEqual(result.items, [{...matching, tags:[tag], description:'合成测试分类'}, stale, other]);
+  assert.deepEqual(f.calls, [{kind:'space', action:'list', input:{parent:'folder-1', space_id:'personal'}}]);
+});
+
+test('the Starlink Space search stays inside the requested folder and reports a partial result', async () => {
+  const f = fixture();
+  const result = await f.decorator.run('space-list', {parent:'folder-1',query:tag,after:'b'.repeat(32)}, async () => ({
+    parent:'folder-1',breadcrumbs:[],items:[],
+  }));
+  assert.deepEqual(result.search,{nextCursor:fileId,scanLimited:true});
+  assert.deepEqual(result.items,[{id:fileId,name:'test.txt',kind:'file',digest:'digest-1',
+    format:'txt',problem:null,tags:[tag],folderPath:'nested'}]);
+  assert.deepEqual(f.calls,[{kind:'space',action:'search-annotations',
+    input:{parent:'folder-1',query:tag,space_id:'personal',filesOnly:true,limit:100,after:'b'.repeat(32)}}]);
+});
+
+test('tag search pages through verified material versions and rejects a stale cursor', async () => {
+  const records = Array.from({length:23}, (_, i) => ({id:`file-${i}`, documentId:`doc-${i}`,
+    versionId:`version-${i}`, warehouseId, space_id:'personal', digest:'same'}));
+  const space = {async operation(action, input) {
+    if (action === 'annotation-imports') return records;
+    if (action === 'annotation-pending-imports') return [];
+    assert.equal(action, 'stat');
+    return {id:input.id, kind:'file', digest:'same', name:'test.txt', annotation:{tags:[tag], revision:1}};
+  }};
+  const service = {async call(action, {id}) {
+    assert.equal(action, 'document');
+    const record = records.find(row => row.documentId === id);
+    return {document:{id, status:'ready', warehouse_id:warehouseId}, version:{id:record.versionId}};
+  }};
+  const link = createStarlinkSpaceAnnotations({space, service, check() {}});
+  const search = (query, annotationAfter) => link.run('search', {warehouseId, query, annotationAfter},
+    async () => ({items:[{document_id:'doc-0'}]}));
+  const first = await search(tag);
+  const second = await search(tag, first.annotationSearch.nextCursor);
+  const last = await search(tag, second.annotationSearch.nextCursor);
+  assert.deepEqual([first, second, last].map(result => result.annotationDocuments.length), [10,10,2]);
+  assert.equal(first.annotationSearch.verificationIncomplete, false);
+  assert.equal(last.annotationSearch.nextCursor, null);
+  assert.deepEqual([first, second, last].flatMap(result => result.annotationDocuments.map(row => [row.documentId,row.versionId])),
+    records.slice(1).map(row => [row.documentId,row.versionId]));
+  await assert.rejects(search('另一个标签', first.annotationSearch.nextCursor), {code:'SPACE_TAG_RESULTS_CHANGED'});
+  records[12] = {...records[12], versionId:'new-version'};
+  await assert.rejects(search(tag, first.annotationSearch.nextCursor), {code:'SPACE_TAG_RESULTS_CHANGED'});
+});
 
 test('space tag snapshot survives importer restart and recalls real Starlink text with real document version', async () => {
   const f = fixture();
@@ -72,8 +127,7 @@ test('space tag snapshot survives importer restart and recalls real Starlink tex
   const result = await f.search();
   assert.equal(result.items.length, 0);
   assert.equal(result.annotationDocuments.length, 1);
-  assert.deepEqual(result.annotationDocuments[0], {documentId, versionId, title:'test.txt', text,
-    locator:{page:1}, annotation:f.annotation});
+  assert.deepEqual(result.annotationDocuments[0], {documentId, versionId, title:'test.txt', annotation:f.annotation});
   assert.equal(Object.hasOwn(result.annotationDocuments[0], 'evidenceId'), false);
   assert.equal(text.includes(tag), false, 'the hit is supplied only by the source annotation');
 });
@@ -87,6 +141,41 @@ test('current annotation changes affect recall and stale content or pending revi
   assert.equal((await f.search()).annotationDocuments.length, 0);
   f.setEntry({annotation:f.annotation, digest:'digest-2'});
   assert.equal((await f.search()).annotationDocuments.length, 0);
+});
+
+test('a shorter stored tag does not match a different, longer tag query', async () => {
+  const f = fixture();
+  f.setEntry({annotation:{...f.annotation, tags:['记录']}});
+  await f.select();
+  await f.upload();
+
+  assert.deepEqual((await f.search('木杉项目记录')).annotationDocuments, []);
+  f.setEntry({annotation:{...f.annotation, tags:['木杉项目记录']}});
+  assert.equal((await f.search('木杉项目记录')).annotationDocuments.length, 1);
+  assert.equal((await f.search('木杉项目')).annotationDocuments.length, 1);
+});
+
+test('native search identifies earlier and current Space imports without changing excerpts', async () => {
+  const f = fixture();
+  await f.select();
+  await f.upload();
+  const previous = {document_id:documentId, document_version_id:versionId, text:'五月十八日'};
+  const current = {document_id:'new-document', document_version_id:'new-version', text:'六月九日'};
+  const unbound = {...current, document_version_id:'another-version'};
+  f.records.push({...f.records[0], documentId:current.document_id, versionId:current.document_version_id, digest:'digest-2'});
+  f.setEntry({digest:'digest-2'});
+  const items = [previous, current, unbound];
+  const search = () => f.decorator.run('search', {warehouseId, query:'交付'}, async () => ({items}));
+  assert.deepEqual((await search()).items, [
+    {...previous, spaceSourceStatus:'updated'}, {...current, spaceSourceStatus:'current'}, unbound,
+  ]);
+  f.setEntry({folder_path:'教务 / 春季'});
+  assert.deepEqual((await search()).items, [
+    {...previous, spaceSourceStatus:'updated', spaceFolderPath:'教务 / 春季'},
+    {...current, spaceSourceStatus:'current', spaceFolderPath:'教务 / 春季'}, unbound,
+  ]);
+  f.deny(true);
+  assert.deepEqual((await search()).items, items);
 });
 
 test('warehouse filters and explicit document filters are preserved for annotation recall', async () => {
@@ -145,7 +234,8 @@ test('durable commit receipts recover pending imports in a new session without s
   assert.equal(f.records.length, 0);
   f.restart(); f.setDetail(ready);
   const result = await f.search();
-  assert.equal(result.annotationDocuments[0].text, text);
+  assert.equal(result.annotationDocuments[0].documentId, documentId);
+  assert.equal(Object.hasOwn(result.annotationDocuments[0], 'text'), false);
   assert.equal(result.annotationSearch.recoveredImports, 1);
   assert.equal(result.annotationSearch.pendingImports, 0);
   assert.equal(f.receipts.length, 0);
@@ -174,12 +264,12 @@ test('staging failure stops followup network reads, exposes pending, and can ret
   f.failStage(false); assert.equal((await f.upload()).annotationIndex.status, 'saved');
 });
 
-test('missing segments use the version pinned text API and reject an unexpected returned version', async () => {
+test('missing segments still allow an authorized reference without requesting raw text', async () => {
   const f = fixture(); await f.select(); await f.upload();
   f.setDetail({...f.detail, segments:[]});
-  assert.equal((await f.search()).annotationDocuments[0].text, text);
-  assert.match(f.calls.find(call => call.path)?.path || '', /version_id=version_1/);
-  f.textVersion('version_2');
+  assert.equal((await f.search()).annotationDocuments[0].versionId, versionId);
+  assert.equal(f.calls.some(call => call.path), false);
+  f.setDetail({...f.detail, version:{id:'version_2'}});
   assert.equal((await f.search()).annotationDocuments.length, 0);
 });
 
@@ -290,8 +380,9 @@ for (const delayed of [false, true]) test(`synthetic Space to Starlink to Agent 
   const result = await sources.call({warehouseId}, 'starlink_search', {query:tag}, () => {});
   assert.equal(result.matches[0].documentId, documentId);
   assert.equal(result.matches[0].versionId, versionId);
-  assert.equal(result.matches[0].snippet, text);
-  assert.equal(result.matches[0].annotation.tags.includes(tag), true);
+  assert.equal(Object.hasOwn(result.matches[0], 'snippet'), false);
+  assert.equal(Object.hasOwn(result.matches[0], 'annotation'), false);
+  assert.equal(JSON.stringify(result).includes(text), false);
   assert.equal(Object.hasOwn(result.matches[0], 'evidenceId'), false);
   assert.equal(requests.filter(input => input.path.endsWith('/imports') && input.method === 'POST').length, 1);
 });

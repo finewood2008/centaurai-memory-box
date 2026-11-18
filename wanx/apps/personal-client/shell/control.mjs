@@ -1,3 +1,4 @@
+import {projectApplicationsForUI} from './ui-broadcast.mjs';
 import { displayCreditAtoms, validateCreditWallet } from "../account/credit-wallet.mjs";
 
 import {PANEL_NOTE_METHODS,panelNoteState} from './panel-note.mjs';
@@ -73,7 +74,7 @@ export function registerControlActions({
   creditWallet,
   accountProfile,
   notifications,
-  aiDialogue, panelDialogue, personalDataService, personalWorkshop,
+  aiDialogue, personalDataService, personalWorkshop, starlinkPanel,
   support,
   uiState,
   desktop,
@@ -141,17 +142,6 @@ export function registerControlActions({
       return { error: error.code ? directoryError[error.code] || "无法处理此本机文件夹。" : error.message };
     }
   });
-  for(const method of ["load","open","send","stop","watch","unwatch","model","legacy-open","upload","release","resume","artifact","history-update","history-export","space-list","space-grant","release-context","knowledge-list","knowledge-grant","knowledge-evidence","usage","version","version-select","handoff","history-list"]) {
-    const name = "panel-ai-dialogue-" + method; panelActions.add(name);
-    register(name, input => { if(!panelDialogue) throw Error("DIALOGUE_UNAVAILABLE");return panelDialogue.action(method,input); });
-  }
-  panelActions.add("panel-assistant-open");
-  register("panel-assistant-open", async input => {
-    const payload=await panelDialogue.action("handoff",input);
-    desktop?.showManagement("ai-dialogue");
-    control.webContents.send("wanx-client:ai-dialogue",{type:"handoff",...payload});
-    return {ok:true};
-  });
   register("workshop", ({action,input} = {}) => {
     if (!personalWorkshop) throw Error("WORKSHOP_UNAVAILABLE");
     return personalWorkshop.action(action,input);
@@ -159,6 +149,11 @@ export function registerControlActions({
   register("data", ({action,input} = {}) => {
     if (!personalDataService) throw Error("SEMANTICA_NOT_CONFIGURED");
     return personalDataService.action(action,input);
+  });
+  reads.add('starlink');
+  register('starlink', ({action,input} = {}) => {
+    if (!starlinkPanel) throw Error('SEMANTICA_NOT_CONFIGURED');
+    return starlinkPanel.action(action,input);
   });
   const creditsRead = async action => {
     try { return await action(); }
@@ -174,7 +169,7 @@ export function registerControlActions({
     if (!openDeviceTrust) throw new Error("LOCAL_TRUST_UNAVAILABLE");
     return openDeviceTrust();
   });
-  for (const method of ["load","open","send","stop","watch","unwatch","model","legacy-open","upload","release","resume","artifact","history-update","history-export","space-list","space-grant","release-context","knowledge-list","knowledge-grant","knowledge-evidence","usage","version","version-select","handoff","channels-list","channels-detail","channels-save","channels-toggle","channels-delete","channels-test","channels-start","channels-poll","channels-cancel","channels-verification","channels-verify-start","channels-verify-confirm","channels-verify-revoke","history-list"]) register(`ai-dialogue-${method}`, input => {
+  for (const method of ["sidebar-memory","sidebar-mode","sidebar-source","sidebar-source-list","sidebar-memmy","sidebar-memory-cancel","load","open","send","stop","watch","unwatch","model","legacy-open","upload","release","resume","artifact","history-update","history-export","space-list","space-grant","release-context","knowledge-list","knowledge-grant","knowledge-evidence","usage","version","version-select","handoff","channels-list","channels-detail","channels-save","channels-toggle","channels-delete","channels-test","channels-start","channels-poll","channels-cancel","channels-verification","channels-verify-start","channels-verify-confirm","channels-verify-revoke","history-list"]) register(`ai-dialogue-${method}`, input => {
     if (!aiDialogue) throw new Error("DIALOGUE_UNAVAILABLE");
     return aiDialogue.action(method, input);
   });
@@ -240,9 +235,9 @@ export function registerControlActions({
     const {method,scope,...args}=input;
     if(!PANEL_NOTE_METHODS.has(method))throw new Error("PANEL_ACTION_NOT_ALLOWED");
     if(method!=="snapshot"&&(!scope||scope!==superClipboard.snapshot().scope))throw new Error("SPACE_CONTEXT_CHANGED");
-    if(["preview","copy","download"].includes(method)&&!superClipboard.snapshot().note?.blocks?.some(b=>b.type==="image"&&b.item===args.id)&&!superClipboard.snapshot().tasks?.some(t=>t.kind==="image"&&t.id===args.id))throw new Error("CLIPBOARD_NOT_FOUND");
+    if(["preview","copy","download"].includes(method)&&!superClipboard.snapshot(args.noteId).note?.blocks?.some(b=>b.type==="image"&&b.item===args.id)&&!superClipboard.snapshot().tasks?.some(t=>t.kind==="image"&&t.id===args.id))throw new Error("CLIPBOARD_NOT_FOUND");
     if(method==="transfer"&&!['pause','resume'].includes(args.action))throw new Error("PANEL_ACTION_NOT_ALLOWED");
-    if(method==="note-command"&&!['clear','restore','local','remote','recover-local'].includes(args.action))throw new Error("PANEL_ACTION_NOT_ALLOWED");
+    if(method==="note-command"&&!['clear','restore','local','remote','recover-local','create','delete'].includes(args.action))throw new Error("PANEL_ACTION_NOT_ALLOWED");
     return panelNoteState(await superClipboard.operation(method,{...args,...(["choose","download"].includes(method)?{panel:true}:{})}));
   });
   for (const method of ["snapshot","refresh","capture","paste","choose","transfer","copy","preview","download","manage","export","note-save","note-refresh","note-command","note-paste"]) {
@@ -314,6 +309,7 @@ export function registerControlActions({
     if (method === "refresh") return notifications.refresh();
     if (method === "read") return notifications.markRead(input?.all === true ? { all: true } : { id: text(input?.id, 64, "NOTIFICATION_INVALID_ID") });
     const target = notifications.target(text(input?.id, 64, "NOTIFICATION_INVALID_ID"));
+    if (starlinkPanel && target.applicationId === 'centaurai.wanx.semantica') return { destination: 'data' };
     if (target.category === "application") return { destination: "applications" };
     if (target.applicationId) return uiState.requestOpen(target.applicationId);
     if (target.category === "task") return { destination: "notifications" };
@@ -329,7 +325,7 @@ export function registerControlActions({
   register("get-state", async () => {
     if (getState) return getState();
     const installed = applications ? await applications.listInstalled() : [];
-    return { ...client.snapshot(), applications: installed };
+    return { ...client.snapshot(), applications: projectApplicationsForUI(installed) };
   });
   register("login-password", (input) => {
     const number = phone(input);
@@ -438,7 +434,7 @@ export function registerControlActions({
     if (!["terminal", "desktop"].includes(input?.tool)) throw new Error("INVALID_MAINTENANCE_TOOL");
     return openConnectedDashboard(client, dashboards, input.tool, text(input.deviceId, 128, "invalid_device"));
   });
-  register("applications-list", () => applications?.listInstalled() || []);
+  register("applications-list", async () => projectApplicationsForUI(await applications?.listInstalled() || []));
   register("applications-install", (input) => {
     if (!allowDevelopmentInstall) throw new Error("MARKET_SIGNED_PACKAGE_REQUIRED");
     if (!applications) throw new Error("APPLICATIONS_UNAVAILABLE");
@@ -462,7 +458,7 @@ export function registerControlActions({
   register("applications-local-uninstall", input => {
     if (!applications) throw new Error("APPLICATIONS_UNAVAILABLE");
     const id = text(input?.applicationId, 64, "invalid_application_id");
-    const operation = () => applications.uninstall(id);
+    const operation = () => applications.uninstallLocal(id);
     return uiState ? uiState.runApplicationOperation(id, "uninstalling", operation) : operation();
   });
   register("applications-local-rollback", input => {

@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "repository": "git@codeup.aliyun.com:667637d76d5f7b05cc5d9ed7/centuarai/centuarai-wanx-app-dev-kit.git",
+  "revision": "ae87e55ddfba5b14cca1422592e56cf2f231f9d5",
+  "archive": "dev-kit-source.tar.gz",
+  "sha256": "b45c5e024160c6c6d5c6bbe503b713b56edff084ebae00d1a98465def61f7275",
+  "kitVersion": "0.3.0"
+}

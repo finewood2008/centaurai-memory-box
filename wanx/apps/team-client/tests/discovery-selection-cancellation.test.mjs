@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 import { installElectronBluetoothPicker } from "@nexusaos/device-discovery-electron/main";
 
-const bundle = await readFile(new URL("../local-ui/renderer/device-setup.bundle.js", import.meta.url), "utf8");
+const bundle = await readFile(new URL("../build/app/local-ui/renderer/device-setup.bundle.js", import.meta.url), "utf8");
 const source = await readFile(new URL("../local-ui/renderer/discovery-selection.js", import.meta.url), "utf8");
 const flush = () => new Promise(resolve => setImmediate(resolve));
 

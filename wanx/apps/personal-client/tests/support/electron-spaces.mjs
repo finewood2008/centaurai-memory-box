@@ -24,6 +24,17 @@ try{
   ipcMain.handle('wanx-client:space-trash',(_event,input)=>{calls.push(['trash',input]);trashed.add(input.id);return {};});
   ipcMain.handle('wanx-client:space-restore',(_event,input)=>{calls.push(['restore',input]);trashed.delete(input.id);return {};});
   ipcMain.handle('wanx-client:space-mkdir',(_event,input)=>{calls.push(['mkdir',input]);return {};});
+  ipcMain.handle('wanx-client:space-annotation', (_event, {id}) => {
+    const item = stat(id);
+    return item.annotation || {revision: 0, automatic: {tags: ['课程'], description: ''}, inherit: true};
+  });
+  ipcMain.handle('wanx-client:space-set-annotation', (_event, input) => {
+    calls.push(['annotation', input]);
+    const item = stat(input.id);
+    const {tags, description, inherit} = input;
+    item.annotation = {revision: 1, manual: {tags, description}, tags, description, inherit};
+    return item.annotation;
+  });
   ipcMain.handle('wanx-client:space-links-spaces',()=>spaces);
   ipcMain.handle('wanx-client:space-links-requests',()=>[]);
   let directoryChoice={path:'/tmp/space-test'};
@@ -31,17 +42,35 @@ try{
   let storageFailure=true;
   ipcMain.handle('wanx-client:space-links-storage-set',(_event,input)=>{calls.push(['storage',input]);if(storageFailure){storageFailure=false;throw Error('SPACE_LINK_UPGRADE_REQUIRED');}return {cleanup_pending:0};});
   ipcMain.handle("wanx-client:credits-balance",()=>({available:0}));ipcMain.handle("wanx-client:credits-transactions",()=>({items:[]}));
-  win=new BrowserWindow({show:false,width:1280,height:900,webPreferences:{preload:fileURLToPath(new URL('../../local-ui/remote-preload.cjs',import.meta.url)),contextIsolation:true,nodeIntegration:false,sandbox:true}});
-  await win.loadFile(fileURLToPath(new URL('../../local-ui/renderer/index.html',import.meta.url)));
+  win=new BrowserWindow({show:false,width:1280,height:900,webPreferences:{preload:fileURLToPath(new URL('../../build/app/local-ui/remote-preload.cjs',import.meta.url)),contextIsolation:true,nodeIntegration:false,sandbox:true}});
+  win.webContents.session.webRequest.onBeforeRequest({urls:['http://*/*','https://*/*']}, (_details, done) => done({cancel:true}));
+  await win.loadFile(fileURLToPath(new URL('../../build/app/local-ui/renderer/index.html',import.meta.url)));
   console.log("SPACES: loaded");
   const js=s=>win.webContents.executeJavaScript(s).catch(error=>{console.error('JS_FAILED',s);throw error;});
   await js(`window.until=async f=>{for(let i=0;i<150;i++){if(f())return;await new Promise(r=>setTimeout(r,20));}throw Error('UI timeout');};void 0;`);
   await js(`until(()=>!!document.querySelector('[data-action="show-space"]'))`);
-  const click=async (selector,modifiers=[],button='left')=>{const point=await js(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e)throw Error('Missing '+${JSON.stringify(selector)});e.scrollIntoView({block:'center'});const r=e.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};})()`);win.webContents.sendInputEvent({type:'mouseDown',button,modifiers,clickCount:1,...point});win.webContents.sendInputEvent({type:'mouseUp',button,modifiers,clickCount:1,...point});await pause(60);};
+  const click = async (selector, modifiers = [], button = 'left') => {
+    const point = await js(`(() => {
+      const element = document.querySelector(${JSON.stringify(selector)});
+      if (!element) return null;
+      element.scrollIntoView({block:'center',behavior:'instant'});
+      const rect = element.getBoundingClientRect();
+      const x = Math.round(rect.x + rect.width / 2), y = Math.round(rect.y + rect.height / 2);
+      const target = document.elementFromPoint(x, y);
+      return {x, y, hit: element.contains(target), coveredBy: target?.outerHTML.slice(0,180)};
+    })()`);
+    assert.ok(point, `Missing ${selector}`);
+    assert.ok(point.hit, `${selector} is covered by ${point.coveredBy}`);
+    const {x, y} = point;
+    win.webContents.sendInputEvent({type:'mouseMove', x, y});
+    win.webContents.sendInputEvent({type:'mouseDown', button, modifiers, clickCount:1, x, y});
+    win.webContents.sendInputEvent({type:'mouseUp', button, modifiers, clickCount:1, x, y});
+    await pause(60);
+  };
   const key=async code=>{win.webContents.sendInputEvent({type:'keyDown',keyCode:code});win.webContents.sendInputEvent({type:'char',keyCode:code});win.webContents.sendInputEvent({type:'keyUp',keyCode:code});await pause(25);};
   await click('[data-action="show-space"]');
-  await js(`until(()=>!!document.querySelector('[data-workspace-action="requests"]'))`);
-  assert.equal(await js(`document.querySelector('.space-tree > section').getAttribute('aria-label')`),'常用位置');
+  await js(`until(()=>!!document.querySelector('[data-action="space-folder"][data-space="${spaceA}"]'))`);
+  assert.equal(await js(`document.querySelector('.space-tree > section').getAttribute('aria-label')`),'我的空间');
   assert.equal(await js(`Array.from(document.querySelectorAll('.space-tree-toggle')).every(e=>e.getAttribute('aria-expanded')==='false')`),true);
   console.log('SPACES: create'); await click('[data-action="space-mkdir"]');
   await js(`window.originalInput=document.querySelector('#space-name');void 0;`);
@@ -60,13 +89,16 @@ try{
   win.webContents.debugger.attach('1.3');
   await win.webContents.debugger.sendCommand('Input.imeSetComposition',{text:'中文',selectionStart:2,selectionEnd:2});
   win.webContents.send('wanx-client:space-state',status);win.webContents.send('wanx-client:space-content-changed');await pause(50);
-  await js(`originalInput.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',isComposing:true,bubbles:true}));originalInput.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',isComposing:true,bubbles:true}));`);
+  await js(`document.querySelector('#space-form').requestSubmit();
+    originalInput.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',isComposing:true,bubbles:true}));`);
   assert.equal(calls.filter(c=>c[0]==='mkdir').length,0);
   assert.equal(await js(`document.querySelector('#space-name')===originalInput`),true);
   await win.webContents.debugger.sendCommand('Input.insertText',{text:'中文'});
   win.webContents.debugger.detach();await pause(30);
-  assert.match(await js(`originalInput.value`),/中文/);
-  await click('[data-action="space-dialog-close"]');
+  const folderName = await js(`originalInput.value`);
+  assert.match(folderName,/中文/);
+  await click('#space-form button[type="submit"]');
+  assert.deepEqual(calls.filter(c=>c[0]==='mkdir').map(c=>c[1]),[{parent:'',name:folderName,space_id:'personal'}]);
   await click(`[data-action="space-folder"][data-space="${spaceA}"]`);
   await click(`[data-workspace-action="expand"][data-id="${rootA}"]`);
   for(const id of [folder,child,third]){await js(`until(()=>!!document.querySelector('[data-action="space-folder"][data-id="${id}"]'))`);await click(`[data-action="space-folder"][data-id="${id}"]`);if(id!==third)await click(`[data-workspace-action="expand"][data-id="${id}"]`);}
@@ -79,9 +111,8 @@ try{
   await click('[data-action="space-mkdir"]');await key('z');await key('\r');
   await pause(80);
   // Native Enter is separately sent; char carriage return differs across platforms.
-  if(!calls.some(c=>c[0]==='mkdir')){win.webContents.sendInputEvent({type:'keyDown',keyCode:'Enter'});win.webContents.sendInputEvent({type:'keyUp',keyCode:'Enter'});await pause(100);}
-  assert.equal(calls.find(c=>c[0]==='mkdir')[1].parent,third);
-  assert.equal(calls.find(c=>c[0]==='mkdir')[1].space_id,spaceA);
+  if(calls.filter(c=>c[0]==='mkdir').length===1){win.webContents.sendInputEvent({type:'keyDown',keyCode:'Enter'});win.webContents.sendInputEvent({type:'keyUp',keyCode:'Enter'});await pause(100);}
+  assert.deepEqual(calls.filter(c=>c[0]==='mkdir').slice(1).map(c=>c[1]),[{parent:third,name:'z',space_id:spaceA}]);
   await click('[data-workspace-action="storage"]');
   assert.equal(await js(`Boolean(document.querySelector('#workspace-name'))`),false);
   await click('[data-workspace-action="storage-choose"]');
@@ -91,19 +122,46 @@ try{
   directoryChoice={canceled:true};await click('[data-workspace-action="storage-choose"]');
   assert.equal(await js(`document.querySelector('[data-storage-path]').textContent`),'/tmp/space-test');
   await click('[data-workspace-form] button[type="submit"]');
-  assert.match(await js(`document.querySelector('[data-workspace-error]').textContent`),/主机服务需要更新/);
+  assert.match(await js(`document.querySelector('[data-workspace-error]').textContent`),/设备服务需要更新/);
   assert.equal(await js(`document.querySelector('[data-storage-path]').textContent`),'/tmp/space-test');
   await click('[data-workspace-form] button[type="submit"]');
   assert.deepEqual(calls.find(c=>c[0]==='storage')[1],{id:spaceA,path:'/tmp/space-test'});
   // Select two files, then delete a different ancestor through its sidebar menu.
   entries.push({id:'f'.repeat(32),parent:third,name:'one.txt',kind:'file',space_id:spaceA,size:5,modified:1},{id:'1'.repeat(32),parent:third,name:'two.txt',kind:'file',space_id:spaceA,size:5,modified:1});
   win.webContents.send('wanx-client:space-content-changed');await pause(100);
+  const taggedId = 'f'.repeat(32);
+  await click(`[data-entry-id="${taggedId}"]`, [], 'right');
+  await click('.space-context-menu [data-action="space-annotation"]');
+  await js(`until(()=>!!document.querySelector('#space-annotation-tags'))`);
+  await click('#space-annotation-tags');
+  await js(`window.tagInput = document.querySelector('#space-annotation-tags'); tagInput.select();`);
+  win.webContents.debugger.attach('1.3');
+  await win.webContents.debugger.sendCommand('Input.imeSetComposition', {text:'研发课程',selectionStart:4,selectionEnd:4});
+  win.webContents.send('wanx-client:space-state',status);
+  win.webContents.send('wanx-client:space-content-changed');
+  await pause(50);
+  await js(`document.querySelector('#space-annotation-form').requestSubmit();
+    tagInput.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',isComposing:true,bubbles:true}));`);
+  assert.equal(calls.filter(c=>c[0]==='annotation').length,0);
+  assert.ok(await js(`document.activeElement===tagInput && document.querySelector('#space-annotation-tags')===tagInput`));
+  await win.webContents.debugger.sendCommand('Input.insertText',{text:'研发课程'});
+  win.webContents.debugger.detach();
+  await click('#space-annotation-form button[type="submit"]');
+  await js(`until(()=>!document.querySelector('#space-annotation-form'))`);
+  const [[, savedAnnotation]] = calls.filter(c=>c[0]==='annotation');
+  assert.deepEqual(savedAnnotation, {id:taggedId,space_id:spaceA,expectedRevision:0,tags:['研发课程'],description:'',inherit:true,reviewed:true});
+  assert.match(await js(`document.querySelector('[data-entry-id="${taggedId}"]').textContent`),/研发课程/);
+  await click('#space-search');
+  await win.webContents.insertText('研发课程');
+  assert.deepEqual(await js(`Array.from(document.querySelectorAll('.space-file-row'), row => row.dataset.entryId)`), [taggedId]);
+  await js(`const search = document.querySelector('#space-search'); search.value = ''; search.dispatchEvent(new Event('input',{bubbles:true}));`);
+
   await click(`[data-entry-id="${'f'.repeat(32)}"]`);await click(`[data-entry-id="${'1'.repeat(32)}"]`,[process.platform==='darwin'?'meta':'control']);
   assert.equal(await js(`document.querySelectorAll('.space-file-row.is-selected').length`),2);
   await click(`[data-workspace-action="menu"][data-id="${child}"]`);
   assert.equal(await js(`document.querySelector('.space-workspace').inert`),false);
-  await click(`[data-entry-id="${'f'.repeat(32)}"]`);assert.equal(await js(`Boolean(document.querySelector('.space-sidebar-menu'))`),false);
-  await click(`[data-entry-id="${'1'.repeat(32)}"]`,[process.platform==='darwin'?'meta':'control']);
+  await click('.space-status-count');
+  assert.equal(await js(`Boolean(document.querySelector('.space-sidebar-menu'))`),false);
   await click(`[data-workspace-action="menu"][data-id="${child}"]`);
   await click('[data-workspace-action="menu-command"][data-command="rename"]');
   assert.equal(await js(`document.querySelector('#space-name').value`),'资料');await click('[data-action="space-dialog-close"]');
@@ -128,7 +186,7 @@ try{
   const layout=await js(`(()=>{const s=document.querySelector('.space-sidebar-scroll'),f=document.querySelector('.space-sidebar-bottom');return {overflows:s.scrollHeight>s.clientHeight,separate:s.getBoundingClientRect().bottom<=f.getBoundingClientRect().top+1,footerVisible:f.getBoundingClientRect().bottom<=innerHeight,clipped:document.querySelector('.space-sidebar').scrollWidth<=document.querySelector('.space-sidebar').clientWidth};})()`);
   assert.deepEqual(layout,{overflows:true,separate:true,footerVisible:true,clipped:true});
   if(process.env.WANX_SPACES_SCREENSHOT)await writeFile(process.env.WANX_SPACES_SCREENSHOT,(await win.webContents.capturePage()).toPNG());
-  console.log('SPACES_ELECTRON_PASS: native character input, selection, cursor insertion, Chromium IME with broadcasts, hierarchy and history, scoped create and directory selection/cancel with broadcasts');
+  console.log('SPACES_ELECTRON_PASS: native input and Chromium IME for folders and tags with broadcasts, hierarchy and history, scoped create and storage recovery');
 }catch(error){console.error(error);process.exitCode=1;}finally{win?.destroy();app.exit(process.exitCode||0);}
 
 }

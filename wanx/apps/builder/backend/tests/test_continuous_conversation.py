@@ -69,7 +69,8 @@ async def test_live_interview_serializes_followups_and_associates_right_turn(env
  # The frozen current round must not consume the pending text early.
  current=await pm.tool('alice',pid,started[0],'read_project',{})
  assert not any(m['text']==second['text'] for m in current['conversation'])
- gates[0].set();await until(lambda:len(started)==2)
+ # read_project now yields while the generator runs off the event loop.
+ gates[0].set();await until(lambda:len(readbacks)==2)
  p=svc.snapshot('alice',pid)
  assert [t['state'] for t in p['preparation']['interview']['turns']]==['completed','running']
  assert next(m for m in p['messages'] if m['role']=='assistant')['operationId']==first['operationId']

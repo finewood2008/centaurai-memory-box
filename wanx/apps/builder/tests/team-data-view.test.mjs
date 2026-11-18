@@ -628,16 +628,16 @@ test('personal search renders source-label document references and opens their r
   calls.push([name,input]);
   if(name==='data.warehouses')return {items:[{id:'w',name:'测试仓'}]};
   if(name==='data.warehouse')return {id:'w'};
-  if(name==='data.search')return {items:[],annotationDocuments:[{documentId:'real-document',versionId:'real-version',title:'真实来源',text:'合成原始正文',annotation}],annotationSearch:{incomplete:true}};
-  if(name==='data.document')return {document:{id:input.id,original_name:'真实来源',active_version_id:'real-version'},version:{id:'real-version'},segments:[{text:'合成原始正文'}],sourceAnnotation:{snapshot:{...annotation,tags:['导入时标签']},current:annotation,needsRefresh:true}};
+  if(name==='data.search')return {items:[],annotationDocuments:[{documentId:'real-document',versionId:'real-version',title:'真实来源',text:'合成原始正文',folderPath:'教务 / <春季>',annotation}],annotationSearch:{incomplete:true}};
+  if(name==='data.document')return {document:{id:input.id,original_name:'真实来源',active_version_id:'real-version'},version:{id:'real-version'},segments:[{text:'合成原始正文'}],sourceAnnotation:{snapshot:{...annotation,tags:['导入时标签']},current:annotation,needsRefresh:true,folderPath:'教务 / <春季>'}};
   if(name==='data.document-text')return {version_id:input.versionId,text:'合成原始正文'};
   return {items:[],nodes:[],edges:[]};
  },{},{},{edition:'personal'});
  view.sync(state,true);await view.refresh();await view.action('tab',{tab:'search'});await view.submit('search',{get:()=> '橙色松鼠'});
- let html=view.render();assert.match(html,/空间标签命中 · 文档引用/);assert.match(html,/合成原始正文/);assert.match(html,/橙色&lt;松鼠&gt;/);assert.match(html,/部分空间标签索引尚未核验/);
+ let html=view.render();assert.match(html,/空间标签命中 · 文档引用/);assert.match(html,/空间目录 · 教务 \/ &lt;春季&gt;/);assert.doesNotMatch(html,/合成原始正文/);assert.match(html,/打开来源查看对应版本/);assert.match(html,/橙色&lt;松鼠&gt;/);assert.match(html,/部分空间标签索引尚未核验/);
  assert.match(html,/data-id="real-document" data-version-id="real-version"/);
  await view.action('source',{id:'real-document',versionId:'real-version'});html=view.render();
- assert.match(html,/空间标签与说明 · 需核对/);assert.match(html,/导入时快照/);assert.match(html,/导入时标签/);assert.match(html,/当前空间标注/);assert.match(html,/文件夹继承 · 来源 folder-source/);assert.match(html,/说明&lt;script&gt;/);assert.doesNotMatch(html,/<script>/);
+ assert.match(html,/合成原始正文/);assert.match(html,/空间标签与说明 · 需核对/);assert.match(html,/空间目录 · 教务 \/ &lt;春季&gt;/);assert.match(html,/导入时快照/);assert.match(html,/导入时标签/);assert.match(html,/当前空间标注/);assert.match(html,/文件夹继承 · 来源 folder-source/);assert.match(html,/说明&lt;script&gt;/);assert.doesNotMatch(html,/<script>/);
  assert.equal(calls.find(([name])=>name==='data.document-text')[1].versionId,'real-version');
 });
 
@@ -645,6 +645,34 @@ test('team search ignores personal annotation-only responses',async()=>{
  const view=make(async(name,input)=>name==='data.warehouses'?{items:[{id:'w',name:'团队仓'}]}:name==='data.warehouse'?{id:input.id}:name==='data.search'?{items:[],annotationDocuments:[{documentId:'private',title:'个人标签来源',text:'不应出现在团队'}],annotationSearch:{incomplete:true}}:{items:[],nodes:[],edges:[]});
  view.sync(state,true);await view.refresh();await view.action('tab',{tab:'search'});await view.submit('search',{get:()=> '关键词'});
  assert.doesNotMatch(view.render(),/个人标签来源|不应出现在团队|空间标签命中|空间标签索引尚未核验/);
+});
+
+test('spreadsheet search shows the cited rows and opens the pinned character offset', async () => {
+  const calls=[];
+  const view=make(async(name,input)=>{
+    calls.push([name,input]);
+    if(name==='data.warehouses')return {items:[{id:'w',name:'合成测试仓'}]};
+    if(name==='data.warehouse')return {id:'w'};
+    if(name==='data.search')return {items:[{
+      document_id:'sheet',document_version_id:'v2',original_name:'教务排期.xlsx',text:'六月十二日',
+      locator:{source_segments:[{canonical_start:42,locator:{sheet:'排期',row:2}},
+        {canonical_start:49,locator:{sheet:'排期',row:3}}]},
+    }]};
+    if(name==='data.document')return {document:{id:input.id,original_name:'教务排期.xlsx'},version:{id:'v3'},segments:[]};
+    if(name==='data.document-text')return {version_id:input.versionId,text:'六月十二日',start:42,end:47,total_chars:47};
+    return {items:[],nodes:[],edges:[]};
+  },{},{},{edition:'personal'});
+  view.sync(state,true);
+  await view.refresh();
+  await view.action('tab',{tab:'search'});
+  await view.submit('search',{get:()=> '交付'});
+  const label='工作表 排期 · 第 2–3 行';
+  assert.ok(view.render().includes(`data-location="${label}" data-start="42"`));
+  await view.action('source',{id:'sheet',versionId:'v2',start:'42',location:label});
+  assert.ok(view.render().includes('引用位置 · '+label));
+  const [,input]=calls.find(([name])=>name==='data.document-text');
+  assert.equal(input.versionId,'v2');
+  assert.equal(input.start,42);
 });
 
 test('committed imports expose pending labels and finish durable receipts after reopening without reuploading',async()=>{

@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 import { assertApplicationCompatibility } from "../applications/compatibility.mjs";
 
-const source = (await Promise.all(["discovery-selection.js", "wallet.bundle.js", "personal-space.js", "app-media.js", "store-carousel.js", "support.js", "data-view.js", "studio-product.js", "workshop.js", "renderer.js"].map(name => readFile(new URL(`../local-ui/renderer/${name}`, import.meta.url), "utf8")))).join("\n");
+const source = (await Promise.all(["discovery-selection.js", "wallet.bundle.js", "personal-space.js", "app-media.js", "store-carousel.js", "support.js", "data-view.js", "studio-product.js", "workshop.js", "renderer.js"].map(name => readFile(new URL(`../${["wallet.bundle.js", "data-view.js", "studio-product.js", "workshop.js"].includes(name) ? "build/app/" : ""}local-ui/renderer/${name}`, import.meta.url), "utf8")))).join("\n");
 const client = { current: { productVersion: "0.1.4", buildId: "dev-abc123", distributionClass: "development", platform: "darwin", arch: "arm64" }, phase: "development" };
 const release = { payload: { releaseId: "box-v2", version: "2.0.0", releaseNotes: "修复稳定性" } };
 const plan = { planId: "plan-1", deviceId: "box-1", releaseId: "box-v2", release, planDigest: "a".repeat(64), expiresAt: new Date(Date.now() + 600000).toISOString(), impact: { serviceInterruption: true, dataMigration: false }, dataPolicy: "backward-compatible" };

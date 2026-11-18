@@ -53,7 +53,7 @@ function sha256(file) {
 }
 
 function maintenanceFiles() {
-  const directory = path.join(root, "local-ui", "maintenance");
+  const directory = path.join(root, "build/app/local-ui", "maintenance");
   const htmlPath = path.join(directory, "maintenance.html");
   if (!existsSync(htmlPath) || statSync(htmlPath).size === 0)
     throw new Error("MAINTENANCE_HTML_MISSING");
@@ -160,6 +160,8 @@ async function main() {
   }
   licenseFiles.sort((a, b) => a.file.localeCompare(b.file));
 
+  run(process.execPath, [npmCli, "run", "build:renderer"]);
+  run(process.execPath, [npmCli, "run", "build:maintenance"]);
   process.env.CSC_IDENTITY_AUTO_DISCOVERY = "false";
   const { build, Platform, Arch } = require("electron-builder");
   const buildOptions = {
@@ -176,7 +178,7 @@ async function main() {
       asar: true,
       npmRebuild: false,
       nodeGypRebuild: false,
-      directories: { output },
+      directories: { app: "build/app", output },
       files: windowsInternalFiles(JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"))),
       extraResources: [
         { from: binary, to: `network/${binaryName}` },

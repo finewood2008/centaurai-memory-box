@@ -793,6 +793,43 @@
         "真实盒子验收",
         "版本兼容登记"
       ]
+    },
+    {
+      "id": "wanx.expert-app.v1",
+      "version": "1.0.0",
+      "title": "已部署专家应用 HTTP API",
+      "status": "ready-for-acceptance",
+      "features": [
+        "context",
+        "expert",
+        "data"
+      ],
+      "scope": "Verified managed Host audience, canonical user, selected box, application slot and deployment generation; no caller-selected authority.",
+      "permission": "http.request",
+      "contractFiles": [
+        "expert-app-api.md",
+        "octop-modules/expert-app.openapi.json",
+        "schemas/expert-app-context.v1.schema.json",
+        "schemas/expert-app-invoke.v1.schema.json",
+        "schemas/expert-app-result.v1.schema.json"
+      ],
+      "routes": [
+        {
+          "method": "GET",
+          "path": "/api/wanx-expert-app/v1/context",
+          "operation": "expertAppContext",
+          "permission": "http.request",
+          "responseSchema": "schemas/expert-app-context.v1.schema.json"
+        },
+        {
+          "method": "POST",
+          "path": "/api/wanx-expert-app/v1/invoke",
+          "operation": "expertAppInvoke",
+          "permission": "http.request",
+          "requestSchema": "schemas/expert-app-invoke.v1.schema.json",
+          "responseSchema": "schemas/expert-app-result.v1.schema.json"
+        }
+      ]
     }
   ],
   "readOnlyCatalog": [

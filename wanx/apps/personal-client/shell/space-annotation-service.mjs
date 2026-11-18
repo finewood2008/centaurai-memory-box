@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { extname } from "node:path";
 import { createSpaceAnnotations } from "./space-annotations.mjs";
 
@@ -6,12 +6,17 @@ const fail = code => Object.assign(new Error(code), { code });
 const validId = value => typeof value === "string" && /^[a-f0-9]{32}$/.test(value);
 const textTypes = new Set([".txt", ".md", ".csv", ".json", ".log"]);
 const maxText = 128 * 1024;
+const searchPageEntries = 2000;
+const searchPageFolders = 128;
+const searchCursorLifetime = 10 * 60 * 1000;
+const maxSearchCursors = 16;
 const fingerprint = entry => JSON.stringify([entry.id, entry.parent, entry.name, entry.kind, entry.digest, entry.size, entry.version, entry.modified]);
 
 // The index supplies candidates only. Every operation uses the current box
 // lease and freshly authorized metadata before reading or returning a record.
 export async function createSpaceAnnotationService({ store, scope, request, assertWritable = async () => {}, notify = () => {} }) {
   let index, loadError;
+  const searchCursors = new Map();
   try { index = await createSpaceAnnotations({ store }); }
   catch (cause) { loadError = cause; }
   const enabled = !!store;
@@ -31,7 +36,7 @@ export async function createSpaceAnnotationService({ store, scope, request, asse
     if (entry?.id !== itemId || entry.trashed != null || entry.space_id && entry.space_id !== ctx.spaceId) throw fail("SPACE_NOT_FOUND");
     return entry;
   }
-  async function observe(ctx, entry) {
+  async function observe(ctx, entry, root = "", relativePath = false) {
     ctx.check();
     const ancestors = [], seen = new Set([entry.id]);
     let parent = entry.parent;
@@ -42,11 +47,16 @@ export async function createSpaceAnnotationService({ store, scope, request, asse
       if (ancestor.kind !== "folder") throw fail("SPACE_INVALID_DESTINATION");
       ancestors.push(ancestor); parent = ancestor.parent;
     }
-    for (const ancestor of ancestors.reverse()) { ctx.check(); await index.observe(ctx.key, ancestor); }
+    ancestors.reverse();
+    const rootIndex = root ? ancestors.findIndex(ancestor => ancestor.id === root) : -1;
+    if (root && rootIndex < 0) throw fail("SPACE_LINK_SCOPE");
+    for (const ancestor of ancestors) { ctx.check(); await index.observe(ctx.key, ancestor); }
     ctx.check();
     const annotation = await index.observe(ctx.key, entry);
     ctx.check();
-    return { ...entry, annotation: provenance(annotation, [entry, ...ancestors]) };
+    const path = relativePath ? ancestors.slice(rootIndex + 1) : ancestors;
+    return { ...entry, folder_path: path.map(folder => folder.name).join(" / "),
+      annotation: provenance(annotation, [entry, ...ancestors]) };
   }
   function provenance(annotation, entries) {
     if (!annotation) return annotation;
@@ -162,7 +172,7 @@ export async function createSpaceAnnotationService({ store, scope, request, asse
     const ctx = context(connection, input.space_id || "personal");
     if (action === "annotation-imports") {
       if (ctx.spaceId !== "personal") throw fail("SPACE_ACTION_INVALID");
-      const rows = await index.imports(ctx.key, input.warehouseId); ctx.check();
+      const rows = await index.imports(ctx.key, input.warehouseId, input.query); ctx.check();
       return rows.map(row => ({ ...row, space_id: "personal" }));
     }
     if (action === "search-annotations") return search(ctx, input);
@@ -188,41 +198,89 @@ export async function createSpaceAnnotationService({ store, scope, request, asse
   async function search(ctx, input) {
     if (typeof input.query !== "string" || !input.query.trim() || input.query.length > 300) throw fail("SPACE_ANNOTATION_INVALID");
     const query = input.query.trim().toLocaleLowerCase(), root = input.parent || "";
+    const filesOnly = input.filesOnly === true;
+    const after = input.after ?? "";
+    if (after !== "" && (!filesOnly || typeof after !== "string" || !/^[a-f0-9]{32}$/.test(after)))
+      throw fail("SPACE_ANNOTATION_INVALID");
+    const searchKey = JSON.stringify([ctx.key, root, query]);
+    const saved = after ? searchCursors.get(after) : null;
+    if (after && (!saved || saved.key !== searchKey || saved.expires <= Date.now()))
+      throw fail("SPACE_TAG_RESULTS_CHANGED");
     if (root) { const entry = await stat(ctx, root); if (entry.kind !== "folder") throw fail("SPACE_INVALID_DESTINATION"); await observe(ctx, entry); }
-    const queue = [{ id: root, depth: 0 }], seen = new Set(), candidates = [];
-    let scanned = 0, folders = 0, truncated = false;
-    while (queue.length && folders < 128 && scanned < 2000) {
-      const folder = queue.shift(); if (seen.has(folder.id)) continue;
-      seen.add(folder.id); folders++;
-      const page = await request(ctx.connection, `/files?parent=${folder.id}&trash=false&space_id=${ctx.spaceId}`, { spaceId: ctx.spaceId });
-      ctx.check();
-      if (!Array.isArray(page?.items)) throw fail("SPACE_REQUEST_FAILED");
-      for (const entry of page.items) {
-        if (scanned >= 2000) { truncated = true; break; }
-        if (entry.trashed != null || entry.parent !== folder.id || entry.space_id && entry.space_id !== ctx.spaceId) continue;
-        scanned++;
-        const row = await observe(ctx, entry);
-        if (entry.kind === "folder") {
-          if (folder.depth < 16) queue.push({ id: entry.id, depth: folder.depth + 1 }); else truncated = true;
+    const matches = (entry, annotation) =>
+      [entry.name, ...(annotation?.tags || []), annotation?.description || ""].join("\n").toLocaleLowerCase().includes(query);
+    // Continue a checkpoint only after a successful page. Failed reads can retry
+    // the same cursor, and queued metadata never authorizes a returned item.
+    const queue = saved ? [...saved.queue] : [{ id: root, depth: 0 }], seen = new Set(saved?.seen);
+    let candidates = saved?.candidates || [];
+    let scanned = 0, folders = 0, scanLimited = saved?.scanLimited || false;
+    if (!candidates.length) {
+      candidates = [];
+      while (queue.length && folders < searchPageFolders && scanned < searchPageEntries) {
+        const folder = queue.shift();
+        let entries = folder.entries;
+        const offset = folder.offset || 0;
+        if (!entries && seen.has(folder.id)) continue;
+        folders++;
+        try {
+          if (folder.id && folder.id !== root) {
+            const current = await stat(ctx, folder.id);
+            if (current.kind !== "folder") throw fail("SPACE_NOT_FOUND");
+            await observe(ctx, current, root);
+          }
+          if (!entries) {
+            seen.add(folder.id);
+            const page = await request(ctx.connection, `/files?parent=${folder.id}&trash=false&space_id=${ctx.spaceId}`, { spaceId: ctx.spaceId });
+            ctx.check();
+            if (!Array.isArray(page?.items)) throw fail("SPACE_REQUEST_FAILED");
+            entries = page.items;
+          }
+        } catch (error) {
+          ctx.check();
+          if (![403, 404].includes(error.status) && !["SPACE_LINK_SCOPE", "SPACE_NOT_FOUND"].includes(error.code)) throw error;
+          scanLimited = true;
+          continue;
         }
-        if ([entry.name, ...(row.annotation?.tags || []), row.annotation?.description || ""].join("\n").toLocaleLowerCase().includes(query)) candidates.push(row);
+        const end = Math.min(entries.length, offset + searchPageEntries - scanned);
+        const eligible = entries.slice(offset, end).filter(entry => validId(entry?.id) &&
+          entry.trashed == null && entry.parent === folder.id && (!entry.space_id || entry.space_id === ctx.spaceId));
+        const annotations = await index.observeMany(ctx.key, eligible);
+        ctx.check();
+        scanned += end - offset;
+        eligible.forEach((entry, index) => {
+          if (entry.kind === "folder") {
+            if (folder.depth < 16) queue.push({ id: entry.id, depth: folder.depth + 1 });
+            else scanLimited = true;
+          }
+          if ((!filesOnly || entry.kind === "file") && matches(entry, annotations[index])) candidates.push(entry);
+        });
+        if (end < entries.length) queue.unshift({ ...folder, entries, offset: end });
       }
+      if (filesOnly) candidates.sort((a, b) => a.id.localeCompare(b.id));
     }
     const limit = Math.max(1, Math.min(100, Number.isSafeInteger(input.limit) ? input.limit : 50)), items = [];
-    for (const candidate of candidates) {
-      if (items.length >= limit) { truncated = true; break; }
+    let consumed = 0;
+    for (; consumed < candidates.length && items.length < limit; consumed++) {
+      const candidate = candidates[consumed];
       try {
         const current = await stat(ctx, candidate.id);
         if (fingerprint(current) !== fingerprint(candidate)) continue;
-        const row = await observe(ctx, current);
-        // A move of any ancestor also revokes membership in the search root.
-        let parent = current.parent, within = root === "";
-        for (let depth = 0; parent && depth < 64; depth++) { if (parent === root) { within = true; break; } parent = (await stat(ctx, parent)).parent; }
-        if (within && [row.name, ...(row.annotation?.tags || []), row.annotation?.description || ""].join("\n").toLocaleLowerCase().includes(query)) items.push(row);
-      } catch (cause) { ctx.check(); if (![403, 404].includes(cause.status) && cause.code !== "SPACE_NOT_FOUND") throw cause; }
+        const row = await observe(ctx, current, root, filesOnly);
+        if (matches(row, row.annotation)) items.push(row);
+      } catch (cause) { ctx.check(); if (![403, 404].includes(cause.status) && !["SPACE_NOT_FOUND", "SPACE_LINK_SCOPE"].includes(cause.code)) throw cause; }
     }
     ctx.check();
-    return { items, scanned, truncated: truncated || queue.length > 0 };
+    const more = consumed < candidates.length || queue.length > 0;
+    let nextCursor = null;
+    if (filesOnly && more) {
+      nextCursor = randomBytes(16).toString("hex");
+      if (searchCursors.size >= maxSearchCursors) searchCursors.delete(searchCursors.keys().next().value);
+      searchCursors.set(nextCursor, {key:searchKey, expires:Date.now() + searchCursorLifetime,
+        scanLimited, queue, seen, candidates:candidates.slice(consumed)});
+    }
+    return filesOnly
+      ? {items, scanned, truncated:scanLimited || Boolean(nextCursor), scanLimited, nextCursor}
+      : {items, scanned, truncated:more || scanLimited};
   }
   async function localOperation(action, input) {
     available();
@@ -236,5 +294,6 @@ export async function createSpaceAnnotationService({ store, scope, request, asse
     if (scope() !== owner) throw fail("SPACE_CONTEXT_CHANGED");
     return Array.isArray(result) ? result.map(row => ({ ...row, space_id: spaceId })) : result;
   }
-  return { enabled, decorate, list, operation, localOperation, applyBatch, undoBatch, batchReceipt, async close() { await index?.close(); } };
+  return { enabled, decorate, list, operation, localOperation, applyBatch, undoBatch, batchReceipt,
+    async close() { searchCursors.clear(); await index?.close(); } };
 }

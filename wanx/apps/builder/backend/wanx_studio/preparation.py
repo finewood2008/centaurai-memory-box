@@ -126,7 +126,7 @@ class Preparation:
     if reply.projectName:
      p['autoName']=reply.projectName
      if p.get('nameMode')=='auto':p['name']=reply.projectName
-    self.event(p,'intake.updated',operationId=op)
+    self.event(p,'intake.updated',operationId=op,gapHashes=[digest(g) for g in x['gaps']])
    return self.mutate(owner,pid,'intake-reply',apply)
  def required(self,p,development=False):
   x=p['preparation']; caps=list(x['required'])
@@ -142,8 +142,8 @@ class Preparation:
   if expert_selected(p):value['expertDeployment']=expert_selected(p)
   return digest(value)
  def gaps(self,p):
-  x=p['preparation'];decisions=x.get('gapDecisions',{})
-  return [g for g in x['gaps'] if digest(g) not in decisions]
+  from .capability_gaps import unresolved_capability_gaps
+  return unresolved_capability_gaps(p)
  def defer_gap(self,owner,pid,body):
   p=self.get(owner,pid)
   gap=next((g for g in p['preparation']['gaps'] if digest(g)==body['gapId']),None)
@@ -157,7 +157,13 @@ class Preparation:
   x=p['preparation'];r=x.get('report')
   if x.get('currentProbe',{}).get('state')=='running' or (self.gaps(p) and not allow_gaps) or not r or r['fingerprint']!=self.fingerprint(owner,p,model_ref):return False
   required=self.required(p,development)
-  return set(required)<=set(r['required']) and all(r['results'].get(k,{}).get('status')=='passed' for k in required) and r.get('codex',{}).get('available') is True
+  def ready(cap):
+   result=r['results'].get(cap,{})
+   if result.get('status')=='passed':return True
+   # A drafting mistake must remain discussable. This is not runtime readiness:
+   # deployment, first handoff, failed dependencies and background grants stay gated.
+   return bool(allow_gaps and not development and x['phase']=='acp' and x.get('handoff') and expert_selected(p) and cap=='foundation' and result.get('status')=='failed' and result.get('code')=='EXPERT_CLIENT_CAPABILITY_UNSUPPORTED')
+  return set(required)<=set(r['required']) and all(ready(k) for k in required) and r.get('codex',{}).get('available') is True
  def guard(self,owner,p,development=False,*,planning=False,model_ref=None):
   self.svc.engines.guard(owner,p)
   if 'preparation' not in p:return
@@ -359,6 +365,8 @@ class Preparation:
      results[cap]={'status':status,'code':code,'at':time.time()}
    codex=await self.svc.runner.preflight(fresh=True,owner=owner)
    report={'version':1,'contractVersion':CONTRACT_VERSION,'operationId':op,'fingerprint':fingerprint,'required':required,'results':results,'codex':codex,'environment':'isolated-probe-runtime','at':time.time()}
+   if expert_selected(p):
+    report.update(preparationRevision=x['revision'],expertContractDigest=digest(expert_selected(p)))
    def change(p):
     if fingerprint!=self.fingerprint(owner,p):raise StudioError('CAPABILITY_SET_CHANGED',409)
     x=p['preparation'];x['report']=report;x['currentProbe']['state']='completed'
@@ -370,10 +378,10 @@ class Preparation:
   async with self.lock(owner,pid):
    p=self.get(owner,pid);x=p['preparation']
    if x['handoff'] and x['phase']=='acp':
-    await self.guard_async(owner,p)
+    await self.guard_async(owner,p,planning=True)
     if x['handoff']['report']['operationId']==x['report']['operationId']:return self.svc.snapshot(owner,pid)
    if body['expectedRevision']!=x['revision']:raise StudioError('INTAKE_CHANGED',409)
-   if not self.valid_report(owner,p):raise StudioError('CAPABILITY_CHECK_REQUIRED',409)
+   if not self.valid_report(owner,p,allow_gaps=bool(x['handoff'] and x['phase']=='acp')):raise StudioError('CAPABILITY_CHECK_REQUIRED',409)
    await self.validate_references(owner,x['references'])
    def change(p):
     x=p['preparation'];previous=x['handoff']

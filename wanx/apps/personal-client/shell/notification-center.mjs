@@ -4,6 +4,11 @@ import { collectStarlinkNotifications } from './starlink-notifications.mjs';
 const APP_NAMES = { 'centaurai.wanx.centaurloop': '半人马环', 'centaurai.wanx.zhijun': '知君', 'centaurai.wanx.dialogue': '众见', 'centaurai.wanx.semantica': "知识星图", 'ai.wanx.studio': "应用工坊", 'centaurai.wanx.superadvisors': '个人议事厅', 'centaurai.wanx.ai-browser': "记忆盒子 AI 浏览器", 'centaurai.wanx.new-media-toolkit': '火花' };
 const clean = (value, max = 4000) => typeof value === 'string' ? value.trim().slice(0, max) : '';
 const digest = value => createHash('sha256').update(value).digest('hex');
+const MEMORY_BLOCKER_NOTICES = {
+  'summary-model': ['记忆摘要已暂停', '有记忆等待生成摘要，当前摘要模型不可用。请在「记忆模型」中检查「记忆摘要」。'],
+  'evolution-model': ['记忆演化已暂停', '有记忆等待归纳或演化，当前演化模型不可用。请在「记忆模型」中检查「技能进化」。'],
+  'model-budget': ['记忆处理已暂停', '当前额度限制了记忆处理。请在「记忆预算」中查看用量和额度设置。'],
+};
 // Only WANX application feeds and trusted main-process events create notices.
 // The native dashboard push source is not subscribed to by the WANX client.
 export async function createNotificationCenter({ client, store, serviceURL, dataScope = 'personal', onChanged = () => {} }) {
@@ -161,6 +166,22 @@ export async function createNotificationCenter({ client, store, serviceURL, data
       const action = { installing: '安装', uninstalling: '卸载', 'rolling-back': '回退' }[event.phase];
       add({ key: `operation:${randomUUID()}`, title: `${name}${action}${event.status === 'succeeded' ? '完成' : '失败'}`,
         body: event.status === 'succeeded' ? `${name}已${action}完成。` : `${action}未完成，请在应用页查看并重试。`, applicationId: event.applicationId });
+    },
+    memoryPipeline({ accountId, blockers }) {
+      const current = bucket();
+      if (!current || closed || accountId !== client.snapshot().account?.accountId) return;
+      const active = Object.keys(MEMORY_BLOCKER_NOTICES).filter(code => blockers.includes(code));
+      const previous = current.memoryBlockers ?? [];
+      if (active.length === previous.length && active.every(code => previous.includes(code))) return;
+      current.memoryBlockers = active;
+      let added = false;
+      for (const code of active) {
+        if (previous.includes(code)) continue;
+        const [title, body] = MEMORY_BLOCKER_NOTICES[code];
+        added = add({ key: `memory-pipeline:${code}:${randomUUID()}`, category: 'system', title, body }, true) || added;
+      }
+      void persist();
+      if (added) emit();
     },
     candidate(applicationId, candidate, installed) {
       if (candidate?.status !== 'available' || !installed) return;

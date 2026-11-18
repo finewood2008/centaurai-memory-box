@@ -19,6 +19,7 @@ from octop.api.common.agent import require_agent_row
 from octop.api.common.validators import validate_chat_mcp_servers, validate_chat_skills
 from octop.api.common.workspace import require_running_workspace
 from octop.api.routers.chat.models import ChatTurnBody
+from octop.infra.agents.assistant_profile import is_assistant_profile
 from octop.infra.agents.attachment_sources import attachment_path, attachment_turn_content
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.gateway.media.attachment_hints import (
@@ -263,6 +264,12 @@ async def prepare_dashboard_turn(
         turn.knowledge_base_ids = []
         turn.conversation_mode = "ask"
     row = require_agent_row(agent_id, user=user, as_user=None, server=server)
+    if turn.assistant_persona and not is_assistant_profile(row, server.services.user_repo):
+        raise OctopError.localized(ErrorCode.FORBIDDEN)
+    if (turn.zhijun_references or turn.zhijun_memory is not None or turn.zhijun_agent_only) and (
+        turn.assistant_persona != "zhijun" or getattr(user, "local_team", None) is not None
+    ):
+        raise OctopError.localized(ErrorCode.FORBIDDEN)
     default_model = (row.default_model or "").strip() or None
 
     application_id = getattr(row, "application_id", "wanx")
@@ -409,6 +416,16 @@ def build_dashboard_inbound(
         metadata["reasoning_effort"] = turn.reasoning_effort
     if turn.conversation_mode:
         metadata["conversation_mode"] = turn.conversation_mode
+    if turn.assistant_persona:
+        metadata["assistant_persona"] = turn.assistant_persona
+    if turn.zhijun_references:
+        metadata["zhijun_references"] = [
+            reference.model_dump(exclude_none=True) for reference in turn.zhijun_references
+        ]
+    if turn.zhijun_memory is not None:
+        metadata["zhijun_memory"] = turn.zhijun_memory
+    if turn.zhijun_agent_only:
+        metadata["zhijun_agent_only"] = True
     if turn.hitl_policy is not None:
         metadata["hitl_policy"] = turn.hitl_policy.model_dump()
     if prepared.composer_context:

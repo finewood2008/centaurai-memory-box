@@ -1,9 +1,11 @@
+import {requestErrorCode} from '../../core/request-errors.mjs';
+
 export type Target = {organizationId:string;boxId:string;applicationId:string;environment:'dev'|'prod'};
 export type ReleaseRef = {releaseId:string;bundleDigest:string};
 export type ComponentResult = {componentId:string;role:string;required:boolean;status:string;actualVersion?:string;errorCode?:string};
 export type Operation = {id:string;target:Target;kind:string;releaseRef:ReleaseRef|null;state:string;phase:string;revision:number;createdAt:number;updatedAt:number;deadline:number;commitStatus:string;committedGeneration:number|null;previousGeneration:number;components:ComponentResult[];errorCode:string|null};
 export type Capabilities = {schemaVersion:1;available:boolean;reason:string|null;operations:string[]};
-export type ProgressEvent = {sequence:number;operationId:string;operationRevision:number;createdAt:number;type:string;state?:string;phase?:string};
+export type ProgressEvent = {sequence:number;operationId:string;operationRevision:number;createdAt:number;type:string;state?:string;phase?:string;errorCode?:string};
 export type EventPage = {items:ProgressEvent[];nextCursor:number;hasMore:boolean};
 export type Receipt = {receiptId:string;operationId:string;outcome:string;commitStatus:string;componentResults:ComponentResult[];observedAt:string};
 export type Delivery = {receipt:Receipt;deliveryStatus:'pending'|'delivered';attempts:number};
@@ -62,7 +64,8 @@ export function parseEventPage(value:unknown,operation:string,after:number):Even
     if(event.operationId!==operation||sequence<=cursor)return fail();
     cursor=sequence;
     return {sequence,operationId:operationId(event.operationId),operationRevision:integer(event.operationRevision),createdAt:timestamp(event.createdAt),type:id(event.type),
-      ...(event.state!==undefined?{state:id(event.state)}:{}),...(event.phase!==undefined?{phase:id(event.phase)}:{})};
+      ...(event.state!==undefined?{state:id(event.state)}:{}),...(event.phase!==undefined?{phase:id(event.phase)}:{}),
+      ...(event.errorCode!=null?{errorCode:publicProgressCode(event.errorCode)}:{})};
   });
   const nextCursor=integer(source.nextCursor),hasMore=boolean(source.hasMore);
   if(nextCursor!==cursor||(hasMore&&!items.length))return fail();
@@ -75,7 +78,7 @@ export function parseDelivery(value:unknown,operation:string):Delivery|null {
   return {receipt:{receiptId:id(receipt.receiptId),operationId:operationId(receipt.operationId),outcome:id(receipt.outcome),commitStatus:id(receipt.commitStatus),componentResults:parseComponents(receipt.componentResults),observedAt:text(receipt.observedAt)},deliveryStatus:source.deliveryStatus,attempts:integer(source.attempts)};
 }
 
-const stateLabels:Record<string,string>={queued:'已受理，等待处理',preflight:'正在预检',preparing:'正在准备',verifying:'正在验证',committing:'正在提交版本切换',reconciling:'正在核对执行结果',blocked:'等待条件满足',waiting_box:'等待盒子连接',waiting_client:'等待客户端连接',compensating:'正在恢复原环境',succeeded:'部署操作成功',rejected:'请求未通过',failed_recovered:'操作失败，原环境已恢复',failed_degraded:'操作失败，环境需处理',recovery_required:'需要人工恢复'};
+const stateLabels:Record<string,string>={queued:'已受理，等待处理',preflight:'正在预检',preparing:'正在准备',verifying:'正在验证',committing:'正在提交版本切换',reconciling:'正在核对执行结果',blocked:'等待条件满足',waiting_box:'等待盒端处理',waiting_client:'等待客户端连接',compensating:'正在恢复原环境',succeeded:'部署操作成功',rejected:'请求未通过',failed_recovered:'操作失败，原环境已恢复',failed_degraded:'操作失败，环境需处理',recovery_required:'需要人工恢复'};
 const phaseLabels:Record<string,string>={validating:'校验请求',preflight:'检查部署条件',prepare_backend:'准备后端',prepare_client:'准备客户端',prepare_channels:'准备应用入口',prepare_data:'准备数据',verify_candidate:'验证待部署版本',commit:'确认版本切换',activate:'激活版本',verify_active:'验证运行状态',manage:'执行管理操作',compensate:'恢复原环境',recover:'核对与恢复',completed:'处理结束'};
 const kindLabels:Record<string,string>={deploy:'部署',promote:'转正式',rollback:'回滚',restart:'重启',stop:'停止',uninstall:'卸载',purge:'清除',recover:'恢复'};
 const componentLabels:Record<string,string>={ready:'已就绪',pending:'等待处理',preparing:'准备中',prepared:'已准备',activating:'激活中',waiting:'等待中',waiting_box:'等待盒子',waiting_client:'等待客户端',failed:'失败',blocked:'受阻',unknown:'状态待核对',stopped:'已停止',uninstalled:'已卸载',purged:'已清除',skipped:'无需处理',not_required:'无需处理'};
@@ -84,9 +87,14 @@ export const phaseLabel=(phase:string)=>phaseLabels[phase]||'待核对阶段';
 export const kindLabel=(kind:string)=>kindLabels[kind]||'部署操作';
 export const componentLabel=(status:string)=>componentLabels[status]||'状态待核对';
 export const commitLabel=(status:string)=>status==='committed'?'已提交版本切换':status==='not_committed'?'尚未提交版本切换':'提交状态待核对';
-export function errorMessage(error:unknown):string {
+export function deploymentErrorCode(error:unknown):string {
   const code=typeof error==='object'&&error?(error as {code?:unknown}).code:undefined;
-  const value=typeof code==='string'?code:error instanceof Error?error.message:'';
+  return requestErrorCode(typeof code==='string'?code:error);
+}
+export function errorMessage(error:unknown):string {
+  const value=deploymentErrorCode(error);
+  if(['ECONNRESET','ECONNREFUSED','ETIMEDOUT','EPIPE','NETWORK_NOT_READY','ACCOUNT_NETWORK_ERROR'].includes(value))
+    return '暂时无法连接部署服务，请检查盒子连接并刷新状态；已提交的请求请先核对记录，不要另建部署。';
   const messages:Record<string,string>={
     DEPLOYMENT_ADAPTER_UNAVAILABLE:'当前盒子的部署执行能力尚未接通，可查看已有记录。',
     DEPLOYMENT_RESPONSE_INVALID:'部署服务返回的数据暂时无法识别，请刷新或联系管理员。',
@@ -95,26 +103,56 @@ export function errorMessage(error:unknown):string {
     DEPLOYMENT_TARGET_DENIED:'当前账号无权管理这个部署目标。',
     STUDIO_ADMIN_REQUIRED:'当前账号没有部署管理权限，请使用有权限的账号打开。',
     STUDIO_IDENTITY_FORBIDDEN:'当前账号没有部署管理权限。',
-    WORKSHOP_IDENTITY_REQUIRED:'当前工坊身份已失效，请重新连接盒子并打开工坊。',
-    WORKSHOP_SESSION_EXPIRED:'当前工坊会话已失效，请重新连接盒子并打开工坊。',
+    WORKSHOP_IDENTITY_REQUIRED:'当前开物身份已失效，请重新连接盒子并打开开物。',
+    WORKSHOP_SESSION_EXPIRED:'当前开物会话已失效，请重新连接盒子并打开开物。',
     HOST_SESSION_EXPIRED:'万象连接已失效，请重新连接盒子并打开工作台。',
+    HOST_REQUEST_TIMEOUT:'部署服务响应超时，操作结果尚未确认。请先刷新记录；如需重试，将沿用本次请求。',
+    NETWORK_CHANGED:'盒子连接已变化，请重新连接并打开工作台，再读取部署记录。',
     BOX_IDENTITY_UNAVAILABLE:'盒子连接已失效，请在万象重新连接后打开工作台。',
     AUTH_FAILED:'登录状态已失效，请在万象重新登录后打开工作台。',
     IDENTITY_REQUIRED:'请从已登录的万象客户端打开工作台。',
     DEPLOYMENT_AUTHORITY_UNAVAILABLE:'暂时无法确认部署权限，请稍后重试。',
     DEPLOYMENT_CONTEXT_REQUIRED:'当前版本的部署信息尚未就绪，请刷新后重试。',
     DEPLOYMENT_ATTEMPT_PENDING:'上一次部署请求结果尚未确认，请先刷新记录，或重试同一次请求。',
+    DEPLOYMENT_ENVIRONMENT_BUSY:'目标环境有其他部署正在处理，请等待处理结束后刷新并重新确认。',
     DEPLOYMENT_GENERATION_CONFLICT:'目标环境已经变化，请读取最新部署状态。',
     RECORD_CHANGED:'项目已发生变化，请刷新并重新确认采用版本。',
     DEPLOYMENT_PROFILE_UNAVAILABLE:'当前盒子尚未开通此类应用的部署。',
+    STANDARD_DEPLOYMENT_CONTRACT_REQUIRED:'当前成果是标准 Host 应用，不能通过 miniapp 通道部署。盒子部署需要具有专家后端合同的标准成果；普通标准应用请使用客户端安装。删除页面功能不会改变部署合同。',
     RUNTIME_INCOMPATIBLE:'当前版本使用的能力尚未支持此部署方式。',
     DEPLOYMENT_DEV_VERIFICATION_REQUIRED:'请先将同一版本部署到联调环境并验证，再部署到正式环境。',
     DEPLOYMENT_VERSION_CHANGED:'已采纳版本已经变化，请刷新工作台后重新确认。',
     DEPLOYMENT_PREPARATION_INVALID:'部署准备信息不完整，请刷新工作台后重试。',
     DEPLOYMENT_PREPARATION_NOT_FOUND:'这次部署准备已经失效，请重新准备部署。',
   };
-  return messages[value]||'部署信息暂时无法读取或操作未完成，请刷新后重试。';
+  return messages[value]||'暂时无法确认部署信息或操作结果，请先刷新记录；若仍无法确认，请联系管理员。';
 }
+// Keep historical reasons descriptive: an old waiting event is not a current failure.
+const progressReasons:Record<string,string>={
+  DEPLOYMENT_ADAPTER_UNAVAILABLE:'盒端部署执行能力尚未就绪。',
+  UPSTREAM_DECISION_REQUIRED:'所需的处理条件尚未满足。',
+  REGRESSION_EVIDENCE_MISMATCH:'验证记录与当前版本不一致。',
+  RUNTIME_INCOMPATIBLE:'运行能力与此版本不兼容。',
+  CHANNEL_NOT_READY:'应用入口尚未就绪。',
+  BOX_UNREACHABLE:'暂时无法连接目标盒子。',
+  CLIENT_UNAVAILABLE:'配套客户端暂时不可用。',
+  INSUFFICIENT_RESOURCES:'可用资源不足。',
+  DEPENDENCY_UNAVAILABLE:'盒端依赖服务尚未就绪或暂未返回结果。',
+  MIGRATION_NOT_COMPATIBLE:'数据迁移条件不兼容。',
+  GENERATION_CONFLICT:'目标环境的版本代次已变化。',
+  UPDATE_REQUIRED:'相关组件需要更新。',
+  RECOVERY_REQUIRED:'环境需要人工恢复。',
+  DEPLOYMENT_TARGET_DENIED:'当前部署目标不可访问。',
+  PROVENANCE_INVALID:'发布来源校验未通过。',
+  ADAPTER_RESULT_INVALID:'执行结果暂时无法识别。',
+  ADAPTER_UNCERTAIN:'尚未确认当前阶段的执行结果。',
+  DEPLOYMENT_WAIT_EXPIRED:'等待已超过处理时限。',
+  DEPLOYMENT_CANCELLED:'部署已取消。',
+  VERSION_NOT_PUBLISHED:'待部署版本尚未发布。',
+};
+const publicProgressCode=(code:unknown):string=>typeof code==='string'&&Object.hasOwn(progressReasons,code)?code:'ADAPTER_UNCERTAIN';
+export const progressReason=(code:unknown):string=>progressReasons[publicProgressCode(code)];
+export const isWaiting=(state:string)=>['waiting_box','waiting_client','blocked','reconciling'].includes(state);
 export function formatTime(value:number):string {
   const date=new Date(value*1000);
   return Number.isFinite(date.getTime())?date.toLocaleString('zh-CN',{hour12:false}):'时间未知';

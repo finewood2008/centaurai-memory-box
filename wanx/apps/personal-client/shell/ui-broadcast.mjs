@@ -1,3 +1,13 @@
+// MemoBox omits environment badges, but still needs main-owned deployment
+// provenance to select local removal rather than ordinary market mutations.
+export const projectApplicationsForUI = records => records.map(({presentation,managedLocal,...record}) => ({
+  ...record,
+  managedLocal: record.installationSource === 'selfmade' && record.deployment?.schemaVersion === 1 &&
+    ['wanx-miniapp-v1','wanx-expert-app-v1'].includes(record.deployment.profile) &&
+    record.deployment.slotApplicationId === record.applicationId &&
+    Number.isSafeInteger(record.deployment.generation) && record.deployment.generation > 0,
+}));
+
 // Account and connection state must reach the UI without waiting for disk reads
 // or an app installation. Installed apps refresh in the background and publish
 // separately; reads from a previous account/connection can never replace them.
@@ -31,7 +41,7 @@ export function createUIBroadcast({ client, applications, uiState, startup, upda
     const currentScope = scope;
     const work = Promise.resolve().then(() => applications.listInstalled());
     reading = work;
-    void work.then(value => {
+    void work.then(projectApplicationsForUI).then(value => {
       snapshot(); // Invalidate a stale read even if no state event was emitted.
       if (closed || currentScope !== scope || reading !== work) return;
       installed = structuredClone(value);

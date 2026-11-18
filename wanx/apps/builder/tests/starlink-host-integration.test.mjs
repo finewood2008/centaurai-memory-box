@@ -14,7 +14,7 @@ const bundle=fileURLToPath(new URL('../../team-client/applications/starlink/',im
 const wid='11111111-1111-1111-1111-111111111111';
 for(const edition of ['personal-client','team-client']) {
  test(`${edition}: builtin upgrade and Host restart retain versions and profile bytes`,async t=>{
-  const {createApplicationManager}=await import(`../../${edition}/applications/manager.mjs`);
+  const {createApplicationManager}=await import(`../../${edition}/build/app/applications/manager.mjs`);
   const root=await mkdtemp(path.join(os.tmpdir(),'starlink-host-integration-'));
   const applicationRoot=path.join(root,'applications');
   let manager;

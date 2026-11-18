@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { createHash, createHmac, createPublicKey, generateKeyPairSync, verify } from 'node:crypto';
+import fs from 'node:fs';
 import { chmod, lstat, mkdtemp, readFile, readdir, rm, symlink, unlink, writeFile } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -8,6 +10,7 @@ import { createIdentityVault } from '../device-trust/identity-vault.mjs';
 import { publicKeyThumbprint, requestDigest, verifyApprovalSignature, verifyCancelProof, verifyRequestProof } from '../device-trust/binding-contract.mjs';
 import { firstRootDigest } from '../device-trust/management-contract.mjs';
 import { signWifiProof, verifyWifiProof, wifiDigest } from '../device-trust/offline-wifi-contract.mjs';
+import { createPrivateDirectoryFixture } from './support/private-directory.mjs';
 
 const vector = JSON.parse(await readFile(new URL('../../../shared/contracts/local-trust/v1/vectors.json', import.meta.url)));
 const passphrase = 'synthetic local passphrase only';
@@ -17,13 +20,7 @@ const code = (suffix) => (error) => error?.code === `LOCAL_IDENTITY_${suffix}`;
 async function fixture(t, { create = true, clock } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'wanx-identity-test-'));
   const directory = path.join(root, 'identity');
-  const options = { directory, ...(clock ? { clock } : {}) };
-  // This test fixture creates no real identity. Windows ACL behavior belongs to
-  // the shell's existing adapter; do not silently substitute a no-op adapter.
-  if (process.platform === 'win32') {
-    const { protectPrivateDirectory } = await import('../shell/private-storage.mjs');
-    options.protectDirectory = (target) => protectPrivateDirectory(target);
-  }
+  const options = { directory, protectDirectory: createPrivateDirectoryFixture(), ...(clock ? { clock } : {}) };
   const vault = createIdentityVault(options);
   t.after(async () => { vault.close(); await rm(root, { recursive: true, force: true }); });
   await vault.load();
@@ -281,6 +278,45 @@ test('state rejects prototype objects, unbounded values and external replacement
   await writeFile(f.file, `${raw}\n`);
   await assert.rejects(f.vault.writeState({ checkpoint: 1 }), code('STATE_CONFLICT'));
   assert.equal(await readFile(f.file, 'utf8'), `${raw}\n`);
+});
+
+test('Windows retries a busy vault replacement and stops if the live state or lock changes', { skip: process.platform !== 'win32' }, async t => {
+  const f = await fixture(t);
+  const rename = fs.renameSync;
+  let onBlocked = () => {};
+  let attempts = 0;
+  t.mock.method(fs, 'renameSync', (source, destination) => {
+    if (destination === f.file) {
+      attempts++;
+      if (onBlocked) {
+        const action = onBlocked;
+        onBlocked = null;
+        action();
+        throw Object.assign(new Error('simulated Windows file lock'), { code: 'EPERM' });
+      }
+    }
+    return rename(source, destination);
+  });
+  syncBuiltinESMExports();
+  try {
+    await f.vault.writeState({ checkpoint: 1 });
+    assert.equal(attempts, 2);
+    assert.deepEqual(f.vault.readState(), { checkpoint: 1 });
+
+    const before = await readFile(f.file, 'utf8');
+    onBlocked = () => fs.writeFileSync(f.file, `${before}\n`);
+    await assert.rejects(f.vault.writeState({ checkpoint: 2 }), code('STATE_CONFLICT'));
+    assert.equal(await readFile(f.file, 'utf8'), `${before}\n`);
+    await writeFile(f.file, before);
+
+    onBlocked = () => f.vault.lock('screen-locked');
+    await assert.rejects(f.vault.writeState({ checkpoint: 3 }), code('CANCELLED'));
+    assert.equal(await readFile(f.file, 'utf8'), before);
+    assert.equal(attempts, 4);
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  }
 });
 
 test('lock invalidates pending state writes and in-flight unlock; no delayed result revives cache', async (t) => {

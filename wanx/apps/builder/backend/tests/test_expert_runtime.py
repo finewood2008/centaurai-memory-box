@@ -1,4 +1,5 @@
 import asyncio
+import os
 import json
 from copy import deepcopy
 from pathlib import Path
@@ -388,15 +389,24 @@ async def test_user_revocation_interrupts_callback_and_never_uses_old_request_id
     assert h.registry.cancelled == [(h.binding['agentId'], run['id'])]
 
 
-async def test_timeout_is_interrupted_and_detaches_the_box_callback(setup):
+@pytest.mark.parametrize("terminal_frame", ["done", "error"])
+async def test_timeout_retains_upgrade_fence_until_a_real_terminal_frame(setup, terminal_frame):
+    from wanx_studio.upgrade_guard import acquire
     h = setup
     h.engine.run_timeout = 0.01
     run = (await h.engine.invoke(OWNER, 'token', 'expert.run', {'operationId': uuid4().hex, 'text': 'hello'}))['run']
     await asyncio.sleep(0.03)
     result = (await h.engine.invoke(OWNER, 'token', 'expert.tasks', {'runId': run['id']}))['run']
     assert result['state'] == 'interrupted' and result['errorCode'] == 'EXPERT_RUN_TIMEOUT'
+    assert h.hub.has_subscribers(run['id'])
+    assert h.engine.busy(OWNER, h.binding['slotApplicationId'])
+    with pytest.raises(StudioError, match='BUILDER_UPGRADE_BUSY'):
+        acquire(h.svc.store.root, exclusive=True)
+    await h.hub.push_to_thread(run['id'], {'type': terminal_frame})
+    with acquire(h.svc.store.root, exclusive=True):
+        pass
     assert not h.hub.has_subscribers(run['id'])
-    assert not h.engine.busy(OWNER, h.binding['slotApplicationId'])
+    assert (await h.engine.invoke(OWNER, 'token', 'expert.tasks', {'runId': run['id']}))['run'] == result
 
 
 @pytest.mark.parametrize('prepare_fails', [False, True])
@@ -485,3 +495,125 @@ async def test_crash_snapshot_recovery_marks_unknown_and_never_reenqueues(setup,
     finally:
         await reopened.close()
         store.close()
+
+
+async def test_standard_contract_executes_real_engine_without_legacy_management_and_deduplicates(setup):
+    import time
+    from jsonschema import Draft202012Validator
+    from wanx_studio.deployment.standard_client import RUNTIME_CONTRACT
+    from test_standard_expert_deployment import payload
+    h=setup
+    h.svc.runtime_sessions=h.sessions
+    session=h.sessions['token']
+    session.update(standardExpertContract=deepcopy(RUNTIME_CONTRACT),expires=time.time()+3600)
+    session['manifest']={'capabilities':['identity.read','http.request']}
+    h.active[h.binding['slotApplicationId']]['base']=payload()
+    def guard(value):
+        binding=h.active.get(value['deploymentSlot'])
+        if not binding or binding['generation']!=value['deploymentGeneration']:raise StudioError('UPDATE_REQUIRED',409)
+    h.svc.deployment_profile.assert_runtime=guard
+    def forbidden(*args):raise AssertionError('Standard runtime cannot use legacy management/runtime')
+    h.svc.authorize_management=forbidden;h.svc.runtime=forbidden
+    schema=Path(__file__).resolve().parents[4]/'apps/personal-client/host-sdk/contracts/schemas/expert-app-result.v1.schema.json'
+    validate=Draft202012Validator(json.loads(schema.read_text())).validate
+    operation=uuid4().hex
+    started=await h.engine.invoke(OWNER,'token','expert.run',{'operationId':operation,'text':'Standard request'})
+    validate(started)
+    repeated=await h.engine.invoke(OWNER,'token','expert.run',{'operationId':operation,'text':'Standard request'})
+    assert repeated['run']['id']==started['run']['id'] and len(h.enqueued)==1
+    tasks=await h.engine.invoke(OWNER,'token','expert.tasks',{})
+    validate(tasks);assert tasks['items'][0]['id']==started['run']['id']
+    cancelled=await h.engine.invoke(OWNER,'token','expert.cancel',{'runId':started['run']['id']})
+    validate(cancelled);assert cancelled['run']['state']=='cancel_requested'
+    assert len(h.registry.cancelled)==1
+    with pytest.raises(StudioError):await h.engine.invoke('wanx:8','token','expert.tasks',{})
+    h.active[h.binding['slotApplicationId']]['generation']=2
+    with pytest.raises(StudioError,match='UPDATE_REQUIRED'):await h.engine.invoke(OWNER,'token','expert.tasks',{})
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Box OTA uses POSIX file locks")
+async def test_expert_run_blocks_ota_until_terminal_and_releases_on_done(setup):
+    from wanx_studio.upgrade_guard import acquire
+
+    h = setup
+    value = await h.engine.invoke(OWNER, 'token', 'expert.run', {'operationId': uuid4().hex, 'text': 'Synthetic input'})
+    with pytest.raises(StudioError, match='BUILDER_UPGRADE_BUSY'):
+        acquire(h.svc.store.root, exclusive=True)
+    await h.hub.push_to_thread(value['run']['id'], {'type': 'token', 'content': 'Synthetic result'})
+    await h.hub.push_to_thread(value['run']['id'], {'type': 'done'})
+    with acquire(h.svc.store.root, exclusive=True):
+        pass
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Box OTA uses POSIX file locks")
+async def test_ota_exclusive_rejects_new_expert_run_before_gateway_or_durable_admission(setup):
+    from wanx_studio.upgrade_guard import acquire
+
+    h = setup
+    with acquire(h.svc.store.root, exclusive=True):
+        with pytest.raises(StudioError, match='BUILDER_UPGRADE_BUSY'):
+            await h.engine.invoke(OWNER, 'token', 'expert.run', {'operationId': uuid4().hex, 'text': 'Synthetic input'})
+    assert not h.enqueued
+    assert h.svc.store.db.execute('SELECT count(*) FROM deployment_expert_runs').fetchone()[0] == 0
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Box OTA uses POSIX file locks")
+async def test_cancelled_expert_start_releases_upgrade_lock(setup, monkeypatch):
+    from wanx_studio.upgrade_guard import acquire
+
+    h = setup
+    entered = asyncio.Event()
+
+    async def waiting(*_):
+        entered.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(h.registry, 'start', waiting)
+    task = asyncio.create_task(h.engine.invoke(OWNER, 'token', 'expert.run', {'operationId': uuid4().hex, 'text': 'Synthetic input'}))
+    await entered.wait()
+    with pytest.raises(StudioError, match='BUILDER_UPGRADE_BUSY'):
+        acquire(h.svc.store.root, exclusive=True)
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+    with acquire(h.svc.store.root, exclusive=True):
+        pass
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Box OTA uses POSIX file locks")
+async def test_background_expert_preparation_holds_lock_until_cancelled(setup, monkeypatch):
+    from wanx_studio.upgrade_guard import acquire
+
+    h = setup
+    entered = asyncio.Event()
+
+    async def waiting(*_):
+        entered.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(h.engine, 'verify', waiting)
+    task = asyncio.create_task(h.engine.prepare(OWNER, TARGET, 'project-test', h.descriptor, lambda: None))
+    await entered.wait()
+    try:
+        with pytest.raises(StudioError, match='BUILDER_UPGRADE_BUSY'):
+            acquire(h.svc.store.root, exclusive=True)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+    with acquire(h.svc.store.root, exclusive=True):
+        pass
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Box OTA uses POSIX file locks")
+async def test_expert_failure_releases_lock_and_does_not_replay_admitted_run(setup):
+    from wanx_studio.upgrade_guard import acquire
+
+    h = setup
+    operation = uuid4().hex
+    run = (await h.engine.invoke(OWNER, 'token', 'expert.run', {'operationId': operation, 'text': 'Synthetic input'}))['run']
+    await h.hub.push_to_thread(run['id'], {'type': 'error'})
+    with acquire(h.svc.store.root, exclusive=True):
+        pass
+    old = await h.engine.invoke(OWNER, 'token', 'expert.run', {'operationId': operation, 'text': 'Synthetic input'})
+    assert old['run']['id'] == run['id'] and len(h.enqueued) == 1
+    with acquire(h.svc.store.root, exclusive=True):
+        pass

@@ -1,0 +1,87 @@
+.sigma-graph-wrapper {
+  position: relative;
+  width: 100%;
+  height: 520px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 20% 30%, rgba(110,147,130,.08), transparent 60%),
+    radial-gradient(circle at 80% 70%, rgba(173,75,45,.06), transparent 55%),
+    #fafbfa;
+  border-radius: 4px;
+}
+
+.sigma-graph-empty {
+  width: 100%;
+  height: 520px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    radial-gradient(circle at 20% 30%, rgba(110,147,130,.08), transparent 60%),
+    #fafbfa;
+  border-radius: 4px;
+}
+
+.sigma-graph-legend {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, .88);
+  border: 1px solid rgba(40, 69, 58, .12);
+  border-radius: 6px;
+  font-size: 12px;
+  color: #3d5045;
+  backdrop-filter: blur(4px);
+  z-index: 10;
+  max-width: calc(100% - 24px);
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.legend-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.sigma-graph-hint {
+  position: absolute;
+  bottom: 10px;
+  right: 12px;
+  font-size: 11px;
+  color: #7a8a80;
+  pointer-events: none;
+  z-index: 10;
+  left: 12px;
+  text-align: right;
+  line-height: 1.6;
+}
+
+/* Sigma 画布占满容器 */
+.sigma-graph-wrapper > .react-sigma {
+  position: absolute;
+  inset: 0;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.react-sigma__graph-canvas {
+  display: block;
+}
+
+@media (max-width: 800px) {
+  .sigma-graph-wrapper, .sigma-graph-empty {
+    height: 380px;
+  }
+  .sigma-graph-legend { font-size: 11px; padding: 6px 10px; gap: 8px; }
+}

@@ -6,12 +6,12 @@ async function verify() {
     await app.whenReady();
     control = new BrowserWindow({ show: false, width: 900, height: 760, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } });
     control.webContents.on('console-message', event => { if(event.level === 'error') console.error(event.message); });
-    const base = new URL('../../local-ui/renderer/index.html', import.meta.url);
+    const base = new URL('../../build/app/local-ui/renderer/index.html', import.meta.url);
     const html = app.getPath('userData') + '/chat-ui-test.html';
     await writeFile(html, `<html><head><base href="${base.href}"></head><body><main id="host" style="height:100vh"></main></body></html>`);
     await control.loadFile(html);
-    for (const name of ['styles.css', 'ai-dialogue.css']) await control.webContents.insertCSS(await readFile(new URL('../../local-ui/renderer/' + name, import.meta.url), 'utf8'));
-    await control.webContents.executeJavaScript((await readFile(new URL('../../local-ui/renderer/ai-dialogue.js', import.meta.url), 'utf8'))+'\n;void 0;');
+    for (const name of ['styles.css', 'ai-dialogue.css']) await control.webContents.insertCSS(await readFile(new URL('../../build/app/local-ui/renderer/' + name, import.meta.url), 'utf8'));
+    await control.webContents.executeJavaScript((await readFile(new URL('../../build/app/local-ui/renderer/ai-dialogue.js', import.meta.url), 'utf8'))+'\n;void 0;');
     await control.webContents.executeJavaScript(`
       window.calls = []; window.scope = 'synthetic-scope'; window.channelRows=[];
       window.box = { phase:'ready', account:{phase:'authenticated',accountId:'synthetic-owner',clientId:'pc'}, connection:{deviceId:'synthetic-box',gatewayURL:'http://127.0.0.1',name:'Synthetic box'} };

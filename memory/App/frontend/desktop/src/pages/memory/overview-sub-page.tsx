@@ -76,7 +76,7 @@ export function OverviewSubPageView(props: {
   const { t } = useTranslation();
 
   return (
-    <section className="memory-page-section">
+    <section className="memory-page-section memory-overview">
       <header className="mb-5">
         <h3 className="memory-page-content-title text-base text-text-ink gap-2">
           <Layers size={18} className="text-text-ink/60" />
@@ -101,16 +101,18 @@ function OverviewContent(props: {
     <>
       <div
         data-tour-anchor={PRODUCT_TOUR_MEMORY_OVERVIEW_COUNTS_ANCHOR}
-        className="grid gap-4 mb-5"
-        style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 150px), 1fr))" }}
+        className="memory-overview__counts grid gap-4 mb-5"
+        style={{ gridTemplateColumns: "var(--memory-overview-columns, repeat(auto-fit, minmax(min(100%, 150px), 1fr)))" }}
       >
         {countCards.map((item) => (
           <CountCard key={item.id} item={item} onNavigate={props.onNavigate} />
         ))}
       </div>
 
-      <DailyActivityCard values={props.data.dailyActivity} />
-      <SourceDistributionCard values={props.data.sourceDistribution} />
+      <div className="memory-overview__charts">
+        <DailyActivityCard values={props.data.dailyActivity} />
+        <SourceDistributionCard values={props.data.sourceDistribution} />
+      </div>
     </>
   );
 }
@@ -137,17 +139,18 @@ function CountCard(props: {
       data-overview-target={props.item.targetPage}
       onClick={() => props.onNavigate(props.item.targetPage)}
       className="w-full bg-background-paper border-content-panel rounded-card p-4 flex flex-col justify-between text-left transition-all cursor-pointer hover:bg-canvas-oat/25 hover:border-action-sky/30 active:scale-[0.99] outline-none focus-visible:ring-2 focus-visible:ring-action-sky/25"
-      style={{ minHeight: 132 }}
+      style={{ minHeight: "var(--memory-overview-stat-height, 132px)" }}
+      title={t(props.item.hintKey)}
     >
-      <div className="flex items-start justify-between gap-3">
+      <div className="memory-overview__stat-label flex items-start justify-between gap-3">
         <div className="text-xs text-text-ink/60">{t(props.item.labelKey)}</div>
         <span className="w-8 h-8 rounded-card bg-action-sky/10 text-action-sky flex items-center justify-center shrink-0">
           {props.item.icon}
         </span>
       </div>
       <div>
-        <div className="text-2xl font-extrabold text-text-ink tabular-nums">{formatInteger(props.item.value)}</div>
-        <div className="mt-1 text-[11px] leading-snug text-text-ink/45">{t(props.item.hintKey)}</div>
+        <div className="memory-overview__stat-value text-2xl font-extrabold text-text-ink tabular-nums">{formatInteger(props.item.value)}</div>
+        <div className="memory-overview__stat-hint mt-1 text-[11px] leading-snug text-text-ink/45">{t(props.item.hintKey)}</div>
       </div>
     </button>
   );
@@ -311,7 +314,7 @@ function SourceDistributionCard(props: { values: PanelOverviewOutput["sourceDist
       <div>
         {props.values.length === 0 && <div className="text-sm text-text-ink/55">{t("memory.overview.empty")}</div>}
         {props.values.length > 0 && (
-          <div className="space-y-3.5">
+          <div className="memory-overview__sources space-y-3.5">
             {props.values.map((item, index) => (
               <div
                 key={item.source}

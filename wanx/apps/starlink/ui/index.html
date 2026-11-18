@@ -1,0 +1,650 @@
+<!doctype html>
+<html lang="zh-CN" data-palette="centaur">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; frame-src 'self'; base-uri 'none'; form-action 'none'"
+    />
+    <title>万象·星图  WanX·Starlink</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="onboarding.css" />
+    <link rel="stylesheet" href="warehouse-preview.css" />
+    <link rel="stylesheet" href="conversation.css" />
+    <link rel="stylesheet" href="material-workspace.css" />
+    <link rel="stylesheet" href="graph-workspace.css" />
+    <link rel="stylesheet" href="starlink-structure.css" />
+    <link rel="stylesheet" href="subpages.css" />
+    <link rel="stylesheet" href="onboarding-workspace.css" />
+  </head>
+  <body>
+    <div class="app starlink-module graph-workspace" id="app">
+      <aside class="sidebar starlink-rail" id="starlink-rail" aria-label="星图分区">
+        <div class="starlink-rail-heading">
+          <button type="button" class="icon-btn mobile-close" data-action="nav" aria-label="收起星图导航" data-icon="close"></button>
+        </div>
+        <div class="starlink-rail-group">
+          <p class="nav-group-label" id="starlink-browse">探索</p>
+          <nav class="nav-list" aria-labelledby="starlink-browse">
+            <button type="button" class="nav-item" data-view="graph" aria-current="page">
+              <span data-icon="network"></span><span>知识星图</span>
+            </button>
+            <button type="button" class="nav-item" data-view="search"><span data-icon="search"></span><span>知识检索</span></button>
+          </nav>
+        </div>
+        <div class="starlink-rail-group">
+          <p class="nav-group-label" id="starlink-materials">资料处理</p>
+          <nav class="nav-list" aria-labelledby="starlink-materials">
+            <button type="button" class="nav-item" data-view="conversation"><span data-icon="files"></span><span>资料库</span></button>
+            <button type="button" class="nav-item" data-view="tasks"><span data-icon="activity"></span><span>处理任务</span><span id="task-count" class="starlink-rail-counter" hidden></span></button>
+          </nav>
+        </div>
+        <div class="starlink-rail-group">
+          <p class="nav-group-label" id="starlink-ontology">本体与关系</p>
+          <nav class="nav-list" aria-labelledby="starlink-ontology">
+            <button type="button" class="nav-item" data-view="ontology" data-ontology-action="published"><span data-icon="network"></span><span>规则总览</span></button>
+          </nav>
+        </div>
+        <div class="starlink-rail-group">
+          <p class="nav-group-label" id="starlink-manage">管理</p>
+          <nav class="nav-list" aria-labelledby="starlink-manage">
+            <button type="button" class="nav-item" data-view="warehouses"><span data-icon="folder"></span><span>数据仓</span></button>
+            <button type="button" class="nav-item" data-view="models"><span data-icon="list"></span><span>模型设置</span></button>
+          </nav>
+        </div>
+        <div class="starlink-rail-status"><span id="connection-dot" class="dot"></span><span id="connection-title">等待盒子连接</span></div>
+      </aside>
+      <button type="button" class="starlink-rail-scrim" tabindex="-1" data-action="nav" aria-label="收起星图导航"></button>
+      <main class="main" id="content">
+        <header class="topbar">
+          <div class="crumb">
+            <button
+              class="icon-btn mobile-toggle"
+              data-action="nav"
+              aria-label="星图导航" aria-controls="starlink-rail" aria-expanded="false"
+              data-icon="menu"
+            ></button
+            ><span data-icon="folder"></span
+            ><button id="crumb-warehouse" data-action="choose-warehouse" aria-haspopup="dialog">我的数据仓</button><span id="crumb-separator">/</span
+            ><strong id="crumb-current">知识图谱</strong>
+          </div>
+          <div class="graph-workspace-links">
+            <button type="button" class="graph-nav-import" data-action="import"><span data-icon="plus"></span>导入资料</button>
+            <button type="button" class="icon-btn graph-nav-help" data-action="help" aria-label="星图操作说明" data-icon="help"></button>
+          </div>
+          <div class="top-actions">
+            <span class="preview-label"
+              ><span class="dot"></span
+              ><span id="connection-label">连接中</span></span
+            ><button
+              class="icon-btn"
+              data-action="help"
+              aria-label="使用说明"
+              data-icon="help"
+            ></button
+            ><span class="avatar" id="user-avatar" title="当前万象用户"
+              >我</span
+            >
+          </div>
+        </header>
+        <div class="page-scroll">
+          <div class="page-content">
+            <div
+              class="connection-notice"
+              id="connection-notice"
+              role="status"
+              hidden
+            ></div>
+            <div class="page-heading">
+              <div>
+                <p class="page-kicker" id="page-kicker">
+                  EXPLORE YOUR KNOWLEDGE
+                </p>
+                <h1 id="page-title">知识图谱</h1>
+                <p class="description" id="page-description">
+                  把你的资料，连成可追溯、可调用的知识。
+                </p>
+              </div>
+              <div class="heading-actions">
+                <details id="ontology-actions" class="ontology-actions" hidden>
+                  <summary class="btn btn-secondary">规则操作 <span aria-hidden="true" data-icon="chevron"></span></summary>
+                  <div class="ontology-actions-list">
+                    <button type="button" data-ontology-action="assistant">对话调整</button>
+                    <button type="button" data-ontology-action="drafts">待发布草稿</button>
+                    <button type="button" data-action="update-warehouse-rules" hidden>规则调整向导</button>
+                  </div>
+                </details>
+                <button class="btn btn-secondary" id="page-ontology-suggestions" data-ontology-action="suggestions" hidden>从资料生成本体建议</button>
+                <button class="btn btn-secondary" id="page-batch-import" data-action="import-batch" hidden>批量导入</button>
+                <button
+                  class="btn btn-secondary secondary-heading"
+                  id="page-secondary"
+                  data-action="reset-graph"
+                >
+                  <span data-icon="expand"></span>返回全图</button
+                ><button class="btn btn-primary" id="page-primary" data-action="import">
+                  <span data-icon="plus"></span>导入材料
+                </button>
+              </div>
+            </div>
+            <section class="view" id="onboarding-shell" aria-label="数据仓设置" hidden></section>
+            <section class="view" id="view-warehouses" hidden aria-label="数据仓总览">
+              <div class="connection-notice" id="onboarding-resume" hidden><span>上次建仓或规则发布有待确认的操作。</span><button class="text-link" data-action="resume-onboarding">继续原操作</button></div>
+              <div class="warehouse-directory-summary" id="warehouse-directory-summary"></div>
+              <div class="warehouse-directory-toolbar">
+                <h2>仓库清单 <span id="warehouse-directory-count" class="mono">0</span></h2>
+                <div class="warehouse-directory-tools"><label class="warehouse-find"><span data-icon="search"></span><input id="warehouse-query" type="search" placeholder="搜索仓名或说明" aria-label="搜索数据仓" /></label><button class="btn btn-secondary" data-action="new-warehouse"><span data-icon="plus"></span>新建数据仓</button><button class="icon-btn" data-action="refresh" aria-label="刷新数据仓" data-icon="activity"></button></div>
+              </div>
+              <div id="warehouse-directory" class="warehouse-directory-grid"></div>
+              <div class="warehouse-directory-empty" id="warehouse-directory-empty" hidden></div>
+            </section>
+            <section class="view" id="view-conversation" hidden aria-label="资料库"></section>
+            <section class="view integrated-workbench-view" id="view-workbench" hidden aria-label="知识管理页面"></section>
+            <section
+              class="view"
+              id="view-graph"
+              data-od-id="knowledge-network"
+              aria-label="知识图谱"
+            >
+              <div class="graph-context" hidden>
+                <strong id="graph-warehouse">知识图谱</strong><span id="graph-model"></span>
+              </div>
+              <div class="network-layout">
+                <div class="graph-controls">
+                  <div class="graph-toolbar">
+                    <div class="graph-entity-search">
+                      <label class="graph-search">
+                        <span data-icon="search"></span><input id="graph-query" type="search" aria-label="查找图中实体" placeholder="搜索图中实体" autocomplete="off" aria-controls="graph-suggestions" /><kbd>⌘ K</kbd>
+                      </label>
+                      <div id="graph-suggestions" class="graph-suggestions" hidden></div>
+                    </div>
+                    <details class="graph-filter-menu">
+                      <summary><span data-icon="list"></span>更多筛选<span class="graph-filter-count" id="graph-filter-count" hidden></span></summary>
+                      <div class="graph-filter-card">
+                        <div class="graph-lens-bar">
+                          <div class="graph-density segmented" aria-label="图谱显示范围">
+                            <button data-graph-density="overview" class="active" aria-pressed="true">知识概览</button>
+                            <button data-graph-density="all" aria-pressed="false">全部实体</button>
+                          </div>
+                          <label class="graph-isolated-toggle" for="graph-show-isolated"><span>显示孤立节点</span><input id="graph-show-isolated" type="checkbox" role="switch" /></label>
+                        </div>
+                        <div class="graph-reference-note" id="graph-reference-note" hidden>概览已收起 <span id="graph-reference-count">0</span> 个原文编号节点。可搜索或查看全部实体。</div>
+                      </div>
+                    </details>
+                    <div class="segmented graph-mode" aria-label="星图显示方式">
+                      <button class="active" data-mode="graph" aria-pressed="true" title="3D 视图"><span data-icon="network"></span><span>3D</span></button>
+                      <button data-mode="list" aria-pressed="false" title="关系列表"><span data-icon="list"></span><span>列表</span></button>
+                    </div>
+                  </div>
+                  <div class="graph-type-bar" role="group" aria-labelledby="graph-types-label">
+                    <span id="graph-types-label">实体类型</span>
+                    <div class="graph-filters" id="graph-filters"></div>
+                  </div>
+                </div>
+                <div class="panel network-panel">
+                  <div class="graph-focus" id="graph-focus" hidden>
+                    <span id="graph-scope-summary" aria-live="polite"></span>
+                    <button class="text-link" id="graph-focus-back" data-action="leave-graph-focus" hidden>返回全图 <span data-icon="arrow"></span></button>
+                  </div>
+                  <div class="graph-space" id="graph-space">
+                    <svg
+                      id="graph-svg"
+                      class="graph-svg"
+                      viewBox="0 0 800 540"
+                      role="group"
+                      aria-label="知识图谱，立体视图"
+                    >
+                      <defs>
+                        <pattern
+                          id="dots"
+                          width="22"
+                          height="22"
+                          patternUnits="userSpaceOnUse"
+                        >
+                          <circle
+                            cx="1"
+                            cy="1"
+                            r=".65"
+                            fill="var(--border)"
+                            opacity=".7"
+                          />
+                        </pattern>
+                        <marker
+                          id="arrow"
+                          markerWidth="7"
+                          markerHeight="7"
+                          refX="6"
+                          refY="3.5"
+                          orient="auto"
+                        >
+                          <path
+                            d="M1 1 L5 3.5 L1 6"
+                            fill="none"
+                            stroke="var(--muted)"
+                            stroke-width=".7"
+                          />
+                        </marker>
+                        <marker
+                          id="arrow-selected"
+                          markerWidth="7"
+                          markerHeight="7"
+                          refX="6"
+                          refY="3.5"
+                          orient="auto"
+                        >
+                          <path
+                            d="M1 1 L5 3.5 L1 6"
+                            fill="none"
+                            stroke="var(--accent)"
+                            stroke-width="1"
+                          />
+                        </marker>
+                      </defs>
+                      <rect width="100%" height="100%" fill="url(#dots)" />
+                      <g id="graph-scene"></g>
+                    </svg>
+                    <div class="graph-no-results" id="graph-empty" hidden>
+                      <span class="graph-empty-symbol" data-icon="network" aria-hidden="true"></span>
+                      <strong id="graph-empty-title"></strong>
+                      <p id="graph-empty-message"></p>
+                      <button type="button" class="btn btn-secondary" id="graph-empty-action" hidden></button>
+                    </div>
+                    <div class="graph-tools">
+                      <button class="icon-btn" data-action="graph-rotate-left" aria-label="向左旋转知识图谱" title="向左旋转">↶</button>
+                      <button class="icon-btn" data-action="graph-rotate-right" aria-label="向右旋转知识图谱" title="向右旋转">↷</button>
+                      <span class="tool-sep"></span>
+                      <button
+                        class="icon-btn"
+                        data-action="zoom-in"
+                        aria-label="放大关系图"
+                        data-icon="plus"
+                      ></button
+                      ><output id="zoom-label">100%</output
+                      ><button
+                        class="icon-btn"
+                        data-action="zoom-out"
+                        aria-label="缩小关系图"
+                        data-icon="minus"
+                      ></button
+                      ><span class="tool-sep"></span
+                      ><button
+                        class="icon-btn"
+                        data-action="fit"
+                        aria-label="适应画布"
+                        data-icon="expand"
+                      ></button>
+                    </div>
+                    <span class="graph-hint">拖动旋转 · 滚轮缩放</span>
+                  </div>
+                  <div class="relation-list" id="relation-list" hidden></div>
+                  <div class="graph-footer">
+                    <div class="tally">
+                      <span><b class="mono" id="nodes-total">0</b> 个实体</span
+                      ><span><b class="mono" id="edges-total">0</b> 条关系</span
+                      ><span
+                        ><b class="mono" id="source-count">0</b> 份材料</span
+                      >
+                    </div>
+
+                  </div>
+                </div>
+                <aside class="panel detail-panel graph-inspector" aria-label="实体关系与来源" hidden>
+                  <header class="graph-inspector-bar"><div id="graph-inspector-trail" class="graph-inspector-trail" aria-label="图谱详情位置"></div><button type="button" class="icon-btn" data-action="close-graph-details" data-icon="close" aria-label="收起实体详情"></button></header>
+                  <div id="graph-details"></div>
+                </aside>
+              </div>
+            </section>
+            <section class="view" id="view-skills" hidden aria-label="Skill 管理">
+              <div class="panel skill-intro"><p class="eyebrow">METHODS FOR YOUR KNOWLEDGE</p><h2>把好方法，放进你的数据仓。</h2><p>导入 Skill ZIP，保留方法和引用文件的完整结构。星图负责保管与授权，其他 AI 应用按需读取并执行分析。</p><p class="muted">仅属于当前账号、当前设备的这个数据仓。每包一个 Skill，最多 4 MiB；脚本仅保存为文本，不会执行。</p><button class="btn btn-primary" id="skill-import">导入 Skill ZIP</button><span id="skill-notice" role="status"></span></div>
+              <div class="native-skills-layout"><aside class="panel"><form id="skill-filter"><label>查找 Skill<input id="skill-keyword" placeholder="名称或说明" /></label><button class="btn btn-secondary">查找</button></form><div id="skill-list"></div><div class="native-pager"><button class="text-link" id="skill-prev">上一页</button><span id="skill-total"></span><button class="text-link" id="skill-next">下一页</button></div></aside><article class="panel" id="skill-detail"><p class="detail-empty">选择方法，查看文件目录与内容。</p></article></div>
+            </section>
+            <dialog id="skill-delete-dialog"><h2>删除当前 Skill</h2><p id="skill-delete-description"></p><p>方法文件与发布版本将删除，相关准备记录立即失效。材料不会删除。</p><label>输入完整方法名称确认<input id="skill-delete-name" autocomplete="off" /></label><label><input id="skill-delete-dependents" type="checkbox" />同时允许本仓依赖此方法的其他 Skill 失效</label><div class="modal-actions"><button class="btn btn-secondary" id="skill-delete-cancel">取消</button><button class="btn btn-primary" id="skill-delete-confirm" disabled>确认删除 Skill</button></div></dialog>
+            <section class="view" id="view-models" hidden aria-label="模型设置">
+              <div id="model-onboarding" class="model-overview-toolbar" hidden>
+                <p id="model-onboarding-budget"></p><button type="button" class="btn btn-secondary" id="model-onboarding-return">返回建仓对话</button>
+              </div>
+              <div class="model-overview-toolbar">
+                <label>查看范围<select id="model-scope"><option value="warehouse">当前数据仓</option><option value="default">星图默认配置</option></select></label>
+                <div class="actions"><button class="btn btn-secondary" id="model-refresh">刷新状态</button><button class="text-link" id="model-manage">在万象管理模型 ↗</button></div>
+              </div>
+              <div id="model-status" role="status" class="model-status"></div>
+              <section class="panel model-role-list" aria-labelledby="model-roles-title">
+                <div class="subpage-card-heading"><h2 id="model-roles-title">当前生效模型</h2><p id="model-context" class="muted"></p></div>
+                <div id="model-stages" class="model-stages"></div>
+              </section>
+              <details class="panel model-editor">
+                <summary>编辑模型配置</summary>
+                <div class="model-config-fields">
+                  <label id="model-inherit-label" class="model-inherit-setting"><input type="checkbox" id="model-inherit">继承星图默认配置</label>
+                  <label id="model-mode-label">模型选择方式<select id="model-mode"><option value="automatic">跟随万象默认模型</option><option value="manual">手动指定模型</option></select></label>
+                  <div id="model-selectors"><label>知识抽取与脱敏模型<select id="model-extraction"></select></label></div>
+                  <div id="model-thinking-controls"><label>思考模式<select id="model-thinking"><option value="auto">沿用模型默认设置</option></select></label><p id="model-thinking-note" class="detail-note"></p></div>
+                </div>
+                <p id="model-impact" class="detail-note"></p>
+                <div class="actions"><button class="btn btn-primary" id="model-save" disabled>检查并保存</button><span id="model-save-status" role="status"></span></div>
+              </details>
+              <details class="panel model-editor">
+                <summary>重新处理资料</summary>
+                <div class="model-reprocess"><p>每份材料处理成功后替换对应的知识关系。</p><button class="btn btn-secondary" id="model-reprocess-all">重新处理当前仓全部材料</button></div>
+              </details>
+            </section>
+            <section class="view" id="view-data" hidden aria-label="数据仓管理">
+              <div class="warehouse-overview panel">
+                <div>
+                  <p class="eyebrow">YOUR LOCAL KNOWLEDGE WAREHOUSE</p>
+                  <h2 id="manage-name">数据仓</h2>
+                  <p id="manage-status" class="modal-warning" hidden></p>
+                  <p id="manage-description">
+                    你的原始资料、正文版本与知识来源，属于同一个数据仓。
+                  </p>
+                </div>
+                <div class="warehouse-stats" id="warehouse-stats" aria-live="polite"></div>
+              </div>
+              <div class="management-grid">
+                <article class="panel manage-card">
+                  <span class="manage-icon" data-icon="activity"></span>
+                  <p class="eyebrow">PROCESSING MODELS</p>
+                  <h2>模型可见，处理可控。</h2>
+                  <p>
+                    资料通过万象当前连接传入本机或盒子，按当前配置抽取知识，并使用检索向量模型建立索引。
+                  </p>
+                  <button class="text-link" data-view="models">查看与配置处理模型 →</button>
+                  <div id="runtime-summary" class="runtime-summary">
+                    正在读取处理模型配置
+                  </div>
+                  <button class="text-link" data-view="tasks">
+                    查看处理任务 →
+                  </button>
+                  <p class="detail-note">
+                    历史资料保留其原有处理记录，新导入资料使用当前配置。
+                  </p>
+                </article>
+              </div>
+              <div class="danger-zone">
+                <div>
+                  <p class="eyebrow">CLEAR THIS WAREHOUSE</p>
+                  <h2>清空数据仓</h2>
+                  <p>
+                    移除当前仓内的全部材料、正文、知识关系和检索索引，并撤销其访问凭证。数据仓本身会保留，可重新导入资料。
+                  </p>
+                </div>
+                <button
+                  class="btn btn-danger-outline"
+                  data-action="prepare-clear"
+                >
+                  清空当前数据仓
+                </button>
+              </div>
+              <div class="danger-zone">
+                <div>
+                  <p class="eyebrow">DELETE THIS WAREHOUSE</p>
+                  <h2>删除数据仓</h2>
+                  <p>永久移除当前数据仓及仓内全部资料、知识和索引，并撤销访问凭证。删除后将从数据仓列表移除，其他数据仓不受影响。</p>
+                </div>
+                <button class="btn btn-danger-outline" data-action="prepare-delete">删除当前数据仓</button>
+              </div>
+            </section>
+            <section
+              class="view search-home"
+              id="view-search"
+              data-od-id="evidence-search"
+              hidden
+            >
+              <form id="search-form" class="query-box">
+                <div class="query-input-row">
+                <textarea
+                  id="search-query"
+                  aria-label="检索问题"
+                  placeholder="输入问题或关键词，查找材料里有依据的信息…"
+                  rows="2"
+                  required
+                  maxlength="2000"
+                ></textarea>
+                <button class="btn btn-primary" type="submit"><span data-icon="search"></span>检索证据</button>
+                </div>
+                <div class="search-index-state" id="search-index-state" role="status">正在读取检索索引状态</div>
+              </form>
+              <div id="search-results" aria-live="polite"></div>
+            </section>
+            <section
+              class="view"
+              id="view-tasks"
+              data-od-id="processing-tasks"
+              hidden
+            >
+              <div class="panel">
+                <div class="table-toolbar task-toolbar">
+                  <div><strong>最近任务</strong> <span class="muted mono" id="jobs-label">0</span><span id="jobs-page-summary"></span></div>
+                  <div class="task-toolbar-actions">
+                    <button class="btn btn-secondary" data-action="import"><span data-icon="plus"></span>导入资料</button>
+                    <button class="btn btn-secondary" data-action="refresh">刷新任务</button>
+                  </div>
+                </div>
+                <div id="tasks-body"></div>
+                <div class="list-pager" id="jobs-pager" hidden></div>
+              </div>
+              <div class="page-footnote">
+                <span
+                  ><span data-icon="info"></span
+                  >正文、检索索引和知识入图分别显示各自的处理进度。</span
+                >
+              </div>
+            </section>
+            <section
+              class="view"
+              id="view-sensitive"
+              data-od-id="delivery-protection"
+              hidden
+            >
+              <div class="settings-grid">
+                <div class="panel settings-body">
+                  <h2>交付保护</h2>
+                  <div class="setting-row">
+                    <div>
+                      <strong>启用交付脱敏</strong>
+                      <p>
+                        在证据检索与对外知识调用中，根据规则处理敏感内容。本人浏览数据仓图谱时显示真实实体与来源。
+                      </p>
+                    </div>
+                    <button
+                      class="switch"
+                      role="switch"
+                      aria-checked="true"
+                      aria-label="启用交付脱敏"
+                      data-setting="protection"
+                    ></button>
+                  </div>
+                  <div class="setting-row">
+                    <div>
+                      <strong>使用 LLM 识别语义敏感信息</strong>
+                      <p>与知识抽取共用模型连接。检测未完成的内容暂缓交付。</p>
+                    </div>
+                    <button
+                      class="switch"
+                      role="switch"
+                      aria-checked="true"
+                      aria-label="使用LLM识别语义敏感信息"
+                      data-setting="semantic"
+                    ></button>
+                  </div>
+                  <div id="sensitive-rules"></div>
+                  <div class="section-caption" hidden style="margin-top: 25px">
+                    <span>当前工作空间规则</span
+                    ><span class="muted">命中后自动处理</span>
+                  </div>
+                  <p class="modal-warning">
+                    开关保存后由盒端安排检测。检测未完成或失败的内容不会被当作已安全交付。
+                  </p>
+                </div>
+                <aside class="settings-note">
+                  <p class="eyebrow">KNOWLEDGE, WITH BOUNDARIES</p>
+                  <h3>让知识流动，也保留边界</h3>
+                  <p>先完成材料处理和敏感识别，再交付符合规则的知识与证据。</p>
+                  <div class="flow-list">
+                    <div class="flow-item">
+                      <span>01</span><span>解析材料与来源</span>
+                    </div>
+                    <div class="flow-item">
+                      <span>02</span><span>检测需要保护的内容</span>
+                    </div>
+                    <div class="flow-item">
+                      <span>03</span><span>按规则交付结果</span>
+                    </div>
+                  </div>
+                </aside>
+              </div>
+            </section>
+          </div>
+        </div>
+      </main>
+    </div>
+    <dialog id="import-dialog" aria-labelledby="import-title">
+      <div class="modal-head">
+        <h2 id="import-title">导入材料</h2>
+        <button
+          class="icon-btn"
+          data-close="import-dialog"
+          aria-label="关闭导入"
+          data-icon="close"
+        ></button>
+      </div>
+      <div class="import-body">
+        <p class="modal-intro" id="import-intro">
+          材料将导入当前数据仓，按所选模型配置整理为可追溯的知识。
+        </p>
+        <div class="import-context" id="import-context"></div>
+        <div class="import-tabs" role="group" aria-label="材料来源">
+          <button class="btn btn-secondary active" id="source-space" aria-pressed="true">从万象空间选择</button>
+          <button class="btn btn-secondary" id="source-computer" aria-pressed="false">从电脑选择</button>
+        </div>
+        <button class="text-link" id="import-link-existing" type="button" hidden>关联当前仓已有材料</button>
+        <section id="space-browser" aria-label="万象空间文件选择">
+          <div class="space-toolbar">
+            <nav id="space-breadcrumbs" aria-label="万象空间文件夹"></nav>
+            <button class="text-link" id="space-refresh">刷新</button>
+          </div>
+          <input id="space-query" class="space-query" type="search" maxlength="300" placeholder="按文件名、标签或说明筛选…" aria-label="按文件名、标签或说明筛选" />
+          <button class="text-link" id="space-search-descendants" type="button" hidden>搜索子文件夹</button>
+          <button class="text-link" id="space-select-visible" type="button" hidden></button>
+          <div id="space-status" role="status" aria-live="polite"></div>
+          <div id="space-entries" class="space-entries" aria-label="万象空间文件"></div>
+          <button class="text-link" id="space-load-more" type="button" hidden>加载更多匹配文件</button>
+        </section>
+        <div class="drop-zone" id="computer-browser" hidden>
+          <span data-icon="upload"></span>
+          <p><button class="text-link" id="choose-files">选择电脑文件</button></p>
+          <small>文件将复制到当前数据仓，原文件保持不变。</small>
+        </div>
+        <p id="import-formats" class="import-formats">正在读取支持的格式与大小限制</p>
+        <div class="import-selection-heading"><strong id="import-selection-count">已选 0 份材料</strong><span id="import-selection-hint">可跨文件夹选择</span></div>
+        <div class="import-model"><p id="import-model-summary" class="muted">正在读取处理模型…</p><button class="text-link" id="import-model-config" type="button">配置模型与处理 ↗</button></div>
+        <div class="file-list" id="file-list" aria-live="polite"></div>
+        <label id="import-note-field" class="import-note-field" hidden>材料说明（选填）<textarea id="import-note" rows="2" maxlength="8000" placeholder="例如：重点关注付款与违约责任。"></textarea></label>
+        <p id="import-error" role="alert" class="modal-warning" hidden></p>
+        <p class="modal-warning" id="import-warning">
+          点击“导入并处理”后读取文件副本，由模型整理。万象空间原文件保持不变；后续修改不会自动同步。
+        </p>
+      </div>
+      <div class="modal-actions import-footer">
+        <p id="import-batch-status" class="small" role="status" hidden></p>
+        <button class="btn btn-secondary" data-close="import-dialog" id="import-close">
+          取消</button
+        ><button class="btn btn-primary" id="confirm-import" disabled>
+          导入并处理
+        </button>
+      </div>
+    </dialog>
+    <dialog
+      class="source-modal"
+      id="source-dialog"
+      aria-labelledby="source-title"
+    >
+      <div class="modal-head">
+        <h2 id="source-title">材料来源</h2>
+        <button
+          class="icon-btn"
+          data-close="source-dialog"
+          aria-label="关闭来源"
+          data-icon="close"
+        ></button>
+      </div>
+      <div id="source-body"></div>
+      <div class="modal-actions" id="source-actions"></div>
+    </dialog>
+    <dialog id="help-dialog" aria-labelledby="help-title">
+      <div class="modal-head">
+        <h2 id="help-title">从材料到有据可查的知识</h2>
+        <button
+          class="icon-btn"
+          data-close="help-dialog"
+          aria-label="关闭说明"
+          data-icon="close"
+        ></button>
+      </div>
+      <p class="modal-intro">半人马·万象·星图  WanX·Starlink</p>
+      <p class="modal-intro">让知识相连，让发现有据。</p>
+      <div class="help-grid">
+        <div class="help-item">
+          01 &nbsp; 对话整理材料
+          <p>上传或关联材料，通过对话确认目标，再核对本体、抽取计划和材料知识。</p>
+        </div>
+        <div class="help-item">
+          02 &nbsp; 知识图谱
+          <p>
+            点击节点查看相关关系，点击连线查看来源。可筛选、搜索、缩放与拖动画布。
+          </p>
+        </div>
+        <div class="help-item">
+          03 &nbsp; 证据检索
+          <p>组合向量、关键词和知识关系查找证据，打开来源核对。</p>
+        </div>
+      </div>
+      <p class="modal-warning">
+        账号与盒子连接由万象管理。切换盒子、断开或退出账号后，本应用会清空当前页面，请从万象重新打开。
+      </p>
+    </dialog>
+    <dialog id="warehouse-picker" class="warehouse-picker" aria-labelledby="warehouse-picker-title">
+      <div class="modal-head"><div><p class="eyebrow">YOUR KNOWLEDGE SPACES</p><h2 id="warehouse-picker-title">切换数据仓</h2></div><button class="icon-btn" data-close="warehouse-picker" aria-label="关闭数据仓切换" data-icon="close"></button></div>
+      <p class="modal-intro">选择一座数据仓，继续探索它的资料与知识。</p>
+      <label class="warehouse-find"><span data-icon="search"></span><input id="warehouse-picker-query" type="search" placeholder="输入仓名或说明，快速找到它" aria-label="搜索要切换的数据仓" /></label>
+      <div id="warehouse-picker-list" class="warehouse-picker-list"></div>
+      <p class="warehouse-picker-empty" id="warehouse-picker-empty" hidden>没有找到匹配的数据仓。</p>
+      <div class="warehouse-picker-footer"><button class="text-link" data-action="all-warehouses">查看全部数据仓<span data-icon="arrow"></span></button><button class="btn btn-secondary" data-action="new-warehouse"><span data-icon="plus"></span>新建数据仓</button></div>
+    </dialog>
+    <dialog id="clear-dialog" aria-labelledby="clear-title">
+      <div class="modal-head">
+        <h2 id="clear-title">清空当前数据仓？</h2>
+        <button
+          class="icon-btn"
+          data-close="clear-dialog"
+          aria-label="取消清空"
+          data-icon="close"
+        ></button>
+      </div>
+      <div id="clear-scope"></div>
+      <div id="clear-second" hidden>
+        <label class="field-label" for="clear-name"
+          >请输入完整数据仓名称以确认</label
+        ><input
+          class="form-input"
+          id="clear-name"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <p class="danger-copy">
+          此操作无法撤销。确认前请先导出需要保留的资料。
+        </p>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" data-close="clear-dialog">
+          保留数据</button
+        ><button class="btn btn-danger" id="clear-next">继续确认</button>
+      </div>
+    </dialog>
+    <div class="toast" id="toast" role="status" hidden></div>
+
+    <script type="module" src="panel-host.js"></script>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

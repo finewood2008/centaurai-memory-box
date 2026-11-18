@@ -47,7 +47,7 @@ async function fixture(t, agent = "gemini") {
   const memory = createMyAiMemoryAccess({ runtimeFile, async request(url, options) {
     assert.equal(options.headers["x-memmy-local-token"], "fixture-token");
     const body = options.body && JSON.parse(options.body);
-    requests.push({ path: url.pathname, body });
+    requests.push({ path: url.pathname, body, ...(url.search && { query: Object.fromEntries(url.searchParams) }) });
     if (url.pathname === "/api/v1/health") return Response.json({ ok: healthy, storage: { ready: healthy } });
     if (url.pathname === "/api/v1/memory/add") {
       const previous = memories.get(body.requestId);
@@ -56,8 +56,18 @@ async function fixture(t, agent = "gemini") {
       memories.set(body.requestId, result);
       return Response.json({ id: result.id, duplicate: Boolean(previous) });
     }
-    if (url.pathname === "/api/v1/memory/search") return Response.json({ debug: { hits: [{ id: "memory_1", title: "Fixture" }] } });
-    return Response.json({ item: { id: url.pathname.split("/").at(-1), body: "Fixture memory" } });
+    if (url.pathname === "/api/v1/agent-sources") return Response.json({ sources: [
+      { sourceId: "claude_code", displayName: "Claude Code", available: true },
+      { sourceId: "gemini", displayName: "Gemini CLI", available: true },
+    ] });
+    if (url.pathname === "/api/v1/panel/items") {
+      const source = url.searchParams.get("sourceAgent");
+      return Response.json({ items: [{ id: source === "claude_code" ? "memory_claude" : "memory_1", title: "Fixture" }] });
+    }
+    if (url.pathname === "/api/v1/memory/search") return Response.json({ debug: { hits: [{ id: "memory_1", title: "Fixture" }, { id: "memory_claude", title: "Claude" }] } });
+    const id = url.pathname.split("/").at(-1);
+    return Response.json({ item: { id, body: "Fixture memory", status: "activated",
+      metadata: { source: id === "memory_claude" ? "claude-code" : "gemini" } } });
   } });
   const sources = {
     async validate(folderId, warehouseId, check) {
@@ -95,6 +105,30 @@ async function fixture(t, agent = "gemini") {
     data(reply) { assert.notEqual(reply.isError, true, reply.content?.[0]?.text); return JSON.parse(reply.content[0].text); },
   };
 }
+
+test("a task can read one Agent's memory or all Agents without changing the save owner", async t => {
+  const h = await fixture(t);
+  assert.deepEqual((await h.access.memoryCatalog(h.check)).agents.map(source => source.id), ["claude_code", "gemini"]);
+  const chosen = { memoryEnabled: true, memoryAgent: "claude_code" };
+  await h.access.selection(h.agent, chosen, h.check);
+  assert.deepEqual((await h.access.selection(h.agent, undefined, h.check)).selection, chosen);
+  await h.access.connect(h.agent, h.check);
+  const context = h.access.context(h.agent);
+  const onlyClaude = await context.prepare(chosen, h.check);
+  const scoped = h.data(await h.call("memory_search", { query: "Fixture", task_id: onlyClaude.taskId }));
+  assert.deepEqual(scoped.memoryIds, ["memory_claude"]);
+  assert.equal(h.requests.find(request => request.path === "/api/v1/panel/items").query.sourceAgent, "claude_code");
+  assert.equal((await h.call("memory_read", { memoryId: "memory_1", task_id: onlyClaude.taskId })).isError, true);
+  assert.equal(h.data(await h.call("memory_read", { memoryId: "memory_claude", task_id: onlyClaude.taskId })).body, "Fixture memory");
+  h.data(await h.call("memory_save", { content: "Save through Gemini.", task_id: onlyClaude.taskId }));
+  assert.equal(h.requests.find(request => request.path === "/api/v1/memory/add").body.source, h.agent);
+
+  const allAgents = await context.prepare({ memoryEnabled: true, memoryAgent: null }, h.check);
+  const all = h.data(await h.call("memory_search", { query: "Fixture", task_id: allAgents.taskId }));
+  assert.deepEqual(all.matches.map(hit => hit.memoryId), ["memory_1", "memory_claude"]);
+  assert.equal(h.requests.find(request => request.path === "/api/v1/memory/search").body.source, undefined);
+  assert.equal(h.data(await h.call("memory_read", { memoryId: "memory_1", task_id: allAgents.taskId })).body, "Fixture memory");
+});
 
 test("configuration is not reported as client loading or successful retrieval; selected scope is enforced", async t => {
   const h = await fixture(t);

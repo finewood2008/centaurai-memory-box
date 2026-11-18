@@ -1,6 +1,6 @@
 {
   "name": "centuarai-wanx-client",
-  "version": "1.0.6",
+  "version": "1.5.1",
   "private": true,
   "license": "UNLICENSED",
   "type": "module",
@@ -14,22 +14,22 @@
     "build:network:all": "node tools/build-network.mjs --all",
     "build:discovery": "node tools/build-discovery.mjs",
     "build:memory": "node tools/build-memory.mjs",
-    "prestart": "npm run build:memory && npm run build:studio && node tools/ensure-network.mjs && node tools/build-discovery.mjs && node tools/build-maintenance.mjs && node tools/build-clipboard.mjs",
+    "prestart": "npm run build:studio && npm run build:memory && npm run build:renderer && node tools/ensure-network.mjs && node tools/build-discovery.mjs && node tools/build-maintenance.mjs && node tools/build-clipboard.mjs",
     "start": "node tools/start-desktop.mjs",
     "prestart:local": "npm run prestart",
     "start:local": "node tools/start-local.mjs",
-    "pretest": "npm run build:studio",
+    "pretest": "npm run build:studio && npm run build:renderer",
     "test": "node --test --test-concurrency=4 tests/*.test.mjs",
-    "test:native": "cd native && go test ./...",
+    "test:native": "node tools/test-network.mjs",
     "package:mac": "node tools/build-network.mjs darwin-arm64 darwin-x64 && node tools/build-discovery.mjs darwin-arm64 darwin-x64 && node tools/build-clipboard.mjs arm64 x64 && electron-builder --mac --dir",
     "package:windows": "node tools/build-network.mjs win32-x64 win32-arm64 && node tools/build-discovery.mjs win32-x64 && electron-builder --win nsis",
-    "build:renderer": "npm run build:studio && esbuild local-ui/renderer/device-setup-entry.ts --bundle --format=iife --platform=browser --preserve-symlinks --tsconfig=tools/renderer-tsconfig.json --outfile=local-ui/renderer/device-setup.bundle.js && esbuild local-ui/renderer/wallet-entry.mjs --bundle --format=iife --platform=browser --preserve-symlinks --tsconfig=tools/renderer-tsconfig.json --outfile=local-ui/renderer/wallet.bundle.js",
+    "build:renderer": "esbuild local-ui/renderer/device-setup-entry.ts --bundle --format=iife --platform=browser --preserve-symlinks --tsconfig=tools/renderer-tsconfig.json --outfile=build/app/local-ui/renderer/device-setup.bundle.js && esbuild local-ui/renderer/wallet-entry.mjs --bundle --format=iife --platform=browser --preserve-symlinks --tsconfig=tools/renderer-tsconfig.json --outfile=build/app/local-ui/renderer/wallet.bundle.js",
     "package:application": "node tools/package-application.mjs",
     "patch:provisioning-sdk": "node tools/patch-provisioning-display-name.mjs && node tools/patch-provisioning-gatt.mjs",
     "package:windows:x64:internal": "node shell/package-win.mjs",
     "build:maintenance": "node tools/build-maintenance.mjs",
-    "prepackage:mac": "npm run build:maintenance && npm run build:renderer",
-    "prepackage:windows": "npm run build:maintenance && npm run build:renderer",
+    "prepackage:mac": "npm run build:studio && npm run build:renderer && npm run build:maintenance",
+    "prepackage:windows": "npm run build:studio && npm run build:renderer && npm run build:maintenance",
     "build:studio": "node ../builder/tools/assemble-client.mjs personal",
     "build:starlink": "node ../builder/tools/assemble-starlink.mjs personal"
   },
@@ -61,7 +61,8 @@
     "afterPack": "tools/package-client-native.mjs",
     "productName": "半人马AI记忆盒子",
     "directories": {
-      "output": "release"
+      "output": "release",
+      "app": "build/app"
     },
     "files": [
       "client.mjs",
@@ -164,5 +165,6 @@
   "overrides": {
     "@nexusaos/local-provisioning-contracts": "$@nexusaos/local-provisioning-contracts"
   },
-  "wanxEdition": "personal"
+  "wanxEdition": "personal",
+  "wanxInternalVersion": "1.5.1"
 }

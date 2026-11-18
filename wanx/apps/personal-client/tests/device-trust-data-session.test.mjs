@@ -20,6 +20,7 @@ import { createClient } from '../client.mjs';
 import { createTunnelAgent } from '../network/tunnel.mjs';
 import { createApplicationSession } from '../app-host/session.mjs';
 import { fromEnvironment } from '../host-sdk/index.cjs';
+import { createPrivateDirectoryFixture } from './support/private-directory.mjs';
 
 const randomId = () => randomBytes(32).toString('base64url');
 const canonical = value => value && typeof value === 'object' ? (Array.isArray(value) ? `[${value.map(canonical).join(',')}]`
@@ -28,6 +29,43 @@ const digest = value => createHash('sha256').update(value).digest('base64url');
 const decode = value => JSON.parse(Buffer.from(value.split('.')[1], 'base64url'));
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+async function until(check, description = 'state transition deadline', timeout = 5000) {
+  const deadline = performance.now() + timeout;
+  while (!(await check())) {
+    assert.ok(performance.now() < deadline, description);
+    await wait(20);
+  }
+}
+
+for (const edition of ['personal-client', 'team-client']) {
+  test(`${edition}: standard expert transport is exact managed HTTP with http.request capability`, async t => {
+    const { createLocalDataAccess: createAccess } = await import(`../../${edition}/device-trust/data-session.mjs`);
+    const f = await fixture(t, { createAccess });
+    const applicationId = 'ai.wanx.selfmade.' + 'a'.repeat(32);
+    const session = await f.connect({ applicationId, capabilities: ['http.request'] });
+    for (const [method, path] of [['GET', '/api/wanx-expert-app/v1/context'], ['POST', '/api/wanx-expert-app/v1/invoke']]) {
+      const response = await session.request({ method, path, ...(method === 'POST' ? { body: { operation: 'expert.tasks', input: {} } } : {}) });
+      assert.equal(response.status, 200);
+      assert.equal(f.seen.at(-1).proof.applicationId, applicationId);
+      const sent = f.seen.length;
+      for (const target of [path + '?', path + '?environment=prod', path + '?owner=other', path + '/', path.replace('/v1/', '/v2/')]) {
+        await assert.rejects(session.request({ method, path: target }), { code: 'LOCAL_DATA_FORBIDDEN' });
+      }
+      for (const verb of ['HEAD', 'PUT', 'DELETE', 'OPTIONS', method === 'GET' ? 'POST' : 'GET']) {
+        await assert.rejects(session.request({ method: verb, path }), { code: 'LOCAL_DATA_FORBIDDEN' });
+      }
+      await assert.rejects(session.openWebSocket({ path }), { code: 'LOCAL_DATA_FORBIDDEN' });
+      assert.equal(f.seen.length, sent);
+    }
+    const missing = await f.connect({ applicationId, capabilities: ['identity.read'] });
+    await assert.rejects(missing.request({ path: '/api/wanx-expert-app/v1/context' }), { code: 'LOCAL_DATA_FORBIDDEN' });
+    for (const id of ['wanx-host', 'ai.wanx.studio', 'centaurai.wanx.ai-browser']) {
+      const ordinary = await f.connect({ applicationId: id, capabilities: ['http.request'] });
+      await assert.rejects(ordinary.request({ path: '/api/wanx-expert-app/v1/context' }), { code: 'LOCAL_DATA_FORBIDDEN' });
+    }
+  });
+}
 const checkSignature = (proof, key) => {
   const parts = proof.split('.');
   assert.equal(verify('sha256', Buffer.from(`${parts[0]}.${parts[1]}`), { key: createPublicKey({ key, format: 'jwk' }), dsaEncoding: 'ieee-p1363' }, Buffer.from(parts[2], 'base64url')), true);
@@ -37,16 +75,27 @@ const checkSignature = (proof, key) => {
 async function fixture(t, { realVault = false, badPin = false, sessionLifetimeMs = 300000,
   createAccess = createLocalDataAccess } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'wanx-data-test-'));
+  const connections = new Set(), wsConnections = new Set();
+  let server, ws, vault, accessProvider;
+  t.after(async () => {
+    accessProvider?.close();
+    vault?.close();
+    for (const client of wsConnections) client.terminate();
+    for (const socket of connections) socket.destroy();
+    ws?.close();
+    if (server?.listening) await new Promise(resolve => server.close(resolve));
+    await rm(root, { recursive: true, force: true, maxRetries: 3 });
+  });
   const cert = await readFile(new URL('./fixtures/tls/server-cert.pem', import.meta.url));
   const tlsKey = await readFile(new URL('./fixtures/tls/server-key.pem', import.meta.url));
   const pair = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
   const access = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
   const profile = { profileId: 'profile-a', principalId: 'principal-a', clientId: 'client-a', accessKey: access.publicKey.export({ format: 'jwk' }) };
   let locked = false, generation = 1, state, denies = false, bindingRevision = 1, sessionGate = null, anonymousDenied = false;
-  const subscribers = new Set(), connections = new Set(), wsConnections = new Set();
+  const subscribers = new Set();
   const channels = new Map(), renewals = new Map(), intents = new Map(), intentIds = new Set(), seen = [], heartbeats = [], controlRequests = [];
   const applicationGrants = new Map(), businessStatuses = new Map();
-  const ws = new WebSocketServer({ noServer: true });
+  ws = new WebSocketServer({ noServer: true });
   const generationId = randomId();
   let descriptor;
   const reply = (response, kind, body) => {
@@ -80,7 +129,7 @@ async function fixture(t, { realVault = false, badPin = false, sessionLifetimeMs
     }
     return payload;
   }
-  const server = https.createServer({ cert, key: tlsKey }, async (request, response) => {
+  server = https.createServer({ cert, key: tlsKey }, async (request, response) => {
     try {
       const chunks = []; for await (const chunk of request) chunks.push(chunk); const bytes = Buffer.concat(chunks);
       if (request.url.startsWith('/local-trust/v1/data/')) {
@@ -184,9 +233,8 @@ async function fixture(t, { realVault = false, badPin = false, sessionLifetimeMs
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   descriptor = { boxId: 'box-a', baseUrl: `https://127.0.0.1:${server.address().port}`, boxKey: pair.publicKey.export({ format: 'jwk' }),
     tlsSpkiSha256: badPin ? randomId() : digest(new X509Certificate(cert).publicKey.export({ type: 'spki', format: 'der' })) };
-  let vault, activeProfile = profile;
-  let protectDirectory;
-  if (process.platform === 'win32') protectDirectory = (await import('../shell/private-storage.mjs')).protectPrivateDirectory;
+  let activeProfile = profile;
+  const protectDirectory = createPrivateDirectoryFixture();
   if (realVault) {
     vault = createIdentityVault({ directory: path.join(root, 'identity'), protectDirectory }); await vault.load();
     activeProfile = await vault.createProfile({ passphrase: 'synthetic independent local secret' });
@@ -202,12 +250,7 @@ async function fixture(t, { realVault = false, badPin = false, sessionLifetimeMs
       lock() { locked = true; generation++; for (const listener of subscribers) listener({ type: 'locked', reason: 'test-lock', generation }); }, close() {} };
   }
   const stagingDirectory = path.join(root, 'staging');
-  const accessProvider = createAccess({ vault, stagingDirectory, protectDirectory });
-  t.after(async () => {
-    accessProvider.close(); vault.close(); for (const client of wsConnections) client.terminate();
-    for (const socket of connections) socket.destroy(); ws.close();
-    await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true });
-  });
+  accessProvider = createAccess({ vault, stagingDirectory, protectDirectory });
   return { root, descriptor, vault, profile: activeProfile, provider: accessProvider, seen, heartbeats, channels, controlRequests,
     exhaustAnonymous: () => { anonymousDenied = true; },
     setBusinessStatus: (target, status) => businessStatuses.set(target, status),
@@ -336,7 +379,10 @@ test('staging buffers no upstream body until complete; lock aborts input and rem
   const pending = session.request({ path: '/api/personal-space/uploads/one', method: 'PUT', body: source });
   const rejected = assert.rejects(pending, /LOCAL_DATA_SESSION_CLOSED/);
   source.write(Buffer.alloc(4096));
-  for (let i = 0; i < 30 && !await readdir(f.stagingDirectory).then(v => v.length, () => 0); i++) await wait(5);
+  await until(async () => (await readdir(f.stagingDirectory).catch(error => {
+    if (error.code !== 'ENOENT') throw error;
+    return [];
+  })).length > 0, 'upload did not create a staging file');
   assert.equal(f.seen.length, 0); f.vault.lock(); await rejected;
   assert.deepEqual(await readdir(f.stagingDirectory), []); assert.equal(source.destroyed, true);
 });
@@ -411,8 +457,15 @@ for (const edition of ['personal-client', 'team-client']) {
 
 test('heartbeat is independently signed and current authority denial closes an idle channel', async t => {
   const f = await fixture(t), session = await f.connect();
-  await wait(1150); assert.equal(f.heartbeats.length, 1); assert.equal(session.isLive(), true);
-  f.deny(); await wait(1150); assert.equal(session.isLive(), false);
+  await until(() => f.heartbeats.length > 0, 'no signed heartbeat received');
+  assert.equal(f.heartbeats[0].sessionId, session.context().sessionId);
+  assert.equal(session.isLive(), true);
+  let reason;
+  session.onInvalidated(code => { reason = code; });
+  f.deny();
+  await until(() => reason, 'denied heartbeat did not invalidate the session');
+  assert.equal(reason, 'LOCAL_DATA_FORBIDDEN');
+  assert.equal(session.isLive(), false);
 });
 
 test('unknown and credential headers, traversal and unknown routes fail before sending', async t => {
@@ -604,7 +657,10 @@ test('client publishes independently fresh child sessions without invalidating s
   const child = client.applicationConnection('centaurai.wanx.dialogue'); const oldChild = await child.localContext();
   let invalidated = false; child.onInvalidated(() => { invalidated = true; });
   f.exhaustAnonymous();
-  await wait(1250);
+  await until(() => {
+    const sessionId = client.snapshot().connection?.dataContext?.sessionId;
+    return sessionId && sessionId !== original;
+  }, 'the replacement session was not published');
   assert.equal(client.snapshot().phase, 'ready');
   assert.notEqual(client.snapshot().connection.dataContext.sessionId, original);
   assert.equal(invalidated, false); assert.equal((await child.request({ path: '/api/auth/me' })).status, 200);
@@ -621,7 +677,8 @@ test('automatic fresh-session path stops when binding authority changes rather t
   const client = createClient({ network }); t.after(() => client.close());
   await client.connect({ deviceId: 'box-a', url: f.descriptor.baseUrl, mode: 'direct' }, {
     localTrust: { tlsSpkiSha256: f.descriptor.tlsSpkiSha256, scope: 'test' }, createSession: input => f.connect({ route: input, signal: input.signal }) });
-  f.changeRevision(); await wait(1250);
+  f.changeRevision();
+  await until(() => client.snapshot().phase === 'disconnected', 'the changed binding did not disconnect the client');
   assert.equal(client.snapshot().phase, 'disconnected'); assert.equal(client.snapshot().connection, null);
   assert.equal(client.snapshot().reason, 'LOCAL_DATA_CONTEXT_CHANGED');
   assert.equal(f.channels.size, 1);
@@ -682,11 +739,6 @@ async function offlinePlatform(t, f) {
     return { session, sdk };
   };
   return { platform, launch };
-}
-
-async function until(check, timeout = 3000) {
-  const end = Date.now() + timeout;
-  while (!check()) { assert.ok(Date.now() < end, 'state transition deadline'); await wait(20); }
 }
 
 test('real offline Host HTTP and scoped WS rotate fresh channels without ending the launch, then lock destroys the live authority', async t => {

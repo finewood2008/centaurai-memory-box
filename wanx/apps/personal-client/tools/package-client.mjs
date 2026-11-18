@@ -88,6 +88,7 @@ export async function packageClient({ version, arch = process.arch, out, notaryP
   try { await access(outputDir); throw new Error(`输出目录已存在，请另选 --out：${outputDir}`); }
   catch (error) { if (error.code !== "ENOENT") throw error; }
 
+  run("npm", ["run", "build:studio"]);
   run(process.execPath, [path.join(root, "tools/build-network.mjs"), `darwin-${arch}`]);
   run(process.execPath, [path.join(root, "tools/build-discovery.mjs"), `darwin-${arch}`]);
   run(process.execPath, [path.join(root, "tools/build-clipboard.mjs"), arch]);

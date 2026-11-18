@@ -15,6 +15,8 @@ from ..contracts import StudioError
 from .contracts import canonicalize_json
 from .expert_runtime import PROFILE
 from .project_expert import ProjectExpert,OPERATION
+from .standard_client import CLIENT_FORMAT,RUNTIME_CONTRACT,validate_client,metadata
+from ..standard_package import validate_standard_package
 
 
 def raw(value):return canonicalize_json(value).encode()
@@ -40,9 +42,19 @@ class StudioRelease:
             self.projects.template(profile,contract['template'])
             old=self.svc.store.db.execute('SELECT request_hash,body FROM studio_release_exports WHERE owner=? AND operation_id=?',(owner,body['operationId'])).fetchone()
             if old and old[0]!=request_hash:raise StudioError('STUDIO_RELEASE_OPERATION_CONFLICT',409)
-            payload={'applicationId':project['appId'],'name':artifact['manifest']['name'],'version':artifact['version'],
-                'manifest':deepcopy(artifact['manifest']),'bundle':artifact['bundle'],'css':artifact['css'],'runtimeNamespace':'studio'}
-            payload['artifactHash']=sha(payload)[7:]
+            package_bytes=None
+            if artifact.get('devKitPackage'):
+                package=artifact['devKitPackage']
+                payload={'format':CLIENT_FORMAT,'applicationId':project['appId'],'name':artifact['manifest']['name'],'version':artifact['version'],
+                    'artifactHash':artifact['hash'],'manifest':deepcopy(artifact['manifest']),'packageSha256':artifact['packageSha256'],
+                    'packageBase64':package['packageBase64'],'runtimeNamespace':'studio','runtimeContract':deepcopy(RUNTIME_CONTRACT)}
+                validate_client(payload)
+                package_bytes=validate_standard_package(payload['packageBase64'],payload['packageSha256'],payload['manifest'],application_id=project['appId'],version=artifact['version'])
+                payload=metadata(payload)
+            else:
+                payload={'applicationId':project['appId'],'name':artifact['manifest']['name'],'version':artifact['version'],
+                    'manifest':deepcopy(artifact['manifest']),'bundle':artifact['bundle'],'css':artifact['css'],'runtimeNamespace':'studio'}
+                payload['artifactHash']=sha(payload)[7:]
             release_id='kaiwu-'+sha([owner,pid,source['artifactHash'],source['contentHash'],contract])[7:55]
             trace={**source,'projectId':pid}
             if old:
@@ -68,7 +80,13 @@ class StudioRelease:
             'configurationArtifactId':'configuration','dependencyLockArtifactId':'dependencies','verificationArtifactId':'verification',
             'resources':[{'kind':'model','key':'default-model','required':True}],
             'data':{'schemaVersion':'1','upgradePolicy':'compatible','taskPolicy':'none','persistentPaths':[]}}
+        if package_bytes is not None:
+            manifest['client']['packageArtifactId']='expert-client-package'
+            artifacts.append({'artifactId':'expert-client-package','role':'client','path':'client/application.zip','mediaType':'application/zip',
+                'digest':'sha256:'+hashlib.sha256(package_bytes).hexdigest(),'sizeBytes':len(package_bytes),
+                'platforms':deepcopy(artifacts[1]['platforms'])})
         contents={'release.json':raw(manifest),**{path:raw(value) for path,value in values.items()}}
+        if package_bytes is not None:contents['client/application.zip']=package_bytes
         self.publish(profile.intake,owner,release_id,contents)
         frozen=profile.intake.ingest(owner,release_id)
         public={'releaseId':release_id,'applicationId':payload['applicationId'],'name':payload['name'],'version':payload['version'],'directoryDigest':frozen['directoryDigest']}

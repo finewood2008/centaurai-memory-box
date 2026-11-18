@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 
-const index = new URL("../local-ui/renderer/index.html", import.meta.url);
+const index = new URL("../build/app/local-ui/renderer/index.html", import.meta.url);
 const html = await readFile(index, "utf8");
 const source = (await Promise.all([...html.matchAll(/<script src="([^"]+)"><\/script>/g)]
   .map(match => match[1]).filter(src => src !== "./device-setup.bundle.js")
@@ -23,7 +23,7 @@ async function harness(t, options = {}) {
       onLocalState() {},
       action: async (name, input) => { calls.push([name, input]); return options.action ? options.action(name, input) : { ok: true, value: { expiresIn: 300 }, state }; },
     } },
-    document: { body:{dataset:{},append(){}},createElement:()=>({dataset:{},setAttribute(){}}),addEventListener() {}, querySelector: selector => selector === "#app" ? app : inputs[selector] || null },
+    document: { body:{dataset:{},append(){},classList:{toggle(){}}},createElement:()=>({dataset:{},setAttribute(){}}),addEventListener() {}, querySelector: selector => selector === "#app" ? app : inputs[selector] || null },
     FormData: class { constructor(form) { return Object.entries(form.values || {}); } },
     Date, setTimeout, clearTimeout, setInterval() {}, clearInterval() {}, TextEncoder,
   });

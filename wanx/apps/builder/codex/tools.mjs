@@ -7,6 +7,7 @@ export const toolSpecs=[
   ['update_plan','公开开发步骤及每一步的执行状态，不请求用户干预',{entries:{type:'array',items:{type:'object',properties:{content:{type:'string'},status:{type:'string',enum:['pending','in_progress','completed']}},required:['content','status'],additionalProperties:false}}},'plan'],
   ['patch_source','局部修改已有源码。find 必须是 read_source 中唯一匹配的完整片段；不匹配或多处匹配时重新读取，不能覆盖其他改动。',{path:{type:'string'},find:{type:'string'},replace:{type:'string'}},'patch'],
   ['write_source','写入当前任务的前端源码或应用清单',{path:{type:'string'},content:{type:'string'}},'write'],
+  ['remove_source','删除标准应用 app/ 下不再使用的源码；保留 host.html 和 host.mjs 入口',{path:{type:'string'}},'remove'],
   ['validate_app','使用固定编译器校验并提交本轮版本，不运行生成的代码',{},'validate'],
   ['require_plan','需求存在影响结果的缺口时，结束开发并交还方案阶段；不向用户请求现场操作',{requirement:{type:'string'},reason:{type:'string'}},'require_plan']
 ];

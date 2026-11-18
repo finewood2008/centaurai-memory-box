@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { promisify } from "node:util";
 import path from "node:path";
+import { validMemoryAgent } from "./my-ai-access.mjs";
 import { agentCatalog, agentCapabilities, catalogAgent, contextAgent } from "./my-ai-catalog.mjs";
 
 const NEW_CODEX_CHAT = "codex://threads/new";
@@ -15,13 +16,13 @@ const warehouseId = value => typeof value === "string" && /^[A-Za-z0-9_-]{1,128}
 const inputError = message => Object.assign(new Error(message), { status: 400 });
 const validText = (value, max) => typeof value === "string" && value.trim().length > 0 && value.length <= max && !value.includes("\0");
 
-function retrievalInstructions({ folder, warehouse, memoryEnabled }) {
+function retrievalInstructions({ folder, warehouse, memoryEnabled, memoryAgent }) {
   if (!folder && !warehouse && !memoryEnabled) return "\n\n## 资料检索\n本次未授权空间、星图或历史记忆读取。不要调用这些检索工具。需要用户明确保存的内容可使用 memory_save。";
   return [
     "\n\n## 资料检索",
     folder && `- 空间文件 ${JSON.stringify(folder.name)}。用 space_search 检索子目录、文件名和正文，再用 space_read 读取相关文件。`,
     warehouse && `- 星图仓库 ${JSON.stringify(warehouse.name)}。用 starlink_search 检索知识，再用 starlink_evidence 读取依据。`,
-    memoryEnabled && "- 已允许读取历史记忆。用 memory_search 检索，再用 memory_read 核对正文；先核实记忆里的路径和环境。",
+    memoryEnabled && `- 历史记忆${memoryAgent === null ? "（全部 Agent）" : memoryAgent ? "（" + JSON.stringify(memoryAgent) + "）" : ""}。用 memory_search 检索，再用 memory_read 核对正文；先核实记忆里的路径和环境。`,
     "先检索所选范围，再执行任务并引用依据。无法读取时说明原因。",
   ].filter(Boolean).join("\n");
 }
@@ -64,6 +65,10 @@ export function createMyAiTask({
   commandInstalled, resolveCommand, findApplication, launcher, installations, integrationUnavailable,
   platform = process.platform, env = process.env, home = homedir(), version = runFile,
 }) {
+  const desktopPaths = platform === "win32" ? path.win32 : path.posix;
+  const trustedDesktop = (agent, file) => typeof file === "string" && desktopPaths.isAbsolute(file)
+    && !file.includes("\0") && !file.startsWith("\\\\") && !file.startsWith("//")
+    && (platform === "win32" ? agent.windowsExecutables : agent.bundles)?.includes(desktopPaths.basename(file).toLowerCase());
   const commandInfo = async agent => {
     const managed = await installations?.inspect(agent.id);
     if (managed) return { installed: true, ...managed };
@@ -99,8 +104,7 @@ export function createMyAiTask({
       protocol = agent.protocol ? Boolean(await protocolRegistered(agent.protocol)) : false;
       if (protocol && applicationForProtocol) {
         const handler = await applicationForProtocol(agent.protocol).catch(() => null);
-        if (typeof handler?.path === "string" && path.isAbsolute(handler.path) && !handler.path.startsWith("\\\\") &&
-          agent.bundles?.includes(path.basename(handler.path).toLowerCase())) application = handler.path;
+        if (trustedDesktop(agent, handler?.path)) application = handler.path;
         else protocol = false;
       }
       if (!application && platform === "darwin") application = await (findApplication ?? (entry => findMacApplication(entry, home)))(agent) || "";
@@ -136,8 +140,9 @@ export function createMyAiTask({
     const selected = input.agentContext !== undefined ? input.agentContext : input.codexContext;
     if (selected !== undefined) {
       if (!selected || typeof selected !== "object" || Array.isArray(selected) ||
-        Object.keys(selected).some(key => !["folderId", "warehouseId", "memoryEnabled"].includes(key)) ||
+        Object.keys(selected).some(key => !["folderId", "warehouseId", "memoryEnabled", "memoryAgent"].includes(key)) ||
         (selected.memoryEnabled !== undefined && typeof selected.memoryEnabled !== "boolean") ||
+        !validMemoryAgent(selected.memoryAgent) || (selected.memoryAgent !== undefined && selected.memoryEnabled !== true) ||
         (selected.folderId != null && !warehouseId(selected.folderId)) ||
         (selected.warehouseId != null && !warehouseId(selected.warehouseId))) throw inputError("任务资料选项无效。");
       if (!context(input)) {
@@ -202,7 +207,8 @@ export function createMyAiTask({
       }
       if (operation === "disconnect") return agentAccess.disconnect(id, assertScope);
       if (operation === "status") return (await agentAccess.status(assertScope))[id];
-      if (operation === "catalog") return context(input).manage(operation, input, assertScope);
+      if (operation === "catalog") return input.kind === "memory"
+        ? agentAccess.memoryCatalog(assertScope) : context(input).manage(operation, input, assertScope);
       throw inputError("资料接入操作无效。");
     }
     if (["agent-access/connect", "agent-access/disconnect"].includes(action) && agentAccess) {
@@ -259,7 +265,7 @@ export function createMyAiTask({
       const prepared = selected !== undefined ? await context(input).prepare(selected, assertScope) : null;
       let prompt = input.text;
       if (prepared) {
-        const instructions = retrievalInstructions({ ...prepared.resources, memoryEnabled: selected.memoryEnabled === true });
+        const instructions = retrievalInstructions({ ...prepared.resources, memoryEnabled: selected.memoryEnabled === true, memoryAgent: selected.memoryAgent });
         if (!prompt.includes(instructions)) prompt += instructions;
         prompt += "\n\nMemoBox MCP task_id: " + prepared.taskId + ". Pass this ID with every MemoBox tool call, including search, read, list and memory_save.";
       }
@@ -319,7 +325,7 @@ export function createMyAiTask({
     const selected = await effectiveSelection(input, check);
     if (selected !== undefined && input.warehouseId != null) throw inputError("请使用同一套任务资料选项。");
     const taskSources = selected !== undefined ? await context(input).describe(selected, check) : null;
-    const instructions = taskSources ? retrievalInstructions({ ...taskSources, memoryEnabled: selected.memoryEnabled === true }) : "";
+    const instructions = taskSources ? retrievalInstructions({ ...taskSources, memoryEnabled: selected.memoryEnabled === true, memoryAgent: selected.memoryAgent }) : "";
     const reference = [];
     if (input.warehouseId) {
       if (input.warehouseScope !== warehouseScope) throw inputError("记忆盒子连接已切换，请重新选择星图仓库。");

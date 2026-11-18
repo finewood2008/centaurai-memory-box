@@ -118,6 +118,7 @@ export interface MemorySourcesContentProps {
   localAgents?: readonly { id: string; name: string }[];
   disconnectedLocalAgentIds?: ReadonlySet<string>;
   collectionProfile?: { id: string; name: string } | null;
+  focusedSourceId?: string;
 }
 
 export const MANUAL_AGENT_NAME_PRESETS = ["kimi code", "zcode", "minimax code", "coder"] as const;
@@ -128,6 +129,7 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
   const { t, language } = useTranslation();
   const isMyAi = props.surface === "my-ai";
   const collectionProfile = props.collectionProfile;
+  const focusedSourceId = props.focusedSourceId;
   const canChangeIntegrations = collectionProfile === undefined || collectionProfile?.id === "legacy";
   const collectionSourceId = collectionProfile?.id === "codex-desktop" || collectionProfile?.id === "codex-cli" ? "codex" : null;
   const collectionProfilePending = !canChangeIntegrations && !collectionSourceId;
@@ -170,9 +172,14 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
   const includedSources = state.agentSources.items.filter((source) => canChangeIntegrations
     ? !isMyAi || !source.builtin || !props.disconnectedLocalAgentIds?.has(normalizeAgentSourceId(source.sourceId))
     : collectionSourceId !== null && normalizeAgentSourceId(source.sourceId) === collectionSourceId);
-  const visibleSources = visibleAgentSources(includedSources);
+  const visibleSources = visibleAgentSources(includedSources).filter(source =>
+    !focusedSourceId || normalizeAgentSourceId(source.sourceId) === focusedSourceId
+  );
   const availableSourceIds = new Set(visibleSources.map((source) => normalizeAgentSourceId(source.sourceId)));
-  const waitingSources = isMyAi && canChangeIntegrations ? (props.localAgents ?? []).filter((agent) => !availableSourceIds.has(normalizeAgentSourceId(agent.id))) : [];
+  const waitingSources = isMyAi && canChangeIntegrations ? (props.localAgents ?? []).filter(agent => {
+    const id = normalizeAgentSourceId(agent.id);
+    return (!focusedSourceId || id === focusedSourceId) && !availableSourceIds.has(id);
+  }) : [];
   const connectedNames = new Set(visibleSources.map((source) => source.displayName.trim().toLocaleLowerCase()));
   const scanPercent = scanProgress && hasDeterminateScanProgress ? formatActiveScanPercent(scanProgress.current, scanProgress.total) : 0;
   const scannableSources = includedSources.filter((source) => source.available);
@@ -861,7 +868,7 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
         </div>
       </div>}
 
-      {showScanProgress && (
+      {showScanProgress && (!focusedSourceId || normalizeAgentSourceId(scanTargetSourceId ?? "") === focusedSourceId) && (
         <div className="mb-5 bg-background-paper border border-action-sky/20 rounded-card-lg p-5 animate-in fade-in" aria-busy={isScanning && !scanCancelling}>
           <div className="flex items-start justify-between gap-3 mb-4">
             <div className="flex items-center gap-3 min-w-0">
@@ -925,7 +932,7 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
       {state.agentSources.error && <Banner tone="danger">{state.agentSources.error}</Banner>}
 
       <div className={isMyAi ? "my-ai-sync-panel" : undefined} data-tour-anchor={PRODUCT_TOUR_MEMORY_AGENTS_LIST_ANCHOR}>
-      <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+      {!focusedSourceId && <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-0">
           <h2 className="text-sm font-semibold text-text-ink/75">{isMyAi && <RefreshCw size={15} aria-hidden="true" />}{t(isMyAi ? "memory.myAiSources" : "memory.sources", { count: visibleSources.length + waitingSources.length })}</h2>
           {!isMyAi && <p className="mt-1 text-xs text-text-ink/55">{t("memory.sourcesDescription")}</p>}
@@ -949,7 +956,7 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
             {t(recentlyCompletedSourceIds.has("all") ? "memory.syncCompleted" : scanStopped ? "memory.scanContinue" : "memory.syncNew")}
           </button>
         </div>
-      </div>
+      </div>}
       <div className="space-y-2.5">
         {isMyAi && canChangeIntegrations && !visibleSources.length && !waitingSources.length && !state.agentSources.error && (
           <p className="rounded-card border-content-panel bg-background-paper p-4 text-sm text-text-ink/60" role="status">
@@ -1070,7 +1077,7 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
           </article>
         ))}
       </div>
-      <div className={isMyAi ? "my-ai-advanced p-3" : "mt-3 rounded-card border-content-panel bg-action-sky/8 px-4 py-3"}>
+      {!focusedSourceId && <div className={isMyAi ? "my-ai-advanced p-3" : "mt-3 rounded-card border-content-panel bg-action-sky/8 px-4 py-3"}>
         <button
           type="button"
           onClick={() => setShowAdvancedActions((value) => !value)}
@@ -1113,11 +1120,11 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
             </button>}
           </div>
         )}
-      </div>
+      </div>}
       </div>
 
       </>}
-      {props.surface !== "workspace" && <div className={isMyAi ? "my-ai-source-tools" : undefined}>
+      {!focusedSourceId && props.surface !== "workspace" && <div className={isMyAi ? "my-ai-source-tools" : undefined}>
       <div
         data-tour-anchor={PRODUCT_TOUR_MEMORY_SCAN_PREFERENCES_ANCHOR}
         className="mt-6 bg-background-paper border-content-panel rounded-card p-5"
@@ -1277,7 +1284,7 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
         )}
       </Modal>}
 
-      {showFullScanConfirm && (
+      {!focusedSourceId && showFullScanConfirm && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center px-4" onClick={() => setShowFullScanConfirm(false)}>
           <div className="bg-background-paper rounded-card-lg shadow-xl border border-border-stone/30 p-6 w-full max-w-lg" onClick={(event) => event.stopPropagation()}>
             <div className="mx-auto w-full max-w-md">
@@ -1327,7 +1334,7 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
         </div>
       )}
 
-      {showWipeConfirm && (
+      {!focusedSourceId && showWipeConfirm && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center px-4" onClick={() => setShowWipeConfirm(false)}>
           <div className="bg-background-paper rounded-card-lg shadow-xl border border-border-stone/30 p-6 w-full max-w-md" onClick={(event) => event.stopPropagation()}>
             <div className="flex items-start gap-3 mb-4">

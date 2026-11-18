@@ -32,12 +32,12 @@ async function verify() {
     window = new BrowserWindow({
       show: false, width: 1180, height: 900,
       webPreferences: {
-        preload: fileURLToPath(new URL("../../local-ui/remote-preload.cjs", import.meta.url)),
+        preload: fileURLToPath(new URL("../../build/app/local-ui/remote-preload.cjs", import.meta.url)),
         contextIsolation: true, nodeIntegration: false, sandbox: true,
       },
     });
     window.webContents.on("console-message", event => { if (event.level === "error") errors.push(event.message); });
-    await window.loadFile(fileURLToPath(new URL("../../local-ui/renderer/index.html", import.meta.url)));
+    await window.loadFile(fileURLToPath(new URL("../../build/app/local-ui/renderer/index.html", import.meta.url)));
     const js = source => window.webContents.executeJavaScript(source);
     await js(`window.until = async predicate => {
       for (let i = 0; i < 100; i++) {

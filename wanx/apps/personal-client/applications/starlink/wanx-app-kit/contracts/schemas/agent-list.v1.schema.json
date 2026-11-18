@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wanx-agent-list/1",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "additionalProperties": true,
+    "required": [
+      "agent_id",
+      "name",
+      "description",
+      "default_model",
+      "state",
+      "application_id",
+      "user_id"
+    ],
+    "properties": {
+      "agent_id": {
+        "type": "string"
+      },
+      "name": {
+        "type": "string"
+      },
+      "description": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "default_model": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "state": {
+        "type": "string"
+      },
+      "application_id": {
+        "type": "string",
+        "const": "wanx"
+      },
+      "user_id": {
+        "type": [
+          "integer",
+          "null"
+        ]
+      }
+    }
+  }
+}

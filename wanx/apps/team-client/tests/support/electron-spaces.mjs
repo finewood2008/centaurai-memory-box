@@ -31,8 +31,8 @@ try{
   let storageFailure=true;
   ipcMain.handle('wanx-client:space-links-storage-set',(_event,input)=>{calls.push(['storage',input]);if(storageFailure){storageFailure=false;throw Error('SPACE_LINK_UPGRADE_REQUIRED');}return {cleanup_pending:0};});
   ipcMain.handle("wanx-client:credits-balance",()=>({available:0}));ipcMain.handle("wanx-client:credits-transactions",()=>({items:[]}));
-  win=new BrowserWindow({show:false,width:1280,height:900,webPreferences:{preload:fileURLToPath(new URL('../../local-ui/remote-preload.cjs',import.meta.url)),contextIsolation:true,nodeIntegration:false,sandbox:true}});
-  await win.loadFile(fileURLToPath(new URL('../../local-ui/renderer/index.html',import.meta.url)));
+  win=new BrowserWindow({show:false,width:1280,height:900,webPreferences:{preload:fileURLToPath(new URL('../../build/app/local-ui/remote-preload.cjs',import.meta.url)),contextIsolation:true,nodeIntegration:false,sandbox:true}});
+  await win.loadFile(fileURLToPath(new URL('../../build/app/local-ui/renderer/index.html',import.meta.url)));
   console.log("SPACES: loaded");
   const js=s=>win.webContents.executeJavaScript(s).catch(error=>{console.error('JS_FAILED',s);throw error;});
   await js(`window.until=async f=>{for(let i=0;i<150;i++){if(f())return;await new Promise(r=>setTimeout(r,20));}throw Error('UI timeout');};void 0;`);

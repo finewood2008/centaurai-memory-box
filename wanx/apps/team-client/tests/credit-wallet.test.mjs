@@ -84,7 +84,7 @@ test('v2 custom recharge uses the quoted integer amount and cannot accept client
   for (const extra of [
     { grant_credit_atoms: '1234000000' }, { product_id: 'product', product_version: 'v1' },
     { currency_rule_id: 'cny-100-v1' },
-    ...[0, 1101, 100100, 1.5, '1200'].map(amount_fen => ({ amount_fen })),
+    ...[0, 1101, 10000000100, 1.5, '1200'].map(amount_fen => ({ amount_fen })),
   ]) {
     await assert.rejects(wallet.createOrder({ ...purchase, ...extra }), { code: 'CREDITS_INVALID_INPUT' });
   }
@@ -100,4 +100,15 @@ test('v2 product purchase keeps server-owned product pricing and the denominatio
   await wallet.createOrder(purchase);
   assert.deepEqual(sent[0].body, { schema_version: '1', ...purchase });
   await assert.rejects(wallet.createOrder({ ...purchase, amount_fen: 5000 }), { code: 'CREDITS_INVALID_INPUT' });
+});
+
+test('v2 custom recharge permits one yuan and amounts above the retired upper limit', async () => {
+  for (const amount_fen of [100, 100100]) {
+    const sent = [];
+    const client = createCreditWallet({ request: async input => { sent.push(input); return {}; } });
+    const purchase = { purchase_intent_id: 'custom-positive', amount_fen,
+      currency_rule_id: 'usd-credit-100-v2', payment_channel: 'alipay' };
+    await client.createOrder(purchase);
+    assert.deepEqual(sent[0].body, { schema_version: '1', ...purchase });
+  }
 });

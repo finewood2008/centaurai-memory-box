@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from copy import deepcopy
 import json
 import os
@@ -9,6 +10,7 @@ import shutil
 import sys
 import time
 from uuid import uuid4
+from pathlib import Path
 
 from .local_authority import to_thread
 from .contracts import StudioError, digest
@@ -250,9 +252,6 @@ class Runner:
         config_env=await to_thread(runtime_config,'wanx_task',self.svc,owner,next(t for t in p['tasks'] if t['id']==task_id).get('_codexModel'))
         if not config_env:
             raise StudioError('CODEX_NOT_CONFIGURED',409)
-        worker=await self.svc.native_codex.acquire((owner,project_id,'build'),'driver.mjs',config_env)
-        proc=worker.proc
-        self.svc.processes[task_id]=proc
         idle=False
         material={'foundationConstraints':foundation_policy(),'foundationInstruction':FOUNDATION_PROMPT,'originalGoal':p['originalGoal'],'solution':p['solution'],'dependencyDecisions':p['decisions'],'verifiedCapabilities':p.get('preparation',{}).get('report'),'verifiedContracts':(p.get('preparation',{}).get('handoff') or {}).get('contracts',{}),'instruction':instruction,'contract':{'entry':'src/app.js','export':'mount(root, api)','manifest':'miniapp.manifest.json','capabilities':['data','model','files','knowledge','reports','foundation'],'foundationMethods':'api.foundation.invoke(operation,input) uses the starter source existing operations. Preserve them. Current account/box/app/environment checked by trusted native bridge. No arbitrary URLs, credentials, paths or Shell; new fields and flow state use api.data with stable customer IDs.','reportMethods':{'context':'api.reports.context() -> {user:{id,username,role},visibility:own|all}','list':'api.reports.list({offset?,limit?}) -> {items:[{id,title,ownerUserId,ownerName,contentHash}],total}','get':'api.reports.get({id}) -> {...summary,content}','save':'api.reports.save({operationId,title,content}) creates; api.reports.save({id,content,expectedHash}) updates own report. Retries reuse operationId.','delete':'api.reports.delete({id,expectedHash}) deletes own report'},'reportPrivacy':'Private reports use api.reports exclusively. Do not copy report contents to shared api.data or trust client owner/role fields. Admin can view all reports in the same app/environment; ordinary user only own. Native WANX login, no custom login form.','knowledgeMethods':['search({warehouseId,query})','documents({warehouseId})','graph({warehouseId})','evidence({warehouseId,id})'],'knowledgeAuthorization':'Administrator must authorize this app in Xingtu. No Key in source or packages. Read-only, protected delivery.','dataMethods':['list','get','put','delete'],'modelMethod':'generate({prompt}) -> {text}','fileMethods':['select()','read(id)'],'signatures':{'data.list':'await api.data.list({collection,offset?:number,limit?:number}) -> {items:[{...value,_id,_revision}],total}','data.get':'await api.data.get({collection,id}) -> record|null','data.put':'await api.data.put({collection,id?:string,value:{field:value},expectedRevision?:number}) -> record. For update include record._id and record._revision; new record expectedRevision 0','data.delete':'await api.data.delete({collection,id,expectedRevision}) -> {deleted:true}','files.select':'await api.files.select() -> [{id,name,size}] (trusted user picker)','files.read':'await api.files.read(id) -> {id,name,text}','model.generate':'await api.model.generate({prompt:string}) -> {text:string,usage?}'},'schema':'collections is a TOP LEVEL field. Only schemaVersion,name,entry,capabilities,collections are allowed. No id/version/schema/styles/export/description keys.','manifestExample':{'schemaVersion':1,'name':'业务事项台账','entry':'src/app.js','capabilities':['data','model','files'],'collections':{'items':{'title':'string','businessObject':'string','status':'string','owner':'string','dueDate':'string','notes':'string'}}},'environmentIsolation':'Handled by trusted runtime. Do not add dataset fields, datasets collection or preview/production toggles. CSS files in src are automatically bundled.','limits':{'totalBytes':2097152,'fileBytes':524288,'files':64},'rules':['Only UI source, no main-process code or dependencies','Use textContent or DOM construction for user/model text','AI suggestions must not automatically alter records','Network access, Shell, subprocesses and external tools are unavailable','Runtime is an opaque-origin sandbox. localStorage, sessionStorage and IndexedDB are unavailable. Persist preferences, theme colors and all saved state using api.data and the frozen collections; do not use browser storage or silently fall back to unsaved memory.','Use validate_app before finishing']}}
         from .deployment.project_expert import selected as expert_selected, instruction as expert_instruction
@@ -272,24 +271,60 @@ class Runner:
         devkit_workspace=None
         if devkit_build.enabled(p):
             from .versions import next_version
-            devkit_workspace=devkit_build.create_workspace(p,self.svc.project_root,task_root,version=next_version(p))
+            build_task=next(t for t in p['tasks'] if t['id']==task_id)
+            if build_task.get('editId'):
+                # execution_project intentionally removes private edit state.
+                # Re-read this task's live edit, never another/latest request.
+                _,edit=self.svc.edits.live(owner,project_id,build_task['editId'])
+                material['requestedChange']={'text':edit['text'],'answers':deepcopy(edit.get('answers',[]))}
+            devkit_workspace=devkit_build.create_iteration_workspace(p,self.svc.project_root,task_root,build_task,version=next_version(p))
             self.svc.store.mutate(owner,project_id,'devkit-workspace-'+task_id,{'task':task_id,'specHash':devkit_workspace['specHash']},lambda current: next(t for t in current['tasks'] if t['id']==task_id).update({'devKitWorkspace':devkit_workspace['root'],'devKitSpecHash':devkit_workspace['specHash']}))
             sources=devkit_build.mutable_files(Path(devkit_workspace['root']))
-            previous=next((a for a in reversed(p.get('artifacts',[])) if a.get('devKitPackage')),None)
-            if previous:
-                devkit_build.apply_mutable_files(Path(devkit_workspace['root']), previous.get('files') or {})
-                sources=devkit_build.mutable_files(Path(devkit_workspace['root']))
-            material['devKit']={'projectSpecHash':devkit_workspace['specHash'],'hostCapabilities':devkit_workspace['hostCapabilities'],'capabilityGaps':devkit_workspace['capabilityGaps']}
-            material['contract']={'workspace':'wanx-app-dev-kit standard host','mutableFiles':['app/host.mjs','app/host.html'],'immutableFiles':['project-spec.json','generation-manifest.json','application.manifest.json','shell/main.cjs','shell/host.cjs','shell/preload.cjs','vendor/'],'hostCapabilities':devkit_workspace['hostCapabilities'],'rules':['Use only the public WANX Host SDK through the existing host adapter.','Do not add renderer URL access, arbitrary IPC channels, credentials, local storage or Builder private API calls.','A missing public contract is a plan gap; do not invent a backend or expert endpoint.']}
+            material['devKit']={'projectSpec':deepcopy(devkit_workspace['spec']),'projectSpecHash':devkit_workspace['specHash'],'hostCapabilities':devkit_workspace['hostCapabilities'],'capabilityGaps':devkit_workspace['capabilityGaps']}
+            material['contract']={'workspace':'wanx-app-dev-kit standard host','mutableFiles':sorted(sources),'mutableRoots':['app/'],'sourceExtensions':['html','mjs','js','css','json','svg','txt'],'immutableFiles':['project-spec.json','generation-manifest.json','application.manifest.json','shell/main.cjs','shell/host.cjs','shell/preload.cjs','vendor/'],'hostCapabilities':devkit_workspace['hostCapabilities'],'rules':['Use only the public WANX Host SDK through the existing host adapter.','Do not add renderer URL access, arbitrary IPC channels, credentials, local storage or Builder private API calls.','A missing public contract is a plan gap; do not invent a backend or expert endpoint.']}
+            bridge={'global':'window.wanx','readOnly':True,'demoIsExhaustive':False,
+                'envelope':'{ok:true,value}|{ok:false,code}',
+                'methods':{'context':'window.wanx.context()','listFiles':'window.wanx.listFiles()',
+                           'onInvalidated':'window.wanx.onInvalidated(callback) -> unsubscribe'},
+                'fixedSourceHashes':{name:hashlib.sha256((Path(devkit_workspace['root'])/name).read_bytes()).hexdigest()
+                    for name in ('shell/main.cjs','shell/host.cjs','shell/preload.cjs')}}
+            material['contract']['rendererBridgeContract']=bridge
+            material['contract']['uiTemplate']={'id':'workspace-reference','version':1,'layoutEditable':True,'sourceOfTruth':'confirmed PRD and requestedChange; preserve the selected baseline on iterations'}
+            material['contract']['rules'].append('The UI is a default reference, not a fixed layout. The confirmed PRD may change navigation, page structure, styling and expert entry points. Edit or add app/ text sources using relative offline imports. Preserve unrelated baseline files; remove obsolete app sources explicitly. Only platform shell, SDK, identity and permissions stay fixed. Delivered files are native browser modules: load CSS via HTML link, reference images via HTML/CSS, and use JSON import attributes (with {type:"json"}) when importing JSON. Do not use CommonJS require or JavaScript imports of CSS/images.')
+            material['contract']['rules'].append('rendererBridgeContract describes immutable Host APIs, not new permissions or read-only business data. The initial app/host files are a replaceable demonstration, not an exhaustive API inventory. Read this contract before inferring a missing bridge from the demonstration.')
+            material['contract']['rules'].append('The installed app enforces app/host.html CSP. Its static style elements and style attributes must be permitted by that policy, including correct hashes/nonces when used. Layout preview replaces CSP and is not proof that delivered styles work. A new build rejects HOST_INLINE_STYLE_BLOCKED conflicts; fix the business HTML/CSS consistently without expanding script or network permissions or changing the fixed shell.')
+            if expert_selected(p):
+                material['contract']['expertInstruction']=expert_instruction(p)
+                material['contract']['expertDeployment']=deepcopy(material['verifiedContracts'].get('foundation',{}).get('expertDeployment'))
+                bridge['methods'].update(expertContext='window.wanx.expertContext()',expertInvoke='window.wanx.expertInvoke({operation,input})')
+                bridge['unavailableExpertContext']={'code':'EXPERT_DEPLOYMENT_REQUIRED','classification':'runtime-unavailable','disableBusinessActions':True,'mayInferDeploymentState':False,'message':'当前未连接专家运行环境。布局预览仅展示页面，专家功能请在已部署应用中使用。'}
+                material['contract']['rules'].append('When expertContext returns {ok:false,code:"EXPERT_DEPLOYMENT_REQUIRED"}, display unavailableExpertContext.message as a neutral unavailable state, not an initialization failure. Disable submit, refresh, cancellation and other business actions; do not read or write business state, invoke an expert, fabricate context or show success. This code alone does not prove preview mode or deployment status. Preserve all other initialization errors as visible failures with business actions disabled; never catch every error as preview or retry/replay automatically.')
+                bridge.update(expertOperations=deepcopy(material['verifiedContracts'].get('foundation',{}).get('operations',{})),
+                    dataOperations=deepcopy(material['verifiedContracts'].get('data',{}).get('operations',{})),
+                    stateCollection='state',recordShape='flat',
+                    initialization='expertContext() -> expertInvoke({operation:"expert.tasks",input:{}}) -> data.list. A successful expert.* call completes client readiness; context/data.list alone do not.',
+                    recordId='Every data.put requires a stable id, including the first create (for example operationId). Persist successfully before expert.run.',
+                    expectedRevision='Use record._revision; create 0; RECORD_CHANGED reloads the current record without overwriting it.')
         else:
             sources=self.source_files(owner,p,task_id)
         codex_root=Path(devkit_workspace['root']) if devkit_workspace else task_root
-        config={'taskRoot':str(codex_root),'material':material,'files':sources,'authorizeTools':True,'scope':project_id,'sessionId':next((t.get('sessionId') for t in reversed(p['tasks']) if t.get('sessionId')),None),'devKit':bool(devkit_workspace)}
+        renderer_assets={}
+        if devkit_workspace:
+            from .standard_preview import workspace_sources
+            renderer_assets={name:content for name,content in workspace_sources(Path(devkit_workspace['root'])).items() if name not in sources}
+            material['contract']['preservedAssets']=sorted(renderer_assets)
+        config={'rendererAssets':renderer_assets,'taskRoot':str(codex_root),'material':material,'files':sources,'authorizeTools':True,'scope':project_id+':'+task_id if devkit_workspace else project_id,'sessionId':None if devkit_workspace else next((t.get('sessionId') for t in reversed(p['tasks']) if t.get('sessionId')),None),'devKit':bool(devkit_workspace)}
         review=next(t for t in p['tasks'] if t['id']==task_id).get('visualReview')
         if review:
             material['visualReview']={k:v for k,v in review.items() if k!='image'}
             material['contract']['rules'].append('Use the numbered preview screenshot and normalized regions for the requested local change. Follow the frozen change specification and contract; preserve unrelated functionality. Never embed the screenshot or its content in application source.' if next(t for t in p['tasks'] if t['id']==task_id).get('editId') else 'Use the numbered preview screenshot and normalized regions for this UI-only change. Preserve behavior, storage keys and permissions; require_plan if the requested change needs a new business rule or contract. Never embed the screenshot or its content in application source.')
             config['visualReview']=review
+        # An ephemeral standard workspace must never resume a native thread
+        # pinned to a removed historical cwd. Legacy workers retain pooling.
+        worker_key=(owner,project_id,'build',task_id) if devkit_workspace else (owner,project_id,'build')
+        worker=await self.svc.native_codex.acquire(worker_key,'driver.mjs',config_env)
+        proc=worker.proc
+        self.svc.processes[task_id]=proc
         proc.stdin.write((json.dumps(config,ensure_ascii=False)+'\n').encode())
         await proc.stdin.drain()
         async def consume():
@@ -376,7 +411,7 @@ class Runner:
             consumer.cancel()
             guard.cancel()
             await asyncio.gather(consumer,guard,return_exceptions=True)
-            await self.svc.native_codex.release(worker,idle)
+            await self.svc.native_codex.release(worker,idle and not bool(devkit_workspace))
             self.svc.processes.pop(task_id,None)
             self.jobs.pop(task_id,None)
 

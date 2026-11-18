@@ -107,6 +107,12 @@ function routeLimit(applicationId, rawTarget, method, transport) {
   requireValue(!['token', 'access_token'].some((key) => url.searchParams.has(key)), 'FORBIDDEN');
   requireValue(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'].includes(method));
   const pathname = rawTarget.split('?')[0];
+  if (pathname.startsWith('/api/wanx-expert-app')) {
+    requireValue(companyApplication(applicationId) && transport === 'http' && rawTarget === pathname
+      && (method === 'GET' && pathname === '/api/wanx-expert-app/v1/context'
+        || method === 'POST' && pathname === '/api/wanx-expert-app/v1/invoke'), 'FORBIDDEN');
+    return method === 'GET' ? 0 : MIB;
+  }
   const family = /^\/api\/([^/?]+)/.exec(pathname)?.[1];
   const profile = /^\/api\/auth\/me(?:\/avatar)?$/.test(pathname) && ['GET', 'PATCH', 'POST', 'DELETE'].includes(method);
   const assistantMetadata = ['wanx-host', 'centaurai.wanx.dialogue'].includes(applicationId)

@@ -9,7 +9,7 @@ import sdk from "../host-sdk/drive.cjs";
 import { backupSourceId } from "./memory-backup-identity.mjs";
 
 const storageRoute = "/api/local-data/wanx-storage";
-const interval = 5 * 60_000;
+const interval = 60 * 60_000;
 const managedFolderName = "半人马AI记忆备份";
 const entryId = /^[a-f0-9]{32}$/;
 const legacyName = /^半人马AI-记忆备份-([a-f0-9]{32})-[a-f0-9]{32}\.sqlite(?:\.gz)?$/;

@@ -91,9 +91,7 @@ test("required updates block new application and AI work while update, stop, and
     assert.throws(() => handlers.get(`wanx-client:${name}`)(event, {}), { code: "CLIENT_UPDATE_REQUIRED" });
   if (handlers.has("wanx-client:studio-preview-open"))
     assert.throws(() => handlers.get("wanx-client:studio-preview-open")(event, {}), { code: "CLIENT_UPDATE_REQUIRED" });
-  assert.equal(handlers.has("wanx-client:ai-dialogue-polish"), false);
-  assert.equal(handlers.has("wanx-client:panel-ai-dialogue-polish"), false);
-  for (const method of ["send", "resume", "version"]) {
+  for (const method of ["send", "resume", "polish", "version"]) {
     assert.throws(() => handlers.get(`wanx-client:ai-dialogue-${method}`)(event, {}), { code: "CLIENT_UPDATE_REQUIRED" });
     assert.throws(() => handlers.get(`wanx-client:panel-ai-dialogue-${method}`)(panelEvent, {}), { code: "CLIENT_UPDATE_REQUIRED" });
   }

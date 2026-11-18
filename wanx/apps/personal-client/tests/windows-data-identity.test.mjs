@@ -18,13 +18,14 @@ const preload = `
 `;
 const url='data:text/javascript;base64,'+Buffer.from(preload).toString('base64');
 const directory=fileURLToPath(new URL('./',import.meta.url));
-test('Windows volume-less path stats preserve trusted data and still reject invalid profiles',{timeout:30000},()=>{
+test('Windows volume-less path stats preserve trusted data and still reject invalid profiles',{timeout:100000},()=>{
  const env={...process.env,WANX_ELECTRON_APP:''};delete env.NODE_TEST_CONTEXT;
- const child=spawnSync(process.execPath,['--import',url,'--test',
+ const child=spawnSync(process.execPath,['--import',url,'--test','--test-concurrency=1',
   fileURLToPath(new URL('zhijun-data.test.mjs',import.meta.url)),
   fileURLToPath(new URL('application-data-schema.test.mjs',import.meta.url)),
   fileURLToPath(new URL('upgrade-review-compat.test.mjs',import.meta.url))],
-  {cwd:directory,encoding:'utf8',timeout:25000,env});
+  {cwd:directory,encoding:'utf8',timeout:90000,env});
+ assert.ifError(child.error);
  assert.equal(child.status,0,child.stdout+'\n'+child.stderr);
  assert.match(child.stdout,/(?:tests|test suites)/);
 });

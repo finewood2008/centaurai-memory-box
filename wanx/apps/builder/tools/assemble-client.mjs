@@ -1,7 +1,10 @@
-// Rebuild Builder resources from checked-in source. Generated assets stay ignored.
+// Assemble an isolated runtime; never write generated files into client source directories.
 import { build } from 'esbuild';
 import { memoboxSource, memoboxBuildPlugin, brandMemoboxTree } from './memobox-branding.mjs';
+import { prepareClientBuild } from './client-build-directory.mjs';
 import { assembleStarlink } from './assemble-starlink.mjs';
+import { assembleStarlinkPanel } from '../../starlink/tools/assemble-panel.mjs';
+import { assembleWorkbench } from './assemble-generated-directory.mjs';
 import {buildKnowledgeTemplate} from './build-knowledge-template.mjs';
 import {buildZhikeTemplate} from './build-zhike-template.mjs';
 import { cp, mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -12,13 +15,17 @@ import path from 'node:path';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const edition = process.argv[2];
 if (!['personal', 'team'].includes(edition)) throw Error('EDITION_REQUIRED');
-const client = path.resolve(root, edition==='personal'?'../personal-client':'../team-client');
-await assembleStarlink(edition);
+const sourceClient = path.resolve(root, edition==='personal'?'../personal-client':'../team-client');
+const client = await prepareClientBuild(sourceClient, { edition });
+await assembleStarlink(edition, { outputRoot: client });
+for (const name of ['application-presentation.js','application-presentation.css']) {
+  await mkdir(path.join(client,'local-ui'),{recursive:true});
+  await cp(path.join(root,'integration',name),path.join(client,'local-ui',name));
+}
 const personalDialogueFiles = new Set([
   'local-ui/renderer/ai-dialogue.js',
   'local-ui/renderer/ai-dialogue.css',
   'shell/ai-dialogue.mjs',
-  'shell/assistant-service.mjs',
 ]);
 for (const [folder, names] of [
   ['local-ui/renderer', ['ai-dialogue.js','ai-dialogue.css','space-shares.js','space-shares.css','space-workspaces.js','space-agent-hub.js','space-agent-hub.css','space-document-preview.css']],
@@ -48,8 +55,7 @@ if (edition === 'personal') {
   for (const script of ['build','package']) execFileSync(process.platform==='win32'?'npm.cmd':'npm',['run',script],{cwd:root,stdio:'inherit',shell:process.platform==='win32',env:{...process.env,WANX_CLIENT_PRODUCT:'memobox'}});
   const personalVersion=JSON.parse(await readFile(path.join(root,'package.json'),'utf8')).version;
   await mkdir(path.join(client,'workshop'),{recursive:true});
-  await cp(path.join(root,'release/wanx-studio-'+personalVersion),path.join(client,'workshop/workbench'),{recursive:true});
-  await cp(path.join(root,'dist/runtime'),path.join(client,'workshop/runtime'),{recursive:true});
+  await assembleWorkbench(root, client, edition, personalVersion);
   await brandMemoboxTree(path.join(client,'workshop'));
   await cp(path.join(root,'integration/embedded-preload.cjs'),path.join(client,'workshop/embedded-preload.cjs'));
   await build({entryPoints:[path.join(root,'integration/personal-client/workshop-service.mjs')],bundle:true,platform:'node',format:'esm',plugins:[memoboxBuildPlugin()],external:['electron'],banner:{js:'import {createRequire as workshopRequire} from "node:module";const require=workshopRequire(import.meta.url);'},outfile:path.join(client,'shell/personal-workshop.mjs'),logLevel:'silent'});
@@ -67,8 +73,7 @@ if (edition === 'personal') {
     await writeFile(target,name.endsWith('.js')?memoboxSource(source,name):source);
   }
   await build({entryPoints:[path.join(root,'integration/personal-client/data-service.mjs')],bundle:true,platform:'node',format:'esm',plugins:[memoboxBuildPlugin()],outfile:path.join(client,'shell/personal-data-service.mjs'),banner:{js:'import {createRequire as personalDataRequire} from "node:module";const require=personalDataRequire(import.meta.url);'},logLevel:'silent'});
-  await build({entryPoints:[path.join(root,'integration/team-client/data-view.js')],bundle:true,platform:'browser',format:'iife',plugins:[memoboxBuildPlugin()],outfile:path.join(client,'local-ui/renderer/data-view.js'),logLevel:'silent'});
-  await cp(path.join(root,'integration/team-client/data.css'),path.join(client,'local-ui/renderer/data.css'));
+  await assembleStarlinkPanel(client);
   process.exit(0);
 }
 const version = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version;
@@ -76,8 +81,7 @@ for (const script of ['build', 'package']) {
   execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', script], { cwd: root, stdio: 'inherit', shell: process.platform === 'win32' });
 }
 await mkdir(path.join(client, 'studio'), { recursive: true });
-await cp(path.join(root, 'dist/runtime'), path.join(client, 'applications/studio-runtime'), { recursive: true });
-await cp(path.join(root, `release/wanx-studio-${version}`), path.join(client, 'studio/workbench'), { recursive: true });
+await assembleWorkbench(root, client, edition, version);
 // The packaged host must resolve everything inside its own ASAR, with no repo paths.
 await build({ entryPoints: [path.join(root, 'integration/host-control.mjs')], bundle: true, platform: 'node', format: 'esm', banner:{js:'import {createRequire as workshopRequire} from "node:module";const require=workshopRequire(import.meta.url);'}, outfile: path.join(client, 'applications/studio.mjs'), logLevel: 'silent' });
 await build({ entryPoints: [path.join(root, 'integration/embedded-workspace.mjs')], bundle: true, platform: 'node', format: 'esm', banner:{js:'import {createRequire as workshopRequire} from "node:module";const require=workshopRequire(import.meta.url);'}, outfile: path.join(client, 'studio/embedded-workspace.mjs'), logLevel: 'silent' });

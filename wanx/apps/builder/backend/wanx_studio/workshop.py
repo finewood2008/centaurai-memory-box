@@ -619,7 +619,9 @@ def mount_workshop(app, server, root, source_service):
         token = _actor.set((owner, context))
         try:
             service.authorize_management(owner)
-            yield owner
+            from .upgrade_guard import request_admission
+            async with request_admission(service, request.method):
+                yield owner
         finally:
             service.local_authority.reset(authority_token)
             _actor.reset(token)

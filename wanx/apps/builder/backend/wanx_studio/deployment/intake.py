@@ -8,6 +8,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from copy import deepcopy
 import hashlib
+import base64
 import json
 import os
 from pathlib import Path
@@ -21,6 +22,8 @@ from jsonschema import Draft7Validator
 
 from ..contracts import StudioError, check_manifest, has_credentials
 from .contracts import bundle_digest, canonicalize_json, validate_bundle
+from ..standard_package import MAX_COMPRESSED, validate_standard_package
+from .standard_client import is_standard, validate_client
 
 
 PROFILE = "wanx-expert-app-v1"
@@ -209,26 +212,34 @@ class ReleaseIntake:
         if len(ids) != len(descriptors) or len({a["path"] for a in descriptors}) != len(descriptors) or "release.json" in {a["path"] for a in descriptors}:
             _fail("DIRECTORY_ARTIFACT_INVALID")
         references = [(backend["artifactId"], "backend"), (manifest["client"]["artifactId"], "client")]
+        package_id=manifest["client"].get("packageArtifactId")
+        if package_id:references.append((package_id,"client"))
         references += [(manifest[key], "support") for key in ("configurationArtifactId", "dependencyLockArtifactId", "verificationArtifactId")]
         if len({ref for ref, _ in references}) != len(references) or set(ids) != {ref for ref, _ in references} or any(ids.get(ref, {}).get("role") != role for ref, role in references):
             _fail("DIRECTORY_ARTIFACT_INVALID")
-        if any(a["mediaType"] != "application/json" for a in descriptors):
+        if any(a["mediaType"] != ("application/zip" if a["artifactId"]==package_id else "application/json") for a in descriptors):
             _fail("DIRECTORY_ARTIFACT_UNSUPPORTED", 409)
         if set(self._tree(root)) != {"release.json", *(a["path"] for a in descriptors)}:
             _fail("DIRECTORY_UNDECLARED_FILE")
         files, total = {"release.json": raw_manifest}, len(raw_manifest)
         for a in descriptors:
-            raw = self._read(root, a["path"], MAX_FILE)
+            raw = self._read(root, a["path"], MAX_COMPRESSED if a["artifactId"]==package_id else MAX_FILE)
             if len(raw) != a["sizeBytes"] or "sha256:" + hashlib.sha256(raw).hexdigest() != a["digest"]:
                 _fail("DIRECTORY_ARTIFACT_CHANGED", 409)
             files[a["path"]] = raw
             total += len(raw)
-            if total > MAX_TOTAL:
+            if total > MAX_TOTAL + (MAX_COMPRESSED if package_id else 0):
                 _fail("DIRECTORY_SIZE_INVALID")
         if self._read(root, "release.json", MAX_MANIFEST) != raw_manifest:
             _fail("DIRECTORY_SOURCE_CHANGED", 409)
         payload = _json(files[ids[manifest["client"]["artifactId"]]["path"]])
-        self._validate_client(manifest, payload)
+        if package_id:
+            validate_client(payload,archive=False)
+            if payload['runtimeNamespace']!=self.runtime_namespace or payload['applicationId']!=manifest['applicationId'] or payload['version']!=manifest['version']:_fail('DIRECTORY_CLIENT_IDENTITY_MISMATCH')
+            archive=files[ids[package_id]['path']]
+            validate_standard_package(base64.b64encode(archive).decode(),payload['packageSha256'],payload['manifest'],application_id=manifest['applicationId'],version=manifest['version'])
+        else:
+            self._validate_client(manifest, payload)
         backend_value = _json(files[ids[backend["artifactId"]]["path"]])
         if canonicalize_json(backend_value) != canonicalize_json({"schemaVersion": 1, "format": "wanx-expert-backend-v1", "template": backend["template"], "mode": "ask"}):
             _fail("DIRECTORY_BACKEND_INVALID")
@@ -243,7 +254,7 @@ class ReleaseIntake:
             _fail("DIRECTORY_DEPENDENCY_INVALID")
         verification = _json(files[ids[manifest["verificationArtifactId"]]["path"]])
         self._validate_verification(verification)
-        if any(has_credentials(raw.decode("utf-8")) for raw in files.values()):
+        if any(has_credentials(raw.decode("utf-8")) for name,raw in files.items() if not package_id or name!=ids[package_id]["path"]):
             _fail("INPUT_CREDENTIAL_DETECTED")
         return manifest, payload, validated, lock, verification, files
 
@@ -316,7 +327,7 @@ class ReleaseIntake:
             source_id = "directory-artifact-" + hashlib.sha256(canonicalize_json([owner, manifest["releaseId"], item["artifactId"], item["digest"]]).encode()).hexdigest()
             descriptors.append({"artifactId": item["artifactId"], "role": "assets" if item["role"] == "support" else item["role"], "mediaType": item["mediaType"], "digest": item["digest"], "sizeBytes": item["sizeBytes"], "sourceRef": {"id": source_id, "digest": item["digest"]}, "platforms": deepcopy(item["platforms"])})
         backend = next(a for a in manifest["artifacts"] if a["artifactId"] == manifest["backend"]["artifactId"])
-        bundle = {"schemaVersion": 1, "releaseId": manifest["releaseId"], "applicationId": manifest["applicationId"], "payloadKind": "packaged-app", "artifactDescriptors": descriptors, "dependencyLockDigest": sha(lock), "runtimeRequirements": {"runtimeRef": {"id": PROFILE, "revision": 1}, "platforms": deepcopy(backend["platforms"]), "resourceBudget": {"memoryBytes": 268435456, "storageBytes": MAX_TOTAL + sum(a["sizeBytes"] for a in manifest["artifacts"]) * 4}, "healthContractRef": {"id": PROFILE + "-health", "revision": 1}, "dataCompatibilityRef": {"id": "expert-app-additive-v1", "revision": 1}, "candidateMode": True}, "clientDelivery": deepcopy(manifest["client"]), "provenanceRef": {"id": provenance, "digest": content_digest}}
+        bundle = {"schemaVersion": 1, "releaseId": manifest["releaseId"], "applicationId": manifest["applicationId"], "payloadKind": "packaged-app", "artifactDescriptors": descriptors, "dependencyLockDigest": sha(lock), "runtimeRequirements": {"runtimeRef": {"id": PROFILE, "revision": 1}, "platforms": deepcopy(backend["platforms"]), "resourceBudget": {"memoryBytes": 268435456, "storageBytes": MAX_TOTAL + sum(a["sizeBytes"] for a in manifest["artifacts"]) * 4}, "healthContractRef": {"id": PROFILE + "-health", "revision": 1}, "dataCompatibilityRef": {"id": "expert-app-additive-v1", "revision": 1}, "candidateMode": True}, "clientDelivery": {"mode":"install","artifactId":manifest["client"].get("packageArtifactId",manifest["client"]["artifactId"])}, "provenanceRef": {"id": provenance, "digest": content_digest}}
         bundle["bundleDigest"] = bundle_digest(bundle)
         return validate_bundle(bundle)
 
@@ -435,7 +446,7 @@ class ReleaseIntake:
             snapshot = self._record(owner, row["release_id"])["snapshot"]
             try:
                 with self._directory(self.snapshots) as root, self._directory(root, self.owner_scope(owner)) as owner_root, self._directory(owner_root, snapshot) as directory:
-                    raw = self._read(directory, artifact["path"], MAX_FILE)
+                    raw = self._read(directory, artifact["path"], MAX_COMPRESSED if artifact["mediaType"]=="application/zip" else MAX_FILE)
             except OSError:
                 _fail("DIRECTORY_SNAPSHOT_CHANGED", 409)
             if len(raw) != artifact["sizeBytes"] or "sha256:" + hashlib.sha256(raw).hexdigest() != source_ref["digest"]:

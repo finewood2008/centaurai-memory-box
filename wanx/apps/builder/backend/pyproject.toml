@@ -3,10 +3,10 @@ name = "wanx-app-studio"
 version = "1.0.3"
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi==0.119.0",
-    "uvicorn==0.37.0",
+    "fastapi>=0.119,<0.139",
+    "uvicorn>=0.37,<0.50",
     "httpx==0.28.1",
-    "jsonschema==4.23.0",
+    "jsonschema>=4.23,<5",
 ]
 
 [dependency-groups]

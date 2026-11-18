@@ -264,13 +264,14 @@ test("Starlink annotation recall exposes real document references separately fro
     locator: { start: 0, end: 7 }, text: "来自当前授权文档接口的真实正文", annotation: metadata };
   const { sources, starlinkCalls } = fixture({ annotationDocuments: [document,
     { ...document, documentId: "unauthorized", warehouseId: otherWarehouse },
-    { ...document, documentId: "invalid/path" }, { ...document, versionId: "" }, { ...document, text: "" },
+    { ...document, documentId: "invalid/path" }, { ...document, versionId: "" },
   ] });
   const selected = await sources.validate(null, warehouseId, check);
   const result = await sources.call(selected, "starlink_search", { query: "蓝鹭项目" }, check);
-  assert.deepEqual(result.matches[0], { kind: "document", documentId: "document_1", versionId: "version_2",
-    title: "合成星图原文", locator: JSON.stringify(document.locator), snippet: document.text, annotation: metadata });
-  assert.equal(Object.hasOwn(result.matches[0], "evidenceId"), false);
+  assert.deepEqual(result.matches[1], { kind: "document", documentId: "document_1", versionId: "version_2",
+    title: "空间标签命中的资料" });
+  assert.equal(Object.hasOwn(result.matches[1], "evidenceId"), false);
+  assert.doesNotMatch(JSON.stringify(result), /来自当前授权文档接口的真实正文|合成星图原文|合成星图标注/);
   assert.deepEqual(result.matches.filter(row => row.evidenceId).map(row => row.evidenceId), ["evidence_1"]);
   assert.equal(result.matches.length, 2);
   assert.equal(starlinkCalls.at(-1).input.warehouseId, warehouseId);

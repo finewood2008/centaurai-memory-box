@@ -2,6 +2,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
+import { validMemoryAgent } from "./my-ai-access.mjs";
 
 const grantLifetime = 2 * 60 * 60 * 1000;
 const supportedVersions = new Set(["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"]);
@@ -112,7 +113,7 @@ export function createCodexContext({ sources, scope, configure, descriptor, prot
     const configured = enabled && (!configure.guided || evidence.loaded);
     const selection = direct?.current()?.selection;
     const required = selection && [selection.folderId && ["space", selection.folderId],
-      selection.warehouseId && ["starlink", selection.warehouseId], selection.memoryEnabled && ["memory", true]].filter(Boolean);
+      selection.warehouseId && ["starlink", selection.warehouseId], selection.memoryEnabled && ["memory", selection.memoryAgent ?? true]].filter(Boolean);
     const retrievalVerified = required
       ? required.length > 0 && required.every(([source, id]) => evidence.verifiedScopes[source] === id)
       : Object.values(evidence.verifiedSources).some(Boolean);
@@ -131,7 +132,7 @@ export function createCodexContext({ sources, scope, configure, descriptor, prot
         [result?.text, result?.body, result?.summary].some(value => typeof value === "string" && value.trim())) {
       const source = name.split("_")[0];
       evidence.verifiedSources[source] = true;
-      evidence.verifiedScopes[source] = source === "space" ? selection.folderId : source === "starlink" ? selection.warehouseId : true;
+      evidence.verifiedScopes[source] = source === "space" ? selection.folderId : source === "starlink" ? selection.warehouseId : selection.memoryAgent ?? true;
     }
     return result;
   }
@@ -288,8 +289,9 @@ export function createCodexContext({ sources, scope, configure, descriptor, prot
 
   function validateSelection(selection, check) {
     if (!selection || typeof selection !== "object" || Array.isArray(selection) ||
-      Object.keys(selection).some(key => !["folderId", "warehouseId", "memoryEnabled"].includes(key)) ||
-      (selection.memoryEnabled !== undefined && typeof selection.memoryEnabled !== "boolean"))
+      Object.keys(selection).some(key => !["folderId", "warehouseId", "memoryEnabled", "memoryAgent"].includes(key)) ||
+      (selection.memoryEnabled !== undefined && typeof selection.memoryEnabled !== "boolean") ||
+      !validMemoryAgent(selection.memoryAgent) || (selection.memoryAgent !== undefined && selection.memoryEnabled !== true))
       throw inputError("请选择本次任务的空间文件夹或星图仓库。");
     const { folderId, warehouseId } = selection;
     if ((folderId != null && (typeof folderId !== "string" || !folderId.trim())) ||
@@ -297,7 +299,9 @@ export function createCodexContext({ sources, scope, configure, descriptor, prot
       throw inputError("请选择本次任务的空间文件夹或星图仓库。");
     check();
     return Promise.resolve(folderId != null || warehouseId != null ? sources.validate(folderId, warehouseId, check) : {})
-      .then(resolved => ({ ...resolved, memoryEnabled: selection.memoryEnabled === true }));
+      .then(resolved => ({ ...resolved, memoryEnabled: selection.memoryEnabled === true,
+        ...(selection.memoryAgent !== undefined && { memoryAgent: selection.memoryAgent }),
+      }));
   }
 
   return {

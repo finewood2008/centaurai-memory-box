@@ -9,7 +9,7 @@ const local = { id: 'local-selection', revision: 'local-v1', name: 'Local select
 const response = body => ({ status: 200, body: Buffer.from(JSON.stringify(body)) });
 
 for (const edition of ['personal-client', 'team-client']) {
-  const source = await readFile(new URL(`../../${edition}/applications/starlink/ui/app.js`, import.meta.url), 'utf8');
+  const source = await readFile(new URL('../../team-client/applications/starlink/ui/app.js', import.meta.url), 'utf8');
   const editor = source.slice(source.indexOf('async function loadModels() {'), source.indexOf('async function reprocessModels('));
   function fixture({ mode = 'automatic', defaultModel = online, scope = 'warehouse', inherit = false, accept = true, checkError, switchDuringCheck = false } = {}) {
     const elements = new Map();

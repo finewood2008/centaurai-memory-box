@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { ZipFile } from "yazl";
 import { createApplicationBackend } from "../applications/backend.mjs";
-import { createApplicationManager } from "../applications/manager.mjs";
+import { createApplicationManager } from "../build/app/applications/manager.mjs";
 import { createApplicationMarket } from "../applications/market.mjs";
 import { createDashboardGateway } from "../octop/gateway.mjs";
 

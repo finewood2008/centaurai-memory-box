@@ -11,6 +11,7 @@ import ssl
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from websockets.asyncio.client import ClientConnection, connect
@@ -139,6 +140,26 @@ async def test_native_assistant_local_owner_isolation_and_no_cloud_fallback(
         await request(f"/api/agents/{aid}/threads/{tid}/history?limit=25&offset=0")
     ).status_code == 200
     assert (await request("/api/assistant/conversations")).json()["items"][0]["thread_id"] == tid
+
+    memory = "/api/assistant/sidebar-memory"
+    save = await request(
+        memory,
+        "POST",
+        {
+            "action": "remember",
+            "requestId": str(uuid4()),
+            "text": "合成知君记忆",
+            "threadId": tid,
+        },
+    )
+    if team_session:
+        assert save.status_code == 403
+        assert (await request(memory)).status_code == 403
+    else:
+        assert save.status_code == 200, save.text
+        found = await request(memory + "?limit=1")
+        assert found.status_code == 200, found.text
+        assert found.json()["items"][0]["text"] == "合成知君记忆"
 
     # Match the desktop native assistant's subscription and user_turn frames.
     server.app_runtime.agent_registry.get_agent(aid).chunks = [

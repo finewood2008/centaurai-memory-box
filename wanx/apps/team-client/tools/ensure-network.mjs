@@ -1,4 +1,6 @@
-import { access } from "node:fs/promises";
+import { networkSourceDigest } from "../../personal-client/tools/netbird-status-build.mjs";
+import path from "node:path";
+import { access, readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -6,10 +8,13 @@ const name = `wanx-netbird-${process.platform}-${process.arch}${
   process.platform === "win32" ? ".exe" : ""
 }`;
 try {
-  await access(new URL(`../native/bin/${name}`, import.meta.url));
+  const root = fileURLToPath(new URL("../", import.meta.url));
+  const stamp = JSON.parse(await readFile(path.join(root, "native/bin", `${name}.sources.json`), "utf8"));
+  if (stamp.sourceDigest !== await networkSourceDigest(root)) throw new Error("Embedded network sources changed");
+  await access(path.join(root, "native/bin", name));
 } catch {
   // Development only: packaged clients contain a prebuilt native engine.
-  console.log("Building WANX's embedded network engine for first use…");
+  console.log("Building WANX's embedded network engine for current sources…");
   const child = spawn(
     process.execPath,
     [fileURLToPath(new URL("./build-network.mjs", import.meta.url))],

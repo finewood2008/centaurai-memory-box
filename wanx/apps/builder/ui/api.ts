@@ -51,6 +51,11 @@ Object.assign(errors,{
  CODEX_INTERRUPTED:'开发环境检查已取消，可以重新检查。',
  CODEX_PROBE_CLEANUP_FAILED:'开发检查进程未能正常关闭，请管理员检查服务状态。',
  CODEX_CLEANUP_FAILED:'开发检查环境未能正常清理，请管理员检查服务状态。',
+ STANDARD_RUNTIME_CONTRACT_REQUIRED:'方案需要的运行能力缺少公开合同或模板调用接口，请先核对运行配置；页面代码不能补齐宿主接口。',
+ EDIT_RUNTIME_INTENT_INVALID:'运行方式声明格式无效，请重新整理本轮方案。',
+ EDIT_RUNTIME_INTENT_REQUIRED:'本轮尚未声明真实运行要求，请重新核对方案与运行合同后继续。',
+ EDIT_RUNTIME_PRD_MISMATCH:'本轮运行要求与已保存方案不一致，请同步功能、能力和验收条件后继续。',
+ STANDARD_RUNTIME_REPLAN_REQUIRED:'本轮需要更换后端或专家，需要按新的后端合同重新规划工程，不能按普通页面修改继续构建。',
  PREFLIGHT_FAILED:'开发环境检查未完成，请稍后重试或联系管理员。',
 });
 export const errorText=(value:unknown)=>{const code=requestErrorCode(value);return errors[code]||'操作未完成：'+code};

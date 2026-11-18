@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createPersonalSpace } from '../shell/personal-space.mjs';
 import { createSuperClipboard } from '../shell/super-clipboard.mjs';
-import { createAIDialogue } from '../shell/ai-dialogue.mjs';
+import { createAIDialogue } from '../build/app/shell/ai-dialogue.mjs';
 import { dataOwnerKey } from '../device-trust/data-context.mjs';
 
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };

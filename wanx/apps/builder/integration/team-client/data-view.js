@@ -71,7 +71,21 @@ window.createTeamDataView=({request,changed,edition="team"})=>{
   const composition=createGraphComposition(()=>JSON.stringify([scope,activeId()]));
   const badge=v=>`<span class="data-status ${v==='failed'?'failed':v==='active'||v==='succeeded'?'ready':''}">${esc(names[v]||v||'待处理')}</span>`;
   const size=v=>v>=1024*1024?(v/1024/1024).toFixed(1)+' MB':Math.ceil((v||0)/1024)+' KB';
-  const loc=v=>{if(!v)return '来源片段';if(typeof v==='string'){try{v=JSON.parse(v)}catch{return v}}return [v.page_number||v.page?`第 ${v.page_number||v.page} 页`:'',v.sheet||v.sheet_name||'',v.paragraph_number?`段落 ${v.paragraph_number}`:'',v.start_seconds!=null?`${v.start_seconds} 秒`:'',v.segment_id||''].filter(Boolean).join(' · ')||'原文片段'};
+  const loc=value=>{
+    let v=value;
+    if(typeof v==='string'){try{v=JSON.parse(v)}catch{return v}}
+    if(!v)return '来源片段';
+    const refs=Array.isArray(v.source_segments)?v.source_segments:[];
+    const first=refs[0]?.locator||v,last=refs.at(-1)?.locator||first;
+    const sheet=first.sheet||first.sheet_name,slide=first.slide,row=first.row;
+    if(sheet||slide!=null||row!=null){
+      const range=sheet===(last.sheet||last.sheet_name)&&slide===last.slide&&last.row>row?row+'–'+last.row:row;
+      return [sheet?`工作表 ${sheet}`:'',slide!=null?`第 ${slide} 张幻灯片`:'',row!=null?`第 ${range} 行`:''].filter(Boolean).join(' · ');
+    }
+    const paragraph=v.paragraph_number??v.paragraph??(v.paragraph_index==null?null:v.paragraph_index+1);
+    return [v.page_number||v.page?`第 ${v.page_number||v.page} 页`:'',paragraph!=null?`第 ${paragraph} 段`:'',
+      v.start_seconds!=null?`${v.start_seconds} 秒`:'',v.segment_id||''].filter(Boolean).join(' · ')||'原文片段';
+  };
   function clearLoading(){if(loadingTimer!==undefined){clearTimeout(loadingTimer);loadingTimer=undefined}}
   function readFailure(e){const text=message(e),failure=code(e);if(invalidScope(e)){reset();error=text;errorCode=failure;changed()}else{error=text;errorCode=failure}}
   function reset(){annotationSearch=null;pendingAnnotationImports.clear();ontologyDetail=null;ontologyError='';closeMoreMenu();materialBrowser.reset();detailSequence++;governanceWriting=false;clearTimeout(refreshTimer);clearLoading();epoch++;warehouses=[];warehouseId=null;overviewWarehouseId=null;documents=[];jobs=[];results=[];clearGraph();sharePreview=null;shareError='';governance=null;governanceError='';reviews=[];reviewTotal=0;reviewsOffset=0;review=null;proposal=null;panel=null;sourceValue=null;panelLoading=false;pendingGovernance=null;retrieval=null;loading=false;searching=false;contentReady=false;refreshVisible=false;busy=false;error='';errorCode='';initialized=false;query='';offset=0;total=0;document.querySelectorAll?.('dialog[data-team-data-dialog]').forEach(d=>{d.close();d.remove()})}
@@ -349,7 +363,7 @@ window.createTeamDataView=({request,changed,edition="team"})=>{
       <footer class="data-core-footer">${!showIsolated&&raw.isolatedCount?`<span>当前图谱已隐藏 ${raw.isolatedCount} 个孤立实体</span>`:''}<span><b>${g.nodes.length}</b> 个实体 <b>${g.edges.length}</b> 条关系 <b>${new Set(g.edges.flatMap(e=>e.evidence.map(v=>v.document_id)).filter(Boolean)).size}</b> 份引用材料</span><span>${node?'实体直接关联':'当前数据仓 · 最多 120 个实体'}</span></footer>
     </section>`;
   }
-  function searchPage(){return `<form class="data-search" data-data-form="search" data-data-context="${esc(JSON.stringify([scope,activeId()]))}"><input data-studio-edit-key="team-data-search" name="query" value="${esc(query)}" placeholder="针对当前数据仓，输入你想查找的问题" aria-label="证据检索问题" required maxlength="2000"><button class="button primary" ${searching?'disabled':''}>${searching?'检索中…':'检索证据'}</button></form><p class="muted">结果遵循数据仓保护规则，保留引用片段与来源定位。</p>${!team&&annotationSearch?.incomplete?'<p role="status">部分空间标签索引尚未核验，结果可能不完整。请重试检索。</p>':''}${results.map(r=>`<article class="data-search-result"><div><strong>${esc(r.document_name||r.original_name||r.document_id)}</strong><small>${esc(loc(r.locator))}</small></div>${!team&&r.annotationMatch?`<p class="muted">空间标签命中 · 文档引用：${esc((r.annotation?.tags||[]).join('、'))}</p>`:''}<p>${esc(r.text||r.excerpt)}</p><button class="text-button" data-data-action="source" data-id="${esc(r.document_id)}" data-version-id="${esc(r.document_version_id||r.version_id||'')}">查看原文来源 →</button></article>`).join('')}${!results.length&&!searching&&(!loading||contentReady)?empty(query?'未找到可交付的证据':'带着具体问题查找'+owner+'知识','如材料尚未完成索引或保护检测，请在星图中查看处理状态。'):''}`}
+  function searchPage(){return `<form class="data-search" data-data-form="search" data-data-context="${esc(JSON.stringify([scope,activeId()]))}"><input data-studio-edit-key="team-data-search" name="query" value="${esc(query)}" placeholder="针对当前数据仓，输入你想查找的问题" aria-label="证据检索问题" required maxlength="2000"><button class="button primary" ${searching?'disabled':''}>${searching?'检索中…':'检索证据'}</button></form><p class="muted">结果遵循数据仓保护规则，保留引用片段与来源定位。</p>${!team&&annotationSearch?.incomplete?'<p role="status">部分空间标签索引尚未核验，结果可能不完整。请重试检索。</p>':''}${results.map(r=>`<article class="data-search-result"><div><strong>${esc(r.document_name||r.original_name||r.document_id)}</strong><small>${esc(loc(r.locator))}</small></div>${!team&&r.spaceFolderPath?`<p class="muted">空间目录 · ${esc(r.spaceFolderPath)}</p>`:''}${!team&&r.spaceSourceStatus?`<p class="muted">${r.spaceSourceStatus==='updated'?'空间原文件已更新 · 此处引用先前导入的正文':'与空间原文件一致'}</p>`:''}${!team&&r.annotationMatch?`<p class="muted">空间标签命中 · 文档引用：${esc((r.annotation?.tags||[]).join('、'))}</p>`:''}<p>${esc(r.text||r.excerpt)}</p><button class="text-button" data-data-action="source" data-id="${esc(r.document_id)}" data-version-id="${esc(r.document_version_id||r.version_id||'')}" data-location="${esc(loc(r.locator))}" data-start="${Number.isSafeInteger(r.locator?.source_segments?.[0]?.canonical_start)?r.locator.source_segments[0].canonical_start:0}">查看原文来源 →</button></article>`).join('')}${!results.length&&!searching&&(!loading||contentReady)?empty(query?'未找到可交付的证据':'带着具体问题查找'+owner+'知识','如材料尚未完成索引或保护检测，请在星图中查看处理状态。'):''}`}
   const failedPublications=()=>jobs.filter(j=>j.kind==='knowledge_publish'&&j.status==='failed');
   function failedExtractions(){
     const latest=new Map();
@@ -383,7 +397,7 @@ window.createTeamDataView=({request,changed,edition="team"})=>{
     if(panelLoading)return '<p role="status">正在读取来源…</p>';
     if(!sourceValue)return '<p>来源读取未完成，请重试。</p>';
     const v=sourceValue;
-    return `<p class="data-detail-eyebrow">${v.pinned?'固定版本原文':'当前正文 · 未定位历史版本'}</p><h3>${esc(v.document?.original_name||'资料来源')}</h3><small>版本 ${esc(v.version?.id||v.document?.active_version_id||'待解析')}</small>${sourceAnnotations(v.sourceAnnotation)}${v.pinned&&Number.isInteger(v.total_chars)?`<p class="muted">正文范围 ${v.start||0}–${v.end||0} / ${v.total_chars} 字</p>`:''}${v.excerpt?`<blockquote>${esc(v.excerpt)}</blockquote>`:''}<div class="data-source">${(v.segments||[]).map(s=>`<article><small>${esc(loc(s.source_locator||s.locator))}</small><p>${esc(s.text||s.content)}</p></article>`).join('')||'<p>正文尚未就绪，或此版本不支持读取。可在完整版查看原件和处理状态。</p>'}</div>${v.pinned&&v.end<v.total_chars?btn('继续读取正文','source',`data-id="${esc(v.sourceId)}" data-warehouse-id="${esc(v.warehouseId)}" data-version-id="${esc(v.version.id)}" data-start="${v.end}"`):''}`;
+    return `<p class="data-detail-eyebrow">${v.pinned?'固定版本原文':'当前正文 · 未定位历史版本'}</p><h3>${esc(v.document?.original_name||'资料来源')}</h3><small>版本 ${esc(v.version?.id||v.document?.active_version_id||'待解析')}</small>${!team&&v.sourceAnnotation?.folderPath?`<p class="muted">空间目录 · ${esc(v.sourceAnnotation.folderPath)}</p>`:''}${sourceAnnotations(v.sourceAnnotation)}${v.sourceLocation&&v.sourceLocation!=='原文片段'?`<p class="muted">引用位置 · ${esc(v.sourceLocation)}</p>`:''}${v.pinned&&Number.isInteger(v.total_chars)?`<p class="muted">正文范围 ${v.start||0}–${v.end||0} / ${v.total_chars} 字</p>`:''}${v.excerpt?`<blockquote>${esc(v.excerpt)}</blockquote>`:''}<div class="data-source">${(v.segments||[]).map(s=>`<article><small>${esc(loc(s.source_locator||s.locator))}</small><p>${esc(s.text||s.content)}</p></article>`).join('')||'<p>正文尚未就绪，或此版本不支持读取。可在完整版查看原件和处理状态。</p>'}</div>${v.pinned&&v.end<v.total_chars?btn('继续读取正文','source',`data-id="${esc(v.sourceId)}" data-warehouse-id="${esc(v.warehouseId)}" data-version-id="${esc(v.version.id)}" data-start="${v.end}" data-location="${esc(v.sourceLocation||'')}"`):''}`;
   }
   function sourceAnnotations(value){
     if(team||!value)return '';
@@ -427,7 +441,7 @@ window.createTeamDataView=({request,changed,edition="team"})=>{
     if(version!==epoch)return;
     const model=processing?.effective?.extraction||processing?.config?.extraction||processing?.extraction;
     const completed=new Set();
-    const d=dialog(retryAnnotations?'补齐空间标签索引':'导入到 '+current().name,`${retryAnnotations?'<p>资料已导入，本次核对原导入记录并补齐空间标签索引。</p>':`<p>导入 ${files.length} 份材料，生成可追溯的正文与知识。${esc(model?.model||model?.label||'处理模型沿用当前数据仓配置。')}</p><p>若本仓配置在线模型，正文片段将发送到已确认的模型服务。模型调整与服务确认请在星图中完成。</p>`}<ul>${files.map(f=>`<li>${esc(f.name)} · ${size(f.size)}</li>`).join('')}</ul>${retryAnnotations?'':'<label class="data-confirm"><input type="checkbox" name="confirmed" required>已确认材料范围及本仓的处理配置</label>'}<p class="data-upload-state" role="status"></p>`,async(_,dialog)=>{
+    const d=dialog(retryAnnotations?'补齐空间标签索引':'导入到 '+current().name,`${retryAnnotations?'<p>资料已导入，本次核对原导入记录并补齐空间标签索引。</p>':`<p>导入 ${files.length} 份材料，生成可追溯的正文与知识。${esc(model?.model||model?.label||'处理模型沿用当前数据仓配置。')}</p><p>若本仓配置在线模型，正文片段将发送到已确认的模型服务。模型调整与服务确认请在星图中完成。</p>`}<ul>${files.map(f=>`<li>${esc(f.name)}${!team&&f.folderPath?' · '+esc(f.folderPath):''} · ${size(f.size)}</li>`).join('')}</ul>${retryAnnotations?'':'<label class="data-confirm"><input type="checkbox" name="confirmed" required>已确认材料范围及本仓的处理配置</label>'}<p class="data-upload-state" role="status"></p>`,async(_,dialog)=>{
       const pending=[];
       for(let i=0;i<files.length;i++){
         if(version!==epoch||wid!==activeId())throw Error('TEAM_SESSION_CHANGED');
@@ -465,7 +479,7 @@ window.createTeamDataView=({request,changed,edition="team"})=>{
     d.addEventListener('change',e=>{if(e.target.dataset.file){const f=listing.items.find(f=>f.id===e.target.dataset.file);if(e.target.checked)picks.set(f.id,{id:f.id,digest:f.digest});else picks.delete(f.id)}});
     await load();
   }
-  async function source(id,wid=activeId(),versionId='',start=0){
+  async function source(id,wid=activeId(),versionId='',start=0,location=''){
     const version=epoch,sequence=++detailSequence;panel='source';panelLoading=true;sourceValue=null;changed();
     try{
       const v=await call('document',{warehouseId:wid,id});if(version!==epoch||sequence!==detailSequence||panel!=='source')return;
@@ -476,7 +490,7 @@ window.createTeamDataView=({request,changed,edition="team"})=>{
         if(returned!==versionId)throw Error('TEAM_DATA_SOURCE_VERSION_CHANGED');
         value={...v,...text,version:{id:versionId},segments:text.segments||[{text:text.text||text.content||''}],pinned:true};
       }
-      sourceValue={...value,sourceId:id,warehouseId:wid};
+      sourceValue={...value,sourceId:id,warehouseId:wid,sourceLocation:location};
     }finally{if(version===epoch&&sequence===detailSequence&&panel==='source'){panelLoading=false;changed()}}
   }
   async function loadReviews(id,offset=0){
@@ -598,7 +612,7 @@ window.createTeamDataView=({request,changed,edition="team"})=>{
       if(!team&&files.length)await importFiles(files,true);return;
     }
     if(name==='previous'||name==='next'){offset=Math.max(0,offset+(name==='next'?100:-100));await refresh();return}
-    if(name==='source'){if(data.warehouseId&&data.warehouseId!==activeId())return;const version=epoch,sequence=detailSequence+1;try{await source(data.id,data.warehouseId||activeId(),data.versionId||'',Number(data.start)||0)}catch(e){if(version===epoch&&sequence===detailSequence){readFailure(e);changed()}}return}
+    if(name==='source'){if(data.warehouseId&&data.warehouseId!==activeId())return;const version=epoch,sequence=detailSequence+1;try{await source(data.id,data.warehouseId||activeId(),data.versionId||'',Number(data.start)||0,data.location||'')}catch(e){if(version===epoch&&sequence===detailSequence){readFailure(e);changed()}}return}
     if(name==='reprocess-failed'||name==='reextract-document'){
       if(!team){
         // Each material has its own version, blockers and replacement consent.
@@ -674,7 +688,7 @@ window.createTeamDataView=({request,changed,edition="team"})=>{
       try{const v=await call('search',{warehouseId:activeId(),query});if(version===epoch){
         results=v.items||v.results||[];
         if(!team){annotationSearch=v.annotationSearch||null;results=[...results,...(v.annotationDocuments||[]).map(d=>({
-          document_id:d.documentId,document_version_id:d.versionId,document_name:d.title,text:String(d.text||'').slice(0,900),locator:d.locator,annotation:d.annotation,annotationMatch:true,
+          document_id:d.documentId,document_version_id:d.versionId,document_name:d.title,text:'打开来源查看对应版本。',spaceFolderPath:d.folderPath,annotation:d.annotation,annotationMatch:true,
         }))]}
       }}
       catch(e){if(version===epoch)readFailure(e)}finally{if(version===epoch){searching=false;changed()}}

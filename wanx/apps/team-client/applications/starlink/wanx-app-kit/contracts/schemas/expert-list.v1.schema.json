@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wanx-expert-list/1",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "additionalProperties": true,
+    "required": [
+      "id",
+      "label",
+      "description",
+      "welcome_message",
+      "icon_name",
+      "icon_url",
+      "color",
+      "quick_prompts",
+      "task_examples"
+    ],
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "label": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "zh",
+          "en"
+        ],
+        "properties": {
+          "zh": {
+            "type": "string"
+          },
+          "en": {
+            "type": "string"
+          }
+        }
+      },
+      "description": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "zh",
+          "en"
+        ],
+        "properties": {
+          "zh": {
+            "type": "string"
+          },
+          "en": {
+            "type": "string"
+          }
+        }
+      },
+      "welcome_message": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "zh",
+          "en"
+        ],
+        "properties": {
+          "zh": {
+            "type": "string"
+          },
+          "en": {
+            "type": "string"
+          }
+        }
+      },
+      "icon_name": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "icon_url": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "color": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "quick_prompts": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "title",
+            "description",
+            "prompt",
+            "color",
+            "icon_name"
+          ],
+          "properties": {
+            "title": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "zh",
+                "en"
+              ],
+              "properties": {
+                "zh": {
+                  "type": "string"
+                },
+                "en": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "zh",
+                "en"
+              ],
+              "properties": {
+                "zh": {
+                  "type": "string"
+                },
+                "en": {
+                  "type": "string"
+                }
+              }
+            },
+            "prompt": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "zh",
+                "en"
+              ],
+              "properties": {
+                "zh": {
+                  "type": "string"
+                },
+                "en": {
+                  "type": "string"
+                }
+              }
+            },
+            "color": {
+              "type": "string"
+            },
+            "icon_name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        }
+      },
+      "task_examples": {
+        "type": [
+          "object",
+          "null"
+        ]
+      }
+    }
+  }
+}

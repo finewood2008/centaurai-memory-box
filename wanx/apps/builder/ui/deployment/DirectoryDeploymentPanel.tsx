@@ -1,8 +1,9 @@
 import React,{useEffect,useMemo,useRef,useSyncExternalStore} from 'react';
 import {api} from '../api';
 import {createDirectoryDeploymentController} from './directory-controller';
-import {TERMINAL,stateLabel,phaseLabel,componentLabel,commitLabel,formatTime,errorMessage,type DeploymentEnvironment} from './model';
+import {TERMINAL,stateLabel,phaseLabel,componentLabel,commitLabel,formatTime,type DeploymentEnvironment} from './model';
 import './deployment.css';
+import {DeploymentEvents,OperationNotice} from './DeploymentProgress';
 
 export function DirectoryDeploymentPanel({scopeId,initialReleaseId='',lockedReleaseId='',disabled=false}:{scopeId:string;initialReleaseId?:string;lockedReleaseId?:string;disabled?:boolean}) {
   const root=useRef<HTMLElement>(null);
@@ -15,7 +16,7 @@ export function DirectoryDeploymentPanel({scopeId,initialReleaseId='',lockedRele
     return()=>{live=false;window.clearInterval(timer);document.removeEventListener('visibilitychange',poll);controller.dispose();};
   },[controller,lockedReleaseId]);
   useEffect(()=>{if(disabled)controller.confirm(false);},[controller,disabled]);
-  const selected=state.selected,context=state.context,operation=state.operation,delivery=state.receipt;
+  const selected=state.selected,context=state.context,operation=state.operation,environmentOperation=state.environmentOperation,delivery=state.receipt;
   const busy=disabled||state.submitting||state.ingesting||state.pending;
   const ready=!disabled&&controller.deployReady();
   return <section className="deployment-panel" ref={root} aria-label="开物交付部署">
@@ -42,15 +43,17 @@ export function DirectoryDeploymentPanel({scopeId,initialReleaseId='',lockedRele
           {state.notice&&<p className="deployment-notice" role="status">{state.notice}</p>}
         </>}
       </section>
-      <aside className="deployment-card deployment-summary"><h3>部署摘要</h3><dl><div><dt>交付版本</dt><dd>{selected?.releaseId||'尚未读取'}</dd></div><div><dt>应用版本</dt><dd>{selected?'v'+selected.version:'尚未读取'}</dd></div><div><dt>部署目标</dt><dd>{context?.target?.boxId||'尚未取得'}</dd></div><div><dt>部署环境</dt><dd>{state.environment==='prod'?'正式环境':'联调环境'}</dd></div></dl><div className="deployment-summary-note"><strong>使用盒子上的应用服务</strong><p>后端由盒子准备与运行，配套客户端由万象安装或加载。请求已受理不代表部署成功。</p></div></aside>
+      <aside className="deployment-card deployment-summary"><h3>部署摘要</h3><dl><div><dt>交付版本</dt><dd>{selected?.releaseId||'尚未读取'}</dd></div><div><dt>应用版本</dt><dd>{selected?'v'+selected.version:'尚未读取'}</dd></div><div><dt>部署目标</dt><dd>{context?.target?.boxId||'尚未取得'}</dd></div><div><dt>部署环境</dt><dd>{state.environment==='prod'?'正式环境':'联调环境'}</dd></div><div><dt>环境当前发布</dt><dd>{context?.environments.some(item=>item.id===state.environment)?context.environments.find(item=>item.id===state.environment)?.activeReleaseRef?.releaseId||'尚未激活':'尚未读取'}</dd></div></dl><div className="deployment-summary-note"><strong>使用盒子上的应用服务</strong><p>后端由盒子准备与运行，配套客户端由万象安装或加载。请求已受理不代表部署成功。</p></div></aside>
     </div>
+    {environmentOperation&&<section className="deployment-card" aria-label="环境其他部署操作"><h3>该环境的其他操作</h3><p className="deployment-muted">此记录不是当前交付版本的部署结果，不代表当前 v{selected?.version} 已部署。</p><dl className="deployment-details"><div><dt>交付版本</dt><dd>{environmentOperation.releaseRef?.releaseId||'待核对'}</dd></div><div><dt>状态</dt><dd>{stateLabel(environmentOperation.state)}</dd></div></dl>{!TERMINAL.has(environmentOperation.state)&&<p role="status">请等待该环境现有部署完成，再部署当前交付版本。</p>}</section>}
     {operation&&<section className="deployment-card deployment-history" aria-label="交付部署结果">
       <div className="deployment-card-heading"><h3>部署结果</h3><span className={`deployment-status ${operation.state==='succeeded'?'good':TERMINAL.has(operation.state)?'attention':'working'}`}>{stateLabel(operation.state)}</span></div>
       <p className="deployment-muted">{commitLabel(operation.commitStatus)} · 最近更新 {formatTime(operation.updatedAt)}</p>
-      {operation.errorCode&&<p className="deployment-error" role="alert">{errorMessage(Error(operation.errorCode))}</p>}
+      <OperationNotice operation={operation}/>
       <dl className="deployment-details"><div><dt>目标盒子</dt><dd>{operation.target.boxId}</dd></div><div><dt>环境</dt><dd>{operation.target.environment==='prod'?'正式':'联调'}</dd></div><div><dt>当前阶段</dt><dd>{phaseLabel(operation.phase)}</dd></div><div><dt>实际发布引用</dt><dd>{operation.releaseRef?.releaseId||'待核对'}</dd></div></dl>
       <h4>组件执行结果</h4>{operation.components.length?<ul className="deployment-components">{operation.components.map((component,index)=><li key={`${component.componentId}:${index}`}><div><strong>{component.role==='backend'?'应用后端':component.role==='client'?'配套客户端':'组件'}</strong><span>{component.required?'必需':'可选'}</span></div><div><span>{componentLabel(component.status)}</span>{component.actualVersion&&<small>实际版本 {component.actualVersion}</small>}</div></li>)}</ul>:<p className="deployment-muted">尚未收到组件执行结果。</p>}
       <section className="deployment-receipt" aria-label="结果回执"><h4>结果回执</h4>{state.receiptError?<p className="deployment-error" role="alert">{state.receiptError}</p>:!state.receiptLoaded?<p className="deployment-muted">正在读取结果回执…</p>:delivery?<><strong>{stateLabel(delivery.receipt.outcome)}</strong><p className="deployment-muted">{delivery.deliveryStatus==='delivered'?'回执已送达。':'回执正在同步。'} 同步结果不会重新执行部署。</p></>:<p className="deployment-muted">尚未生成最终回执。</p>}</section>
+      <DeploymentEvents events={state.events} loading={state.eventsLoading} error={state.eventsError} hasMore={state.hasMore} truncated={state.eventsTruncated} onLoad={()=>void controller.loadEvents()}/>
       <details className="deployment-identifiers"><summary>查看记录标识</summary><dl><div><dt>操作 ID</dt><dd>{operation.id}</dd></div>{selected&&<div><dt>目录摘要</dt><dd>{selected.directoryDigest}</dd></div>}</dl></details>
     </section>}
   </section>;

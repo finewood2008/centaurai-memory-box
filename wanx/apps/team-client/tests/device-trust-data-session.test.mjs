@@ -24,6 +24,14 @@ const digest = value => createHash('sha256').update(value).digest('base64url');
 const decode = value => JSON.parse(Buffer.from(value.split('.')[1], 'base64url'));
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+async function until(check, description = 'state transition deadline', timeout = 5000) {
+  const deadline = performance.now() + timeout;
+  while (!(await check())) {
+    assert.ok(performance.now() < deadline, description);
+    await wait(20);
+  }
+}
 const checkSignature = (proof, key) => {
   const parts = proof.split('.');
   assert.equal(verify('sha256', Buffer.from(`${parts[0]}.${parts[1]}`), { key: createPublicKey({ key, format: 'jwk' }), dsaEncoding: 'ieee-p1363' }, Buffer.from(parts[2], 'base64url')), true);
@@ -315,7 +323,10 @@ test('staging buffers no upstream body until complete; lock aborts input and rem
   const pending = session.request({ path: '/api/personal-space/uploads/one', method: 'PUT', body: source });
   const rejected = assert.rejects(pending, /LOCAL_DATA_SESSION_CLOSED/);
   source.write(Buffer.alloc(4096));
-  for (let i = 0; i < 30 && !await readdir(f.stagingDirectory).then(v => v.length, () => 0); i++) await wait(5);
+  await until(async () => (await readdir(f.stagingDirectory).catch(error => {
+    if (error.code !== 'ENOENT') throw error;
+    return [];
+  })).length > 0, 'upload did not create a staging file');
   assert.equal(f.seen.length, 0); f.vault.lock(); await rejected;
   assert.deepEqual(await readdir(f.stagingDirectory), []); assert.equal(source.destroyed, true);
 });
@@ -333,8 +344,15 @@ test('application launch receives separate channel identity and closing it prese
 
 test('heartbeat is independently signed and current authority denial closes an idle channel', async t => {
   const f = await fixture(t), session = await f.connect();
-  await wait(1150); assert.equal(f.heartbeats.length, 1); assert.equal(session.isLive(), true);
-  f.deny(); await wait(1150); assert.equal(session.isLive(), false);
+  await until(() => f.heartbeats.length > 0, 'no signed heartbeat received');
+  assert.equal(f.heartbeats[0].sessionId, session.context().sessionId);
+  assert.equal(session.isLive(), true);
+  let reason;
+  session.onInvalidated(code => { reason = code; });
+  f.deny();
+  await until(() => reason, 'denied heartbeat did not invalidate the session');
+  assert.equal(reason, 'LOCAL_DATA_FORBIDDEN');
+  assert.equal(session.isLive(), false);
 });
 
 test('unknown and credential headers, traversal and unknown routes fail before sending', async t => {

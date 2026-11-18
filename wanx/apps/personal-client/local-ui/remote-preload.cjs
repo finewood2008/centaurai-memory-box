@@ -85,6 +85,7 @@ async function rawState() {
 }
 
 const actions = {
+  starlink: input => ipcRenderer.invoke('wanx-client:starlink', input),
   "help.faq": input => ipcRenderer.invoke("wanx-client:help-faq", { etag: input?.etag }),
   "help.feedback": async input => {
     const result = await ipcRenderer.invoke("wanx-client:help-feedback", {
@@ -107,7 +108,7 @@ const actions = {
   ...Object.fromEntries(["material-workflows","material-workflow","material-preview","material-transition","material-transition-status"].map(action=>["data."+action,input=>ipcRenderer.invoke("wanx-client:data",{action,input})])),
   ...Object.fromEntries(["document-text","correct","evidence","authorization-summary","governance-summary","governance-reviews","governance-detail","governance-resolve","governance-flag","governance-propose","governance-apply","governance-unflag"].map(action=>["data."+action,input=>ipcRenderer.invoke("wanx-client:data",{action,input})])),
   ...Object.fromEntries(["initialize","warehouses","warehouse","create-warehouse","rename-warehouse","select-warehouse","documents","document","delete-document","jobs","graph","retrieval","search","retry-job","build-index","processing","reprocess-models","select-files","select-space-files","space-list","release-files","upload","open-starlink","share-details","create-share-key","revoke-share-key","reveal-share-key","copy-share-key","copy-share-value","release-share-key"].map(action=>["data."+action,input=>ipcRenderer.invoke("wanx-client:data",{action,input})])),
-  ...Object.fromEntries(["load","open","send","stop","watch","unwatch","model","legacy-open","upload","release","resume","artifact","history-update","history-export","space-list","space-grant","release-context","knowledge-list","knowledge-grant","knowledge-evidence","usage","version","version-select","handoff","channels-list","channels-detail","channels-save","channels-toggle","channels-delete","channels-test","channels-start","channels-poll","channels-cancel","channels-verification","channels-verify-start","channels-verify-confirm","channels-verify-revoke","history-list"].map(method => [`dialogue.${method}`, input => ipcRenderer.invoke(`wanx-client:ai-dialogue-${method}`, input)])),
+  ...Object.fromEntries(["sidebar-memory","sidebar-mode","sidebar-source","sidebar-source-list","sidebar-memmy","sidebar-memory-cancel","load","open","send","stop","watch","unwatch","model","legacy-open","upload","release","resume","artifact","history-update","history-export","space-list","space-grant","release-context","knowledge-list","knowledge-grant","knowledge-evidence","usage","version","version-select","handoff","channels-list","channels-detail","channels-save","channels-toggle","channels-delete","channels-test","channels-start","channels-poll","channels-cancel","channels-verification","channels-verify-start","channels-verify-confirm","channels-verify-revoke","history-list"].map(method => [`dialogue.${method}`, input => ipcRenderer.invoke(`wanx-client:ai-dialogue-${method}`, input)])),
   "notifications.read": input => ipcRenderer.invoke("wanx-client:notifications-read", { id: input?.id, all: input?.all === true }),
   "notifications.refresh": () => ipcRenderer.invoke("wanx-client:notifications-refresh"),
   "notifications.open": input => ipcRenderer.invoke("wanx-client:notifications-open", { id: input?.id }),
@@ -311,6 +312,11 @@ contextBridge.exposeInMainWorld(
       ipcRenderer.on("wanx-client:space-content-changed", receive);
       return () => ipcRenderer.removeListener("wanx-client:space-content-changed", receive);
     },
+    onStarlinkEvent(listener) {
+      const receive = (_event, value) => listener(value);
+      ipcRenderer.on('wanx-client:starlink-event', receive);
+      return () => ipcRenderer.removeListener('wanx-client:starlink-event', receive);
+    },
     onSpaceState(listener) {
       const receive = (_event, state) => listener(state);
       ipcRenderer.on("wanx-client:space-state", receive);
@@ -318,7 +324,7 @@ contextBridge.exposeInMainWorld(
     },
     onNavigate(listener) {
       const receive = (_event, page) => {
-        if (["my-ai", "memory", "applications", "ai-dialogue", "space", "boxes", "settings", "profile", "credits", "notifications"].includes(page)) listener(page);
+        if (["my-ai", "memory", "ai-dialogue", "space", "boxes", "settings", "profile", "credits", "notifications"].includes(page)) listener(page);
       };
       ipcRenderer.on("wanx-client:navigate", receive);
       return () => ipcRenderer.removeListener("wanx-client:navigate", receive);

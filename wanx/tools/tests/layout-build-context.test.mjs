@@ -76,14 +76,14 @@ function localCopies() {
   return copies;
 }
 
-test("portable wheel export resolves workspace dependencies without editable installs", posix, () => {
-  const temporary = mkdtempSync(path.join(os.tmpdir(), "wanx-portable-export-"));
+for (const platform of ["linux-amd64", "darwin-amd64"]) test(`portable wheel export resolves workspace dependencies without editable installs (${platform})`, posix, () => {
+  const temporary = mkdtempSync(path.join(os.tmpdir(), "wanx-portable export-"));
   try {
     const capture = path.join(temporary, "calls.jsonl");
     writeFileSync(path.join(temporary, "uv"), `#!/usr/bin/env node
 import("node:fs").then(({appendFileSync}) => appendFileSync(process.env.UV_CAPTURE, JSON.stringify({args:process.argv.slice(2), cwd:process.cwd()}) + "\\n"));
 `, { mode: 0o755 });
-    const result = spawnSync("bash", [path.join(root, "octop/desktop/portable/vendor-wheels.sh"), "linux-amd64"], {
+    const result = spawnSync(process.platform === "darwin" ? "/bin/bash" : "bash", [path.join(root, "octop/desktop/portable/vendor-wheels.sh"), platform], {
       cwd: temporary,
       encoding: "utf8",
       env: { ...process.env, PATH: `${temporary}${path.delimiter}${process.env.PATH}`, UV_CAPTURE: capture, GREEN_ROOT: path.join(temporary, "portable") },
@@ -94,6 +94,11 @@ import("node:fs").then(({appendFileSync}) => appendFileSync(process.env.UV_CAPTU
     assert.ok(exported.args.includes("--no-editable"));
     assert.deepEqual(optionValues(exported.args, "--project"), [path.join(root, "octop")]);
     assert.ok(calls.every(call => call.cwd === path.join(root, "octop")), "local requirements must resolve relative to the Octop project");
+    const download = calls.find(call => call.args[0] === "pip" && call.args[1] === "download");
+    assert.ok(download, "wheel download must be reached on shells with nounset");
+    assert.deepEqual(optionValues(download.args, "-r"), [path.join(temporary, "portable", `requirements-${platform}.txt`)]);
+    assert.deepEqual(optionValues(download.args, "--overrides"), platform === "darwin-amd64" ? [path.join(temporary, "portable", `overrides-${platform}.txt`)] : []);
+    assert.ok(download.args.every(value => value !== ""), "absent overrides must not add an empty argument");
   } finally {
     rmSync(temporary, { recursive: true, force: true });
   }

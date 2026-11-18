@@ -7,7 +7,7 @@ import {createInterface} from 'node:readline';
 import {mkdtemp, mkdir, readFile, writeFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
-import {createApplicationManager} from '../applications/manager.mjs';
+import {createApplicationManager} from '../build/app/applications/manager.mjs';
 import {createDashboardGateway} from '../octop/gateway.mjs';
 
 const zhijun = process.env.WANX_ZHIJUN_ROOT;

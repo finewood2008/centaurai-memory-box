@@ -18,9 +18,9 @@ export const emptyEffect = () => ({
   grantsBefore: null, grantsAfter: null, capabilitiesBefore: null, capabilitiesAfter: null,
   resultingAuthority: null, redacted: false, ownershipStateAfter: 'owned', requiresVerifiedErase: false,
 });
-export function ledgerFixture(profile) {
+export function ledgerFixture(profile, { clock = Date.now } = {}) {
   const key = keyPair(), second = keyPair();
-  const now = Math.floor(Date.now() / 1000);
+  const now = Math.floor(clock() / 1000);
   const descriptor = { boxId: 'ledger-box', baseUrl: 'https://127.0.0.1:9443',
     boxKey: key.publicKey.export({ format: 'jwk' }), tlsSpkiSha256: randomId() };
   const context = { boxId: descriptor.boxId, boxKeyThumbprint: publicKeyThumbprint(descriptor.boxKey),
@@ -55,7 +55,7 @@ export function ledgerFixture(profile) {
         const binding = projection.bindings.find(value => value.bindingId === locator.actor.bindingId);
         assertChallengeIdentity(binding, locator);
         const changing = path === '/mutations/authenticated-challenge';
-        const proof = (changing ? verifyLedgerAuthMutationChallenge : verifyLedgerAuthChallenge)(input.proof, binding.accessKey, Math.floor(Date.now() / 1000));
+        const proof = (changing ? verifyLedgerAuthMutationChallenge : verifyLedgerAuthChallenge)(input.proof, binding.accessKey, Math.floor(clock() / 1000));
         return response(changing ? 'mutation-challenge' : 'read-challenge', { context,
           ...(changing ? { actor: proof.actor, action: proof.action, challenge: randomId() } : { nonce: randomId() }),
           issuedAt: now, expiresAt: now + (changing ? 300 : 60) });

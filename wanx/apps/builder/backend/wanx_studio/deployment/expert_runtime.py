@@ -20,6 +20,7 @@ from uuid import uuid4
 from jsonschema import Draft7Validator
 
 from ..contracts import StudioError
+from ..upgrade_guard import background_lock
 from .contracts import canonicalize_json
 
 PROFILE = 'wanx-expert-app-v1'
@@ -58,6 +59,7 @@ class ExpertRuntime:
         self.catalog = server.expert_catalog
         self.closed, self.run_timeout = False, run_timeout
         self._connections, self._timers, self._prepare_locks = {}, {}, {}
+        self._upgrade_locks = {}
         with self.svc.store.transaction():
             self.svc.store.db.execute('CREATE TABLE IF NOT EXISTS deployment_expert_runs(id TEXT PRIMARY KEY, owner TEXT NOT NULL, scope TEXT NOT NULL, operation_id TEXT NOT NULL, input_digest TEXT NOT NULL, body TEXT NOT NULL, UNIQUE(owner,scope,operation_id))')
             for row in self.svc.store.db.execute('SELECT body FROM deployment_expert_runs').fetchall():
@@ -175,6 +177,14 @@ class ExpertRuntime:
         return user
 
     async def prepare(self, owner, target, project_id, descriptor, guard):
+        lock = await background_lock(self.svc.store.root) if os.name == 'posix' else None
+        try:
+            return await self._prepare(owner, target, project_id, descriptor, guard)
+        finally:
+            if lock:
+                lock.close()
+
+    async def _prepare(self, owner, target, project_id, descriptor, guard):
         descriptor = validate_backend(descriptor)
         self._user(owner)
         binding = self._binding(owner, target, project_id, descriptor)
@@ -225,11 +235,19 @@ class ExpertRuntime:
         self._assert_agent(owner, binding)
 
     def _runtime_binding(self, owner, token):
-        self.svc.authorize_management(owner)
-        session = self.svc.runtime(owner, token)
+        raw_session=getattr(self.svc,'runtime_sessions',{}).get(token,{})
+        if raw_session.get('standardExpertContract'):
+            from .standard_runtime import assert_session
+            session=assert_session(self.svc,owner,token)
+        else:
+            self.svc.authorize_management(owner)
+            session=self.svc.runtime(owner,token)
         binding = self.svc.deployment_profile.find_binding(owner, session.get('deploymentSlot'))
         expert = binding.get('expertBinding') if binding else None
-        if 'foundation' not in session['manifest']['capabilities'] or not expert or binding['state'] != 'active' or binding['owner'] != owner or binding['generation'] != session.get('deploymentGeneration') or expert.get('generation') != session.get('deploymentGeneration') or expert['target'] != binding['target'] or expert['target']['applicationId'] != session['app'] or 'deployment:' + expert['target']['environment'] != session['environment']:
+        from .standard_client import is_standard,RUNTIME_CONTRACT
+        standard=is_standard(binding.get('base')) if binding else False
+        allowed=('http.request' in session['manifest']['capabilities'] and session.get('standardExpertContract')==RUNTIME_CONTRACT) if standard else 'foundation' in session['manifest']['capabilities']
+        if not allowed or not expert or binding['state'] != 'active' or binding['owner'] != owner or binding['generation'] != session.get('deploymentGeneration') or expert.get('generation') != session.get('deploymentGeneration') or expert['target'] != binding['target'] or expert['target']['applicationId'] != session['app'] or 'deployment:' + expert['target']['environment'] != session['environment']:
             raise StudioError('EXPERT_BINDING_INVALID', 409)
         self._assert_agent(owner, expert)
         return session, deepcopy(expert)
@@ -328,6 +346,14 @@ class ExpertRuntime:
         return await self._start(owner, binding, operation_id, text, 'probe', guard, None)
 
     async def _start(self, owner, binding, operation_id, text, purpose, guard, session):
+        lock = await background_lock(self.svc.store.root) if os.name == 'posix' else None
+        try:
+            return await self._start_guarded(owner, binding, operation_id, text, purpose, guard, session)
+        finally:
+            if lock:
+                lock.close()
+
+    async def _start_guarded(self, owner, binding, operation_id, text, purpose, guard, session):
         if type(binding.get('generation')) is not int or binding['generation'] < 1:
             raise StudioError('EXPERT_BINDING_INVALID', 409)
         scope, input_digest = self._scope(owner, binding, purpose), _sha({'text': text})
@@ -371,6 +397,7 @@ class ExpertRuntime:
             self._save(run)
         self._timers[run_id] = asyncio.create_task(self._expire(run_id), context=Context())
         connection_id = 'deployment-expert-' + run_id
+        dispatched = False
         try:
             guard()
             self.gateway.thread_registry.create_thread(agent_id=binding['agentId'], user_id=self._user(owner).id, channel_type=ThreadRegistry.CHANNEL_DASHBOARD,
@@ -393,22 +420,30 @@ class ExpertRuntime:
             self.gateway.ws_hub.subscribe(prepared.thread_id, connection_id)
             self._connections[run_id] = connection_id
             inbound = build_dashboard_inbound(agent_id=binding['agentId'], user_id=self._user(owner).id, prepared=prepared, turn=turn, ws_connection_id=connection_id, user_is_admin=False)
+            # Acquire before the final persisted-state check: acquisition awaits,
+            # and a timeout or shutdown may win while that await is pending.
+            if os.name == 'posix':
+                self._upgrade_locks[run_id] = await background_lock(self.svc.store.root)
+            if self.closed:
+                raise StudioError('EXPERT_RUNTIME_UNAVAILABLE', 409)
             with self.svc.store.transaction():
                 guard()
                 saved = self._read(run_id)
                 if saved['state'] in _TERMINAL:
                     # Turn preparation can outlive the run timeout. A late
                     # result must not restart an already interrupted request.
-                    self._detach(run_id)
+                    self._detach(run_id, confirmed=True)
                     return self._public(saved)
                 if saved['state'] == 'cancel_requested':
                     saved.update(state='cancelled', updatedAt=self.clock())
                     self._save(saved)
-                    self._detach(run_id)
+                    self._detach(run_id, confirmed=True)
                     return self._public(saved)
+            # A transport enqueue failure may already have dispatched the turn.
+            dispatched = True
             self.gateway.channel_manager.enqueue(WS_CHANNEL_ID, inbound)
         except BaseException as error:
-            self._detach(run_id)
+            self._detach(run_id, confirmed=not dispatched)
             if not self.closed:
                 with self.svc.store.transaction():
                     saved = self._read(run_id)
@@ -442,9 +477,11 @@ class ExpertRuntime:
         cancel = None
         with self.svc.store.transaction():
             run = self._read(run_id)
-            if not run or run['state'] in _TERMINAL:
+            if not run or frame.get('thread_id', run['threadId']) != run['threadId']:
                 return
-            if frame.get('thread_id', run['threadId']) != run['threadId']:
+            if run['state'] in _TERMINAL:
+                if frame.get('type') in {'done', 'error'}:
+                    self._detach(run_id, confirmed=True)
                 return
             try:
                 self._live_run(run)
@@ -484,12 +521,19 @@ class ExpertRuntime:
         if cancel:
             self.registry.cancel_stream(*cancel)
         if terminal:
-            self._detach(run_id)
+            self._detach(run_id, confirmed=kind in {'done', 'error'})
 
-    def _detach(self, run_id):
-        connection = self._connections.pop(run_id, None)
-        if connection:
-            self.gateway.ws_hub.unregister(connection)
+    def _detach(self, run_id, *, confirmed=False):
+        lock = self._upgrade_locks.get(run_id)
+        # Timeout, cancellation signals and local errors do not prove that the
+        # gateway stopped. Retain its subscription and lock for a late terminal
+        # frame, or until process exit. OTA must fail closed in that interval.
+        if not lock or confirmed:
+            if lock:
+                self._upgrade_locks.pop(run_id).close()
+            connection = self._connections.pop(run_id, None)
+            if connection:
+                self.gateway.ws_hub.unregister(connection)
         timer = self._timers.pop(run_id, None)
         if timer and timer is not asyncio.current_task():
             timer.cancel()
@@ -511,6 +555,10 @@ class ExpertRuntime:
     def busy(self, owner, slot):
         self._user(owner)
         with self.svc.store.lock:
+            for run_id in self._upgrade_locks:
+                run = self._read(run_id)
+                if run and run['owner'] == owner and run['binding']['slotApplicationId'] == slot:
+                    return True
             return self.svc.store.db.execute("SELECT 1 FROM deployment_expert_runs WHERE owner=? AND json_extract(body,'$.binding.slotApplicationId')=? AND json_extract(body,'$.state') IN ('queued','running','cancel_requested') LIMIT 1", (owner, slot)).fetchone() is not None
 
     async def close(self):
@@ -523,7 +571,7 @@ class ExpertRuntime:
         # its timer and would make shutdown wait for the entire run timeout.
         for timer in timers:
             timer.cancel()
-        for run_id in list(self._connections):
+        for run_id in set(self._connections) | set(self._upgrade_locks):
             self._detach(run_id)
         self._timers.clear()
         if timers:

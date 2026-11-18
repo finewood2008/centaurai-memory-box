@@ -24,6 +24,7 @@ from ..contracts import StudioError, compatible
 from ..versions import source_artifact, verify, idle
 from .adapters import Blocked, Observation, Plan
 from .contracts import canonicalize_json, bundle_digest, request_digest, validate_bundle
+from .standard_client import is_standard,delivery_digest
 
 PROFILE = 'wanx-miniapp-v1'
 CAPABILITIES = frozenset({'data', 'model', 'files', 'knowledge'})
@@ -40,6 +41,10 @@ def identifier(prefix, value):
 
 def load_target(path, *, profile=PROFILE):
     """Load an explicitly enabled profile from a protected startup file."""
+    # Unsupported hosts must not enable deployment without no-follow opening
+    # and POSIX ownership checks, or prevent unrelated applications starting.
+    if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'geteuid'):
+        return None
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
         with os.fdopen(fd, 'r') as stream:
@@ -134,7 +139,9 @@ class MiniappProfile:
         h = p.get('versioning',{}).get('adoptedHash') or (p.get('acceptance') or {}).get('artifactHash')
         a = source_artifact(p,h) if h else None
         result = {'schemaVersion':1,'profile':PROFILE,'available':self.available,'reason':None if self.available else 'DEPLOYMENT_ADAPTER_UNAVAILABLE','projectId':project_id,'applicationId':p['appId'],'artifact':{'hash':a['hash'],'version':a['version']} if a else None,'target':None,'environments':[],'supportedActions':self.supported_actions,'supportedCapabilities':sorted(CAPABILITIES)}
-        if a and set(a['manifest']['capabilities'])-CAPABILITIES:
+        if a and a.get('devKitPackage'):
+            result.update(available=False,reason='STANDARD_DEPLOYMENT_CONTRACT_REQUIRED')
+        elif a and set(a['manifest']['capabilities'])-CAPABILITIES:
             result.update(available=False,reason='RUNTIME_INCOMPATIBLE')
         if self.available:
             self.authorize_owner(owner)
@@ -181,6 +188,7 @@ class MiniappProfile:
         if p.get('versioning',{}).get('revision',0)!=body['expectedRevision'] or p.get('versioning',{}).get('adoptedHash')!=body['artifactHash']:
             raise StudioError('DEPLOYMENT_VERSION_CHANGED',409)
         a=source_artifact(p,body['artifactHash'])
+        if a.get('devKitPackage'):raise StudioError('STANDARD_DEPLOYMENT_CONTRACT_REQUIRED',409)
         if set(a['manifest']['capabilities'])-CAPABILITIES:raise StudioError('RUNTIME_INCOMPATIBLE',409)
         bundle,base,backend=self.frozen_release(owner,p,a)
         target=self.target_for(owner,p['appId'],body['environment'])
@@ -254,11 +262,15 @@ class MiniappProfile:
         key=identifier('',[op['id'],step]);old=self.get('ticket',key)
         if old:return old
         generation=op['request']['expectedGeneration']+1;slot=self.slot_id(op['owner'],op['target'])
-        payload=deepcopy(record['base']);payload['applicationId']=slot
-        payload['name']=record['base']['name']+(' · 联调' if op['target']['environment']=='dev' else ' · 正式')
+        payload=deepcopy(record['base'])
+        if not is_standard(payload):
+            payload['applicationId']=slot
+            payload['name']=record['base']['name']+(' · 联调' if op['target']['environment']=='dev' else ' · 正式')
         if payload.get('editable'):payload['editable']['applicationId']=slot
         payload['deployment']={'schemaVersion':1,'profile':self.profile_id,'slotApplicationId':slot,'baseApplicationId':op['target']['applicationId'],'boxId':op['target']['boxId'],'operationId':op['id'],'environment':op['target']['environment'],'generation':generation}
-        ticket={'id':key,'owner':op['owner'],'nonce':secrets.token_urlsafe(24),'operationId':op['id'],'step':step,'fence':op['fence'],'generation':generation,'projectId':record['projectId'],'artifactHash':record['base']['artifactHash'],'baseApplicationId':op['target']['applicationId'],'slotApplicationId':slot,'version':record['base']['version'],'environment':op['target']['environment'],'boxId':op['target']['boxId'],'profile':self.profile_id,'payloadDigest':sha(payload),'payload':payload,'state':'pending','clientId':None,'claimUntil':0}
+        if is_standard(payload):payload['deployment']['scopeId']=sha([op['owner'],op['target'],slot,'run'])[7:]
+        ticket={'id':key,'owner':op['owner'],'nonce':secrets.token_urlsafe(24),'operationId':op['id'],'step':step,'fence':op['fence'],'generation':generation,'projectId':record['projectId'],'artifactHash':record['base']['artifactHash'],'baseApplicationId':op['target']['applicationId'],'slotApplicationId':slot,'version':record['base']['version'],'environment':op['target']['environment'],'boxId':op['target']['boxId'],'profile':self.profile_id,'payloadDigest':delivery_digest(payload),'payload':payload,'state':'pending','clientId':None,'claimUntil':0}
+        if is_standard(payload):ticket['scopeId']=payload['deployment']['scopeId']
         self.put('ticket',key,ticket);return ticket
 
     def component_results(self, op, record):
@@ -429,6 +441,8 @@ class MiniappProfile:
         fields={'nonce','clientId','state','artifactHash','slotApplicationId','operationId','step','fence','generation','payloadDigest'}
         failed=body.get('state')=='failed'
         if set(body)!=(fields|{'errorCode'} if failed else fields) or (failed and body['errorCode']!='CLIENT_UNAVAILABLE'):raise StudioError('DEPLOYMENT_ACK_INVALID',422)
+        if any(type(body[key]) is not int for key in ('generation','fence')):
+            raise StudioError('DEPLOYMENT_ACK_INVALID',422)
         with self.transaction():
             ticket=self.owned_ticket(owner,ticket_id)
             if any(body[k]!=ticket[k] for k in fields-{'state'}) or ticket['claimUntil']<self.clock() or (not failed and body['state']!=('prepared' if ticket['step']=='prepare_client' else 'active')):
@@ -456,6 +470,9 @@ class MiniappProfile:
         binding=self.find_binding(owner,slot_id)
         if not binding or binding['state']!='active' or binding['artifactHash']!=body['artifactHash'] or binding['generation']!=body['generation'] or binding['target']['environment']!=body['environment']:
             raise StudioError('DEPLOYMENT_RUNTIME_STALE',409)
+        if is_standard(binding['base']):
+            from .standard_runtime import mint_sso_launch
+            return mint_sso_launch(self.svc,self,owner,binding)
         token=secrets.token_urlsafe(32)
         self.svc.runtime_sessions[token]={'owner':owner,'project':binding['projectId'],'app':binding['target']['applicationId'],'artifact':binding['artifactHash'],'environment':'deployment:'+binding['target']['environment'],'manifest':binding['manifest'],'files':{},'expires':self.clock()+3600,'deploymentSlot':slot_id,'deploymentGeneration':binding['generation'],'deploymentProfile':self.profile_id}
         binding['runtimeReady']={'operationId':binding['operationId'],'artifactHash':binding['artifactHash'],'generation':binding['generation']}

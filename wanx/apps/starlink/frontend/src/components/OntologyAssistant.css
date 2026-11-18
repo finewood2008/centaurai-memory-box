@@ -1,0 +1,60 @@
+.workbench-app .workbench-drawer.ontology-assistant{width:min(1240px,96vw);max-width:96vw}
+.assistant-scopes,.assistant-rounds{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.assistant-scopes button[aria-pressed=true]{background:#eeeafd;color:#5142b3;border-color:#bdb4ee}
+.assistant-rounds select{max-width:290px;margin-left:8px}
+.assistant-workspace{display:grid;grid-template-columns:minmax(0,1fr) 350px;gap:20px}
+.assistant-proposal,.assistant-conversation{min-width:0;border:1px solid var(--border,#e5ddd2);border-radius:12px;padding:18px}
+.assistant-conversation{border-color:#ded8f8;background:#fdfcff}
+.assistant-conversation textarea{width:100%;min-height:110px;box-sizing:border-box}
+.assistant-conversation select{width:100%;max-width:100%;box-sizing:border-box;margin:8px 0}
+.assistant-messages{max-height:38vh;overflow:auto;overflow-wrap:anywhere}
+.assistant-messages article,.assistant-questions{background:#f4f1fc;border-radius:9px;padding:10px;margin:12px 0;white-space:pre-wrap}
+.assistant-user{background:#f0f3f5;padding:8px;border-radius:6px}
+.assistant-target{border:1px solid #bdb4ee;padding:8px;border-radius:8px}
+.assistant-target button{margin-left:8px}
+.assistant-impact{margin-top:18px;padding-top:14px;border-top:1px solid #e5ddd2}
+.assistant-impact article{border-bottom:1px solid #e5ddd2;padding:12px 0}
+.assistant-impact label{display:block;margin:16px 0}
+.assistant-history{margin-bottom:16px}.assistant-history button{margin:6px}
+.assistant-actions{display:flex;gap:8px;flex-wrap:wrap}
+.assistant-suggestion{border:1px solid #c9bff2;border-radius:10px;padding:12px;margin:12px 0;overflow-wrap:anywhere}
+.assistant-suggestion .ontology-change-summary{max-height:38vh;overflow:auto}
+@media(max-width:850px){.assistant-workspace{grid-template-columns:1fr}.assistant-messages{max-height:260px}}
+.ontology-assistant .workbench-drawer-body{display:flex;flex-direction:column;gap:12px;overflow:hidden;padding:20px}
+.ontology-assistant .assistant-feedback:empty{display:none}
+.ontology-assistant .assistant-feedback{flex:none;max-height:25%;overflow:auto}
+.ontology-assistant .assistant-feedback p{margin:0 0 8px}
+.ontology-assistant .assistant-workspace{flex:1;min-height:0;gap:18px;grid-template-columns:minmax(0,1fr) minmax(320px,38%)}
+.ontology-assistant .assistant-proposal,.ontology-assistant .assistant-conversation{display:flex;flex-direction:column;min-height:0;padding:18px}
+.ontology-assistant .section-title{flex:none;margin:0 0 14px;padding-bottom:12px}
+.ontology-assistant .section-title h3{margin:0}
+.ontology-assistant .assistant-preview-content,.ontology-assistant .assistant-chat-content{flex:1;min-height:0;overflow:auto;overflow-wrap:anywhere}
+.ontology-assistant .assistant-published-preview h4{margin:0 0 8px}
+.ontology-assistant .assistant-published-preview section+section{margin-top:22px}
+.ontology-assistant .assistant-published-preview article{padding:12px 0;border-bottom:1px solid var(--border,#e5ddd2)}
+.ontology-assistant .assistant-published-preview article>small{margin-left:8px}
+.ontology-assistant .assistant-published-preview p{margin:6px 0}
+.ontology-assistant .assistant-published-preview ul{margin:8px 0 0;padding-left:20px}
+.ontology-assistant .assistant-published-preview .network-tools>small{display:none}
+.ontology-assistant .assistant-published-preview .network-tools{justify-content:flex-end}
+.ontology-assistant .assistant-published-preview .network-canvas text{font-size:20px}
+.ontology-assistant .assistant-published-preview .network-link text{font-size:18px}
+.ontology-assistant .assistant-definition-list,.ontology-assistant .assistant-dependencies{margin:16px 0}
+.ontology-assistant .assistant-definition-list>summary{margin-bottom:12px}
+.ontology-assistant .assistant-messages{max-height:none;overflow:visible}
+.ontology-assistant .assistant-welcome{margin:6px 0 20px}
+.ontology-assistant .assistant-history{margin:20px 0 8px;color:var(--wb-muted,#777);font-size:12px}
+.ontology-assistant .assistant-composer{flex:none;border-top:1px solid #e5ddd2;padding-top:14px;margin-top:12px}
+.ontology-assistant .assistant-resume-confirmation{margin-bottom:10px;padding:10px;border:1px solid #ded8f8;border-radius:8px}
+.ontology-assistant .assistant-resume-confirmation p{margin:0 0 8px}
+.ontology-assistant .assistant-resume-confirmation button{margin:0 6px 6px 0}
+.ontology-assistant .assistant-retained-draft{margin-top:16px}
+.ontology-assistant .assistant-composer textarea{min-height:96px;max-height:180px;resize:vertical}
+.ontology-assistant .assistant-send{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:10px}
+.ontology-assistant .assistant-impact:first-child{margin-top:0;padding-top:0;border-top:0}
+.ontology-assistant .assistant-impact:first-child h3{margin-top:0}
+.ontology-assistant .assistant-publication-actions{flex:none;border-top:1px solid #e5ddd2;padding-top:12px;margin-top:12px}
+.ontology-assistant .assistant-publication-actions p{margin:0 0 8px}
+.ontology-assistant .assistant-publication-actions label{display:block;margin:0 0 10px}
+.ontology-assistant .ontology-hint{display:none}
+@media(max-width:850px){.ontology-assistant .workbench-drawer-body{overflow:auto}.ontology-assistant .assistant-workspace{display:flex;flex-direction:column;flex:none}.ontology-assistant .assistant-proposal{min-height:200px;max-height:50vh}.ontology-assistant .assistant-conversation{min-height:420px;max-height:85vh}.ontology-assistant .assistant-feedback{max-height:none}}

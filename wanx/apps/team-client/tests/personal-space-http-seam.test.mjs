@@ -7,7 +7,7 @@ import path from "node:path";
 import net from "node:net";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
-import { createPersonalSpace } from "../shell/personal-space.mjs";
+import { createPersonalSpace } from "../build/app/shell/personal-space.mjs";
 import { createDashboardGateway } from "../octop/gateway.mjs";
 
 const waitFor = async predicate => { for (const deadline=Date.now()+30_000;Date.now()<deadline;) { if (await predicate()) return; await new Promise(r=>setTimeout(r,20)); } throw new Error("Timed out"); };

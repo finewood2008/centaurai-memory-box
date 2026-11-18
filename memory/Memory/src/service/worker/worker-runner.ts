@@ -67,7 +67,7 @@ export const SUMMARY_WORKER_CONCURRENCY = 4;
 export const EMBEDDING_RETRY_LEASE_MS = 5 * 60_000;
 export const WORKER_LEASE_SECONDS = 60;
 export const WORKER_HEARTBEAT_MS = 20_000;
-const SUMMARY_JOBS_REQUIRING_MODEL: readonly string[] = ["episode_assignment", "trace_summary", "import_summary", "observation_extract", "episode_title"];
+export const SUMMARY_JOBS_REQUIRING_MODEL: readonly string[] = ["episode_assignment", "trace_summary", "import_summary", "observation_extract", "episode_title"];
 const WORKER_TURN_JOB_LIMIT = 32;
 
 const workerLogger = createMemoryLogger("worker");

@@ -14,14 +14,14 @@ export const interviewTools=[
  ['require_capability','已有 data/model/files/knowledge/reports 能力直接声明并自动检查；仅尚未支持的接口记录为缺口，不要求用户确认技术接口。',{capability:{type:'string'},reason:{type:'string'}}]
 ];
 export async function serve(){
- const tools=process.env.WANX_INTERVIEW_MODE==='iteration'?[...interviewTools.filter(t=>t[0]!=='complete_prd'),['finish_edit','结束本轮迭代理解。ready 将由系统自动构建；discussed 仅讨论不修改；no_change 表示无需重复制作。',{outcome:{type:'string',enum:['ready','discussed','no_change']},summary:{type:'string'}}]]:interviewTools;
+ const tools=process.env.WANX_INTERVIEW_MODE==='iteration'?[...interviewTools.filter(t=>t[0]!=='complete_prd'),['finish_edit','结束本轮迭代理解。ready 将由系统自动构建；discussed 仅讨论不修改；no_change 表示无需重复制作。',{outcome:{type:'string',enum:['ready','discussed','no_change']},summary:{type:'string'},runtimeIntent:{type:'object',description:'标准 Host 应用 ready 必填。声明本轮真实运行要求，必须与已保存 PRD 一致；不能靠页面常量修改权限或部署。',properties:{solutionHash:{type:'string'},capabilities:{type:'array',items:{type:'string'}},execution:{type:'string',enum:['host','managed-expert','service']}},required:['solutionHash','capabilities','execution'],additionalProperties:false}}]]:interviewTools;
  for await(const line of readline.createInterface({input:process.stdin})){
   let request;
   try{
    request=JSON.parse(line);if(request.id===undefined)continue;let result;
    if(request.method==='initialize')result={protocolVersion:request.params.protocolVersion,capabilities:{tools:{}},serverInfo:{name:'wanx-product-manager',version:'1.0.0'}};
    else if(request.method==='ping')result={};
-   else if(request.method==='tools/list')result={tools:tools.map(([name,description,properties])=>({name,description,inputSchema:{type:'object',properties,additionalProperties:false,required:name==='update_prd'?['expectedHash']:name==='read_context'?['ref']:Object.keys(properties)},annotations:{readOnlyHint:['read_project','read_baseline','read_context','search_context','propose_components','validate_project_spec'].includes(name),destructiveHint:false,openWorldHint:false}}))};
+   else if(request.method==='tools/list')result={tools:tools.map(([name,description,properties])=>({name,description,inputSchema:{type:'object',properties,additionalProperties:false,required:name==='update_prd'?['expectedHash']:name==='read_context'?['ref']:name==='finish_edit'?['outcome','summary']:Object.keys(properties)},annotations:{readOnlyHint:['read_project','read_baseline','read_context','search_context','propose_components','validate_project_spec'].includes(name),destructiveHint:false,openWorldHint:false}}))};
    else if(request.method==='tools/call'){
     const spec=tools.find(t=>t[0]===request.params.name);if(!spec)throw new Error('TOOL_DENIED');
     const args=request.params.arguments||{};if(Object.keys(args).some(k=>!Object.hasOwn(spec[2],k)))throw new Error('TOOL_INPUT_INVALID');

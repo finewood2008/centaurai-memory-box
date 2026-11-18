@@ -35,8 +35,8 @@ async function verify() {
     client = createPlatformClient({ account, readPreference: async () => false });
     await client.initialize();
     await client.loginPassword({ phone: "13800138000", password: "fake" });
-    const index = new URL("../../local-ui/renderer/index.html", import.meta.url);
-    window = new BrowserWindow({ show: false, width: 1180, height: 900, webPreferences: { preload: fileURLToPath(new URL("../../local-ui/remote-preload.cjs", import.meta.url)), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+    const index = new URL("../../build/app/local-ui/renderer/index.html", import.meta.url);
+    window = new BrowserWindow({ show: false, width: 1180, height: 900, webPreferences: { preload: fileURLToPath(new URL("../../build/app/local-ui/remote-preload.cjs", import.meta.url)), contextIsolation: true, nodeIntegration: false, sandbox: true } });
     window.webContents.on("console-message", event => { if (event.level === "error") errors.push(event.message); });
     registerControlActions({ ipcMain, control: window, controlURL: index.href, client, market: { list: async () => ({ items: [] }) } });
     client.subscribe(state => window.webContents.send("wanx-client:state", state));

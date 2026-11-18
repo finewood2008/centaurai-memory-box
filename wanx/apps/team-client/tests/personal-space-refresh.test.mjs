@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createPersonalSpace } from "../shell/personal-space.mjs";
+import { createPersonalSpace } from "../build/app/shell/personal-space.mjs";
 
 const deferred = () => Promise.withResolvers();
 const failure = code => Object.assign(new Error(code), { code });

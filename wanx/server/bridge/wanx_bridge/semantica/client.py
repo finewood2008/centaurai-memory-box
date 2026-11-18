@@ -22,7 +22,7 @@ from wanx_bridge.semantica import conversation_contract, modeling_contract
 from wanx_bridge.semantica import desktop_workbench as starlink_legacy_workbench
 from wanx_bridge.semantica.document_contract import BLOCK_QUERY, validate_block_page
 from wanx_bridge.semantica.maintenance import MaintenanceError, request_guard
-from wanx_bridge.semantica.transport_contract import grant_ttl, operation_timeout, owner_error
+from wanx_bridge.semantica.transport_contract import grant_ttl, operation_timeout, owner_error, private_import_error, private_search_error
 
 _NAMESPACE = uuid.UUID("8ae54f40-4054-4bba-a2e2-06e1c43d7514")
 _READ = re.compile(
@@ -211,7 +211,20 @@ class SemanticaClient:
     ) -> dict[str, Any]:
         warehouse_id = None
         renaming = method == "PATCH" and re.fullmatch(r"/warehouses/" + _UUID, path) is not None
-        managed = renaming or (_MANAGE_WRITE if method != "GET" else _MANAGE_READ).fullmatch(path)
+        onboarding_root = any(
+            method == verb and re.fullmatch(pattern, path)
+            for verb, pattern, _ in modeling_contract.ROOT_RULES
+        )
+        managed = onboarding_root or renaming or (_MANAGE_WRITE if method != "GET" else _MANAGE_READ).fullmatch(path)
+        if onboarding_root:
+            if self.team:
+                raise SemanticaError("MODELING_HOST_CREATION_REQUIRED", 403)
+            try:
+                modeling_contract.prepare(method, path, payload, query or {})
+            except PermissionError as exc:
+                raise SemanticaError("SEMANTICA_SCOPE_NOT_SELECTABLE", 403) from exc
+            except ValueError as exc:
+                raise SemanticaError("MODELING_INVALID_REQUEST", 422) from exc
         if renaming:
             try:
                 semantica_bootstrap.validate_query(method, path, query or {})
@@ -384,7 +397,7 @@ class SemanticaClient:
             raise SemanticaError("SEMANTICA_SERVICE_UNAVAILABLE") from None
         if renaming and response.status_code == 405:
             raise SemanticaError("SEMANTICA_UPGRADE_REQUIRED", 409)
-        return self.decode(response, native_workbench=native_workbench)
+        return self.decode(response, native_workbench=native_workbench or onboarding_root)
 
     async def search(self, payload: dict[str, Any]) -> dict[str, Any]:
         return await self.request("POST", "/search", payload=payload)
@@ -450,10 +463,10 @@ class SemanticaClient:
             raise SemanticaError("SEMANTICA_SERVICE_UNAVAILABLE") from None
         if response.status_code == 401:
             raise SemanticaError("ACCESS_KEY_INVALID", 403)
-        return self.decode(response)
+        return self.decode(response, public=True)
 
     @staticmethod
-    def decode(response: httpx.Response, *, native_workbench: bool = False) -> dict[str, Any]:
+    def decode(response: httpx.Response, *, native_workbench: bool = False, public: bool = False) -> dict[str, Any]:
         if response.status_code == 401:
             # Service authentication failure must never revoke the WANX user's Host session.
             raise SemanticaError("SEMANTICA_SERVICE_AUTH_FAILED")
@@ -465,6 +478,10 @@ class SemanticaClient:
                 if detail == "当前模型尚不可用或需要重新确认，请打开模型与处理":
                     raise SemanticaError("MODEL_UNAVAILABLE", response.status_code, detail)
                 error = detail if isinstance(detail, dict) else error
+                if not public and (import_code := private_import_error(response.status_code, error)):
+                    raise SemanticaError(import_code, response.status_code)
+                if not public and (search_code := private_search_error(response.status_code, error)):
+                    raise SemanticaError(search_code, response.status_code)
                 code = error.get("code", "")
                 if isinstance(code, str) and (native_workbench or code in {
                     "MODELING_ROUND_ATOMIC_REQUIRED", "MODELING_ROUND_SINGLE_MATERIAL",

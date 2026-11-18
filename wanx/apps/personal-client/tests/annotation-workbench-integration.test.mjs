@@ -515,6 +515,19 @@ test("workbench tasks and reusable schemes remain isolated across account/box ch
   assert.equal((await f.op("schemes")).items.length, 1, "schemes belong to the account rather than a particular box");
 });
 
+test("saved draft tags remain reusable after restart and stay isolated by account and box", async t => {
+  const f = await fixture(t, { count: 2, ai: false });
+  const opened = await f.op("open", { parent: rootId });
+  const page = await f.ready(opened.job.id);
+  await f.op("draft", { jobId: opened.job.id, id: page.items[0].id, patch: { tags: ["历史复用标签"] } });
+  await f.restart();
+  assert.ok((await f.op("schemes")).tags.includes("历史复用标签"));
+  f.switch({ account: { phase: "authenticated", accountId: "synthetic-other" } });
+  assert.equal((await f.op("schemes")).tags.includes("历史复用标签"), false);
+  f.switch({ account: { phase: "authenticated", accountId: "synthetic-owner" }, connection: { deviceId: "other-box" } });
+  assert.equal((await f.op("schemes")).tags.includes("历史复用标签"), false);
+});
+
 test("an account switch during a durable draft save withholds the late response", async t => {
   const f = await fixture(t, { count: 2 });
   const opened = await f.op("open", { parent: rootId }), jobId = opened.job.id;

@@ -252,20 +252,45 @@ test('opt-in upload idle timeout destroys a stalled socket and allows fresh requ
   assert.equal((await gateway.request({path:'/api/personal-space/uploads/test',method:'PUT',body:'retry',idleTimeoutMs:80})).body.toString(), 'ok');
 });
 
-test('upload idle timeout follows activity rather than total duration, and cancellation still wins', async t => {
-  const timers = new Set(); t.after(() => {for(const timer of timers) clearInterval(timer);});
-  const {gateway} = await fixture(t, (incoming, response) => {
+test("upload idle timeout follows activity rather than total duration, and cancellation still wins", async (t) => {
+  const idleTimeoutMs = 1000;
+  const { promise: cancelStarted, resolve: markCancelStarted } = Promise.withResolvers();
+  const { gateway } = await fixture(t, (incoming, response) => {
     incoming.resume();
-    if (incoming.url.endsWith('/cancel')) return;
-    let n=0; const timer=setInterval(()=>{response.write('x');if(++n===8){clearInterval(timer);timers.delete(timer);response.end();}},30);timers.add(timer);
+    if (incoming.url.endsWith("/cancel")) {
+      markCancelStarted();
+      return;
+    }
+
+    // Eight bytes over about 1.4 seconds exceed the idle timeout in total,
+    // with enough room between writes for scheduling delays on the build host.
+    response.write("x");
+    let remaining = 7;
+    const timer = setInterval(() => {
+      response.write("x");
+      if (--remaining === 0) {
+        clearInterval(timer);
+        response.end();
+      }
+    }, 200);
+    response.once("close", () => clearInterval(timer));
   });
-  const started=Date.now();
-  const result=await gateway.request({path:'/api/personal-space/uploads/active',method:'PUT',body:'x',idleTimeoutMs:120});
-  assert.equal(result.body.toString(),'xxxxxxxx');assert.ok(Date.now()-started>120);
-  const controller=new AbortController();
-  const pending=gateway.request({path:'/api/personal-space/uploads/cancel',method:'PUT',body:'x',idleTimeoutMs:1000,signal:controller.signal});
-  setTimeout(()=>controller.abort(),30);
-  await assert.rejects(pending,{code:'ABORT_ERR'});
+
+  const started = performance.now();
+  const result = await gateway.request({
+    path: "/api/personal-space/uploads/active", method: "PUT", body: "x", idleTimeoutMs,
+  });
+  assert.equal(result.body.toString(), "xxxxxxxx");
+  assert.ok(performance.now() - started > idleTimeoutMs);
+
+  const controller = new AbortController();
+  const pending = gateway.request({
+    path: "/api/personal-space/uploads/cancel", method: "PUT", body: "x",
+    idleTimeoutMs: 3000, signal: controller.signal,
+  });
+  await Promise.race([cancelStarted, pending]);
+  controller.abort();
+  await assert.rejects(pending, { code: "ABORT_ERR" });
 });
 
 test('completed upload watchdog does not leak onto a reused socket or a non-opt-in request', async t => {

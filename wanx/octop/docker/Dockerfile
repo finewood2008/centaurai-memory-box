@@ -59,6 +59,27 @@ RUN mkdir -p ../src/octop/dashboard
 RUN NODE_ENV=production NODE_OPTIONS="--max-old-space-size=${NODE_MAX_OLD_SPACE_SIZE}" npm run build:docker
 
 
+# Pinned WANX Builder and dev-kit, assembled from the canonical Host SDK source.
+FROM node:22-bookworm-slim AS builder-runtime
+WORKDIR /build
+COPY package.json ./
+COPY tools/build-app-kit.mjs ./tools/build-app-kit.mjs
+COPY apps/personal-client/host-sdk/ ./apps/personal-client/host-sdk/
+COPY apps/builder/package.json apps/builder/package-lock.json ./apps/builder/
+COPY apps/builder/vendor/ ./apps/builder/vendor/
+COPY apps/builder/backend/ ./apps/builder/backend/
+COPY apps/builder/core/ ./apps/builder/core/
+COPY apps/builder/codex/ ./apps/builder/codex/
+COPY apps/builder/dsh/ ./apps/builder/dsh/
+COPY apps/builder/tools/ ./apps/builder/tools/
+COPY apps/builder/examples/ ./apps/builder/examples/
+COPY apps/builder/templates/ ./apps/builder/templates/
+COPY apps/builder/integration/ ./apps/builder/integration/
+COPY apps/builder/foundation-runtime/ ./apps/builder/foundation-runtime/
+RUN --mount=type=cache,target=/root/.npm npm run build:builder-runtime
+WORKDIR /build/apps/builder
+RUN --mount=type=cache,target=/root/.npm npm ci --include=dev --no-audit
+
 # ---------------------------------------------------------------------------
 # 阶段 2 — Python 运行时
 # ---------------------------------------------------------------------------
@@ -105,6 +126,11 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 COPY --from=ghcr.io/astral-sh/uv:0.7 /uv /uvx /bin/
 
+COPY --from=builder-runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=builder-runtime /usr/local/lib/node_modules/npm/ /usr/local/lib/node_modules/npm/
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+ENV WANX_STUDIO_ROOT=/apps/builder WANX_APP_DEV_KIT_ROOT=/opt/wanx-app-dev-kit WANX_DEVKIT_NPM_CACHE=/opt/wanx-builder-npm-cache
+COPY --from=builder-runtime /build/.wanx-builder-runtime/dev-kit/ /opt/wanx-app-dev-kit/
 WORKDIR /app
 
 # 先安装锁定依赖，仅改源码时可复用此层缓存
@@ -124,6 +150,7 @@ ENV PATH="/app/.venv/bin:$PATH" \
 COPY octop/src/ ./src/
 COPY octop/_build.py ./
 COPY apps/builder/backend/wanx_studio /apps/builder/backend/wanx_studio
+COPY --from=builder-runtime /build/apps/builder/ /apps/builder/
 COPY --from=frontend-builder /build/src/octop/dashboard/ ./src/octop/dashboard/
 
 COPY octop/.env.example ./
@@ -140,6 +167,10 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     && apt-get purge -y --auto-remove build-essential \
     && rm -rf /var/lib/apt/lists/* /tmp/*
 
+# Validate installed routing and standard expert generation/build/package before export.
+RUN python -m wanx_studio.release_check --pipeline
+ENV WANX_DEVKIT_NPM_OFFLINE=1
+RUN --network=none python -m wanx_studio.release_check --pipeline
 RUN mkdir -p /data/.octop
 
 EXPOSE 8088

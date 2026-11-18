@@ -35,6 +35,14 @@ def frozen(p):
     evidence=None
     if x:
         evidence={k:deepcopy(x[k]) for k in ['phase','revision','references','required','gaps','gapDecisions','report'] if k in x}
+        from .capability_gaps import expert_gap_resolutions
+        resolutions=expert_gap_resolutions(p)
+        if resolutions:
+            # A shipped version binds the fixed expert contract, not the old
+            # temporary absence of that contract. Keep the old requirement as
+            # history; import still discards all historical probe authority.
+            evidence['gaps']=[g for g in evidence['gaps'] if g not in resolutions]
+            evidence['resolvedCapabilityGaps']=[{'requirement':g,**deepcopy(proof)} for g,proof in resolutions.items()]
         evidence['interview']={'state':'completed','sync':'saved'}
     return deepcopy({'solution':p['solution'],'confirmation':p['confirmation'],'decisions':p['decisions'],'preparation':evidence,'contracts':deepcopy((x.get('handoff') or {}).get('contracts',{})) if x else {},'engine':deepcopy(p.get('engine')),'provenance':deepcopy(x.get('provenance',[])) if x else []})
 
@@ -58,12 +66,27 @@ def artifact_hash(files,manifest,solution_hash,task_id,expert_contract_digest=No
     if expert_contract_digest is not None:value['expertContractDigest']=expert_contract_digest
     return digest(value)
 
+def standard_artifact_hash(a):
+    """Bind the shipped package and its frozen build contract as one version."""
+    return digest({k:a.get(k) for k in ["standardArtifactVersion","version","snapshot","files","manifest","solutionHash","taskId","projectSpecHash","packageSha256","expertContractDigest"]} | {"generationManifest":a["devKitPackage"].get("generationManifest")})
+
+
 def verify(a):
     expert=a.get('snapshot',{}).get('contracts',{}).get('foundation',{}).get('expertDeployment')
     sealed=a.get('expertContractDigest')
     if sealed is not None and (not expert or digest(expert)!=sealed) or expert and expert.get('profile')=='wanx-expert-app-v1' and sealed is None:
         raise StudioError('ARTIFACT_INTEGRITY_FAILED',409)
-    expected = digest({'packageSha256': a['packageSha256'], 'solutionHash': a['solutionHash'], 'taskId': a['taskId']}) if a.get('devKitPackage') else artifact_hash(a['files'],a['manifest'],a['solutionHash'],a['taskId'],sealed)
+    if a.get('devKitPackage'):
+        try:
+            from .standard_package import validate_standard_package
+            package=a['devKitPackage']
+            if a.get('standardArtifactVersion')!=1 or package['packageSha256']!=a['packageSha256'] or not a.get('snapshot') or not a.get('contentHash'):
+                raise ValueError('unsealed package')
+            validate_standard_package(package['packageBase64'],a['packageSha256'],a['manifest'],version=a['version'])
+            expected=standard_artifact_hash(a)
+        except (StudioError,KeyError,TypeError,ValueError) as error:
+            raise StudioError('ARTIFACT_INTEGRITY_FAILED',409) from error
+    else:expected=artifact_hash(a['files'],a['manifest'],a['solutionHash'],a['taskId'],sealed)
     if a['hash']!=expected or a.get('contentHash',digest({k:a[k] for k in ['files','manifest','bundle','css']}))!=digest({k:a[k] for k in ['files','manifest','bundle','css']}):
         raise StudioError('ARTIFACT_INTEGRITY_FAILED',409)
     if a.get('checkpoint') and (digest(a['checkpoint'])!=a.get('checkpointHash') or a['checkpoint']['artifactHash']!=a['hash']):raise StudioError('ARTIFACT_INTEGRITY_FAILED',409)
@@ -107,7 +130,7 @@ def differences(p,a,base_hash=None):
     labels={'problem':'目标与现状','currentApproach':'目标与现状','successOutcome':'目标与现状','scenarios':'使用流程','features':'功能范围','outOfScope':'功能范围','pages':'页面草图','dataFields':'数据字段','rules':'规则与异常','exceptions':'规则与异常','tests':'验收条件','openQuestions':'待讨论问题'}
     before=old['solution'].get('prd',{}) if old else {};after=target['solution'].get('prd',{}) if target else {}
     sections=list(dict.fromkeys(label for field,label in labels.items() if before.get(field)!=after.get(field)))
-    current=base['manifest']['collections'] if base else {};wanted=a['manifest']['collections']
+    current=base['manifest'].get('collections',{}) if base else {};wanted=a['manifest'].get('collections',{})
     left={c+'.'+k:v for c,fields in current.items() for k,v in fields.items()};right={c+'.'+k:v for c,fields in wanted.items() for k,v in fields.items()}
     return {'sections':sections,'addedFields':sorted(right.keys()-left.keys()),'hiddenFields':sorted(left.keys()-right.keys()),'changedFields':sorted(k for k in right.keys()&left.keys() if right[k]!=left[k]),'addedCapabilities':sorted(set(a['manifest']['capabilities'])-set(base['manifest']['capabilities'] if base else [])),'removedCapabilities':sorted(set(base['manifest']['capabilities'] if base else [])-set(a['manifest']['capabilities']))}
 
@@ -212,7 +235,23 @@ class Versions:
         def change(p):
             self.expected(p,body);check=self.restore_check(owner,pid,body['artifactHash'],body.get('comparisonHash'))
             if check['checkHash']!=body['checkHash'] or not body.get('confirmedByUser'):raise StudioError('VERSION_CHANGED',409)
-            old=source_artifact(p,body['artifactHash']);a=deepcopy(old);task_id='restore_'+uuid4().hex
+            old=source_artifact(p,body['artifactHash'])
+            if old.get('devKitPackage'):
+                # Restoring an immutable ZIP reuses its real version/hash. A
+                # new version number would require a new package and build.
+                q=shadow(p,old)
+                p.update({k:deepcopy(q[k]) for k in ['solution','decisions','confirmation']})
+                p.get('_iterative',{}).pop('contractDraft',None)
+                if 'preparation' in p:p['preparation'].pop('entryIds',None)
+                v=ensure(p)
+                if v['iteration']:
+                    v['iterations'].append({**v['iteration'],'state':'abandoned','draft':frozen(p),'at':time.time()});v['iteration']=None
+                if trial:
+                    v['iteration']={'id':uuid4().hex,'baseHash':old['hash'],'latestHash':old['hash'],'goal':'恢复自 v'+old['version'],'state':'trial','createdAt':time.time()}
+                    p['stage']='preview';p['acceptance']=None;self.bump(p)
+                else:self.adoption(p,old,'user-restore',body['operationId'])
+                return
+            a=deepcopy(old);task_id='restore_'+uuid4().hex
             a.update({'taskId':task_id,'version':next_version(p),'createdAt':time.time(),'restoredFrom':old['hash'],'baseHash':old['hash'],'iterationId':None,'summary':'恢复自 v'+old['version']})
             a['hash']=artifact_hash(a['files'],a['manifest'],a['solutionHash'],task_id,a.get('expertContractDigest'))
             if a.get('checkpoint'):

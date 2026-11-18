@@ -480,6 +480,28 @@ Octop 只保留注册和调用连接，鉴权依赖、模型服务、团队权�
 用户标识和 box/application 标识继续使用原值；不要重新初始化数据目录。
 Semantica 仓库的旧 `integration/wanx/install.py` 仅核对新布局，不再向 Octop 复制代码。
 
+## Semantica 自动抽取候选数量
+
+材料工作流详情及列表的 `extraction_review` 与
+`GET /api/semantica/warehouses/{warehouse_id}/workbench/documents/{document_id}/corrections/current-extraction`
+使用同一组候选数量含义。Bridge 原样转发 Semantica 的响应，不计算或补齐数量。
+
+| 字段 | 含义 |
+| --- | --- |
+| `entity_count` / `relation_count` | 本轮全部实体 / 关系候选，包含未通过核验的候选；不代表可采纳或已发布数量 |
+| `adoptable_entity_count` | 可以加入草稿的实体候选数量 |
+| `adoptable_relation_count` | 可以加入草稿的关系候选数量，可能包含仍需人工核对的不确定关系 |
+| `excluded_candidate_count` | 因证据、端点或约束检查未通过而不能直接采纳的候选总数，不等同于全部是错误事实 |
+
+三个新增字段均为可选的非负整数；缺失或 `null` 表示旧服务未提供，不能解释为零。
+Starlink 应使用可采纳数量判断候选空状态，区分“未抽取到候选”和“候选全部未通过核验”。
+同一轮结果的全部候选总数等于两个可采纳数量与已排除数量之和；分页或按种类筛选后的
+列表数量应以对应列表的 `total` 为准，不用单页 `items.length` 推断总数。
+
+这些数量仅用于展示和选择候选，不表示发布授权。原有 `publication_policy`、发布预览、
+`ready_for_confirmation`、编辑租约、材料访问隔离和最终发布确认继续有效。
+此补充不增加开关、接口或客户端发布权限；旧服务不返回新增字段时，Bridge 不插入默认值。
+
 ## Semantica 迁移期间的请求维护
 
 `semantica.maintenance` 提供固定的 `wanx.semantica-maintenance.v1` 本地能力。

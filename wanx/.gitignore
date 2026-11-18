@@ -67,7 +67,6 @@ coverage.xml
 
 # Node / frontend
 node_modules/
-apps/personal-client/applications/starlink/
 apps/personal-client/shell/native/bin/
 npm-debug.log*
 yarn-debug.log*
@@ -129,9 +128,6 @@ standard-sdk/
 zhijun-lan-test/
 *.sqlite3
 
-# Built from dashboard/src/maintenance via npm run build:maintenance.
-apps/personal-client/local-ui/maintenance/
-
 # Isolated local client profiles
 .local/
 
@@ -151,58 +147,14 @@ apps/personal-client/local-ui/maintenance/
 # Local integration probes, reports, and staging copies
 /.codex-tmp/
 
-# Generated personal Starlink integration
-/apps/personal-client/shell/personal-data-service.mjs
-/apps/personal-client/local-ui/memory/
-/apps/personal-client/local-ui/renderer/data-view.js
-/apps/personal-client/local-ui/renderer/data.css
-/apps/team-client/applications/starlink/vendor/wanx-host-sdk/
-/apps/team-client/applications/starlink/wanx-app-kit/
-
-# Personal workshop assembled runtime; source lives in apps/builder/integration.
-apps/personal-client/workshop/
-apps/personal-client/shell/personal-workshop.mjs
-apps/personal-client/local-ui/renderer/workshop.js
-apps/personal-client/local-ui/renderer/workshop.css
-apps/personal-client/local-ui/renderer/studio-product.js
-apps/personal-client/local-ui/renderer/studio-home.css
-apps/personal-client/local-ui/renderer/construction.css
-
 # Local session / tooling scratch
 /out/
 .v2c/
 .video_agent/
 vf_admin/
 
-# Artwork metadata copied from the versioned Builder integration sources.
-/apps/personal-client/local-ui/renderer/assets/material-v1/manifest.json
-/apps/personal-client/local-ui/renderer/assets/section-icons-v2/prompts.json
+# Client runtime trees are assembled under apps/*/build/app/.
+# The build/ rule above covers copied integrations, bundles and app runtimes.
 
-# Keep generated artifacts from pre-workspace checkouts local after migration.
-/src/octop/dashboard/
-/wanx-*/release/
-/wanx-*/local-ui/maintenance/
-/wanx-client/applications/starlink/
-/wanx-client/workshop/
-/wanx-client/shell/personal-data-service.mjs
-/wanx-client/shell/personal-workshop.mjs
-/wanx-client/local-ui/renderer/data-view.js
-/wanx-client/local-ui/renderer/data.css
-/wanx-client/local-ui/renderer/workshop.js
-/wanx-client/local-ui/renderer/workshop.css
-/wanx-client/local-ui/renderer/studio-product.js
-/wanx-client/local-ui/renderer/studio-home.css
-/wanx-client/local-ui/renderer/construction.css
-/wanx-client/local-ui/renderer/assets/material-v1/manifest.json
-/wanx-client/local-ui/renderer/assets/section-icons-v2/prompts.json
-/wanx-team-client/applications/starlink/vendor/wanx-host-sdk/
-/wanx-team-client/applications/starlink/wanx-app-kit/
-/wanx-team-client/applications/studio.mjs
-/wanx-team-client/applications/studio-runtime/
-/wanx-team-client/studio/
-/wanx-team-client/shell/team-data-service.mjs
-/wanx-team-client/shell/team-service.mjs
-/wanx-team-client/shell/wanx-mcp-bridge.mjs
-/wanx-team-client/local-ui/renderer/data-view.js
-/wanx-team-client/local-ui/renderer/device-setup.bundle.js
-/wanx-team-client/local-ui/renderer/wallet.bundle.js
+# Generated pinned Builder runtime and App Kit assembly.
+/.wanx-builder-runtime/

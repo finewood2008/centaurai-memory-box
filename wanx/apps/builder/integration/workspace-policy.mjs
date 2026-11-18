@@ -32,6 +32,10 @@ export function studioRoute(raw,method='GET'){
  const url=new URL(raw,'http://studio.invalid');
  if(url.origin!=='http://studio.invalid'||!url.pathname.startsWith('/api/app-studio/')||url.username||url.password)throw Error('STUDIO_PATH_DENIED');
  const tail=url.pathname.slice(16);
+ if(/^projects\/[a-f0-9]{32}\/dev-kit$/.test(tail)){
+  if(method!=='GET'||raw!==url.pathname)throw Error('STUDIO_PATH_DENIED');
+  return url.pathname;
+ }
  if(/^projects\/[a-f0-9]{32}\/deployment\/(expert|release)$/.test(tail)){
   if(raw!==url.pathname||!(tail.endsWith('/expert')?['GET','PUT'].includes(method):method==='POST'))throw Error('STUDIO_PATH_DENIED');
   return url.pathname;

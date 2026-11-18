@@ -5,7 +5,7 @@ import path from "node:path";
 import { mkdtemp, rm, readFile, writeFile, readdir } from "node:fs/promises";
 import { createHash, generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { createDefaultApplicationDelivery, createDefaultApplicationStore } from "../applications/delivery.mjs";
-import { createApplicationManager } from "../applications/manager.mjs";
+import { createApplicationManager } from "../build/app/applications/manager.mjs";
 import { createApplicationMarket } from "../applications/market.mjs";
 import { writeApplicationZip } from "./support/application-zip.mjs";
 

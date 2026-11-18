@@ -1196,7 +1196,7 @@ test('v2 wallet requests a server quote before submitting a custom amount', asyn
   const quotedOrder = { ...order, amount_fen: 1100, credit_display: { currency_rule_id: 'usd-credit-100-v2', credit_scale: 6, grant_credit_atoms: '1100000000' },
     grant_credit_atoms: '1100000000', display_state: 'credited', payment_state: 'paid', fulfillment_state: 'credited', payment_action: null };
   const { view, seen } = setup({ request: async (action, input) => {
-    if (action === 'wallet.catalog') return envelope({ view_version: '2', currency_rule_id: 'usd-credit-100-v2', recharge_enabled: true, custom_amount: { min_fen: 1000, max_fen: 100000, step_fen: 100 }, payment_channels: ['alipay'] });
+    if (action === 'wallet.catalog') return envelope({ view_version: '2', currency_rule_id: 'usd-credit-100-v2', recharge_enabled: true, custom_amount: { min_fen: 100, max_fen: 10000000000, step_fen: 100 }, payment_channels: ['alipay'] });
     if (action === 'wallet.balance') return envelope({ ...balance, billing_backend: 'qeetoken' });
     if (action === 'wallet.wallet') return envelope(wallet);
     if (action === 'wallet.usage') return envelope(usage);
@@ -1220,7 +1220,7 @@ test('QR conversion failures are recorded as failed payment stages', async () =>
 });
 
 const v2PurchaseCatalog = { view_version: '2', currency_rule_id: 'usd-credit-100-v2', recharge_enabled: true,
-  payment_channels: ['alipay', 'wechat'], custom_amount: { min_fen: 1000, max_fen: 100000, step_fen: 100 },
+  payment_channels: ['alipay', 'wechat'], custom_amount: { min_fen: 100, max_fen: 10000000000, step_fen: 100 },
   products: [{ product_id: 'p50', version: 'v2', name: '50元充值', amount_fen: 5000, grant_credit_atoms: '5000000000', enabled: true }] };
 
 test('v2 product confirmation preserves product identity and denomination for either payment channel', async () => {
@@ -1464,4 +1464,275 @@ test('entering the wallet during an order-only read refreshes its data as soon a
   view.visible(true); delayOrder = false;
   release(envelope(order)); await new Promise(resolve => setImmediate(resolve));
   assert.ok(seen.slice(before).some(([name]) => name === 'wallet.balance'));
+});
+
+function automaticCustomQuoteSetup(overrides = {}) {
+  const timers = new Map(), store = overrides.storage || storage();
+  const value = setup({ ...overrides, storage: store,
+    schedule: (fn, ms) => { const token = {}; timers.set(token, { fn, ms }); return token; },
+    cancel: token => timers.delete(token),
+    request: async (action, input) => {
+      if (action === 'wallet.catalog') return envelope(v2PurchaseCatalog);
+      return overrides.request?.(action, input);
+    },
+  });
+  return { ...value, store,
+    quoteTimerCount: () => [...timers.values()].filter(timer => timer.ms === 300).length,
+    async flushQuote() {
+      const entry = [...timers].find(([, timer]) => timer.ms === 300);
+      assert.ok(entry, 'valid custom input schedules an automatic server quote');
+      const [token, timer] = entry; timers.delete(token); timer.fn();
+      await new Promise(resolve => setImmediate(resolve));
+    },
+  };
+}
+
+const automaticQuote = amountFen => envelope({ view_version: '2', currency_rule_id: 'usd-credit-100-v2',
+  rule_id: 'v2', credit_scale: 6, amount_fen: amountFen, grant_credit_atoms: String(BigInt(amountFen) * 1000000n) });
+
+const nextWalletTick = () => new Promise(resolve => setImmediate(resolve));
+
+test('v2 invalid custom input explains the supported range without asking the service or creating an intent', async () => {
+  const { view, seen, store, quoteTimerCount } = automaticCustomQuoteSetup();
+  await view.refresh(); await view.action('credits-open');
+  await view.action('credits-custom-change', { amount: '0' });
+  const html = view.render();
+  assert.match(html, /id="wallet-custom-amount"[^>]*aria-invalid="true"/);
+  assert.match(html, /请输入大于 0 的整数金额/);
+  assert.doesNotMatch(html, /购买金额或商品无效/);
+  assert.equal(quoteTimerCount(), 0);
+  assert.equal(seen.some(([name]) => name === 'wallet.quote' || name === 'wallet.createOrder'), false);
+  assert.equal(store.getItem('wanx.credit.purchase.v1:alice'), null);
+});
+
+test('v2 valid boundary amounts automatically use server pricing and remain drafts until explicit payment', async () => {
+  for (const yuan of ['1', '10', '1000', '1001']) {
+    const amountFen = Number(yuan) * 100;
+    const { view, seen, store, flushQuote } = automaticCustomQuoteSetup({ request: (action, input) => {
+      if (action === 'wallet.quote') return automaticQuote(input.amount_fen);
+      if (action === 'wallet.createOrder') return envelope({ ...order, amount_fen: input.amount_fen,
+        grant_credit_atoms: String(BigInt(input.amount_fen) * 1000000n) });
+    } });
+    await view.refresh(); await view.action('credits-open');
+    await view.action('credits-custom-change', { amount: yuan });
+    assert.equal(seen.some(([name]) => name === 'wallet.quote'), false, 'wait for input debounce');
+    await flushQuote();
+    assert.deepEqual(seen.filter(([name]) => name === 'wallet.quote').map(([, input]) => input), [{ amount_fen: amountFen }]);
+    const html = view.render();
+    assert.doesNotMatch(html, /data-action="credits-quote"|data-action="credits-custom-buy"|获取报价|选择此金额/);
+    assert.match(html, /class="wallet-custom" data-selected="true"/);
+    assert.match(html, new RegExp(`应付金额[\\s\\S]*?¥${yuan}`));
+    assert.equal(seen.some(([name]) => name === 'wallet.createOrder'), false);
+    assert.equal(store.getItem('wanx.credit.purchase.v1:alice'), null);
+    await view.action('credits-pay');
+    const creates = seen.filter(([name]) => name === 'wallet.createOrder');
+    assert.equal(creates.length, 1);
+    assert.deepEqual(creates[0][1], { purchase_intent_id: 'intent-1', amount_fen: amountFen,
+      currency_rule_id: 'usd-credit-100-v2', payment_channel: 'alipay' });
+  }
+});
+
+test('v2 automatic custom pricing debounces continued typing and keeps the input editable', async () => {
+  let resolveQuote;
+  const { view, seen, flushQuote, quoteTimerCount } = automaticCustomQuoteSetup({ request: action => {
+    if (action === 'wallet.quote') return new Promise(resolve => { resolveQuote = resolve; });
+  } });
+  await view.refresh(); await view.action('credits-open');
+  for (const amount of ['1', '10', '100', '1000']) await view.action('credits-custom-change', { amount });
+  assert.equal(quoteTimerCount(), 1);
+  await flushQuote();
+  assert.deepEqual(seen.filter(([name]) => name === 'wallet.quote').map(([, input]) => input), [{ amount_fen: 100000 }]);
+  assert.doesNotMatch(view.render(), /id="wallet-custom-amount"[^>]*disabled/);
+  await view.action('credits-custom-change', { amount: '20' });
+  assert.match(view.render(), /id="wallet-custom-amount"[^>]*value="20"/);
+  resolveQuote(automaticQuote(100000)); await nextWalletTick();
+  assert.doesNotMatch(view.render(), /应付金额[\s\S]*?<strong>¥1000<\/strong>/);
+  assert.equal(seen.some(([name]) => name === 'wallet.createOrder'), false);
+});
+
+test('v2 late automatic quotes cannot overwrite newer custom input or a selected fixed product', async () => {
+  const resolvers = new Map();
+  const { view, seen, flushQuote } = automaticCustomQuoteSetup({ request: (action, input) => {
+    if (action === 'wallet.quote') return new Promise(resolve => resolvers.set(input.amount_fen, resolve));
+  } });
+  await view.refresh(); await view.action('credits-open');
+  await view.action('credits-custom-change', { amount: '10' }); await flushQuote();
+  await view.action('credits-custom-change', { amount: '20' }); await flushQuote();
+  resolvers.get(2000)(automaticQuote(2000)); await nextWalletTick();
+  resolvers.get(1000)(automaticQuote(1000)); await nextWalletTick();
+  assert.match(view.render(), /id="wallet-custom-amount"[^>]*value="20"/);
+  assert.match(view.render(), /应付金额[\s\S]*?<strong>¥20<\/strong>/);
+  await view.action('credits-custom-change', { amount: '30' }); await flushQuote();
+  await view.action('credits-buy', { amount: 'p50' });
+  resolvers.get(3000)(automaticQuote(3000)); await nextWalletTick();
+  assert.match(view.render(), /data-amount="p50" aria-pressed="true"/);
+  assert.match(view.render(), /应付金额[\s\S]*?<strong>¥50<\/strong>/);
+  assert.equal(seen.some(([name]) => name === 'wallet.createOrder'), false);
+});
+
+test('v2 late quote rejection from an old account cannot contaminate the next account', async () => {
+  let rejectQuote;
+  const { view, seen, store, flushQuote } = automaticCustomQuoteSetup({ request: action => {
+    if (action === 'wallet.quote') return new Promise((_resolve, reject) => { rejectQuote = reject; });
+  } });
+  await view.refresh(); await view.action('credits-open');
+  await view.action('credits-custom-change', { amount: '10' }); await flushQuote();
+  view.reset(JSON.stringify(['bob', 'client-2'])); await view.refresh(); await view.action('credits-open');
+  rejectQuote(Object.assign(new Error('VALIDATION_ERROR'), { code: 'VALIDATION_ERROR', request_id: 'old-account-quote' }));
+  await nextWalletTick();
+  assert.doesNotMatch(view.render(), /old-account-quote|购买金额或商品无效/);
+  assert.match(view.render(), /id="wallet-custom-amount"[^>]*value=""/);
+  assert.equal(seen.some(([name]) => name === 'wallet.createOrder'), false);
+  assert.equal(store.getItem('wanx.credit.purchase.v1:bob'), null);
+});
+
+test('v2 editing after an automatic pricing failure retries without making an order', async () => {
+  let fail = true;
+  const { view, seen, store, flushQuote } = automaticCustomQuoteSetup({ request: (action, input) => {
+    if (action === 'wallet.quote') {
+      if (fail) throw Object.assign(new Error('SERVICE_UNAVAILABLE'), { code: 'SERVICE_UNAVAILABLE' });
+      return automaticQuote(input.amount_fen);
+    }
+  } });
+  await view.refresh(); await view.action('credits-open');
+  await view.action('credits-custom-change', { amount: '10' }); await flushQuote();
+  assert.doesNotMatch(view.render(), /id="wallet-custom-amount"[^>]*disabled/);
+  fail = false;
+  await view.action('credits-custom-change', { amount: '11' }); await flushQuote();
+  assert.match(view.render(), /应付金额[\s\S]*?<strong>¥11<\/strong>/);
+  assert.equal(seen.filter(([name]) => name === 'wallet.quote').length, 2);
+  assert.equal(seen.some(([name]) => name === 'wallet.createOrder'), false);
+  assert.equal(store.getItem('wanx.credit.purchase.v1:alice'), null);
+});
+
+test('v2 closing the dialog discards late pricing and reopening obtains a fresh quote', async () => {
+  const resolvers = [];
+  const { view, seen, store, flushQuote, quoteTimerCount } = automaticCustomQuoteSetup({ request: action => {
+    if (action === 'wallet.quote') return new Promise(resolve => resolvers.push(resolve));
+  } });
+  await view.refresh(); await view.action('credits-open');
+  await view.action('credits-custom-change', { amount: '10' }); await flushQuote();
+  await view.action('credits-dismiss');
+  resolvers[0](automaticQuote(1000)); await nextWalletTick();
+  assert.doesNotMatch(view.render(), /id="wallet-purchase-title"/);
+  assert.equal(quoteTimerCount(), 0);
+  await view.action('credits-open');
+  assert.doesNotMatch(view.render(), /应付金额[\s\S]*?<strong>¥10<\/strong>/);
+  assert.equal(quoteTimerCount(), 1);
+  await flushQuote(); resolvers[1](automaticQuote(1000)); await nextWalletTick();
+  assert.match(view.render(), /应付金额[\s\S]*?<strong>¥10<\/strong>/);
+  assert.equal(seen.filter(([name]) => name === 'wallet.quote').length, 2);
+  assert.equal(seen.some(([name]) => name === 'wallet.createOrder'), false);
+  assert.equal(store.getItem('wanx.credit.purchase.v1:alice'), null);
+});
+
+
+test('one yuan with a stale ten-yuan catalog explains the server policy instead of invalid integer syntax', async () => {
+  const { view } = setup({ request: action => action === 'wallet.catalog' ? envelope({ ...v2PurchaseCatalog,
+    custom_amount: { min_fen: 1000, max_fen: 100000, step_fen: 100 } }) : undefined });
+  await view.refresh(); await view.action('credits-open');
+  await view.action('credits-custom-change', { amount: '1' });
+  assert.match(view.render(), /服务器仍使用旧充值规则，尚不支持此金额，请更新服务端后重试/);
+  assert.doesNotMatch(view.render(), /请输入大于 0 的整数金额/);
+});
+
+test('opening a purchase reloads published custom policy and enables one yuan without restarting', async () => {
+  let updated = false;
+  const { view, seen } = setup({ request: action => action === 'wallet.catalog' ? envelope({ ...v2PurchaseCatalog,
+    custom_amount: { min_fen: updated ? 100 : 1000, max_fen: 10000000000, step_fen: 100 } }) : undefined });
+  await view.refresh(); await view.action('credits-custom-change', { amount: '1' });
+  updated = true;
+  await view.action('credits-open');
+  assert.equal(seen.filter(([action]) => action === 'wallet.catalog').length, 2);
+  assert.match(view.render(), /id="wallet-custom-amount"[^>]*aria-invalid="false"/);
+});
+
+
+test('closing or switching account discards an unfinished purchase catalog read', async () => {
+  for (const change of ['close', 'account']) {
+    let delay = false, resolveCatalog;
+    const { view } = setup({ request: action => {
+      if (action === 'wallet.catalog') return delay ? new Promise(resolve => { resolveCatalog = resolve; }) : envelope(v2PurchaseCatalog);
+    } });
+    await view.refresh(); delay = true;
+    const opening = view.action('credits-open');
+    if (change === 'close') await view.action('credits-dismiss');
+    else view.reset(JSON.stringify(['bob', 'client-2']));
+    resolveCatalog(envelope({ ...v2PurchaseCatalog, products: [{ ...v2PurchaseCatalog.products[0], name: 'late-catalog-product' }] }));
+    await opening;
+    assert.equal(view.isOpen(), false);
+    assert.doesNotMatch(view.render(), /late-catalog-product/);
+  }
+});
+
+test('opening an existing payment does not refresh catalog or reprice the purchase', async () => {
+  const { view, seen } = setup({ request: action => {
+    if (action === 'wallet.catalog') return envelope(v2PurchaseCatalog);
+    if (action === 'wallet.orders') return envelope({ items: [order] });
+  } });
+  await view.refresh();
+  const catalogs = seen.filter(([action]) => action === 'wallet.catalog').length;
+  await view.action('credits-open');
+  assert.equal(seen.filter(([action]) => action === 'wallet.catalog').length, catalogs);
+  assert.match(view.render(), /data-step="payment"/);
+});
+
+
+test('a late page refresh catalog cannot overwrite a newer purchase policy', async () => {
+  let reads = 0, release;
+  const { view } = setup({ request: action => {
+    if (action === 'wallet.catalog') {
+      reads++;
+      if (reads === 2) return new Promise(resolve => { release = resolve; });
+      return envelope(v2PurchaseCatalog);
+    }
+  } });
+  await view.refresh();
+  const refreshing = view.refresh();
+  await nextWalletTick();
+  await view.action('credits-open');
+  release(envelope({ ...v2PurchaseCatalog, custom_amount: { min_fen: 1000, max_fen: 100000, step_fen: 100 } }));
+  await refreshing;
+  await view.action('credits-custom-change', { amount: '1' });
+  assert.match(view.render(), /id="wallet-custom-amount"[^>]*aria-invalid="false"/);
+});
+
+
+test('focusing an existing custom amount replaces a fixed product before confirming payment', async () => {
+  const { view, seen, flushQuote, quoteTimerCount } = automaticCustomQuoteSetup({ request: (action, input) => {
+    if (action === 'wallet.quote') return automaticQuote(input.amount_fen);
+    if (action === 'wallet.createOrder') return envelope({ ...order, amount_fen: input.amount_fen });
+  } });
+  await view.refresh(); await view.action('credits-open');
+  await view.action('credits-custom-change', { amount: '13' }); await flushQuote();
+  await view.action('credits-buy', { amount: 'p50' });
+  assert.match(view.render(), /应付金额[\s\S]*?<strong>¥50<\/strong>/);
+  await view.action('credits-custom');
+  assert.match(view.render(), /class="wallet-custom" data-selected="true"/);
+  assert.doesNotMatch(view.render(), /data-amount="p50" aria-pressed="true"/);
+  assert.match(view.render(), /data-action="credits-pay"[^>]*disabled/);
+  assert.equal(quoteTimerCount(), 1);
+  await view.action('credits-custom');
+  assert.equal(quoteTimerCount(), 1, 'focus restoration must not reschedule the quote');
+  await flushQuote();
+  const quotes = seen.filter(([name]) => name === 'wallet.quote').length;
+  await view.action('credits-custom');
+  assert.equal(quoteTimerCount(), 0, 'restoring focus after pricing must not quote again');
+  assert.equal(seen.filter(([name]) => name === 'wallet.quote').length, quotes);
+  assert.match(view.render(), /应付金额[\s\S]*?<strong>¥13<\/strong>/);
+  await view.action('credits-pay');
+  assert.equal(seen.find(([name]) => name === 'wallet.createOrder')[1].amount_fen, 1300);
+});
+
+test('focusing an empty custom amount deselects a fixed product and disables payment', async () => {
+  const { view, seen, quoteTimerCount } = automaticCustomQuoteSetup();
+  await view.refresh(); await view.action('credits-open');
+  await view.action('credits-buy', { amount: 'p50' });
+  await view.action('credits-custom');
+  assert.match(view.render(), /class="wallet-custom" data-selected="true"/);
+  assert.match(view.render(), /data-action="credits-pay"[^>]*disabled/);
+  assert.doesNotMatch(view.render(), /应付金额[\s\S]*?<strong>¥50<\/strong>/);
+  assert.equal(quoteTimerCount(), 0);
+  await view.action('credits-pay');
+  assert.equal(seen.some(([name]) => name === 'wallet.createOrder'), false);
 });

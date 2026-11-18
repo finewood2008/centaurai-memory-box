@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any, Literal
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 from wanx_bridge.semantica.client import SemanticaError
+from wanx_bridge.zhijun_memory import MemoryConflict, MemoryMissing, run_memory
 
 from octop.api.deps import current_user, get_server
 from octop.i18n import tr
@@ -19,7 +21,7 @@ from octop.infra.agents.assistant_knowledge import (
     KnowledgeReader,
     KnowledgeSources,
 )
-from octop.infra.agents.assistant_profile import AssistantProfiles
+from octop.infra.agents.assistant_profile import AssistantProfiles, is_assistant_profile
 from octop.infra.agents.assistant_space import AssistantSpaceGrants
 from octop.infra.personal_space.service import SpaceError
 
@@ -258,6 +260,9 @@ class AssistantProfileResponse(BaseModel):
     agent_id: str = Field(description="Current user's private general-expert instance.")
     template_id: str = Field(description="Bundled expert template; always default.")
     default_model: str | None = Field(description="Expert default; turns may override it.")
+    sidebar_sources: bool
+    sidebar_evidence: bool = False
+    sidebar_agent_scope: bool = False
 
 
 @router.post(
@@ -279,7 +284,86 @@ async def ensure_assistant(
     if service is None:
         service = AssistantProfiles(server)
         request.app.state.assistant_profiles = service
-    return await service.ensure(user)
+    result = await service.ensure(user)
+    personal = getattr(user, "local_team", None) is None
+    return {
+        **result,
+        "sidebar_sources": personal,
+        "sidebar_evidence": personal,
+        "sidebar_agent_scope": personal,
+    }
+
+
+class SidebarMemoryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    action: Literal["remember", "correct", "forget"]
+    requestId: UUID
+    id: UUID | None = None
+    text: str = Field(default="", max_length=3000)
+    threadId: str | None = Field(default=None, max_length=128)
+    messageId: str | None = Field(default=None, max_length=128)
+
+
+def _sidebar_owner(user: Any, server: Any) -> Any:
+    if (
+        user.application_id != "wanx"
+        or getattr(user, "disabled", False)
+        or getattr(user, "local_team", None) is not None
+    ):
+        raise HTTPException(403)
+    existing = AssistantProfiles(server)._existing(user.id)
+    if (
+        not existing
+        or not existing.enabled
+        or not is_assistant_profile(existing, server.services.user_repo)
+    ):
+        raise HTTPException(403)
+    return existing
+
+
+@router.get("/assistant/sidebar-memory")
+async def sidebar_memory_search(
+    query: str = Query(default="", max_length=300),
+    limit: int = Query(default=20, ge=1, le=50),
+    offset: int = Query(default=0, ge=0),
+    user: Any = Depends(current_user),
+    server: Any = Depends(get_server),
+) -> dict[str, Any]:
+    _sidebar_owner(user, server)
+    return await asyncio.to_thread(
+        run_memory,
+        server.paths.root,
+        user.id,
+        {"action": "search", "query": query.strip(), "limit": limit, "offset": offset},
+    )
+
+
+@router.post("/assistant/sidebar-memory")
+async def sidebar_memory(
+    body: SidebarMemoryRequest,
+    user: Any = Depends(current_user),
+    server: Any = Depends(get_server),
+) -> dict[str, Any]:
+    existing = _sidebar_owner(user, server)
+    if (body.action != "remember" and not body.id) or (
+        body.action != "forget" and (not body.text or "\0" in body.text)
+    ):
+        raise HTTPException(422)
+    if body.threadId:
+        thread = server.services.thread_repo.get(body.threadId)
+        if not thread or thread.user_id != user.id or thread.agent_id != existing.agent_id:
+            raise HTTPException(404)
+    try:
+        return await asyncio.to_thread(
+            run_memory, server.paths.root, user.id, body.model_dump(mode="json", exclude_none=True)
+        )
+    except MemoryMissing as exc:
+        raise HTTPException(404) from exc
+    except MemoryConflict as exc:
+        raise HTTPException(409) from exc
+    except ValueError as exc:
+        raise HTTPException(422) from exc
 
 
 class AssistantHistoryEntry(BaseModel):

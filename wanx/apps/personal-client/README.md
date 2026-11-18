@@ -17,8 +17,10 @@ npm run dev:web
 
 # 桌面源码开发：Node >= 22.14，Go >= 1.26；macOS 还需 Xcode Command Line Tools
 npm ci --prefix apps/builder
+npm ci --prefix apps/starlink/frontend
 npm ci --prefix octop/dashboard
 npm ci --prefix apps/personal-client
+npm ci --prefix apps/memory
 npm run start:mini
 
 # 跨工程测试所需的 Python 环境
@@ -30,6 +32,10 @@ npm --prefix apps/personal-client run test:native
 # 盒端 bridge 与原生 Octop 公共接口合同测试
 npm run test:bridge
 ```
+
+客户端运行目录统一装配到 `build/app/`，开发启动与打包都使用此目录。Builder 集成源码位于 `../builder/integration/`，构建不会再向客户端的 `shell/`、`local-ui/` 等源码目录写入副本。`build/` 可删除后重新构建，不要直接编辑其中的文件。
+
+「星图」面板源码位于 [`../starlink/`](../starlink/README.md)，在主窗口内直接提供建仓、资料导入与自动抽取、图谱、检索和本体管理。`build:studio` 自动构建和装配星图，不依赖外部 Starlink 项目或“打开完整版”。接入边界见[迁移说明](../../docs/applications/starlink-panel-migration.md)。
 
 Builder 与 Dashboard 的依赖供启动前的应用组装和维护页面构建使用；只安装个人版依赖不能完成首次启动。桌面端连接盒子时无需在本机启动 Octop 服务。`npm run start:client` 和 `npm start` 仍是个人版入口。
 
@@ -105,7 +111,7 @@ Dashboard 按需在独立临时 Electron session 中打开，不随连接自动�
 
 应用首页通过在线市场 API 查询候选、授权下载并验证签名安装包。应用包可复用万象运行时（`launchMode: "shared"`，默认），也可自带完整 Electron（`launchMode: "bundled"`，需声明系统/架构并接入 SDK 的 Electron 生命周期 helper）。同一应用只展示一个当前版本，安装更高 SemVer 版本后在下次打开时完成旧进程回收并切换；历史版本无法比较时先选择当前版本。停止和退出会等待应用主进程退出，超时强制终止，回收失败会明确报错。完整包的入口是包内可执行程序；`.dmg`、`.msi` 或安装向导 `.exe` 不能直接导入。本地 ZIP／目录安装保留为默认关闭的开发 IPC 入口，正常页面不展示。包结构与接入示例见 [WANX Host 应用接入](../../docs/applications/wanx-host-app-integration.md)。
 
-Host 和共享运行时应用启动经过 `shell/entry.mjs`：普通启动进入 Host；市场 `--wanx-managed-app` 子进程先验签，开发包 `--wanx-application` 子进程校验本地记录，两者都只加载已安装清单指定的 JS 入口，在 Host 单实例锁和网络初始化之前分流。开发启动会额外传入万象源码目录，打包版直接复用可执行文件，不能依赖只适用于默认 Electron 启动器的 `--app` 参数。独立运行时应用直接启动包内可执行程序，通过 SDK helper 对接相同的启动协议。两种应用均使用独立 Chromium 数据目录，窗口完成首次页面加载后才向父进程报告启动成功；提前退出、加载失败或 30 秒未就绪会撤销该启动会话，并在首页提示重试。业务 API、Host SDK 的传输接口和 Web/LAN 模式不变。
+Host 和共享运行时应用启动经过 `shell/entry.mjs`：普通启动进入 Host；市场 `--wanx-managed-app` 子进程先验签，开发包 `--wanx-application` 子进程校验本地记录，两者都只加载已安装清单指定的 JS 入口，在 Host 单实例锁和网络初始化之前分流。开发启动会额外传入万象的 `build/app/` 运行目录，打包版直接复用可执行文件，不能依赖只适用于默认 Electron 启动器的 `--app` 参数。独立运行时应用直接启动包内可执行程序，通过 SDK helper 对接相同的启动协议。两种应用均使用独立 Chromium 数据目录，窗口完成首次页面加载后才向父进程报告启动成功；提前退出、加载失败或 30 秒未就绪会撤销该启动会话，并在首页提示重试。业务 API、Host SDK 的传输接口和 Web/LAN 模式不变。
 
 发布前可设置 `WANX_PACKAGED_EXECUTABLE` 为打包程序的可执行文件路径，运行 `node --test tests/packaged-application-seam.test.mjs`。该 seam 使用临时用户目录，验证真实打包进程进入 manifest 入口，以及应用异常时返回失败，不会读取真实盒子或账号。
 
@@ -214,9 +220,15 @@ macOS 正式客户端请从仓库根目录运行独立入口（市场应用使�
 应用提交方还必须随安装包交付图标、Logo、真实产品截图、1–3 张产品介绍海报及资料索引；具体规格与人工审核标准见 [应用上架素材规范](../../docs/applications/wanx-marketplace-submission-assets.md)。当前六款内置介绍页使用产品海报，不再展示本机采集的界面截图。
 ## 私人记忆盒子接入
 
+「我的 AI」的 CLI 任务支持 Windows 与 macOS。Windows 使用独立 PowerShell 窗口展示提示词、工作目录和资料范围，按 Enter 后重新核验当前账号与盒子授权，再启动 CLI；关闭或取消不会执行任务。支持已安装的原生可执行程序，以及 Codex、Gemini、Claude Code 的标准 npm 安装入口。修改启动器后需退出客户端，再运行 `npm run start:mini` 重新组装；运行中的网络引擎会占用 `build/app` 文件，关闭窗口可能只隐藏客户端，应从应用菜单退出。
+
+Windows 终端通过系统 ShellExecute 打开，核对助手写入就绪回执后，页面才显示「终端已准备任务」。窗口未就绪会报错，不会把创建后台进程当作任务已打开。记忆使用万象模型时，Octop 必须注册 `/api/wanx/memory-model` 及 `/complete`；日志返回 404 表示盒端接口尚未加载，需更新并重启对应 Octop 服务。
+
+新建调试资料目录使用独立记忆库。概览加载完成但数量全部为 0 时，可在「我的 AI → 采集与备份设置」选择本机来源并执行采集，或在「从备份恢复」恢复已有快照；自动采集按当前设置执行。Codex 下的「等待客户端加载」单独表示 MCP 配置已保存、尚未观察到客户端加载工具，不表示记忆页面加载失败。
+
 万象个人版登录后默认打开「记忆」。启动本机的半人马AI私人记忆盒子后，万象会使用它的记忆服务和数据库。「设置 → 记忆」可配置模型、来源扫描及用量预算，并管理本机记忆数据。
 
 源码版启动时会检查本机记忆服务。缺失的进程由客户端拉起。「重新连接记忆服务」会重新检查进程，等服务就绪后继续读取原记忆库。
 
-在记忆盒子源码目录安装依赖，执行 `npm run memory:build` 和 `npm run build -w @memmy/backend`。在客户端目录将 `WANX_MEMORY_BOX_ROOT` 指向该源码目录，再执行 `npm run build:memory`。该构建会记录本机运行组件的源码位置。若设置 `MEMMY_RUNTIME_CONFIG_PATH`，客户端会连接指定的外部管理服务，进程由外部管理。
+默认启动使用仓库内的 `apps/memory`，首次先执行 `npm ci --prefix apps/memory`，之后直接从仓库根目录运行 `npm run start:mini`。启动流程构建记忆前端、Memory 与 backend，并将适配 Electron 的服务准备到 `build/local-memory`；后续按源码摘要复用缓存，`build:studio` 重建应用目录后也会恢复记忆界面。`WANX_MEMORY_BOX_ROOT` 仅用于覆盖为另一份源码。若设置 `MEMMY_RUNTIME_CONFIG_PATH`，客户端会连接指定的外部管理服务，不再准备第二套本机后端。
 

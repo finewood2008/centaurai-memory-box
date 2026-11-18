@@ -9,7 +9,7 @@ import { validateCompatibility, evaluateApplicationCompatibility, assertApplicat
 import { validateApplicationManifest } from "../applications/manifest.mjs";
 import { verifyEnvelope } from "../applications/descriptor.mjs";
 import { createApplicationInstaller } from "../applications/installer.mjs";
-import { createApplicationManager } from "../applications/manager.mjs";
+import { createApplicationManager } from "../build/app/applications/manager.mjs";
 import { createApplicationMarket } from "../applications/market.mjs";
 
 const applicationId = "centaurai.wanx.zhijun";

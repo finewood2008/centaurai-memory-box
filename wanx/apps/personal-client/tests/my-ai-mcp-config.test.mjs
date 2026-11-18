@@ -8,7 +8,7 @@ import { configurableAgents, createMyAiMcpConfig } from "../shell/my-ai-mcp-conf
 async function fixture(t, env = {}) {
   const home = await mkdtemp(path.join(tmpdir(), "my-ai-mcp-adapter-"));
   t.after(() => rm(home, { recursive: true, force: true }));
-  return { home, env, executable: process.execPath, stdioPath: path.join(home, "stdio.mjs"), descriptorPath: path.join(home, "endpoint.json") };
+  return { home, env, platform:'darwin', executable: process.execPath, stdioPath: path.join(home, "stdio.mjs"), descriptorPath: path.join(home, "endpoint.json") };
 }
 
 test("the managed catalog advertises only first-release contexts", () => {
@@ -57,6 +57,34 @@ test("Claude Desktop and Claude Code use separate configurations", async t => {
   const custom = createMyAiMcpConfig("claude_code", { ...options, env: { CLAUDE_CONFIG_DIR: configuredDirectory } });
   await custom.ensure();
   assert.equal(JSON.parse(await readFile(path.join(configuredDirectory, ".claude.json"), "utf8")).mcpServers["wanx-memobox"].type, "stdio");
+});
+
+test('Windows Claude Desktop uses APPDATA and leaves the obsolete macOS path untouched', async t => {
+  const options=await fixture(t);
+  const appData=path.join(options.home,'roaming-profile');
+  const file=path.join(appData,'Claude','claude_desktop_config.json');
+  const obsolete=path.join(options.home,'Library','Application Support','Claude','claude_desktop_config.json');
+  await mkdir(path.dirname(file),{recursive:true});
+  await mkdir(path.dirname(obsolete),{recursive:true});
+  await writeFile(file,'{"mcpServers":{"existing":{"command":"keep"}}}\n');
+  await writeFile(obsolete,'keep old user configuration\n');
+  const adapter=createMyAiMcpConfig('claude_desktop',{...options,platform:'win32',env:{APPDATA:appData}});
+  await adapter.ensure();
+  const value=JSON.parse(await readFile(file,'utf8'));
+  assert.equal(value.mcpServers.existing.command,'keep');
+  assert.equal(value.mcpServers['wanx-memobox'].command,process.execPath);
+  assert.equal(await adapter.isConfigured(),true);
+  assert.equal(await readFile(obsolete,'utf8'),'keep old user configuration\n');
+  await adapter.remove();
+  assert.equal(JSON.parse(await readFile(file,'utf8')).mcpServers.existing.command,'keep');
+});
+
+test('Windows Claude Desktop falls back to the user roaming directory when APPDATA is absent',async t=>{
+  const options=await fixture(t);
+  const adapter=createMyAiMcpConfig('claude_desktop',{...options,platform:'win32'});
+  await adapter.ensure();
+  const file=path.join(options.home,'AppData','Roaming','Claude','claude_desktop_config.json');
+  assert.ok(JSON.parse(await readFile(file,'utf8')).mcpServers['wanx-memobox']);
 });
 
 test("Gemini respects GEMINI_CLI_HOME as the parent of .gemini", async t => {

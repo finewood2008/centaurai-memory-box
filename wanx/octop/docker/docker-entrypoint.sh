@@ -84,6 +84,10 @@ EOF
     echo "[entrypoint] 凭据已保存至: $CREDENTIAL_FILE"
 fi
 
+# An upgrade must not silently serve a WANX image without its Builder runtime.
+python -m wanx_studio.release_check
+python -m wanx_studio.deployment.bootstrap --root "$OCTOP_HOME"
+
 if [ $# -eq 0 ]; then
     echo "[entrypoint] 正在启动 Octop，端口 $PORT..."
     exec octop run --host 0.0.0.0 --port "$PORT"

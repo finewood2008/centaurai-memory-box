@@ -431,9 +431,20 @@ class ModelProviderRuntime:
             if provider_error is None and snapshot and snapshot.get("schemaVersion") == 3:
                 try:
                     await self.catalog.acknowledge_applied()
-                except BridgeAuthError:
-                    self.entries.clear()
-                    self.catalog.clear()
+                except BridgeAuthError as exc:
+                    try:
+                        if exc.code != "MODEL_PROVIDER_TEMPORARILY_UNAVAILABLE":
+                            raise exc
+                        # ACK reports installation; the validated GET lease is
+                        # the authority. A transient reporting failure must not
+                        # revoke an installed provider or interrupt its streams.
+                        # Never renew a lease here or restore previous entries.
+                        await self._authority(self.catalog.active())
+                        self.catalog.active()  # Authority checks may have awaited.
+                    except BridgeAuthError:
+                        self.entries.clear()
+                        self.catalog.clear()
+                        raise
                     raise
             self.last_error = refresh_error.code if refresh_error else None
             if provider_error is not None:

@@ -21,6 +21,9 @@ REVISION_PAGE = PAGE | {"revision"}
 # parent membership under the verified principal before calling the domain.
 MATERIAL_ROUTES: tuple[tuple[str, str, frozenset[str], str], ...] = (
     ("GET", rf"/workbench/knowledge/runs/(?P<run_id>{ID})", frozenset(), "get_knowledge_run"),
+    ("POST", "/workbench/ontology-suggestions/generate", frozenset(), "generate_ontology_suggestions"),
+    ("POST", "/workbench/ontology-suggestions/draft", frozenset(), "draft_ontology_suggestions"),
+    ("POST", rf"/workbench/ontology-suggestions/(?P<suggestion_preview_id>{ID})/validate", frozenset(), "validate_ontology_suggestions"),
     ("POST", r"/workbench/conversations", frozenset(), "create_conversation"),
     ("GET", r"/workbench/conversations", PAGE, "list_conversations"),
     ("GET", r"/workbench/conversations/materials", PAGE, "list_material_workflows"),
@@ -57,6 +60,8 @@ MATERIAL_ROUTES: tuple[tuple[str, str, frozenset[str], str], ...] = (
     ("POST", "/workbench/_correction_read", frozenset(), "correction_read"),
     ("POST", CORRECTION + "/sessions", frozenset(), "create_correction_session"),
     ("GET", CORRECTION + "/leases", frozenset(), "list_correction_leases"),
+    ("GET", CORRECTION + "/current-extraction", frozenset(), "get_correction_current_extraction"),
+    ("POST", CORRECTION + "/current-extraction/draft", frozenset(), "open_correction_extraction_review"),
     ("POST", CORRECTION, frozenset(), "open_correction_draft"),
     ("GET", CORRECTION + "/events", frozenset({"after_id", "limit"}), "list_correction_events"),
     ("GET", CORRECTION + r"/events/(?P<event_id>[0-9]{1,16})", PAGE, "get_correction_event"),
@@ -241,6 +246,9 @@ MATERIAL_OPERATIONS = frozenset(row[3] for row in MATERIAL_ROUTES) | frozenset(
 # Required business fields / optional business fields. The private transport
 # operation and permitted editor credentials are added separately below.
 _BODY_FIELDS = {
+    "generate_ontology_suggestions": ({"document_ids", "base_ontology_id", "schema"}, set()),
+    "draft_ontology_suggestions": ({"operation_id", "preview_ids", "name", "schema"}, {"reviewed_preview_ids"}),
+    "validate_ontology_suggestions": (set(), set()),
     "create_conversation": ({"operation_id"}, {"scenario"}),
     "start_onboarding": ({"operation_id", "expected_revision", "draft_digest"}, set()),
     "send_onboarding_turn": ({"operation_id", "expected_revision", "draft_digest"}, {"content", "question_actions"}),
@@ -260,6 +268,7 @@ _BODY_FIELDS = {
     "correction_read": ({"path", "query"}, set()),
     "create_correction_session": ({"operation_id"}, set()),
     "open_correction_draft": ({"operation_id"}, set()),
+    "open_correction_extraction_review": ({"operation_id", "review_reference"}, set()),
     "claim_correction_draft": ({"operation_id", "expected_revision"}, {"legacy_confirmed"}),
     "save_correction_draft": ({"operation_id", "expected_revision"}, {"upserts", "remove_ids", "note"}),
     "select_correction_ontology": ({"operation_id", "expected_revision", "ontology_id"}, {"note"}),
@@ -277,7 +286,7 @@ for _operation in ("discard_correction_draft", "submit_correction_draft", "rebas
     _BODY_FIELDS[_operation] = ({"operation_id", "expected_revision"}, {"note"})
 
 _OPTIONAL_EDITOR = frozenset({"get_material_change_context", "generate_material_change", "read_material_change", "apply_material_change"})
-_REQUIRED_EDITOR = frozenset({"preview_material_review", "merge_material_review", "correction_read", "open_correction_draft"}) | frozenset(
+_REQUIRED_EDITOR = frozenset({"preview_material_review", "merge_material_review", "correction_read", "open_correction_draft", "open_correction_extraction_review"}) | frozenset(
     operation for _, operation in CORRECTION_ACTIONS
 )
 
@@ -328,6 +337,14 @@ def _material_body(operation: str, body: dict[str, Any] | None) -> str:
     if "_native_editor" in body and not (
             body["_native_editor"] is None and operation in _OPTIONAL_EDITOR) and not _editor(body["_native_editor"]):
         raise ValueError("workbench editor credentials are invalid")
+    if operation == "open_correction_extraction_review":
+        reference = body["review_reference"]
+        if (not isinstance(reference, dict) or set(reference) != {
+                "document_id", "document_version_id", "run_id", "knowledge_generation", "processing_generation"}
+                or any(not _string(reference[key], 1, 200) for key in ("document_id", "document_version_id", "run_id"))
+                or reference["knowledge_generation"] is not None and not _string(reference["knowledge_generation"], 1, 2000)
+                or reference["processing_generation"] is not None and not _integer(reference["processing_generation"], 0)):
+            raise ValueError("workbench extraction review reference is invalid")
     for name in ("expected_revision", "expected_conversation_revision", "proposal_offset"):
         if name in body and not _integer(body[name], 0 if name == "proposal_offset" or operation in {"start_onboarding", "send_onboarding_turn", "preview_onboarding"} else 1):
             raise ValueError("workbench revision or offset is invalid")
@@ -377,6 +394,15 @@ def _material_body(operation: str, body: dict[str, Any] | None) -> str:
         raise ValueError("workbench deferred policy is invalid")
     if "schema" in body and not isinstance(body["schema"], dict):
         raise ValueError("workbench ontology schema is invalid")
+    if operation == "generate_ontology_suggestions":
+        identifiers = body["document_ids"]
+        if (not isinstance(identifiers, list) or not 1 <= len(identifiers) <= 5
+                or any(not _string(value, 1, 120) for value in identifiers)):
+            raise ValueError("workbench ontology sources are invalid")
+    if operation == "draft_ontology_suggestions" and (
+        not _string(body["name"], 1, 120) or not body["name"].strip() or not body["preview_ids"]
+    ):
+        raise ValueError("workbench ontology draft is invalid")
     for name, maximum in (("selected_item_ids", 20), ("preview_ids", 8), ("reviewed_preview_ids", 8), ("remove_ids", 100)):
         if name in body and (not isinstance(body[name], list) or len(body[name]) > maximum
                 or any(not _string(value, 1, 200) for value in body[name])):

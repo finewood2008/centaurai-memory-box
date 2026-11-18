@@ -47,7 +47,7 @@ function sha256(file) {
 }
 
 function maintenanceFiles() {
-  const directory = path.join(root, "local-ui", "maintenance");
+  const directory = path.join(root, "build/app/local-ui", "maintenance");
   const htmlPath = path.join(directory, "maintenance.html");
   if (!existsSync(htmlPath) || statSync(htmlPath).size === 0)
     throw new Error("MAINTENANCE_HTML_MISSING");
@@ -108,9 +108,10 @@ async function main() {
   const npmCli = process.env.npm_execpath || path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
   if (!existsSync(npmCli)) throw new Error("NPM_CLI_MISSING");
   run(process.execPath, [npmCli, "ci"]);
-  run(process.execPath, [npmCli, "run", "build:maintenance"]);
+  run(process.execPath, [npmCli, "run", "build:studio"]);
   run(process.execPath, [npmCli, "run", "build:renderer"]);
-  const dashboard = path.join(repo, "dashboard");
+  run(process.execPath, [npmCli, "run", "build:maintenance"]);
+  const dashboard = path.join(root, "../../octop/dashboard");
   run(process.execPath, [npmCli, "ci", "--replace-registry-host=never"], dashboard);
   run(process.execPath, [npmCli, "run", "build:maintenance"], dashboard);
   const maintenance = maintenanceFiles();
@@ -153,6 +154,8 @@ async function main() {
   }
   licenseFiles.sort((a, b) => a.file.localeCompare(b.file));
 
+  run(process.execPath, [npmCli, "run", "build:renderer"]);
+  run(process.execPath, [npmCli, "run", "build:maintenance"]);
   process.env.CSC_IDENTITY_AUTO_DISCOVERY = "false";
   const { build, Platform, Arch } = require("electron-builder");
   const buildOptions = {
@@ -169,7 +172,7 @@ async function main() {
       asar: true,
       npmRebuild: false,
       nodeGypRebuild: false,
-      directories: { output },
+      directories: { app: "build/app", output },
       files: [
         "client.mjs", "platform.mjs", "account/**", "device-trust/**", "shell/**",
         "local-ui/**", "!local-ui/memory/.wanx-source", "network/**", "octop/**", "app-host/**",

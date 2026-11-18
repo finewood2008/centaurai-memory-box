@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
-import { createAIDialogue } from '../shell/ai-dialogue.mjs';
-import { createAIDialogue as createScopedDialogue } from '../shell/assistant-service.mjs';
+import { createAIDialogue } from '../build/app/shell/ai-dialogue.mjs';
+import { createAIDialogue as createScopedDialogue } from '../build/app/shell/assistant-service.mjs';
 
 function fixture(options = {}) {
   let state = { phase: 'ready', account: { phase: 'authenticated', accountId: 'synthetic-owner', clientId: 'synthetic-client' }, connection: { deviceId: 'synthetic-box', gatewayURL: 'http://127.0.0.1' } };

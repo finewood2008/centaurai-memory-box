@@ -4,10 +4,11 @@ import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { EventEmitter } from "node:events";
-import { createApplicationManager } from "../applications/manager.mjs";
+import { createApplicationManager } from "../build/app/applications/manager.mjs";
 
 test("Builder launches as an independent managed app, upgrades its bundle and reuses the live process", async t => {
   const {readFile,rm}=await import("node:fs/promises");
+  const bundled=JSON.parse(await readFile(new URL('../build/app/studio/workbench/application.manifest.json',import.meta.url),'utf8'));
   const root=await mkdtemp(path.join(os.tmpdir(),"wanx-builder-app-"));
   t.after(()=>rm(root,{recursive:true,force:true}));
   const source=path.join(root,"old");await mkdir(source);
@@ -20,12 +21,14 @@ test("Builder launches as an independent managed app, upgrades its bundle and re
     spawn:(_file,_args,options)=>{const child=new EventEmitter();child.exitCode=null;child.send=message=>messages.push(message);child.kill=()=>{child.exitCode=0;child.emit("exit",0)};children.push({child,options});queueMicrotask(()=>child.emit("message",{type:"wanx:application-ready",launchId:options.env.WANX_HOST_LAUNCH_ID}));return child},
   });
   t.after(()=>manager.close());await manager.install({sourceDir:source});
+  const previous=(await manager.listInstalled()).find(item=>item.applicationId==="ai.wanx.studio");
+  assert.equal(previous.version,"1.0.0");assert.notEqual(previous.version,bundled.version);
   allowed=false;await assert.rejects(manager.launch("ai.wanx.studio"),/STUDIO_ADMIN_REQUIRED/);assert.equal(children.length,0);
   allowed=true;const first=await manager.launch("ai.wanx.studio");const second=await manager.launch("ai.wanx.studio");
   assert.equal(children.length,1);assert.equal(first.launchId,second.launchId);assert.ok(messages.some(message=>message.type==="wanx:application-activate"));
   const installed=(await manager.listInstalled()).find(item=>item.applicationId==="ai.wanx.studio");
   assert.equal(installed.name,"万象·开物");
-  assert.equal(installed.version,JSON.parse(await readFile(new URL('../package.json',import.meta.url),'utf8')).wanxStudioVersion);
+  assert.equal(installed.version,bundled.version);
   assert.equal(children[0].options.env.WANX_HOST_CLIENT_APPLICATION_ID,"ai.wanx.studio");
   assert.equal(await readFile(path.join(profile,"existing-project.txt"),"utf8"),"keep");
   live=false;await assert.rejects(manager.launch("ai.wanx.studio"),/SESSION_CHANGED/);assert.equal(children.length,1);

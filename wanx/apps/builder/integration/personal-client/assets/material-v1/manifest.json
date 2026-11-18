@@ -26,6 +26,10 @@
     {
       "file": "workshop.png",
       "sha256": "3de78744094f5e851423af5b524ec8fe1e3a4559bfc328d695f6bd41d60a8124"
+    },
+    {
+      "file": "memory.png",
+      "sha256": "60ec1c08d412827e87fb92cb619b5a197d1f9fac51afd82a36a6deaf9b12e5e6"
     }
   ]
 }

@@ -1,0 +1,251 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wanx-expert-app-result/1",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "run": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._-]{1,128}$"
+            },
+            "state": {
+              "enum": [
+                "queued",
+                "running",
+                "cancel_requested",
+                "succeeded",
+                "failed",
+                "cancelled",
+                "interrupted"
+              ]
+            },
+            "text": {
+              "type": "string",
+              "maxLength": 12000
+            },
+            "result": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 1048576
+            },
+            "errorCode": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 128
+            },
+            "createdAt": {
+              "type": "number",
+              "minimum": 0
+            },
+            "updatedAt": {
+              "type": "number",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "id",
+            "state",
+            "text",
+            "result",
+            "errorCode",
+            "createdAt",
+            "updatedAt"
+          ]
+        },
+        "context": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "scopeId": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          },
+          "required": [
+            "scopeId"
+          ]
+        }
+      },
+      "required": [
+        "run"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._-]{1,128}$"
+              },
+              "state": {
+                "enum": [
+                  "queued",
+                  "running",
+                  "cancel_requested",
+                  "succeeded",
+                  "failed",
+                  "cancelled",
+                  "interrupted"
+                ]
+              },
+              "text": {
+                "type": "string",
+                "maxLength": 12000
+              },
+              "result": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 1048576
+              },
+              "errorCode": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 128
+              },
+              "createdAt": {
+                "type": "number",
+                "minimum": 0
+              },
+              "updatedAt": {
+                "type": "number",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "id",
+              "state",
+              "text",
+              "result",
+              "errorCode",
+              "createdAt",
+              "updatedAt"
+            ]
+          },
+          "maxItems": 200
+        },
+        "context": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "scopeId": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          },
+          "required": [
+            "scopeId"
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "context"
+      ]
+    },
+    {
+      "type": "null"
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "json": {
+          "type": "string",
+          "maxLength": 262144
+        },
+        "_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "json",
+        "_id",
+        "_revision"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "json": {
+                "type": "string",
+                "maxLength": 262144
+              },
+              "_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "_revision": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "json",
+              "_id",
+              "_revision"
+            ]
+          },
+          "maxItems": 200
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "items",
+        "total"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "deleted": {
+          "const": true
+        }
+      },
+      "required": [
+        "deleted"
+      ]
+    }
+  ]
+}

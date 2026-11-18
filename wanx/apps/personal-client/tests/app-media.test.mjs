@@ -9,7 +9,7 @@ test('temporary media contains only existing image assets, not app metadata or p
  for(const item of Object.values(media)){
   assert.deepEqual(Object.keys(item).sort(),['icon','posters']);
   assert.equal(Object.isFrozen(item),true);
-  assert.ok((await readFile(new URL('../local-ui/renderer/'+item.icon,import.meta.url))).length>0);
-  for(const poster of item.posters) assert.ok((await readFile(new URL('../local-ui/renderer/assets/posters/'+poster,import.meta.url))).length>0);
+  assert.ok((await readFile(new URL('../build/app/local-ui/renderer/'+item.icon,import.meta.url))).length>0);
+  for(const poster of item.posters) assert.ok((await readFile(new URL('../build/app/local-ui/renderer/assets/posters/'+poster,import.meta.url))).length>0);
  }
 });

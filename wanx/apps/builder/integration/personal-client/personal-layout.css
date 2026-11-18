@@ -135,7 +135,7 @@
 .workshop-page .kaiwu-product-tabs{border-color:#e5dbcd}
 .workshop-page .kaiwu-preview-host{border:1px solid #e3dacd;border-radius:11px;overflow:hidden}
 /* Space remains a real disk browser, with its own independently scrolling file body. */
-.space-files-page{max-width:1320px;width:100%;margin:0 auto;padding:24px 28px 26px;gap:0}
+.space-files-page{max-width:none;width:100%;min-width:0;margin:0;padding:24px 28px 26px;gap:0}
 .space-files-page>.personal-module-title{flex:none}
 .personal-space-browser{display:flex;flex-direction:column;flex:1;min-height:0;min-width:0;position:relative;border:1px solid #e0d6c8;border-radius:16px;background:#fffdfa;overflow:hidden}
 .personal-space-browser>.space-workspace{min-height:0}

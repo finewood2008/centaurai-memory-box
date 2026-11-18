@@ -37,6 +37,22 @@ def observed(path, method="GET", **extra):
     }
 
 
+def test_material_ontology_suggestions_stay_on_the_selected_warehouse():
+    owner = context("semantica", ["read", "write"])
+    warehouse = "10000000-0000-4000-8000-000000000001"
+    prefix = f"/api/semantica/warehouses/{warehouse}/workbench/ontology-suggestions"
+    for suffix, operation in (
+        ("/generate", "generate_ontology_suggestions"),
+        ("/preview-id/validate", "validate_ontology_suggestions"),
+        ("/draft", "draft_ontology_suggestions"),
+    ):
+        route = route_policy(owner, observed(prefix + suffix, "POST"))
+        assert route["serviceContext"]["warehouseId"] == warehouse
+        assert route["serviceContext"]["operation"] == operation
+        with pytest.raises(wire.DataProtocolError):
+            route_policy(owner, observed(prefix + suffix + "?workspace_id=foreign", "POST"))
+
+
 @pytest.mark.parametrize("resource", ["space", "space:personal", "wanx"])
 def test_personal_space_aliases_never_authorize_shared_space(resource):
     value = context(resource, ["read"])
@@ -106,6 +122,19 @@ def test_upload_limits_are_exact_route_caps_not_generic_unknown_allowance():
     )
     with pytest.raises(wire.DataProtocolError):
         route_policy(context(), observed("/api/anything/archive", "POST"))
+
+
+def test_additional_note_routes_use_the_same_owner_read_and_write_grants():
+    path = "/api/clipboard/v1/notes"
+    item = path + "/" + "c" * 32
+    read = context("clipboard", ["read"])
+    assert route_policy(read, observed(path))["resourceId"] == "clipboard"
+    assert route_policy(read, observed(item + "?since=1"))["action"] == "read"
+    with pytest.raises(wire.DataProtocolError):
+        route_policy(read, observed(item, "PUT"))
+    with pytest.raises(wire.DataProtocolError):
+        route_policy(context("clipboard"), observed(path + "/unknown", "PUT"))
+    assert route_policy(context("clipboard"), observed(item, "PUT"))["action"] == "write"
 
 
 def test_child_clipboard_scope_is_derived_from_parent_export_plan():

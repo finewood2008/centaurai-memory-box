@@ -38,8 +38,8 @@ export interface AgentAccessStatus {
 }
 
 export interface TaskSource { id: string; name: string }
-export interface TaskSources { folder?: TaskSource; warehouse?: TaskSource; memoryEnabled?: boolean }
-export interface TaskSelection { folderId?: string; warehouseId?: string; memoryEnabled: boolean }
+export interface TaskSources { folder?: TaskSource; warehouse?: TaskSource; memoryEnabled?: boolean; memoryAgent?: string | null }
+export interface TaskSelection { folderId?: string; warehouseId?: string; memoryEnabled: boolean; memoryAgent?: string | null }
 export type MyAiRequest = <T>(action: string, signal: AbortSignal, data?: object) => Promise<T>;
 
 export function contextAgentId(agent: string, mode = "chat") {

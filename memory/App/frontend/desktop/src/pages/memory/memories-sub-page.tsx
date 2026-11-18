@@ -67,6 +67,7 @@ const PROCESSING_REFRESH_INTERVAL_MS = 2_000;
 
 export interface MemoriesSubPageProps {
   client: MemoryRuntimeClient | null;
+  initialSourceAgent?: string;
   openRequest?: MemoryReferenceOpenRequest;
   onOpenSettings?: () => void;
   onOpenHistorySource?: (historyId: string) => Promise<void>;
@@ -121,12 +122,14 @@ export function MemoriesSubPage(props: MemoriesSubPageProps) {
   const { track } = useAnalytics();
   const memoriesFilterLayer = (sourceAgent = "") => buildMemoryUiFilterLayer("L1", sourceAgent || undefined);
   const [query, setQuery] = useState("");
-  const [sourceAgent, setSourceAgent] = useState("");
+  const [sourceAgent, setSourceAgent] = useState(props.initialSourceAgent ?? "");
   const [page, setPage] = useState(1);
   const [state, setState] = useState<RemoteData<PanelItemsOutput>>({ status: "loading" });
   const [detail, setDetail] = useState<DetailState>(null);
   const [selectedMemoryId, setSelectedMemoryId] = useState<string | null>(null);
   const [retryFeedback, setRetryFeedback] = useState<ProcessingRetryFeedback>(null);
+  const [summaryModelConfigured, setSummaryModelConfigured] = useState<boolean | undefined>();
+  useEffect(() => { setSummaryModelConfigured(undefined); }, [props.client]);
   const requestIdRef = useRef(0);
   const requestAbortRef = useRef<AbortController | null>(null);
   const submitSearch = usePanelLoad({ query, identity: [props.client, sourceAgent, page, t], load: () => refresh(),
@@ -179,6 +182,15 @@ export function MemoriesSubPage(props: MemoriesSubPageProps) {
       .then((data) => {
         if (requestId !== requestIdRef.current) {
           return undefined;
+        }
+        if (data.items.some(item => item.processing?.state === "summary_pending")) {
+          // Health reads configuration only; it does not run a model probe. A
+          // failed read is unknown, not evidence that a model is configured.
+          void props.client?.health(controller.signal).then((health) => {
+            if (requestId === requestIdRef.current) setSummaryModelConfigured(health.models?.summary?.configured);
+          }).catch(() => {
+            if (requestId === requestIdRef.current) setSummaryModelConfigured(undefined);
+          });
         }
         if (!props.client?.resetPanelView) writeMemoryPanelCaches(cacheKeys, data);
         viewStatus.clear();
@@ -406,6 +418,14 @@ export function MemoriesSubPage(props: MemoriesSubPageProps) {
   }).map((item) => item.id) : [];
   usePanelPoll(Boolean(props.client) && processingIds.length > 0, async () => {
     const generation = requestIdRef.current;
+    // Keep progress updates independent of an unavailable health endpoint.
+    if (state.status === "ready" && state.data.items.some(item => item.processing?.state === "summary_pending")) {
+      void props.client!.health(AbortSignal.timeout(1_500)).then((health) => {
+        if (generation === requestIdRef.current) setSummaryModelConfigured(health.models?.summary?.configured);
+      }).catch(() => {
+        if (generation === requestIdRef.current) setSummaryModelConfigured(undefined);
+      });
+    }
     const result = await props.client!.getMemoryProcessingStatus(processingIds);
     if (generation !== requestIdRef.current) return;
     const byId = new Map(result.items.map((item) => [item.memoryId, item]));
@@ -487,6 +507,7 @@ export function MemoriesSubPage(props: MemoriesSubPageProps) {
       onOpenHistorySource={props.onOpenHistorySource}
       onOpenSourceMemory={openDetailById}
       retryFeedback={retryFeedback}
+      summaryModelConfigured={summaryModelConfigured}
       onCloseDetail={() => {
         detailRequestIdRef.current += 1;
         detailAbortRef.current?.abort();
@@ -515,6 +536,7 @@ export interface MemoriesSubPageViewProps {
   onOpenHistorySource?: (historyId: string) => Promise<void>;
   onOpenSourceMemory?: (memoryId: string) => void;
   retryFeedback?: ProcessingRetryFeedback;
+  summaryModelConfigured?: boolean;
   onCloseDetail: () => void;
   selectedMemoryId?: string | null;
 }
@@ -523,7 +545,7 @@ export function MemoriesSubPageView(props: MemoriesSubPageViewProps) {
   const { t } = useTranslation();
 
   return (
-    <section className="memory-panel">
+    <section className="memory-panel memory-panel--memories">
       <div className="memory-panel__header">
         <div className="memory-panel__header-main">
           <h3 className="memory-panel__title">
@@ -571,6 +593,7 @@ export function MemoriesSubPageView(props: MemoriesSubPageViewProps) {
         onOpenHistorySource={props.onOpenHistorySource}
         onOpenSourceMemory={props.onOpenSourceMemory}
         retryFeedback={props.retryFeedback ?? null}
+        summaryModelConfigured={props.summaryModelConfigured}
       />
     </section>
   );
@@ -631,7 +654,7 @@ function MemoryListState(input: { props: MemoriesSubPageViewProps }) {
                   {item.kind !== "observed_activity" && <span className="memory-card__score">{formatMemoryScore(item.metrics)}</span>}
                   {processingStatus && (
                     <span className={`memory-pill memory-pill--processing${processingStatus === "failed" ? " memory-pill--failed" : ""}`}>
-                      {t(item.kind === "observed_activity" && item.processing?.errorCode === "summary_model_unconfigured"
+                      {t(summaryModelMissing(item.processing, props.summaryModelConfigured) || item.kind === "observed_activity" && item.processing?.errorCode === "summary_model_unconfigured"
                         && item.metadata?.observationStatus !== "processed" && item.metadata?.observationStatus !== "skipped"
                         ? "memory.memories.observationWaitingForModel" : MEMORY_PROCESSING_STATUS_LABELS[processingStatus])}
                     </span>
@@ -672,6 +695,7 @@ function MemoryDetailPanel(props: {
   onOpenHistorySource?: (historyId: string) => Promise<void>;
   onOpenSourceMemory?: (memoryId: string) => void;
   retryFeedback: ProcessingRetryFeedback;
+  summaryModelConfigured?: boolean;
 }) {
   const { t } = useTranslation();
 
@@ -717,6 +741,7 @@ function MemoryDetailPanel(props: {
               onOpenHistorySource={props.onOpenHistorySource}
               onOpenSourceMemory={props.onOpenSourceMemory}
               retryFeedback={props.retryFeedback}
+              summaryModelConfigured={props.summaryModelConfigured}
             />
           )}
         </div>
@@ -739,12 +764,13 @@ function MemoryDetailBody(props: {
   onOpenHistorySource?: (historyId: string) => Promise<void>;
   onOpenSourceMemory?: (memoryId: string) => void;
   retryFeedback: ProcessingRetryFeedback;
+  summaryModelConfigured?: boolean;
 }) {
   const { t } = useTranslation();
   const detail = props.detail;
   const item = detail.item;
   const traceDetail = readTraceDetail(detail);
-  const summaryText = displayMemorySummaryText(item.summary, t, item.processing);
+  const summaryText = displayMemorySummaryText(item.summary, t, item.processing, props.summaryModelConfigured);
 
   if (item.kind === "observed_activity") {
     return <ObservedMemoryDetail
@@ -792,6 +818,7 @@ function MemoryDetailBody(props: {
         onRetryProcessing={props.onRetryProcessing}
         onOpenSettings={props.onOpenSettings}
         retryFeedback={props.retryFeedback}
+        summaryModelConfigured={props.summaryModelConfigured}
       />
     );
   }
@@ -994,6 +1021,7 @@ function TraceMemoryDetail(props: {
   onRetryProcessing?: (id: string) => void | Promise<void>;
   onOpenSettings?: () => void;
   retryFeedback: ProcessingRetryFeedback;
+  summaryModelConfigured?: boolean;
 }) {
   const { t } = useTranslation();
   const detail = props.detail;
@@ -1005,7 +1033,7 @@ function TraceMemoryDetail(props: {
   const rawBody = !hasTurnSteps && props.item.body?.trim() ? props.item.body : undefined;
   // The read model owns summary validity and legacy field precedence. Raw trace
   // metadata may still contain a placeholder or an older copy of the summary.
-  const summaryText = displayMemorySummaryText(props.item.summary, t, props.item.processing);
+  const summaryText = displayMemorySummaryText(props.item.summary, t, props.item.processing, props.summaryModelConfigured);
 
   return (
     <>
@@ -1211,14 +1239,22 @@ function waitForProcessingPoll(): Promise<void> {
 function displayMemorySummaryText(
   value: string | undefined | null,
   t: (key: MessageKey) => string,
-  processing?: MemoryProcessingRecord
+  processing?: MemoryProcessingRecord,
+  summaryModelConfigured?: boolean
 ): string {
+  if (summaryModelMissing(processing, summaryModelConfigured)) {
+    return t("memory.memories.observationWaitingForModel");
+  }
   if (isMemorySummaryWaiting(processing)) {
     return t(MEMORY_PROCESSING_STATUS_LABELS.summary);
   }
   const cleaned = cleanMemoryText(value);
   const processingStatus = importProcessingSummaryStatus(cleaned);
   return processingStatus ? t(MEMORY_PROCESSING_STATUS_LABELS[processingStatus]) : cleaned;
+}
+
+function summaryModelMissing(processing: MemoryProcessingRecord | undefined, configured: boolean | undefined): boolean {
+  return processing?.state === "summary_pending" && configured === false;
 }
 
 function importProcessingSummaryStatus(value: string | undefined | null): MemoryProcessingStatus | null {

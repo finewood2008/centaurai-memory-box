@@ -222,4 +222,17 @@ def create_host_routers(
                 headers={"Cache-Control": "no-store"},
             )
 
-    return router, internal_router
+    # The hosting application mounts this extension at root. Keep memory's
+    # public API alongside the existing private callback without changing the
+    # Octop core or the callback's loopback authorization boundary.
+    from ..memory_models import create_memory_model_router
+
+    root_router = APIRouter()
+    root_router.include_router(internal_router)
+    root_router.include_router(create_memory_model_router(
+        current_user=current_user,
+        get_server=get_server,
+        application_id=application_id,
+        model_host=model_host,
+    ))
+    return router, root_router

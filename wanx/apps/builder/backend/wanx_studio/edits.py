@@ -28,6 +28,9 @@ PROMPT = '''你是万象应用的迭代助手。首版已存在；本轮是修�
 
 PROMPT += "\n" + FOUNDATION_PROMPT
 
+STANDARD_PROMPT = "这是标准 wanx-app-dev-kit Host 工程。沿用 buildProposal.contract 的固定 Host 能力、backendContracts 与专家合同，不能改成 legacy miniapp 或新建 collections。业务字段保存在已冻结的标准后端数据合同中；不要调用 propose_contract 或要求用户重新选择技术数据结构。新增运行能力、后端或专家模板必须另走明确配置与授权，本轮不隐式变更。当前是产品经理交接阶段，不是代码开发阶段；用户提到修改源码、patch_source 或 validate_app，是后续开发者的职责。ready 只表示本轮需求已整理清楚、可交给开发，不表示源码已经修好；不要因为自己没有开发工具而拒绝交接。明确且合同覆盖的实现修复，整理必要的增量要求后调用 finish_edit(outcome=\"ready\",summary=简短修改摘要)，后续构建器负责实际修改和校验。实质需求或授权缺口仍按原流程处理，不承诺尚未验证的结果。"
+STANDARD_PROMPT += '\n提交 ready 必须提供 runtimeIntent：solutionHash 为已保存方案的 expectedHash，capabilities 为本轮真正需要的全部产品能力，execution 为 host、managed-expert 或 service。必须先 update_prd 同步功能、页面、规则、验收和能力，不能只改交接摘要。减少能力也属于合同变更；平台只允许同一后端内经校验的能力收缩。新增能力或更换后端/专家请说明需要重新配置，不能用页面常量、删除样式、探测不存在的接口或要求用户反复删功能替代。read_project.runtimeContract 是运行事实；部署失败不得仅凭通用文案猜测具体能力不支持。'
+
 
 class Edits:
     def __init__(self, svc):
@@ -285,7 +288,9 @@ class Edits:
                     q=self.project(p,e);rows(q);e['draft']=self.draft(q)
                     from .iterative import data_intent
                     a=source_artifact(p,base)
-                    e['iterative']={'contractDraft':{'dataIntent':data_intent(q),'contract':{'collections':deepcopy(a['manifest']['collections']),'capabilities':sorted(a['manifest']['capabilities']),'visibility':'application-access'}}}
+                    from .iterative import standard_contract
+                    fixed=standard_contract(a) if a.get('devKitPackage') else {'collections':deepcopy(a['manifest']['collections']),'capabilities':sorted(a['manifest']['capabilities']),'visibility':'application-access'}
+                    e['iterative']={'contractDraft':{'dataIntent':data_intent(q),'contract':fixed}}
             self.mutate(owner, pid, eid, begin)
             _, edit = self.get(owner, pid, eid)
             if edit['state'] != 'preparing':
@@ -317,6 +322,10 @@ class Edits:
 
     def project(self, p, edit):
         base = source_artifact(p, edit['baseHash']); verify(base)
+        if base.get('devKitPackage'):
+            from .deployment.project_expert import selected
+            expert=base['snapshot'].get('contracts',{}).get('foundation',{}).get('expertDeployment')
+            if selected(p)!=expert:raise StudioError('STANDARD_CONTRACT_CHANGED',409)
         q = shadow(p, base)
         # Current resource grants and engine remain authoritative, not the old snapshot.
         if 'preparation' in p:
@@ -349,7 +358,7 @@ class Edits:
             from .preparation import CATALOG
             from .iterative import proposal
             future = {o for e in p['_edits']['items'][p['_edits']['items'].index(edit)+1:] for o in e['sourceOperations']}
-            return {'originalGoal': p['originalGoal'], 'solution': q['solution'], 'expectedHash': digest(q['solution']),
+            result={'originalGoal': p['originalGoal'], 'solution': q['solution'], 'expectedHash': digest(q['solution']),
                     'entries': rows(q), 'schema': ProductRequirement.model_json_schema(),
                     'foundationConstraints':foundation_policy(),'availableContracts': CATALOG, 'buildProposal': proposal(q), 'references': q['preparation']['references'],
                     'conversation': [m for m in p['messages'] if m.get('operationId') not in future],
@@ -357,6 +366,15 @@ class Edits:
                     'visualReview':{k:v for k,v in (edit.get('visualReview') or {}).items() if k!='image'},
                     'provenanceSchema': {'kind': 'user/background/hypothesis'},
                     'validSourceIds': [m['id'] for m in p['messages'] if m['role'] == 'user'] + [r['kind']+':'+r['id'] for r in q['preparation']['references']]}
+            if source_artifact(p,edit['baseHash']).get('devKitPackage'):
+                from .deployment.project_expert import capability_contracts,instruction
+                from .runtime_contract import execution_mode
+                from .devkit import compatibility_report
+                result['standardInstruction']=STANDARD_PROMPT+'\n'+instruction(q)
+                result['availableContracts']=capability_contracts(q,q['solution']['capabilities'],CATALOG)
+                result['runtimeContract']={'execution':execution_mode(q), 'compatibility':await to_thread(compatibility_report,q,self.svc.project_root),
+                    'authority':'project-spec.json/application.manifest.json; app/ constants do not configure deployment'}
+            return result
         if method == 'read_baseline':
             a = source_artifact(p, edit['baseHash']); return {'version': a['version'], 'files': a['files']}
         if method == 'read_context':
@@ -372,6 +390,7 @@ class Edits:
             self.mutate(owner, pid, eid, save)
             return {'saved': True, 'expectedHash': digest(solution), 'entries': rows(candidate)}
         if method == 'propose_contract':
+            if source_artifact(p,edit['baseHash']).get('devKitPackage'):raise StudioError('STANDARD_CONTRACT_FIXED',409)
             from .iterative import data_intent
             if args['expectedHash'] != digest(q['solution']):raise StudioError('SOLUTION_CHANGED', 409)
             m = check_manifest({'schemaVersion': 1, 'name': q['name'], 'entry': 'src/app.js', 'capabilities': q['solution']['capabilities'], 'collections': args['collections']})
@@ -397,7 +416,11 @@ class Edits:
         if method == 'finish_edit':
             if args.get('outcome') not in {'ready', 'discussed', 'no_change'} or not isinstance(args.get('summary'), str):
                 raise StudioError('EDIT_INPUT_REQUIRED', 422)
-            self.mutate(owner, pid, eid, lambda p, e: e.update({'outcome': args['outcome'], 'summary': args['summary']}))
+            intent = None
+            if args['outcome']=='ready' and source_artifact(p,edit['baseHash']).get('devKitPackage'):
+                from .runtime_contract import review
+                intent = review(q,args.get('runtimeIntent'))
+            self.mutate(owner, pid, eid, lambda p, e: e.update({'outcome': args['outcome'], 'summary': args['summary'], 'runtimeIntent':intent}))
             return {'saved': True}
         raise StudioError('INTERVIEW_TOOL_DENIED', 403)
 
@@ -412,6 +435,9 @@ class Edits:
         idle=False
         self.svc.processes['interview:edit:'+eid] = proc
         payload = {'cwd': str(folder), 'scope': eid, 'mode': 'iteration', 'sessionId': edit.get('sessionId'), 'prompt': PROMPT+'\n本轮输入：'+edit['text']+'\n本轮补充：'+json.dumps(edit['answers'], ensure_ascii=False)}
+        if source_artifact(p,edit['baseHash']).get('devKitPackage'):
+            from .deployment.project_expert import instruction
+            payload['prompt']+='\n'+STANDARD_PROMPT+'\n'+instruction(self.project(p,edit))
         if edit.get('visualReview'):payload['visualReview']=edit['visualReview']
         proc.stdin.write((json.dumps(payload, ensure_ascii=False)+'\n').encode()); await proc.stdin.drain()
         completed = False
@@ -443,8 +469,14 @@ class Edits:
         if not proposed['ready']:raise StudioError('EDIT_DRAFT_INCOMPLETE', 409)
         base = source_artifact(p, edit['baseHash'])
         self.svc.versions.guard(owner, p, base)
-        wanted = {'capabilities': proposed['contract']['capabilities'], 'collections': proposed['contract']['collections']}
-        if not compatible(base['manifest'], wanted):raise StudioError('EDIT_DATA_CHANGE_REQUIRES_DECISION', 409)
+        if base.get('devKitPackage'):
+            from .runtime_contract import review
+            from .iterative import planned_standard_contract
+            review(q,edit.get('runtimeIntent'))
+            if proposed['contract']!=planned_standard_contract(q,base):raise StudioError('STANDARD_CONTRACT_CHANGED',409)
+        else:
+            wanted = {'capabilities': proposed['contract']['capabilities'], 'collections': proposed['contract']['collections']}
+            if not compatible(base['manifest'], wanted):raise StudioError('EDIT_DATA_CHANGE_REQUIRES_DECISION', 409)
         await self.svc.preparation.validate_references(owner, q['preparation']['references'])
         for cap in q['solution']['capabilities']:
             report = q['preparation'].get('report')
@@ -526,7 +558,7 @@ class Edits:
         artifact = next(a for a in p['artifacts'] if a['taskId'] == task)
         def finish(p, e):
             e.update({'state': 'completed', 'artifactHash': artifact['hash']})
-            p['messages'].append({'id': uuid4().hex, 'role': 'assistant', 'text': '已生成 v'+artifact['version']+'：'+(e.get('summary') or e['text'])+'。上一版已保留，可对比或恢复。'})
+            p['messages'].append({'id': uuid4().hex, 'role': 'assistant', 'text': '已生成 v'+artifact['version']+'，构建校验通过。部署与实际业务调用仍需验证。\n本轮修改目标：'+(e.get('summary') or e['text'])+'\n上一版已保留，可对比或恢复。'})
             for turn in p.get('preparation', {}).get('interview', {}).get('turns', []):
                 if turn.get('transferredTo') == eid:turn['state'] = 'completed'
         self.mutate(owner, pid, eid, finish)

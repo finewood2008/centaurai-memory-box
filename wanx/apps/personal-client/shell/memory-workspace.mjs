@@ -68,6 +68,7 @@ export function resolveMemoryRuntimeFile(env = process.env, home = homedir(), ma
 export function createMemoryWorkspace({
   assets, getState, fetchAsset, request = fetch, client, serviceURL, preferenceFile, protectFile,
   localStorage, backup, myAiTask, memoryTransfer, runtime, agentVisibilityStore, agentAccess, manageAgentSync = Boolean(runtime),
+  onPipelineBlockers,
   runtimeFile = resolveMemoryRuntimeFile(),
 }) {
   const models = client && createMemoryModelBridge({ client, serviceURL, runtimeFile, preferenceFile, protectFile });
@@ -75,6 +76,8 @@ export function createMemoryWorkspace({
   let activatedScope;
   let visibility = {};
   let visibilityWrites = Promise.resolve();
+  let pipelineCheck = null;
+  let previousPipelineSample = null;
 
   function visibilityKey() {
     const state = getState();
@@ -140,6 +143,35 @@ export function createMemoryWorkspace({
   }
 
   const localService = () => readMemoryConnection(runtimeFile);
+
+  function checkPipeline() {
+    const state = getState();
+    const scope = accountScope(state);
+    const accountId = state.account?.phase === "authenticated" ? state.account.accountId : null;
+    if (!onPipelineBlockers || !scope || !accountId || pipelineCheck) return;
+    const controller = new AbortController();
+    pipelineCheck = controller;
+    void (async () => {
+      const { base, token } = await localService();
+      const response = await request(new URL("/api/v1/health", base), {
+        headers: { "x-memmy-local-token": token }, redirect: "error",
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]),
+      });
+      if (!response.ok) return;
+      const health = await response.json();
+      const latest = getState();
+      if (controller.signal.aborted || accountScope(latest) !== scope ||
+          latest.account?.accountId !== accountId || health.storage?.ready !== true ||
+          !Array.isArray(health.pipelineBlockers)) return;
+      const blockers = [...new Set(health.pipelineBlockers)].sort();
+      const sample = JSON.stringify([scope, accountId, blockers]);
+      if (previousPipelineSample === sample) onPipelineBlockers({ accountId, blockers });
+      previousPipelineSample = sample;
+    })().catch(() => {}).finally(() => { pipelineCheck = null; });
+  }
+
+  const pipelineTimer = onPipelineBlockers ? setInterval(checkPipeline, 30_000) : null;
+  pipelineTimer?.unref?.();
 
   async function localStorageRequest(api, body, { signal, timeout = 7_000 } = {}) {
     await runtime?.waitForStartup();
@@ -398,6 +430,10 @@ export function createMemoryWorkspace({
     handle, open, sync,
     storage: (action, input) => localMemorySpace?.run(action, input),
     backup: (action, input) => memoryBackup?.action(action, input),
-    async close() { await Promise.all([models?.close(), localMemorySpace?.close(), memoryBackup?.close(), visibilityWrites]); },
+    async close() {
+      clearInterval(pipelineTimer);
+      pipelineCheck?.abort();
+      await Promise.all([models?.close(), localMemorySpace?.close(), memoryBackup?.close(), visibilityWrites]);
+    },
   };
 }

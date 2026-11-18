@@ -35,6 +35,30 @@ body {
 /* A single continuous shared note; editing never rebuilds its input nodes. */
 .clipboard-notepad .clipboard-header { padding: 17px 20px 13px; border-bottom: 1px solid #eae4db; }
 .clipboard-notepad .clipboard-header h2 { font-size: 17px; }
+.clipboard-note-switch {
+  display: flex;
+  gap: 6px;
+  padding: 8px 16px;
+  border-bottom: 1px solid #eee6dc;
+}
+.clipboard-note-switch[hidden] { display: none; }
+.clipboard-note-switch select {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid #e7dbcd;
+  border-radius: 8px;
+  background: #fffdf9;
+  color: #514237;
+  text-overflow: ellipsis;
+}
+.clipboard-note-switch .clipboard-icon-button {
+  border: 1px solid #e7dbcd;
+  color: #765c48;
+  font-size: 18px;
+  line-height: 1;
+}
+.clipboard-note-menu button.clipboard-note-delete { color: #a0463a; }
 .clipboard-note-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #d4c9bc transparent; }
 .clipboard-note-editor { min-height: 100%; padding: 23px 24px 60px; outline: none; font: 14px/1.95 -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Segoe UI', sans-serif; color: #403a33; white-space: pre-wrap; overflow-wrap: anywhere; caret-color: #a56343; user-select: text; -webkit-user-select: text; }
 .clipboard-note-editor::first-line { font-size: 20px; font-weight: 600; line-height: 1.65; }

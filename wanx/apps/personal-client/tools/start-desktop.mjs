@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { cp, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, cp, copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
 import { createRequire } from "node:module";
@@ -53,9 +53,36 @@ export async function prepareDesktopRuntime({
   return executable;
 }
 
+// Native tools are built after application assembly during prestart.
+export async function syncDesktopNativeBinaries(root = projectRoot) {
+  const source = path.join(root, "native/bin");
+  const target = path.join(root, "build/app/native/bin");
+  await rm(target, { recursive: true, force: true });
+  try { await stat(source); } catch (error) {
+    if (error.code === "ENOENT") return;
+    throw error;
+  }
+  await mkdir(path.dirname(target), { recursive: true });
+  await cp(source, target, { recursive: true });
+}
+
+// Development and packaged clients use the same assembled application layout.
+export async function resolveDesktopApplication(root = projectRoot) {
+  const directory = path.join(root, "build/app");
+  try {
+    const manifest = JSON.parse(await readFile(path.join(directory, "package.json"), "utf8"));
+    await access(path.join(directory, manifest.main));
+  } catch (error) {
+    throw new Error("CLIENT_BUILD_REQUIRED: run npm run build:studio before starting the client", { cause: error });
+  }
+  return directory;
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  const application = await resolveDesktopApplication();
+  await syncDesktopNativeBinaries();
   const executable = await prepareDesktopRuntime();
-  const child = spawn(executable, [projectRoot, ...process.argv.slice(2)], { stdio: "inherit", windowsHide: false });
+  const child = spawn(executable, [application, ...process.argv.slice(2)], { stdio: "inherit", windowsHide: false });
   child.on("error", (error) => { console.error(error.message); process.exitCode = 1; });
   child.on("close", (code) => { process.exitCode = code ?? 1; });
   for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { if (!child.killed) child.kill(signal); });

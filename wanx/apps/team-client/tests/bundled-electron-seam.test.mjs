@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import yazl from "yazl";
-import { createApplicationManager } from "../applications/manager.mjs";
+import { createApplicationManager } from "../build/app/applications/manager.mjs";
 
 const electronApp = process.env.WANX_ELECTRON_APP;
 const packagedHost = process.env.WANX_PACKAGED_EXECUTABLE;

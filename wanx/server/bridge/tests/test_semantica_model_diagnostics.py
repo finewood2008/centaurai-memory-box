@@ -10,7 +10,7 @@ from test_semantica_model_relay import relay as _shared_relay
 relay = _shared_relay
 
 
-@pytest.mark.parametrize("status", [401, 429, 503])
+@pytest.mark.parametrize("status", [401, 402, 429, 503])
 async def test_personal_authorized_upstream_failure_has_private_diagnostic(relay, caplog, status):
     secret = "synthetic-private-prompt-token-url-user"
 
@@ -20,8 +20,9 @@ async def test_personal_authorized_upstream_failure_has_private_diagnostic(relay
     relay.handler = fail
     with caplog.at_level(logging.WARNING, logger="wanx_bridge.semantica.model_relay"):
         result = await call(relay, text=secret)
-    assert result.status_code == 502
-    assert result.json()["code"] == "MODEL_CALL_FAILED"
+    expected_code = "MODEL_BILLING_REQUIRED" if status == 402 else "MODEL_CALL_FAILED"
+    assert result.status_code == (402 if status == 402 else 502)
+    assert result.json()["code"] == expected_code
     records = [
         json.loads(r.getMessage())
         for r in caplog.records
@@ -32,7 +33,7 @@ async def test_personal_authorized_upstream_failure_has_private_diagnostic(relay
     assert event["event"] == "starlink_model_failure"
     assert event["category"] == "upstream_http"
     assert event["upstreamStatus"] == status
-    assert event["publicCode"] == "MODEL_CALL_FAILED"
+    assert event["publicCode"] == expected_code
     assert event["jobHash"] == hashlib.sha256(b"job-1").hexdigest()
     assert len(event["requestHash"]) == 64
     assert secret not in caplog.text

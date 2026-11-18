@@ -390,8 +390,7 @@ def create_router(svc: StudioService, identity, *, local_preview=False, prefix='
 
     @router.delete('/runtime/{session}',summary='Revoke this runtime session')
     async def revoke(session:str,owner=Depends(identity)):
-        svc.runtime(owner,session)
-        del svc.runtime_sessions[session]
+        svc.close_runtime(owner,session)
         return {'revoked':True}
 
     @router.get('/projects/{project_id}/events',summary='Subscribe to state changes without replaying model calls')

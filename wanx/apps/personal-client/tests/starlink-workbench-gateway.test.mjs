@@ -15,7 +15,7 @@ async function fixture(t, edition) {
     seen.push({ path: req.url, origin: req.headers.origin });
     // Match the Bridge's existing service-only workbench Origin boundary.
     res.setHeader("content-type", "application/json");
-    const denied = req.url.startsWith(root + "/workbench/") && req.headers.origin;
+    const denied = (req.url.startsWith(root + "/workbench/") || req.url.startsWith('/api/semantica/modeling/') || req.url.startsWith(root+'/modeling/')) && req.headers.origin;
     res.statusCode = denied ? 403 : 200;
     res.end(JSON.stringify(denied ? { code: "SEMANTICA_RESOURCE_FORBIDDEN" } : { items: [] }));
   });
@@ -37,6 +37,29 @@ async function fixture(t, edition) {
   });
   return { gateway, client, seen, targetURL };
 }
+
+test('personal Starlink onboarding and ontology modeling use the service-only main transport', async t => {
+  const f = await fixture(t, 'personal-client');
+  for (const [method, path] of [
+    ['GET', '/api/semantica/modeling/onboarding'], ['GET', '/api/semantica/modeling/warehouses'],
+    ['POST', '/api/semantica/modeling/onboarding'], ['POST', '/api/semantica/modeling/onboarding/profile/warehouse'],
+    ['GET', root+'/modeling/suggestion-context'], ['POST', root+'/modeling/answer-confirmations'],
+    ['POST', root+'/modeling/answer-suggestions'], ['GET', root+'/modeling/answer-suggestions/proposal'],
+    ['GET', root+'/modeling/answer-suggestions/proposal/rules'], ['POST', root+'/modeling/rule-previews'],
+    ['POST', root+'/modeling/rule-previews/preview/publish'],
+  ]) {
+    const response = await f.client.request(path, {method, ...(method==='POST'?{body:{operation_id:'synthetic-operation'}}:{})});
+    assert.equal(response.status,200,path); assert.equal(f.seen.at(-1).origin,undefined,path);
+  }
+  for (const path of ['/api/semantica/modeling/onboarding',root+'/modeling/suggestion-context']) {
+    assert.equal(await browserRequest(f.gateway.url+path,{origin:f.gateway.origin,'x-wanx-native-request':'true'}),403);
+    assert.equal(f.seen.at(-1).origin,f.targetURL);
+  }
+  for (const [method,path] of [['DELETE','/api/semantica/modeling/onboarding'],['POST','/api/semantica/modeling/warehouses'],
+    ['GET','/api/semantica/modeling/../onboarding'],['GET',root+'/modeling/%73uggestion-context']]) {
+    await f.gateway.request({method,path}); assert.equal(f.seen.at(-1).origin,f.targetURL,path);
+  }
+});
 
 function browserRequest(url, headers) {
   return new Promise((resolve, reject) => {

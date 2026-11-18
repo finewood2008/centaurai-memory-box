@@ -1,0 +1,260 @@
+/* Native pages share STARLINK's warm surfaces, ink, typography and controls. */
+:root:has(.embedded-workbench) {
+  --wb-bg: #faf7f2; --wb-surface: #fffdfa; --wb-subtle: #f5f0e8;
+  --wb-line: #e6dfd4; --wb-text: #223747; --wb-muted: #767168;
+  --wb-accent: #a35c43; --wb-tint: #f3e9e1;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  background: var(--wb-bg);
+}
+html:has(.embedded-workbench), body:has(.embedded-workbench), body:has(.embedded-workbench) #root {
+  height: 100%; min-height: 0; overflow: hidden; background: var(--wb-bg);
+}
+.workbench-app.embedded-workbench { height: 100%; min-height: 0; font-family: inherit; font-size: 14px; }
+.embedded-workbench .app-sidebar, .embedded-workbench .app-topbar,
+.embedded-workbench .app-content > .page-heading,
+.embedded-workbench .app-content > footer:not(.review-footer) { display: none; }
+.embedded-workbench .app-workspace { margin: 0; height: 100%; min-height: 0; }
+.workbench-app.embedded-workbench .app-content { height: 100%; padding: 0 6px 24px 0; overflow: auto; }
+.workbench-app.embedded-workbench button { min-height: 36px; border-radius: 8px; font-size: 13px; }
+.workbench-app.embedded-workbench button:hover:not(:disabled) { border-color: var(--wb-line); background: var(--wb-tint); }
+.workbench-app.embedded-workbench button.primary:hover:not(:disabled),
+.workbench-app.embedded-workbench button.ontology-apply:hover:not(:disabled) { color: var(--wb-surface); background: color-mix(in srgb, var(--wb-accent) 88%, var(--wb-text)); }
+.workbench-app.embedded-workbench button[aria-pressed="true"] { border-color: var(--wb-line); }
+.workbench-app.embedded-workbench input:not([type="checkbox"]):not([type="file"]),
+.workbench-app.embedded-workbench select, .workbench-app.embedded-workbench textarea { background: var(--wb-surface); border-radius: 8px; }
+.embedded-workbench .knowledge-card, .embedded-workbench .library,
+.embedded-workbench .material-source-panel, .embedded-workbench .material-review-side,
+.embedded-workbench .ontology-current, .embedded-workbench .catalog-list,
+.embedded-workbench .catalog-detail, .embedded-workbench .release-list,
+.embedded-workbench .release-detail { background: var(--wb-surface); border-color: var(--wb-line); border-radius: 10px; }
+.embedded-workbench .ontology-current h2, .embedded-workbench .catalog-detail h2,
+.embedded-workbench .release-detail h2 { font-family: "Songti SC", "Noto Serif SC", Georgia, serif; font-weight: 600; }
+.embedded-workbench .document-row, .embedded-workbench .notice { background: var(--wb-surface); }
+.embedded-workbench .document-row.selected { border-color: var(--wb-line); background: var(--wb-tint); }
+.embedded-workbench .review-footer { left: 0; background: var(--wb-surface); border-color: var(--wb-line); }
+.embedded-workbench .workbench-drawer, .embedded-workbench .workbench-modal { background: var(--wb-bg); }
+.embedded-workbench .review-tabs button[aria-selected="true"], .embedded-workbench .review-tabs .active { color: var(--wb-accent); border-color: var(--wb-accent); }
+.embedded-workbench .library, .embedded-workbench .material-source-panel,
+.embedded-workbench .material-review-side { min-height: 440px; height: calc(100dvh - 112px); }
+
+/* Ontology inside the desktop Starlink panel. */
+.workbench-app.embedded-workbench.view-ontology {
+  --wb-text: #302d29;
+  --wb-line: #e5d8c8;
+  --wb-surface: #fffdf8;
+  --wb-subtle: #f6f0e6;
+  --wb-accent: #8b5e3b;
+  --wb-tint: #f5ecde;
+}
+.workbench-app.embedded-workbench.view-ontology .ontology-current {
+  flex-wrap: wrap;
+  gap: 7px 10px;
+  padding: 9px 12px;
+  margin-bottom: 8px;
+}
+.embedded-workbench.view-ontology .ontology-current-icon { width: 29px; height: 29px; }
+.embedded-workbench.view-ontology .ontology-current h2,
+.embedded-workbench.view-ontology .catalog-detail h2 { font-family: inherit; font-size: 15px; }
+.embedded-workbench.view-ontology .ontology-current p { margin-top: 3px; }
+.embedded-workbench.view-ontology .ontology-page > .ontology-notice { margin: 7px 0 9px; font-size: 11px; }
+.embedded-workbench.view-ontology .ontology-catalog-view,
+.embedded-workbench.view-ontology .ontology-catalog { gap: 8px; }
+.embedded-workbench.view-ontology .catalog-tabs { padding: 0 8px; }
+.embedded-workbench.view-ontology .review-tabs button { min-height: 34px; padding: 4px 8px; font-size: 12px; }
+.embedded-workbench.view-ontology .catalog-list,
+.embedded-workbench.view-ontology .catalog-detail { padding: 10px; }
+.embedded-workbench.view-ontology .ontology-graph-toolbar { gap: 4px 10px; }
+.embedded-workbench.view-ontology .ontology-graph-filters { gap: 5px 8px; }
+.embedded-workbench.view-ontology .ontology-graph-filters label { gap: 3px; font-size: 11px; }
+.embedded-workbench.view-ontology .ontology-graph-filters select { width: min(155px, 100%); min-height: 30px; padding: 4px 6px; font-size: 12px; }
+.embedded-workbench.view-ontology .ontology-graph-toolbar small { font-size: 11px; }
+.embedded-workbench.view-ontology .ontology-graph-help { margin: 6px 0; }
+.embedded-workbench.view-ontology .ontology-spatial-graph .network-canvas { height: clamp(215px, 44dvh, 460px); min-height: 0; }
+.embedded-workbench.view-ontology .ontology-spatial-graph .network-tools { padding: 6px 8px; gap: 4px; }
+.embedded-workbench.view-ontology .ontology-spatial-graph .network-tools small { font-size: 10px; }
+.embedded-workbench.view-ontology .ontology-spatial-graph .network-tools button { min-height: 30px; padding: 4px 7px; font-size: 12px; }
+.embedded-workbench.view-ontology .ontology-spatial-graph .node-star-glow { opacity: 0; }
+.embedded-workbench.view-ontology .ontology-spatial-graph .graph-node:is(.selected, :focus-visible) .node-star { stroke: var(--wb-text); stroke-width: 1.5; }
+.embedded-workbench.view-ontology .catalog-detail h3 { margin-top: 12px; padding-top: 8px; }
+.embedded-workbench.view-ontology .catalog-property { margin: 8px 0; }
+.embedded-workbench.view-ontology .catalog-footnote { margin-top: 9px; padding-top: 6px; }
+/* The catalog keeps type selection and the selected definition together. */
+.ontology-page .rules-catalog-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 4px 0 6px;
+}
+.rules-catalog-toolbar .review-tabs { margin: 0; flex-wrap: wrap; }
+.rules-catalog-toolbar .review-tabs button > span {
+  margin-left: 7px;
+  font-size: 11px;
+  color: var(--wb-muted);
+}
+.ontology-page .rules-catalog-grid { grid-template-columns: minmax(0, 1fr); align-items: start; gap: 12px; }
+.rules-catalog-grid > section, .rules-catalog-grid > aside { min-width: 0; }
+.rules-catalog-list { overflow: hidden; }
+.rules-catalog-grid:not(.rules-catalog-graph) .rules-catalog-list { padding: 0; }
+.rules-catalog-graph .rules-catalog-list { padding: 14px; }
+.rules-catalog-search { display: grid; gap: 5px; padding: 12px; border-bottom: 1px solid var(--wb-line); }
+.rules-catalog-search input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--wb-line);
+  padding: 8px 10px;
+}
+.rules-catalog-search small { color: var(--wb-muted); }
+.rules-type-list {
+  max-height: 240px;
+  overflow: auto;
+  list-style: none;
+  padding: 5px;
+  margin: 0;
+}
+.workbench-app .rules-type-list button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  text-align: left;
+  gap: 8px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  padding: 8px 9px;
+}
+.workbench-app .rules-type-list button[aria-pressed=true] {
+  border-color: var(--wb-line);
+  background: var(--wb-tint);
+}
+.rules-type-list button > strong { min-width: 0; overflow-wrap: anywhere; }
+.rules-type-list small { flex: none; color: var(--wb-muted); font-size: 11px; }
+.workbench-app .rules-catalog-detail { padding: 16px 18px; overflow-wrap: anywhere; }
+.rules-catalog-detail > header { align-items: flex-start; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+.workbench-app .rules-catalog-detail h2 { margin: 3px 0 2px; font-family: inherit; font-size: 21px; font-weight: 650; line-height: 1.3; }
+.workbench-app .rules-catalog-detail :is(.rules-type-direction, .rules-type-boundary, .rules-properties) h3 {
+  margin: 0 0 5px;
+  padding: 0;
+  border: 0;
+  font-size: 13px;
+}
+.rules-type-direction, .rules-type-boundary { margin: 12px 0; padding: 10px; border-radius: 7px; background: var(--wb-subtle); }
+.rules-type-direction p, .rules-type-boundary p { margin: 0; }
+.rules-properties { margin: 14px 0; padding-top: 12px; border-top: 1px solid var(--wb-line); }
+.rules-properties h3 span { color: var(--wb-muted); font-weight: 500; margin-left: 4px; }
+.rules-properties dl { margin: 0; }
+.rules-properties dl > div { display: grid; gap: 4px 8px; padding: 8px 0; grid-template-columns: minmax(0, 1fr) auto; }
+.rules-properties dl > div + div { border-top: 1px solid var(--wb-line); }
+.rules-properties dd { display: contents; }
+.rules-properties dd p { grid-column: 1 / -1; margin: 0; color: var(--wb-muted); font-size: 12px; }
+.rules-definition-source, .rules-related-knowledge {
+  border-top: 1px solid var(--wb-line);
+  padding: 9px 0 3px;
+  color: var(--wb-muted);
+}
+.rules-definition-source summary, .rules-related-knowledge summary { cursor: pointer; }
+.rules-draft-tabs, .rules-assistant-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+.workbench-app .rules-draft-tabs button[aria-pressed=true],
+.workbench-app .rules-assistant-tabs button[aria-pressed=true] {
+  background: var(--wb-tint);
+  color: var(--wb-accent);
+}
+.rules-assistant-dot { display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: var(--wb-accent); vertical-align: middle; }
+.workbench-app .ontology-assistant.workbench-inline .assistant-workspace > [hidden] { display: none; }
+@media (min-width: 670px) {
+  .ontology-page .rules-catalog-grid { grid-template-columns: minmax(215px, 34%) minmax(0, 1fr); }
+  .ontology-page .rules-catalog-grid.rules-catalog-graph { grid-template-columns: minmax(0, 1fr) minmax(220px, 33%); }
+  .rules-type-list { max-height: min(62dvh, 540px); }
+}
+
+.workbench-app.embedded-workbench.view-ontology button.primary {
+  background: #a6533f; border-color: #a6533f; color: #fffdf8;
+}
+.workbench-app.embedded-workbench.view-ontology button.primary:hover:not(:disabled) {
+  background: #914532; border-color: #914532;
+}
+.workbench-app.embedded-workbench.view-ontology .ontology-current button { color: var(--wb-text); }
+.ontology-page-state { padding: 16px; }
+.ontology-page-state p { margin: 6px 0 10px; }
+.ontology-type-page .ontology-drawer-header, .ontology-type-page .ontology-drawer-footer {
+  padding: 12px 16px; border-color: var(--wb-line);
+}
+.ontology-type-page .ontology-drawer-header h2 { margin: 0 0 4px; }
+.ontology-type-page .ontology-drawer-body { display: block; padding: 16px; overflow: visible; }
+.ontology-type-page .ontology-drawer-footer {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; background: var(--wb-surface);
+  position: sticky; bottom: 0; z-index: 2; border-radius: 0 0 9px 9px;
+}
+.ontology-type-page .ontology-drawer-footer > div { margin-left: auto; flex-wrap: wrap; }
+.ontology-type-fields { display: grid; gap: 14px; align-items: start; }
+.ontology-type-form { min-width: 0; }
+.ontology-type-form .ontology-fields label, .ontology-type-form .ontology-property label {
+  display: grid; gap: 5px; font-size: 12px; color: var(--wb-muted);
+}
+.ontology-type-page .ontology-type-form input:not([type="checkbox"]) {
+  width: 100%; min-width: 0; padding: 8px; border-color: var(--wb-line);
+}
+.ontology-type-page .ontology-hint { font-size: 12px; color: var(--wb-muted); }
+.ontology-type-form > .ontology-hint { margin: 6px 0; }
+.ontology-type-page :is(.ontology-endpoint-section, .ontology-properties) {
+  border-top: 1px solid var(--wb-line); margin-top: 14px; padding-top: 12px; gap: 8px;
+}
+.ontology-type-page .ontology-endpoints {
+  display: grid; min-width: 0; gap: 6px; padding: 8px 10px; border: 1px solid var(--wb-line);
+  max-height: 184px; overflow: auto; border-radius: 8px; font-size: 12px;
+}
+.ontology-type-page .ontology-check { display: flex; align-items: flex-start; gap: 5px; overflow-wrap: anywhere; }
+.ontology-type-page .ontology-check input { accent-color: var(--wb-accent); flex: none; }
+.ontology-type-page .ontology-property { border-color: var(--wb-line); border-radius: 8px; padding: 9px; gap: 7px; }
+.ontology-type-page .ontology-live-review {
+  min-width: 0; min-height: 0; margin: 0; padding: 12px; overflow-wrap: anywhere;
+  border: 1px solid var(--wb-line); border-radius: 8px; background: var(--wb-subtle);
+}
+.ontology-type-page .ontology-live-review h3 { margin: 0 0 8px; font-size: 14px; }
+.ontology-type-page .ontology-live-review p { margin: 6px 0; }
+.ontology-type-fields > [role="alert"] { grid-column: 1 / -1; }
+.ontology-saved-drafts { padding: 12px; margin: 0 0 10px; border-color: var(--wb-line); background: var(--wb-surface); }
+.ontology-saved-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.ontology-saved-drafts p { margin: 5px 0 0; color: var(--wb-muted); }
+.ontology-saved-drafts .workflow-draft-row { border-color: var(--wb-line); }
+.embedded-workbench.view-ontology .ontology-editor :is(.ontology-suggestions, .ontology-change-summary) {
+  border-color: var(--wb-line); border-radius: 8px; background: var(--wb-subtle);
+}
+.embedded-workbench.view-ontology .ontology-editor .ontology-suggestions > summary { color: var(--wb-accent); }
+.embedded-workbench.view-ontology .ontology-editor .ontology-table th { background: var(--wb-subtle); color: var(--wb-muted); }
+.embedded-workbench.view-ontology .ontology-editor .ontology-table td { padding: 8px 10px; vertical-align: middle; }
+.embedded-workbench.view-ontology .ontology-editor .ontology-table button.ontology-name { color: var(--wb-accent); }
+.workbench-app.embedded-workbench.view-ontology .ontology-table button.ontology-name { min-height: 26px; }
+.ontology-draft-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.embedded-workbench .ontology-draft-actions {
+  position: sticky; bottom: 0; z-index: 2; padding: 8px 0;
+  background: var(--wb-surface); border-top: 1px solid var(--wb-line);
+}
+.workbench-inline > header {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 8px 12px; border-bottom: 1px solid var(--wb-line);
+}
+.workbench-inline > .workbench-drawer-body { padding: 12px; }
+.workbench-inline { background: var(--wb-surface); border: 1px solid var(--wb-line); border-radius: 10px; min-width: 0; }
+.ontology-assistant.workbench-inline .workbench-drawer-body { padding: 10px; overflow: visible; }
+.ontology-assistant.workbench-inline .assistant-workspace { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+.ontology-assistant.workbench-inline :is(.assistant-proposal, .assistant-conversation) {
+  border-color: var(--wb-line); background: var(--wb-surface); padding: 12px;
+}
+.ontology-assistant.workbench-inline .assistant-conversation { min-height: 320px; max-height: 550px; }
+.ontology-assistant.workbench-inline .assistant-proposal { max-height: 560px; }
+.ontology-assistant.workbench-inline :is(.assistant-messages article, .assistant-questions, .assistant-suggestion, .assistant-target, .assistant-resume-confirmation) {
+  background: var(--wb-subtle); border-color: var(--wb-line);
+}
+.ontology-assistant.workbench-inline .assistant-composer textarea { min-height: 72px; max-height: 160px; }
+@media (min-width: 640px) {
+  .ontology-type-page .ontology-endpoint-section { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .ontology-type-page .ontology-endpoint-section > :is(h3, p) { grid-column: 1 / -1; }
+  .ontology-type-fields { grid-template-columns: minmax(0,1.85fr) minmax(180px,1fr); }
+  .ontology-assistant.workbench-inline { display: flex; flex-direction: column; height: clamp(380px, calc(100dvh - 14px), 740px); }
+  .ontology-assistant.workbench-inline .assistant-workspace { flex: 1; }
+  .ontology-assistant.workbench-inline :is(.assistant-proposal, .assistant-conversation) { min-height: 0; max-height: none; }
+}

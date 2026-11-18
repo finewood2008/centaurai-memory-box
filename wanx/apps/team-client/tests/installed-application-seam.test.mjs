@@ -110,6 +110,7 @@ for (const [label, launch, signed] of [["market", runManagedApplication, true], 
     contents.emit("did-fail-load", {}, -3, "aborted", "", true);
     assert.deepEqual(h.messages, []);
     contents.emit("did-finish-load");
+    contents.emit("did-fail-load", {}, -105, "late failure", "late URL", true);
     h.options.app.emit("before-quit");
     assert.deepEqual(h.messages, [{ type: "wanx:application-ready", launchId: "launch" }]);
     const before = h.effects.length;
@@ -265,9 +266,10 @@ for (const [label, launch, signed] of [["market", runManagedApplication, true], 
     const webContents = new EventEmitter();
     h.options.app.emit("browser-window-created", {}, Object.assign(new EventEmitter(), { webContents, setMenu() {}, setMenuBarVisibility() {} }));
     webContents.emit("did-fail-load", {}, -105, "private diagnostic", "private URL", true);
+    webContents.emit("did-fail-load", {}, -106, "second diagnostic", "second URL", true);
     webContents.emit("did-finish-load");
     h.options.app.emit("before-quit");
-    assert.deepEqual(h.messages, [{ type: "wanx:application-failed", launchId: "launch" }]);
+    assert.deepEqual(h.messages, [{ type: "wanx:application-failed", launchId: "launch", code: "APPLICATION_RENDERER_LOAD_FAILED", detail: "-105:private diagnostic:private URL" }]);
   });
 }
 

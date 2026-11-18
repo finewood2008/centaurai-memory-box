@@ -20,7 +20,7 @@ from centuarai_local_data_gate import semantica_bootstrap, starlink_workbench
 from . import conversation_contract, desktop_workbench, modeling_contract, warehouse_contract
 from .config import DEFAULT_URL, upstream_origin
 from .document_contract import BLOCK_QUERY, validate_block_page
-from .transport_contract import operation_timeout, owner_error
+from .transport_contract import operation_timeout, owner_error, private_import_error, private_search_error
 
 APPS = {"wanx", "semantica", "centaurai.wanx.semantica"}
 NAMESPACE = uuid.UUID("8ae54f40-4054-4bba-a2e2-06e1c43d7514")
@@ -442,6 +442,10 @@ def decode(
     if not 200 <= status < 300:
         error = value if isinstance(value, dict) else {}
         error = error.get("detail") if isinstance(error.get("detail"), dict) else error
+        if not public and (import_code := private_import_error(status, error)):
+            raise DesktopError(import_code, status)
+        if not public and (search_code := private_search_error(status, error)):
+            raise DesktopError(search_code, status)
         code, message = error.get("code"), error.get("message")
         if (
             isinstance(code, str)

@@ -125,11 +125,42 @@ class NoteBlock(Input):
     item: str | None = None
 
 
-class NoteInput(Input):
+class NoteMutation(Input):
     expected: int = Field(ge=0)
     operation: str = Field(pattern=r"^[a-f0-9]{32}$")
     blocks: list[NoteBlock] = Field(default_factory=list, max_length=2000)
+
+
+class NoteInput(NoteMutation):
     action: Literal["save", "clear", "restore"] = "save"
+
+
+class ExtraNoteInput(NoteMutation):
+    action: Literal["save", "clear", "restore", "delete"] = "save"
+
+
+@router.get("/notes", summary="List additional shared notes")
+async def note_list(store: Store = None):
+    return await call(store.note_list)
+
+
+@router.get("/notes/{note_id}", summary="Read an additional note or poll its revision")
+async def extra_note_get(
+    note_id: str, since: int | None = Query(default=None, ge=0), store: Store = None
+):
+    return await call(store.note_get, since, note_id)
+
+
+@router.put("/notes/{note_id}", summary="Create, save or delete an additional shared note")
+async def extra_note_save(note_id: str, body: ExtraNoteInput, store: Store = None):
+    return await call(
+        store.note_save,
+        body.expected,
+        body.operation,
+        [b.model_dump(exclude_none=True) for b in body.blocks],
+        body.action,
+        note_id,
+    )
 
 
 @router.get("/note", summary="Read the single shared note or poll its revision")

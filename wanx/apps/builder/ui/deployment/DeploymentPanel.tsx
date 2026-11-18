@@ -3,6 +3,7 @@ import {api,type Project} from '../api';
 import {createDeploymentController} from './controller';
 import {TERMINAL,canResume,stateLabel,phaseLabel,kindLabel,componentLabel,commitLabel,formatTime,errorMessage,type DeploymentEnvironment,type ComponentResult,type Operation} from './model';
 import './deployment.css';
+import {DeploymentEvents,OperationNotice} from './DeploymentProgress';
 import {StudioExpertDeploymentPanel} from './StudioExpertDeploymentPanel';
 
 function Status({operation}:{operation:Operation}) {
@@ -80,18 +81,13 @@ function MiniappDeploymentPanel({project,scopeId}:{project:Project;scopeId:strin
             <header className="deployment-detail-heading"><div><h4>{kindLabel(operation.kind)}详情</h4><Status operation={operation}/></div><button disabled={!resumeEnabled} onClick={()=>void controller.resume()}>{state.actionPending==='resume'?'正在请求…':'继续处理任务'}</button></header>
             <p className="deployment-muted">{commitLabel(operation.commitStatus)} · 最近更新 {formatTime(operation.updatedAt)}</p>
             <dl className="deployment-details"><div><dt>目标盒子</dt><dd>{operation.target.boxId}</dd></div><div><dt>环境</dt><dd>{operation.target.environment==='prod'?'正式环境':'联调环境'}</dd></div><div><dt>当前阶段</dt><dd>{phaseLabel(operation.phase)}</dd></div><div><dt>发布版本</dt><dd>{operation.releaseRef?.releaseId||'沿用当前运行版本'}</dd></div></dl>
-            {operation.errorCode&&<p className="deployment-error">{errorMessage(new Error(operation.errorCode))}</p>}
+            <OperationNotice operation={operation}/>
             {state.notice&&<p className="deployment-notice" role="status">{state.notice}</p>}{state.actionError&&<p className="deployment-error" role="alert">{state.actionError}</p>}
             <h4>组件执行结果</h4><Components items={operation.components}/>
             <section className="deployment-receipt" aria-label="结果回执"><div className="deployment-card-heading"><h4>结果回执</h4>{delivery?.deliveryStatus==='pending'&&<button disabled={actionUnavailable||Boolean(state.receiptError)} onClick={()=>void controller.retryReceipt()}>{state.actionPending==='receipt'?'正在同步…':'重新同步回执'}</button>}</div>
               {state.receiptError?<p className="deployment-error" role="alert">{state.receiptError}</p>:!state.receiptLoaded?<p className="deployment-muted">正在读取结果回执…</p>:!delivery?<p className="deployment-muted">尚未生成最终结果回执。</p>:<><div className="deployment-receipt-status"><strong>{stateLabel(delivery.receipt.outcome)}</strong><span className={`deployment-status ${delivery.deliveryStatus==='delivered'?'good':'attention'}`}>{delivery.deliveryStatus==='delivered'?'回执已送达':'回执待同步'}</span></div><p className="deployment-muted">已尝试投递 {delivery.attempts} 次。回执同步与部署执行分开处理，重新同步不会重新部署。</p></>}
             </section>
-            <section className="deployment-events" aria-label="执行事件"><div className="deployment-card-heading"><h4>执行记录</h4>{state.eventsLoading&&<span className="deployment-muted">读取中…</span>}</div>
-              {state.eventsError&&<p className="deployment-error" role="alert">{state.eventsError}</p>}
-              {state.eventsTruncated&&<p className="deployment-muted">仅保留当前已读取的最近 1000 条事件。</p>}
-              {!state.events.length&&!state.eventsLoading?<p className="deployment-muted">{state.eventsError?'事件暂不可读。':'尚无执行事件。'}</p>:<ol>{state.events.map(event=><li key={event.sequence}><span>{event.phase?phaseLabel(event.phase):event.type==='accepted'?'任务已受理':event.type==='completed'?'处理结束':'状态更新'}</span><small>{event.state?stateLabel(event.state)+' · ':''}{formatTime(event.createdAt)}</small></li>)}</ol>}
-              {(state.hasMore||state.eventsError)&&<button disabled={state.eventsLoading} onClick={()=>void controller.loadEvents()}>{state.eventsLoading?'正在读取…':state.eventsError?'重试读取事件':'读取更多事件'}</button>}
-            </section>
+            <DeploymentEvents events={state.events} loading={state.eventsLoading} error={state.eventsError} hasMore={state.hasMore} truncated={state.eventsTruncated} onLoad={()=>void controller.loadEvents()}/>
             <details className="deployment-identifiers"><summary>查看记录标识</summary><dl><div><dt>操作 ID</dt><dd>{operation.id}</dd></div><div><dt>组织</dt><dd>{operation.target.organizationId}</dd></div>{delivery&&<div><dt>回执 ID</dt><dd>{delivery.receipt.receiptId}</dd></div>}</dl></details>
           </>}
         </div>

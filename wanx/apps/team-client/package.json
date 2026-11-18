@@ -13,23 +13,24 @@
     "build:network": "node tools/build-network.mjs",
     "build:network:all": "node tools/build-network.mjs --all",
     "build:discovery": "node tools/build-discovery.mjs",
-    "prestart": "npm run build:studio && node tools/ensure-network.mjs && node tools/build-discovery.mjs && node tools/build-maintenance.mjs && node tools/build-clipboard.mjs && npm run build:renderer",
+    "prestart": "npm run build:studio && npm run build:renderer && node tools/ensure-network.mjs && node tools/build-discovery.mjs && node tools/build-maintenance.mjs && node tools/build-clipboard.mjs",
     "start": "node tools/start-desktop.mjs",
     "prestart:local": "npm run prestart",
     "start:local": "node tools/start-local.mjs",
     "test": "node --test --test-concurrency=4 tests/*.test.mjs",
-    "test:native": "cd native && go test ./...",
+    "test:native": "node tools/test-network.mjs",
     "package:mac": "node tools/build-network.mjs darwin-arm64 darwin-x64 && node tools/build-discovery.mjs darwin-arm64 darwin-x64 && node tools/build-clipboard.mjs arm64 x64 && electron-builder --mac --dir",
     "package:windows": "node tools/build-network.mjs win32-x64 win32-arm64 && node tools/build-discovery.mjs win32-x64 && electron-builder --win nsis",
-    "build:renderer": "esbuild local-ui/renderer/device-setup-entry.ts --bundle --format=iife --platform=browser --outfile=local-ui/renderer/device-setup.bundle.js && esbuild local-ui/renderer/wallet-entry.mjs --bundle --format=iife --platform=browser --outfile=local-ui/renderer/wallet.bundle.js",
+    "build:renderer": "esbuild local-ui/renderer/device-setup-entry.ts --bundle --format=iife --platform=browser --outfile=build/app/local-ui/renderer/device-setup.bundle.js && esbuild local-ui/renderer/wallet-entry.mjs --bundle --format=iife --platform=browser --outfile=build/app/local-ui/renderer/wallet.bundle.js",
     "package:application": "node tools/package-application.mjs",
     "patch:provisioning-sdk": "node tools/patch-provisioning-display-name.mjs && node tools/patch-provisioning-gatt.mjs",
     "package:windows:x64:internal": "node shell/package-win.mjs",
     "build:maintenance": "node tools/build-maintenance.mjs",
-    "prepackage:mac": "npm run build:studio && npm run build:maintenance && npm run build:renderer",
-    "prepackage:windows": "npm run build:studio && npm run build:maintenance && npm run build:renderer",
+    "prepackage:mac": "npm run build:studio && npm run build:renderer && npm run build:maintenance",
+    "prepackage:windows": "npm run build:studio && npm run build:renderer && npm run build:maintenance",
     "build:studio": "node ../builder/tools/assemble-client.mjs team",
-    "build:starlink": "node ../builder/tools/assemble-starlink.mjs team"
+    "build:starlink": "node ../builder/tools/assemble-starlink.mjs team",
+    "pretest": "npm run build:studio && npm run build:renderer"
   },
   "dependencies": {
     "@nexusaos/consumer-contracts": "file:vendor/nexusaos-consumer-contracts-1.0.0.tgz",
@@ -55,7 +56,8 @@
     "afterPack": "tools/package-client-native.mjs",
     "productName": "万象企业版",
     "directories": {
-      "output": "release"
+      "output": "release",
+      "app": "build/app"
     },
     "files": [
       "client.mjs",
@@ -165,5 +167,5 @@
     "@nexusaos/local-provisioning-contracts": "$@nexusaos/local-provisioning-contracts"
   },
   "wanxEdition": "team",
-  "wanxStudioVersion": "1.0.3"
+  "wanxStudioVersion": "1.0.12"
 }

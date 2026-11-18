@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 from .local_authority import to_thread
 import os
-import base64
-import hashlib
-import io
-import zipfile
 import json
 import secrets
 import time
@@ -73,7 +70,8 @@ class StudioService:
         from .edits import Edits
         self.edits=Edits(self)
         from .deployment.coordinator import Coordinator
-        self.deployments=Coordinator(root / "deployment", deployment_adapter)
+        self.deployments=Coordinator(root / "deployment", deployment_adapter, upgrade_root=self.store.root)
+        self.closing = False
 
     async def close(self):
         if getattr(self,'closing',False):return
@@ -100,6 +98,14 @@ class StudioService:
             result['readiness']['missing'].append('prd.productChoices')
         if 'preparation' in p:
             x=result['preparation'];valid=self.preparation.valid_report(owner,p,development=x['phase']=='acp')
+            from .capability_gaps import expert_gap_resolutions
+            resolutions=expert_gap_resolutions(p)
+            if resolutions:
+                x=result['preparation']=deepcopy(x)
+                # Public "pending gaps" are a projection. Stored requirements
+                # and their source events remain intact for audit/rechecking.
+                x['gaps']=[g for g in x['gaps'] if g not in resolutions]
+                x['resolvedCapabilityGaps']=[{'requirement':g,**proof} for g,proof in resolutions.items()]
             x['capabilitiesValid']=valid
             result['readiness']['ready']=result['readiness']['ready'] and valid and x['phase']=='acp' and x['interview']['sync']=='saved' and x['interview']['state']!='running' and not any(t.get('state') in {'queued','paused'} for t in x['interview'].get('turns',[]))
         return result
@@ -379,29 +385,53 @@ class StudioService:
         if task and task.get("devKitWorkspace"):
             from . import devkit_build
             workspace = Path(task["devKitWorkspace"])
-            devkit_build.apply_mutable_files(workspace, files)
             try:
-                pipeline = await to_thread(devkit_build.run_pipeline, workspace)
-            except BaseException:
+                devkit_build.apply_mutable_files(workspace, files, replace=True)
+                pipeline = await to_thread(devkit_build.run_pipeline, workspace, project_root=self.project_root)
+            finally:
                 shutil.rmtree(workspace, ignore_errors=True)
                 (workspace.parent / "project-spec.json").unlink(missing_ok=True)
-                raise
-            shutil.rmtree(workspace, ignore_errors=True)
-            (workspace.parent / "project-spec.json").unlink(missing_ok=True)
-            if task["state"] != "running" or task["solutionHash"] != digest(current["solution"]):
-                raise StudioError("BUILD_VERSION_STALE", 409)
-            artifact_hash = digest({"packageSha256": pipeline["packageSha256"], "solutionHash": task["solutionHash"], "taskId": task_id})
             def change(project):
-                live_task = next(item for item in project["tasks"] if item["id"] == task_id)
-                if live_task["state"] != "running":
+                self.authorize_management(owner)
+                live_task = next((item for item in project["tasks"] if item["id"] == task_id),None)
+                working=self.edits.execution_project(owner,project,live_task) if live_task and live_task.get('editId') else project
+                if not live_task or live_task["state"] != "running" or live_task["solutionHash"] != digest(working["solution"]) or not working.get("confirmation") or working["confirmation"]["hash"]!=live_task["solutionHash"]:
                     raise StudioError("BUILD_VERSION_STALE", 409)
-                from .versions import next_version
-                artifact = {"hash": artifact_hash, "version": next_version(project), "manifest": pipeline["manifest"], "solutionHash": live_task["solutionHash"], "confirmation": project["confirmation"], "taskId": task_id, "createdAt": time.time(), "files": files, "bundle": "", "css": "", "devKitPackage": pipeline, "sourceFormat": "wanx-app-dev-kit", "projectSpecHash": task.get("devKitSpecHash"), "packageSha256": pipeline["packageSha256"]}
+                from copy import deepcopy
+                from .deployment.project_expert import selected
+                from .versions import next_version, standard_artifact_hash, verify
+                expert=selected(working)
+                frozen_expert=(working.get('preparation',{}).get('handoff') or {}).get('contracts',{}).get('foundation',{}).get('expertDeployment')
+                if expert!=frozen_expert:raise StudioError('EXPERT_CONTRACT_CHANGED',409)
+                if live_task.get('editId'):
+                    if digest(project['solution'])!=digest(working['solution']):
+                        project['revisions'].append({'number':len(project['revisions'])+1,'hash':digest(working['solution']),'solution':deepcopy(working['solution']),'source':'direct-edit','createdAt':time.time()})
+                    for key in ['solution','decisions','confirmation']:project[key]=deepcopy(working[key])
+                    if project.get('nameMode')=='auto':project['name']=working['name']
+                    if 'preparation' in project:
+                        for key in ['entryIds','provenance']:
+                            if key in working['preparation']:project['preparation'][key]=deepcopy(working['preparation'][key])
+                        project['preparation']['interview'].update({'state':'completed','sync':'saved','error':None})
+                version=next_version(project)
+                if pipeline['manifest'].get('version')!=version:raise StudioError('BUILD_VERSION_STALE',409)
+                artifact = {"standardArtifactVersion":1,"hash":"", "version":version, "manifest":pipeline["manifest"], "solutionHash":live_task["solutionHash"], "confirmation":deepcopy(working["confirmation"]), "taskId":task_id, "createdAt":time.time(), "files":deepcopy(files), "bundle":"", "css":"", "devKitPackage":pipeline, "sourceFormat":"wanx-app-dev-kit", "projectSpecHash":live_task.get("devKitSpecHash"), "packageSha256":pipeline["packageSha256"]}
+                if expert is not None:artifact['expertContractDigest']=digest(expert)
+                self.versions.add(project,artifact,live_task)
+                artifact['hash']=standard_artifact_hash(artifact)
+                if project['versioning'].get('iteration'):project['versioning']['iteration']['latestHash']=artifact['hash']
+                if live_task.get('change'):
+                    change=live_task['change']
+                    artifact['checkpoint']={'schemaVersion':1,'artifactHash':artifact['hash'],'parent':live_task.get('baseHash'),'changeId':change['id'],'specHash':digest(change['spec']),'contract':change['contract']}
+                    artifact['checkpointHash']=digest(artifact['checkpoint'])
+                verify(artifact)
                 project["artifacts"].append(artifact)
                 live_task["state"] = "completed"
                 project["acceptance"] = None
                 project["stage"] = "preview"
             result = self.store.mutate(owner, project_id, "artifact_" + task_id, {"task": task_id, "packageSha256": pipeline["packageSha256"]}, change)
+            if getattr(self,'client_launch',None):
+                _, artifact=self.artifact(owner,project_id,result['artifacts'][-1]['hash'])
+                await self.client_launch.archive(owner,project_id,artifact)
             return result
         # New Builder projects are dev-kit projects.  A missing workspace means
         # the standard generator failed before the artifact phase; silently
@@ -535,6 +565,13 @@ class StudioService:
             if not p["versioning"]["adoptedHash"] or p["versioning"]["adoptedHash"] != artifact_hash:raise StudioError("USER_ACCEPTANCE_REQUIRED",409)
             if not devkit_payload:
                 return self.versions.payload(owner,project_id,artifact_hash)
+            self.versions.guard(owner,p,a)
+            devkit_payload["delivery"]=delivery_state(p,a)
+            adoptions=p["versioning"].get("adoptions",[])
+            latest=adoptions[-1] if adoptions else {}
+            if latest.get("source")=="user-restore" and latest.get("artifactHash")==artifact_hash:
+                devkit_payload["restore"]={"schemaVersion":1,"source":"restore","artifactHash":artifact_hash}
+            return devkit_payload
         if not p["acceptance"] or p["acceptance"]["artifactHash"] != artifact_hash or a["solutionHash"] != digest(p["solution"]) or not p["confirmation"] or p["confirmation"]["hash"] != digest(p["solution"]) or p["artifacts"][-1]["hash"] != artifact_hash or p["tasks"][-1]["id"] != a["taskId"] or any(t["state"] in {"queued","running","waiting"} for t in p["tasks"]):
             raise StudioError("USER_ACCEPTANCE_REQUIRED",409)
         if devkit_payload:
@@ -546,69 +583,84 @@ class StudioService:
         return {"taskId":a["taskId"],"applicationId":p["appId"],"name":a["manifest"]["name"],"projectId":p["id"],"version":a["version"],"artifactHash":a["hash"],"manifest":a["manifest"],"bundle":a["bundle"],"css":a["css"],"delivery":delivery_state(p, a)}
 
     def export_standard_version(self, owner, project_id, artifact_hash):
-        p, a = self.artifact(owner, project_id, artifact_hash)
-        if not a.get("devKitPackage"):
-            raise StudioError("STANDARD_VERSION_REQUIRED", 409)
-        # Reuse the normal acceptance and integrity gate before a bundle leaves
-        # the local preview service.
-        payload = self.install_payload(owner, project_id, artifact_hash)
-        package = payload["packageBase64"]
-        if hashlib.sha256(base64.b64decode(package)).hexdigest() != payload["packageSha256"]:
-            raise StudioError("STANDARD_TRANSFER_INTEGRITY_FAILED", 409)
-        return {"format": "wanx-local-codex-transfer", "version": 1,
-                "sourceEngine": "local-codex", "project": {"name": p["name"],
-                "originalGoal": p["originalGoal"], "solution": p["solution"],
-                "decisions": p["decisions"], "confirmation": p.get("confirmation")},
-                "artifact": {k: payload[k] for k in ("taskId", "applicationId", "name", "projectId", "version", "artifactHash", "manifest", "packageBase64", "packageSha256")},
-                "exportedAt": time.time()}
+        from copy import deepcopy
+        p,a=self.artifact(owner,project_id,artifact_hash)
+        if not a.get("devKitPackage"):raise StudioError("STANDARD_VERSION_REQUIRED",409)
+        payload=self.install_payload(owner,project_id,artifact_hash)
+        # The adopted snapshot, not the current editable PRD/configuration, is
+        # the authority for an exported version.
+        snap=a['snapshot']
+        descriptor=deepcopy(a)
+        return {"format":"wanx-local-codex-transfer","version":1,"sourceEngine":"local-codex",
+            "project":{"name":a['manifest']['name'],"originalGoal":p['originalGoal'],
+                "solution":deepcopy(snap['solution']),"decisions":deepcopy(snap['decisions']),"confirmation":deepcopy(snap['confirmation'])},
+            "artifact":{**{k:payload[k] for k in ["taskId","applicationId","name","projectId","version","artifactHash","manifest","packageBase64","packageSha256"]},"descriptor":descriptor},"exportedAt":time.time()}
 
     def import_standard_version(self, owner, bundle, operation_id):
-        if bundle.get("format") != "wanx-local-codex-transfer" or bundle.get("version") != 1:
-            raise StudioError("STANDARD_TRANSFER_INVALID", 400)
-        project_data, artifact = bundle.get("project", {}), bundle.get("artifact", {})
-        required = {"taskId", "artifactHash", "manifest", "packageBase64", "packageSha256", "version", "name"}
-        solution = project_data.get("solution") if isinstance(project_data, dict) else None
-        manifest = artifact.get("manifest") if isinstance(artifact, dict) else None
-        if not isinstance(solution, dict) or not required.issubset(artifact) or not isinstance(manifest, dict):
-            raise StudioError("STANDARD_TRANSFER_INVALID", 400)
-        from . import devkit, devkit_build
-        if devkit.validate_project_spec(devkit.project_spec({"id": "import", "name": artifact["name"], "appId": artifact.get("applicationId", ""), "solution": solution})):
-            raise StudioError("STANDARD_TRANSFER_INVALID", 400)
-        allowed_manifest = {"applicationId", "name", "version", "protocolVersion", "runtime", "launchMode", "platform", "arch", "entrypoint", "capabilities", "description", "compatibility", "critical"}
-        if set(manifest) - allowed_manifest or manifest.get("protocolVersion") != 3 or manifest.get("entrypoint") != "shell/main.cjs":
-            raise StudioError("STANDARD_TRANSFER_INVALID", 400)
-        if devkit_build.validate_manifest_capabilities(manifest):
-            raise StudioError("STANDARD_TRANSFER_INVALID", 400)
-        if has_credentials(json.dumps(bundle, ensure_ascii=False)):
-            raise StudioError("STANDARD_TRANSFER_INVALID", 400)
-        if len(artifact["packageBase64"]) > 12 * 1024 * 1024:
-            raise StudioError("STANDARD_TRANSFER_INVALID", 413)
+        from copy import deepcopy
+        from .versions import verify, shadow
+        self.authorize_management(owner)
+        if not isinstance(bundle,dict) or bundle.get("format")!="wanx-local-codex-transfer" or bundle.get("version")!=1:
+            raise StudioError("STANDARD_TRANSFER_INVALID",400)
+        project_data=bundle.get('project');entry=bundle.get('artifact')
+        if not isinstance(project_data,dict) or not isinstance(entry,dict) or not isinstance(entry.get('descriptor'),dict):
+            # Historical bundles without frozen evidence cannot acquire today's
+            # contract or authorization through import.
+            raise StudioError("VERSION_SNAPSHOT_INCOMPLETE",409)
+        a=deepcopy(entry['descriptor'])
         try:
-            raw = base64.b64decode(artifact["packageBase64"], validate=True)
-        except Exception as exc:
-            raise StudioError("STANDARD_TRANSFER_INVALID", 400) from exc
-        try:
-            with zipfile.ZipFile(io.BytesIO(raw)) as package:
-                names = set(package.namelist())
-                if any(name.startswith("/") or ".." in Path(name).parts for name in names) or not {"shell/main.cjs", "shell/host.cjs", "shell/preload.cjs"}.issubset(names):
-                    raise StudioError("STANDARD_TRANSFER_INVALID", 400)
-        except zipfile.BadZipFile as exc:
-            raise StudioError("STANDARD_TRANSFER_INVALID", 400) from exc
-        if hashlib.sha256(raw).hexdigest() != artifact["packageSha256"]:
-            raise StudioError("STANDARD_TRANSFER_INTEGRITY_FAILED", 409)
-        if digest({"packageSha256": artifact["packageSha256"], "solutionHash": digest(solution), "taskId": artifact["taskId"]}) != artifact["artifactHash"]:
-            raise StudioError("STANDARD_TRANSFER_INTEGRITY_FAILED", 409)
-        created = self.store.create(owner, project_data.get("name") or artifact["name"], project_data.get("originalGoal", "标准版本导入"), operation_id + ":create")
-        pid = created["id"]
+            verify(a)
+            if not a.get('devKitPackage'):raise ValueError('not standard')
+            expected={'artifactHash':a['hash'],'taskId':a['taskId'],'version':a['version'],
+                'manifest':a['manifest'],'applicationId':a['manifest']['applicationId'],
+                'packageBase64':a['devKitPackage']['packageBase64'],'packageSha256':a['packageSha256']}
+            if any(entry.get(k)!=v for k,v in expected.items()):raise ValueError('descriptor mismatch')
+            if any(project_data.get(k)!=a['snapshot'][k] for k in ['solution','decisions','confirmation']):raise ValueError('snapshot mismatch')
+            if has_credentials(json.dumps(bundle,ensure_ascii=False)):raise ValueError('credentials')
+            expert=a['snapshot'].get('contracts',{}).get('foundation',{}).get('expertDeployment')
+            if expert is not None and (not isinstance(expert,dict) or expert.get('profile')!='wanx-expert-app-v1' or type(expert.get('revision')) is not int or not 1<=expert['revision']<=9007199254740991):
+                raise ValueError('invalid frozen expert configuration')
+        except (StudioError,KeyError,TypeError,ValueError) as exc:
+            raise StudioError("STANDARD_TRANSFER_INTEGRITY_FAILED",409) from exc
+        created=self.store.create(owner,project_data.get('name') or a['manifest']['name'],project_data.get('originalGoal','标准版本导入'),operation_id+':create',dev_kit=True)
         def change(p):
-            p.update({"devKit": True, "solution": solution, "decisions": project_data.get("decisions", {}),
-                      "confirmation": project_data.get("confirmation"), "stage": "preview", "acceptance": None, "installed": None})
-            p["appId"] = artifact.get("applicationId") or p["appId"]
-            p["tasks"] = [{"id": artifact["taskId"], "executor": "local-codex", "version": "local-import", "state": "completed", "solutionHash": digest(p["solution"]), "createdAt": time.time(), "events": [], "operationId": operation_id}]
-            p["artifacts"] = [{"hash": artifact["artifactHash"], "version": artifact["version"], "manifest": artifact["manifest"], "solutionHash": digest(p["solution"]), "confirmation": p["confirmation"], "taskId": artifact["taskId"], "createdAt": time.time(), "files": {}, "bundle": "", "css": "", "devKitPackage": {"packageBase64": artifact["packageBase64"], "packageSha256": artifact["packageSha256"]}, "sourceFormat": "wanx-app-dev-kit", "projectSpecHash": None, "packageSha256": artifact["packageSha256"]}]
-            p["versioning"] = {"revision": 0, "adoptedHash": None, "adoptions": [], "iteration": None, "iterations": [], "feedback": ""}
-            p["importSource"] = {"engine": "local-codex", "at": time.time()}
-        return self.store.mutate(owner, pid, operation_id + ":configure", {"format": bundle["format"], "artifactHash": artifact["artifactHash"]}, change)
+            shadow(p,a)
+            p.update({k:deepcopy(a['snapshot'][k]) for k in ['solution','decisions','confirmation']})
+            p.update(appId=a['manifest']['applicationId'],stage='preview',acceptance=None,installed=None)
+            if expert is not None:
+                # Restore configuration from the verified version, never the
+                # editable export metadata, grants, or another owner's binding.
+                p['deploymentExpert']=deepcopy(expert)
+                p['_deploymentExpertRevision']=expert['revision']
+            # A version snapshot holds evidence, not a complete live workspace.
+            # Rebuild live state; old probe reports remain only in the artifact.
+            from .preparation import initial, CONTRACT_VERSION
+            evidence=a['snapshot'].get('preparation') or {}
+            prep=initial(p)
+            for key in ('phase','revision','references','required','gaps','gapDecisions'):
+                if key in evidence:prep[key]=deepcopy(evidence[key])
+            for key in ('state','sync'):
+                if key in evidence.get('interview',{}):prep['interview'][key]=evidence['interview'][key]
+            if prep['phase']=='acp' or expert is not None:
+                # This restored handoff records frozen input contracts only.
+                # The live report stays None; current check/authority gates run
+                # before any new handoff or runtime access can be accepted.
+                pending={'version':1,'contractVersion':CONTRACT_VERSION,'operationId':None,
+                    'fingerprint':None,'required':[],'results':{},
+                    'codex':{'available':False,'code':'CAPABILITY_CHECK_REQUIRED'},
+                    'environment':'imported-version','at':None}
+                prep['handoff']={'version':1,'id':uuid4().hex,'at':time.time(),
+                    'brief':deepcopy(prep['brief']),'messages':[],
+                    'references':deepcopy(prep['references']),
+                    'scopeDecisions':deepcopy(prep.get('gapDecisions',{})),
+                    'report':pending,'contracts':deepcopy(a['snapshot'].get('contracts',{})),
+                    'restoredFrom':a['hash']}
+            p['preparation']=prep
+            p['tasks']=[{'id':a['taskId'],'executor':'local-codex','version':'local-import','state':'completed','solutionHash':a['solutionHash'],'createdAt':time.time(),'events':[],'operationId':operation_id,'buildFormat':'wanx-app-dev-kit'}]
+            p['artifacts']=[a]
+            p['versioning']={'revision':0,'adoptedHash':None,'adoptions':[],'iteration':None,'iterations':[],'feedback':''}
+            p['importSource']={'engine':'local-codex','at':time.time()}
+        return self.store.mutate(owner,created['id'],operation_id+':configure',{'format':bundle['format'],'artifactHash':a['hash']},change)
 
     def installed(self, owner, project_id, body):
         info = self.install_payload(owner,project_id,body["artifactHash"])
@@ -645,20 +697,40 @@ class StudioService:
         p,a = self.artifact(owner,project_id,artifact_hash)
         if environment == "production" and (not p["installed"] or p["installed"]["artifactHash"] != artifact_hash):
             raise StudioError("APP_NOT_INSTALLED",409)
+        layout=None
+        if a.get("devKitPackage"):
+            from .versions import verify
+            verify(a)
+            if environment=='preview':
+                from .standard_preview import compile_layout
+                layout=compile_layout(self.project_root,a)
+        # Compilation failures must not leave an unreturned runtime lease.
         token = secrets.token_urlsafe(32)
         self.runtime_sessions[token] = {"owner":owner,"project":project_id,"app":p["appId"],"artifact":artifact_hash,"environment":environment,"manifest":a["manifest"],"files":{},"expires":time.time()+3600}
         if a.get("devKitPackage"):
-            return {"session":token,"manifest":a["manifest"],"packageBase64":a["devKitPackage"]["packageBase64"],"packageSha256":a["devKitPackage"]["packageSha256"]}
+            result={"session":token,"manifest":a["manifest"],"packageBase64":a["devKitPackage"]["packageBase64"],"packageSha256":a["devKitPackage"]["packageSha256"]}
+            if layout is not None:
+                self.runtime_sessions[token]['layoutOnly']=True
+                result['standardLayout']=layout
+            return result
         return {"session":token,"manifest":a["manifest"],"bundle":a.get("bundle",""),"css":a.get("css","")}
 
-    def runtime(self, owner, token):
+    def runtime(self, owner, token, *, allow_layout=False):
         s = self.runtime_sessions.get(token)
         if not s or s["owner"] != owner or s["expires"] < time.time():
             raise StudioError("RUNTIME_SESSION_EXPIRED",401)
         if "publicationDigest" in s:self.team.assert_session(owner,s)
         elif getattr(self,"team",None) and not self.team.is_admin(owner):raise StudioError("STUDIO_ADMIN_REQUIRED",403)
         if getattr(self,'deployment_profile',None):self.deployment_profile.assert_runtime(s)
+        if s.get('layoutOnly') and not allow_layout:raise StudioError('EXPERT_DEPLOYMENT_REQUIRED',409)
         return s
+
+    def close_runtime(self, owner, token):
+        if self.runtime_sessions.get(token,{}).get('layoutOnly'):
+            self.authorize_management(owner)
+            StudioService.runtime(self,owner,token,allow_layout=True)
+        else:self.runtime(owner,token)
+        del self.runtime_sessions[token]
 
     async def invoke(self, owner, token, method, params):
         if method=='foundation.invoke':

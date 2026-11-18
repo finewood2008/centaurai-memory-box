@@ -4,15 +4,29 @@ import {build,transform} from 'esbuild';
 
 export const LIMITS = Object.freeze({files:64,fileBytes:512*1024,totalBytes:2*1024*1024});
 export function sourcePath(name, standard=false) {
-  if (standard && typeof name==='string' && /^app\/(?:host\.mjs|host\.html)$/.test(name) && !name.split('/').some(p=>p==='..'||p==='.'||!p)) return name;
+  if (standard) {
+    if (typeof name!=='string' || name.length>180 || !/^app\/(?:[a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*\.(?:html|mjs|js|css|json|svg|txt)$/.test(name) || name.split('/').some(p=>/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(p))) throw new Error('SOURCE_PATH_DENIED');
+    return name;
+  }
   if (typeof name!=='string' || !/^(miniapp\.manifest\.json|src\/[a-zA-Z0-9_/-]+\.(js|css|json))$/.test(name) || name.split('/').some(p=>p==='..'||p==='.'||!p) || name.length>180) throw new Error('SOURCE_PATH_DENIED');
   return name;
 }
 export function validateSources(files, standard=false) {
   if (!files || typeof files!=='object' || Array.isArray(files) || Object.keys(files).length>LIMITS.files) throw new Error('SOURCE_LIMIT');
   let total=0;
+  const portable=new Set(), prefixes=new Map();
   for (const [name,value] of Object.entries(files)) {
     sourcePath(name, standard);
+    if (portable.has(name.toLowerCase())) throw new Error('SOURCE_PATH_DENIED');
+    portable.add(name.toLowerCase());
+    if(standard){
+      const parts=name.split('/');
+      for(let i=1;i<=parts.length;i++){
+        const prefix=parts.slice(0,i).join('/'), key=prefix.toLowerCase();
+        if(prefixes.has(key)&&prefixes.get(key)!==prefix)throw new Error('SOURCE_PATH_DENIED');
+        prefixes.set(key,prefix);
+      }
+    }
     if(typeof value!=='string'||Buffer.byteLength(value)>LIMITS.fileBytes) throw new Error('SOURCE_LIMIT');
     total+=Buffer.byteLength(value);
   }

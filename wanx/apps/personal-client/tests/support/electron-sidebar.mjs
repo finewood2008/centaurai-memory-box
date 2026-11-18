@@ -6,9 +6,8 @@ import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, ipcMain, nativeTheme, screen } from "electron";
 
 const renderer = process.env.WANX_SIDEBAR_RENDERER_DIR ||
-  fileURLToPath(new URL("../../local-ui/renderer/", import.meta.url));
-const noteButton = "#academy-tab-note";
-const assistantTab = "#academy-tab-assistant";
+  fileURLToPath(new URL("../../build/app/local-ui/renderer/", import.meta.url));
+const noteButton = "#academy-note-tool";
 const workbenchButton = '[data-action="space-workbench"]';
 const uploadControl = 'summary[aria-label="上传到当前文件夹"]';
 const connectControl = '[data-action="show-boxes"]';
@@ -22,8 +21,10 @@ const scope = "fixture-dialogue";
 const threadId = "fixture-thread";
 const conversation = { id: threadId, revision: 1, context: {}, versions: [] };
 const messages = [];
+let dialogueSessions = [];
 const editableApplicationId = "fixture.editable";
 const expectExpertApps = process.env.WANX_TEST_EXPECT_EXPERT_APPS === "1";
+const testMultipleNotes = process.env.WANX_SIDEBAR_NOTES_ONLY === "1";
 const expectAcademyBridge = process.env.WANX_TEST_ACADEMY_BRIDGE === "1";
 const expertAppRecords = {
   office: {
@@ -48,17 +49,26 @@ const baseState = {
 };
 let hostState = baseState;
 let noteBlocks = [];
+const extraNotes = new Map();
+let nextNote = 0;
 const noteWrites = [];
 let heldSave;
+let heldDialogueSend;
 let releaseSave;
 let window;
 
 const run = source => window.webContents.executeJavaScript(source, true);
 const send = (channel, value) => window.webContents.send("wanx-client:" + channel, value);
-const noteSnapshot = () => ({
+const noteSnapshot = noteId => ({
   items: [], tasks: [], boxId: "test-box", scope: "fixture-note",
   online: hostState.phase === "ready",
-  note: { blocks: noteBlocks, revision: 1, phase: hostState.phase === "ready" ? "saved" : "offline" },
+  note: { blocks: noteId ? extraNotes.get(noteId) || [] : noteBlocks, revision: 1,
+    phase: hostState.phase === "ready" ? "saved" : "offline",
+    ...(noteId && !extraNotes.has(noteId) ? { deleted: true } : {}) },
+  ...(noteId ? { noteId } : {}),
+  ...(testMultipleNotes ? { notes: [...extraNotes].map(([id, blocks]) => ({
+    id, title: blocks[0]?.text?.split("\n")[0] || "",
+  })) } : {}),
 });
 
 async function until(predicate, description) {
@@ -71,6 +81,9 @@ async function until(predicate, description) {
 }
 
 async function click(selector) {
+  if (selector === noteButton || selector === ".clipboard-note-editor") {
+    await waitForEdge(true);
+  }
   const point = await run("(" + function(selector) {
     const element = document.querySelector(selector);
     if (!element) throw Error("Missing control " + selector);
@@ -183,9 +196,16 @@ function mockIPC() {
   handle("space-links-spaces", () => []);
   handle("space-links-requests", () => []);
   handle("space-links-mcp-state", () => ({}));
-  handle("clipboard-snapshot", noteSnapshot);
-  handle("clipboard-note-refresh", noteSnapshot);
-  handle("clipboard-note-save", async (_event, { blocks }) => {
+  handle("clipboard-snapshot", () => noteSnapshot());
+  handle("clipboard-note-refresh", (_event, { noteId }) => noteSnapshot(noteId));
+  handle("clipboard-note-command", (_event, { action, noteId }) => {
+    if (action === "create") {
+      noteId = (++nextNote).toString(16).padStart(32, "0");
+      extraNotes.set(noteId, []);
+    } else if (action === "delete") extraNotes.delete(noteId);
+    return noteSnapshot(noteId);
+  });
+  handle("clipboard-note-save", async (_event, { blocks, noteId }) => {
     const owner = hostState.account.accountId;
     noteWrites.push(blocks);
     if (heldSave) {
@@ -196,23 +216,63 @@ function mockIPC() {
       releaseSave = null;
       if (failure) throw Error(failure);
     }
-    if (owner === hostState.account.accountId) noteBlocks = blocks;
-    return noteSnapshot();
+    if (owner === hostState.account.accountId) {
+      if (noteId) extraNotes.set(noteId, blocks);
+      else noteBlocks = blocks;
+    }
+    return noteSnapshot(noteId);
   });
-  handle("ai-dialogue-load", () => ({ scope, defaultModel: model.id, models: [model], sessions: [], legacySessions: [] }));
+  handle("notifications-read", () => ({ ok: true }));
+  const testMemories = new Map();
+  handle("ai-dialogue-sidebar-memory", (_event, input) => {
+    if (input.action === "search") {
+      return { scope, items: [...testMemories.values()].filter(item => !input.query || item.text.includes(input.query)), hasMore: false };
+    }
+    assert.equal(input.conversationMode, "craft");
+    if (input.id) testMemories.delete(input.id);
+    if (input.action === "forget") return { scope, item: null, applied: true };
+    const item = { id: input.requestId, text: input.text, createdAt: new Date().toISOString() };
+    testMemories.set(item.id, item);
+    return { scope, item, applied: true };
+  });
+  handle("ai-dialogue-sidebar-memory-cancel", () => ({ scope }));
+  handle("ai-dialogue-sidebar-memmy", (_event, input) => ({
+    scope, items: [{ source: input.source === "codex" ? "Codex" : "Claude Code", text: "本次授权的测试片段" }],
+  }));
+  handle("ai-dialogue-load", () => ({ scope, defaultModel: model.id, models: [model], sessions: dialogueSessions, legacySessions: [], sidebarSources: true, sidebarConversationModes: true }));
   handle("ai-dialogue-model", () => ({ scope, defaultModel: model.id, models: [model] }));
-  handle("ai-dialogue-history-list", () => ({ scope, sessions: [] }));
+  let savedConversationMode = "ask";
+  handle("ai-dialogue-sidebar-mode", (_event, { conversationId, mode }) => {
+    assert.equal(conversationId, threadId);
+    savedConversationMode = mode;
+    return { scope, conversation, conversationMode: savedConversationMode };
+  });
+  handle("ai-dialogue-history-list", () => ({ scope, sessions: dialogueSessions }));
+  handle("ai-dialogue-channels-list", () => ({ scope, items: [] }));
+  handle("ai-dialogue-sidebar-source", () => ({ scope, title: "杭州周末笔记", text: "妈妈喜欢清泉茶馆的窗边位置。" }));
+  handle("ai-dialogue-sidebar-source-list", (_event, { kind, parent }) => ({ scope,
+    ...(kind === "space" ? { folder: { id: parent, name: "旅行笔记" }, parent: "",
+      folders: parent ? [] : [{ id: "trip", name: "旅行笔记" }] } : {}),
+    ...(kind === "starlink" ? { warehouses: [{ id: "trips", name: "旅途" }] } : {}),
+    ...(kind === "memory" ? { agents: [{ id: "claude_code", name: "Claude Code" }] } : {}),
+  }));
   handle("ai-dialogue-release-context", () => ({ scope }));
   handle("ai-dialogue-watch", () => ({}));
   handle("ai-dialogue-unwatch", () => ({}));
   handle("ai-dialogue-usage", () => ({}));
-  handle("ai-dialogue-send", (_event, { prompt }) => {
+  handle("ai-dialogue-send", async (_event, { prompt }) => {
+    const pendingSend = heldDialogueSend;
+    heldDialogueSend = null;
+    if (pendingSend) await pendingSend.promise;
     messages.push({ role: "user", content: prompt });
     return { scope, threadId, conversation, model: model.id };
   });
-  handle("ai-dialogue-open", () => ({
-    scope, conversation, history: { thread_id: threadId, model_ref: model.id, messages },
-  }));
+  handle("ai-dialogue-open", (_event, { trackOpened } = {}) => {
+    const current = dialogueSessions.find(row => row.thread_id === threadId && row.unread);
+    if (trackOpened && current) current.unread = false;
+    return { scope, conversation, history: { thread_id: threadId, model_ref: model.id, messages }, conversationMode: savedConversationMode,
+      ...(trackOpened && current && { channelReadThrough: current.last_active }) };
+  });
   ipcMain.handle("wanx:discovery:bluetooth-state", () => ({ status: "available" }));
   ipcMain.handle("wanx:setup:state", () => ({ ok: true, value: { state: "idle" } }));
 }
@@ -242,125 +302,6 @@ async function assertApplicationTabPosition(bannerSelector, contentSelector) {
     positions.tabs.top >= positions.banner.top - 1 && positions.tabs.bottom <= positions.banner.bottom + 1 &&
     positions.banner.bottom <= positions.content.top + 1,
     "the category tabs are contained within the banner above the content: " + JSON.stringify(positions));
-}
-
-async function verifyWorkshopTab() {
-  const appsBanner = '.wanx-section-banner[data-section="apps"]';
-  const workshopBanner = '.wanx-section-banner[data-section="workshop"]';
-  const assertBannerActions = async (bannerSelector, refreshAction, title, updateLabel) => {
-    const { appearance, ...banner } = await run("(" + function(selector, refreshAction) {
-      const banner = document.querySelector(selector);
-      const controls = banner.querySelector(".applications-banner-controls");
-      const lastTab = controls.querySelector("#applications-tab-workshop").getBoundingClientRect();
-      const refresh = controls.querySelector('.applications-banner-refresh[data-action="' + refreshAction + '"]');
-      const update = refresh.getBoundingClientRect();
-      const style = getComputedStyle(refresh);
-      return {
-        actions: [...controls.querySelectorAll("button")].map(button => button.dataset.action),
-        title: banner.querySelector("h2")?.textContent.trim().split(/\s+/)[0],
-        hasConnectionBadge: Boolean(banner.querySelector(".connection-line, .status-dot")),
-        updateLabel: refresh.getAttribute("aria-label"),
-        updateIconOnly: Boolean(refresh.querySelector("svg") && !refresh.textContent.trim()),
-        updateOnRight: lastTab.right <= update.left + 1 && lastTab.top < update.bottom && update.top < lastTab.bottom,
-        appearance: {
-          width: update.width, height: update.height, radius: style.borderRadius,
-          color: style.color, background: style.backgroundColor, gap: getComputedStyle(controls).columnGap,
-          icon: refresh.querySelector("svg")?.innerHTML,
-        },
-      };
-    } + ")(" + JSON.stringify(bannerSelector) + "," + JSON.stringify(refreshAction) + ")");
-    assert.deepEqual(banner, {
-      actions: ["applications-tab", "applications-tab", "applications-tab", refreshAction],
-      title, hasConnectionBadge: false, updateLabel, updateIconOnly: true, updateOnRight: true,
-    });
-    return appearance;
-  };
-  assert.equal(await run("innerWidth"), 760);
-  const tabs = await run(`Array.from(document.querySelectorAll('.applications-tabs [data-action="applications-tab"]'),
-    tab => [tab.dataset.tab, tab.textContent.trim()])`);
-  assert.deepEqual(tabs, [["wanx", "应用市场"], ["local", "我的应用"], ["workshop", "应用工坊"]]);
-  assert.equal(await run('Boolean(document.querySelector(".main-nav [data-action=show-workshop]"))'), false);
-  await until(() => run('document.querySelector(\'[data-action="market-refresh"]\')?.disabled === false'), "market refresh ready");
-  await assertApplicationTabPosition(appsBanner, "#applications-panel-wanx");
-  const marketActions = await assertBannerActions(appsBanner, "market-refresh", "AI", "检查更新");
-  await click(assistantButton);
-  await waitForPanel("assistant");
-  await assertApplicationTabPosition(appsBanner, "#applications-panel-wanx");
-  await click(assistantButton);
-  await waitForPanel(null);
-  await click("#applications-tab-local");
-  await until(() => run('Boolean(document.querySelector("#applications-panel-local"))'), "My Apps tab");
-  await assertApplicationTabPosition(appsBanner, "#applications-panel-local");
-  assert.deepEqual(await assertBannerActions(appsBanner, "market-refresh", "AI", "检查更新"),
-    marketActions);
-  await click("#applications-tab-wanx");
-  await until(() => run('Boolean(document.querySelector("#applications-panel-wanx"))'), "Applications Market tab");
-  await click("#applications-tab-workshop");
-  await until(() => run('document.querySelector("#applications-panel-workshop")?.getAttribute("aria-label") === "应用工坊"'),
-    "Workshop in Applications");
-  assert.equal(await run('document.querySelector(".applications-tabs [aria-selected=true]").id'), "applications-tab-workshop");
-  assert.equal(await run('document.activeElement.id'), "applications-tab-workshop");
-  await until(() => run('document.querySelector(\'[data-action="workshop-refresh"]\')?.disabled === false'), "Workshop refresh ready");
-  await assertApplicationTabPosition(workshopBanner, "#applications-panel-workshop .workshop-layout");
-  assert.deepEqual(await assertBannerActions(workshopBanner, "workshop-refresh", "应用工坊", "刷新工坊"),
-    marketActions);
-  await click("#applications-tab-wanx");
-  await until(() => run('Boolean(document.querySelector("#applications-panel-wanx"))'), "return to Applications market");
-
-  send("workshop-source", editableApplicationId);
-  await until(() => run('Boolean(document.querySelector(\'#applications-panel-workshop [aria-label="创建定制副本"] [data-action="workshop-copy"]:enabled\'))'),
-    "native Workshop source handoff");
-  await click('[data-action="workshop-cancel"]');
-  await until(() => run('!document.querySelector(".workshop-shade")'), "close source handoff dialog");
-  await click("#applications-tab-wanx");
-  await until(() => run('Boolean(document.querySelector("#applications-panel-wanx"))'), "return after source handoff");
-}
-
-async function verifyMergedExpertApps() {
-  const officeCard = `[data-application="${expertAppRecords.office.applicationId}"]`;
-  const crmCard = `[data-application="${expertAppRecords["ai-crm"].applicationId}"]`;
-  const crmOffer = '[data-expert-app="ai-crm"]';
-  const find = selector => run(`Boolean(document.querySelector(${JSON.stringify(selector)}))`);
-  const count = selector => run(`document.querySelectorAll(${JSON.stringify(selector)}).length`);
-  const scrollClick = async selector => {
-    await run(`document.querySelector(${JSON.stringify(selector)}).scrollIntoView({ block: "center" })`);
-    await click(selector);
-  };
-
-  await click("#applications-tab-local");
-  await until(() => find(`#applications-panel-local ${officeCard}`), "installed app in My Apps");
-  if (!expectExpertApps) {
-    assert.equal(await count(officeCard), 1);
-    assert.equal(await find('#applications-panel-local [aria-label="可添加的应用"]'), false);
-    assert.equal(await find(`${officeCard} [data-action="expert-installed-workshop"]`), false);
-    await scrollClick(`${officeCard} [data-action="applications-launch"]`);
-    await until(() => appLaunches.includes(expertAppRecords.office.applicationId), "open installed app without Expert API");
-    await click("#applications-tab-wanx");
-    await until(() => find("#applications-panel-wanx"), "return after My Apps verification");
-    return;
-  }
-  await until(() => find(`#applications-panel-local ${crmOffer}`), "addable apps in My Apps");
-  assert.equal(await find('#applications-panel-local [aria-label="可添加的应用"]'), true);
-  assert.equal(await count(officeCard), 1);
-  assert.equal(await count('[data-expert-app="office"]'), 0, "the installed app should not have an offer card");
-  assert.equal(await count(crmCard), 0, "an available app does not belong to the installed list");
-
-  await scrollClick(`${officeCard} [data-action="expert-installed-workshop"]`);
-  await until(() => expertAppCalls.some(([action, input]) => action === "workshop-installed" &&
-    input.applicationId === expertAppRecords.office.applicationId), "installed app demo action");
-  await scrollClick(`${crmOffer} [data-action="expert-app-workshop"]`);
-  await until(() => expertAppCalls.some(([action, input]) => action === "workshop" && input.id === "ai-crm"),
-    "addable app demo action");
-  await scrollClick(`${crmOffer} [data-action="expert-app-install"]`);
-  await until(() => expertAppCalls.some(([action, input]) => action === "install" && input.id === "ai-crm"),
-    "add app action");
-  await until(() => find(crmCard), "installed CRM in My Apps");
-  assert.equal(await count(crmCard), 1);
-  assert.equal(await count(crmOffer), 0, "the added app moved to the installed list");
-  await scrollClick(`${crmCard} [data-action="applications-launch"]`);
-  await until(() => appLaunches.includes(expertAppRecords["ai-crm"].applicationId), "open added application");
-  send("navigate", "applications");
-  await until(() => find("#applications-panel-wanx"), "return after My Apps verification");
 }
 
 async function assertWorkbenchPlacement(adjacentSelector) {
@@ -394,6 +335,257 @@ async function assertWorkbenchPlacement(adjacentSelector) {
     JSON.stringify(geometry));
 }
 
+async function verifyZhijunMemory() {
+  const modal = ".zhijun-memory";
+  const invoke = selector => run(`document.querySelector(${JSON.stringify(selector)}).click()`);
+  const contains = text => run(`document.querySelector(${JSON.stringify(modal)}).textContent.includes(${JSON.stringify(text)})`);
+  hostState = { ...baseState, notifications: { unreadCount: 1, items: [{
+    id: "old-application", category: "application", applicationId: expertAppRecords.office.applicationId,
+    title: "历史通知", body: "以前收到的应用通知", createdAt: Date.now(),
+  }] } };
+  send("state", hostState);
+  send("navigate", "notifications");
+  await until(() => run('Boolean(document.querySelector("[data-action=notifications-select]"))'), "legacy notification");
+  await invoke("[data-action=notifications-select]");
+  assert.equal(await run('Boolean(document.querySelector("[data-action=notifications-open]"))'), false);
+  send("workshop-source", expertAppRecords.office.applicationId);
+  for (const old of ["applications", "workshop", "application-detail"]) send("navigate", old);
+  assert.equal(await run('Boolean(document.querySelector(".notification-page"))'), true);
+  assert.equal(await run('Boolean(document.querySelector(".applications-tabs, [data-action=show-applications], [aria-label=应用工坊]"))'), false);
+  hostState = baseState;
+  send("state", hostState);
+  send("navigate", "memory");
+  await until(() => run('Boolean(document.querySelector(".memory-banner h2"))'), "agent memory banner");
+  assert.equal(await run('document.querySelector(".memory-banner h2").firstChild.textContent.trim()'), "智能体记忆");
+  assert.equal(await run('document.querySelector(".memory-banner .wanx-section-english").textContent'), "agent memory");
+  send("navigate", "my-ai");
+  await invoke(assistantButton);
+  await waitForPanel("assistant");
+  await waitForEdge(true);
+  await until(() => run('Boolean(document.querySelector("[data-chat-action=quick-remember]"))'), "Zhijun memory entry");
+  assert.equal(await run('!!document.querySelector("[data-chat-action=memory]")'), false);
+  assert(await run('document.querySelector("#academy-drawer").textContent.includes("记忆智能体")'));
+  assert(await run('getComputedStyle(document.querySelector(".ai-zhijun-dialogue .ai-page-title")).display === "none"'));
+  const modeTrigger = '[data-chat-action="modes"]';
+  assert(await run('document.querySelector(".ai-model-section").nextElementSibling.classList.contains("ai-mode-setting")'));
+  await until(() => run(`!document.querySelector('${modeTrigger}').disabled`), "mode control is ready");
+  const modelTrigger = '[data-chat-action="models"]';
+  for (const selector of [modelTrigger, modeTrigger]) {
+    assert.deepEqual(await run(`(() => {
+      const button = document.querySelector('${selector}');
+      return [button.textContent.trim(), button.offsetWidth, button.offsetHeight];
+    })()`), ["", 28, 28]);
+  }
+  await invoke(modelTrigger);
+  await until(() => run('!document.querySelector("[data-chat-model-picker]").hidden'), "model picker");
+  assert(await run('document.activeElement.matches("[data-chat-model-search]")'));
+  assert(await run('document.querySelector("[data-chat-model-default] [aria-pressed=true]").textContent.includes("跟随默认")'));
+  await run(`(() => {
+    const search = document.querySelector("[data-chat-model-search]");
+    search.value = "invalid test search";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+  })()`);
+  assert.equal(await run('document.querySelectorAll("[data-chat-model-options] button").length'), 0);
+  await run('document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))');
+  assert(await run('document.querySelector("[data-chat-model-picker]").hidden && document.activeElement.matches("[data-chat-action=models]")'));
+  await invoke(modeTrigger);
+  assert.deepEqual(await run('[...document.querySelectorAll("[data-mode-panel] strong")].map(option => option.textContent)'), ["普通模式", "高级模式"]);
+  assert(await run('document.querySelector("[data-mode-compatibility]").hidden'));
+  await invoke('[data-chat-action="select-mode"][data-id="ask"]');
+  await invoke('[data-chat-action="quick-remember"]');
+  assert(await run('document.querySelector("[data-chat-notice]").textContent.includes("切到高级模式")'));
+  assert.equal(await run('document.querySelector(".zhijun-memory").open'), false);
+  await invoke(modeTrigger);
+  await invoke('[data-chat-action="select-mode"][data-id="craft"]');
+  assert.match(await run(`document.querySelector('${modeTrigger}').title`), /高级模式/);
+  assert.deepEqual(await run(
+    '[...document.querySelectorAll(".ai-zhijun-source[aria-pressed=true]")].map(button => button.textContent)'
+  ), ["空间", "星图", "智能体记忆"]);
+  const memorySource = '[data-source-key="memory"]';
+  await until(() => run('!document.querySelector("[data-source-key=memory]").disabled'), "source choices");
+  await invoke(memorySource);
+  assert.equal(await run('document.querySelector("[data-source-key=memory]").getAttribute("aria-pressed")'), "false");
+  await invoke(memorySource);
+
+  await invoke(".ai-zhijun-scope > summary");
+  assert.equal(await run('document.querySelector("#academy-dialogue [data-context-summary]")'), null);
+  for (const [kind, id] of [["space", "trip"], ["starlink", "trips"], ["memory", "claude_code"]]) {
+    const trigger = `[data-chat-action="source-settings"][data-source-key="${kind}"]`;
+    if (kind !== "space") await invoke(trigger);
+    else {
+      await invoke(trigger);
+      await until(() => run('!!document.querySelector("[data-chat-action=source-browse]")'), "folder listing");
+      await invoke('[data-chat-action="source-browse"][data-id="trip"]');
+    }
+    const choice = `[data-chat-action="source-select"][data-id="${id}"]`;
+    await until(() => run(`!!document.querySelector('${choice}')`), `scope selection: ${kind}`);
+    await invoke(choice);
+    assert.equal(await run('document.querySelector("[data-zhijun-picker]").open'), false);
+  }
+  await invoke(".ai-zhijun-scope > summary");
+
+  await invoke('[data-chat-action="quick-remember"]');
+  assert(await run('!!document.querySelector(".zhijun-memory[open] textarea")'));
+  assert(await run('document.activeElement.matches(".zhijun-memory textarea")'));
+  assert(await run('getComputedStyle(document.querySelector(".zhijun-memory [data-memory-search]")).display === "none"'));
+  assert.equal(await run('!!document.querySelector("[data-chat-action=find-material]")'), false);
+  await run(`document.querySelector('${modal} textarea').value = '小林下周搬去杭州。'`);
+  await invoke(modal + " [data-memory-submit]");
+  await until(() => contains("已记住。"), "memory write confirmation");
+  await invoke(modal + " [data-memory-action=close]");
+  await waitForEdge(true);
+
+  const nextChat = '[data-chat-action="new"]';
+  await invoke("#academy-drawer " + nextChat);
+  await until(() => run('document.activeElement.matches("[data-chat-input]")'), "new dialogue is ready");
+  assert.match(await run(`document.querySelector('${modeTrigger}').title`), /普通模式/);
+  await enterDraft("找回，小林");
+  await run('document.querySelector("[data-chat-composer]").requestSubmit()');
+  await until(() => contains("小林下周搬去杭州"), "recall from a new chat");
+  assert.equal(await run('document.querySelector(".zhijun-memory [data-memory-action=correct]")'), null);
+  await invoke(modal + " [data-memory-action=close]");
+  await invoke(modeTrigger);
+  await invoke('[data-chat-action="select-mode"][data-id="craft"]');
+  await enterDraft("找回，小林");
+  await run('document.querySelector("[data-chat-composer]").requestSubmit()');
+  await until(() => run('!!document.querySelector(".zhijun-memory [data-memory-action=correct]")'), "memory correction is available in advanced mode");
+  await invoke(modal + " [data-memory-action=correct]");
+  await run(`document.querySelector('${modal} textarea').value = '小林下周搬去苏州。'`);
+  await invoke(modal + " [data-memory-submit]");
+  await until(() => contains("已更正。"), "memory correction");
+  assert(await contains("小林下周搬去苏州"));
+  await invoke(modal + " [data-memory-action=forget]");
+  await until(() => contains("原聊天和 Memmy 源记录仍保留"), "forget confirmation");
+  await invoke(modal + " [data-memory-action=forget-confirm]");
+  await until(() => contains("已从知君长期记忆移除"), "memory removed");
+  assert.equal(await run(`document.querySelectorAll('${modal} article').length`), 0);
+
+  await invoke(modal + " [data-memory-action=external]");
+  await until(() => run(`!document.querySelector('${modal} [data-memory-external]').hidden`), "external search form");
+  await run(`document.querySelector('${modal} [data-memory-external] [name=query]').value = '测试'`);
+  await run(`document.querySelector('${modal} [data-memory-external]').requestSubmit()`);
+  await until(() => contains("来自 Memmy · Codex"), "authorized read-only external result");
+  await invoke(modal + " [data-memory-action=cancel-external]");
+  assert.equal(await run(`document.querySelectorAll('${modal} article').length`), 0);
+  await invoke(modal + " [data-memory-action=close]");
+
+  assert.equal(await run('!!document.querySelector("[data-chat-history-list] .ai-history-source[data-source=weixin]")'), false);
+  dialogueSessions = [{ thread_id: threadId, title: "杭州周末", channel_type: "weixin", last_active: Date.now() / 1000, unread: true }];
+  await invoke('[data-chat-action="history"]');
+  await until(() => run('!!document.querySelector("[data-chat-history-list] .ai-history-source[data-source=weixin]")'), "new WeChat conversation appears when opening history");
+  assert(await run('document.querySelector("[data-chat-history-list]").textContent.includes("杭州周末")'));
+  assert.equal(await run('document.querySelector("[data-history-unread]").textContent'), "1");
+  assert(await run('!!document.querySelector(".ai-history-unread-dot")'));
+  await invoke('[data-chat-action="history-close"]');
+  assert(await run('!document.querySelector("[data-history-unread]").hidden'));
+
+  messages.push(
+    { role: "user", content: "上次在杭州去了哪家茶馆？", zhijun_evidence: [
+      { source: "space", title: "杭州周末笔记", text: "清泉茶馆", file_id: "a".repeat(32) },
+    ] },
+    { role: "assistant", content: "上次去的是清泉茶馆。" },
+  );
+  await invoke(assistantButton);
+  await waitForPanel(null);
+  await invoke(assistantButton);
+  await waitForPanel("assistant");
+  await waitForEdge(true);
+  await until(() => run('!!document.querySelector("[data-chat-action=continue-recent]")'), "recent dialogue");
+  await invoke('[data-chat-action="continue-recent"]');
+  await until(() => run('document.querySelector("[data-history-unread]").hidden'), "opening the WeChat conversation clears its badge");
+  await invoke(modeTrigger);
+  await invoke('[data-chat-action="select-mode"][data-id="craft"]');
+  await until(() => run(`document.querySelector('${modeTrigger}').title.includes("高级模式")`), "selected mode saved on the conversation");
+  await until(() => run('!!document.querySelector(".ai-zhijun-evidence summary")'), "evidence on resumed answer");
+  await invoke(".ai-zhijun-evidence summary");
+  assert(await run('document.querySelector(".ai-zhijun-evidence details").open'));
+  await invoke('[data-chat-action="evidence-source"]');
+  await until(() => run('document.querySelector("[data-chat-artifact-dialog]").open'), "source preview");
+  assert(await run('document.querySelector("[data-artifact-content]").textContent.includes("窗边位置")'));
+  await invoke('[data-chat-action="close-artifact"]');
+  await invoke('[data-assistant-channels]');
+  await until(() => run('document.querySelector(".ai-channels-dialog[open] .ai-channel-catalog")?.textContent.includes("企业微信")'), "phone channel catalog");
+  assert(await run('document.querySelector(".ai-channels-dialog h3").textContent.includes("在手机上用知君")'));
+  await invoke('[data-channel-action="close"]');
+  await invoke("#academy-drawer " + nextChat);
+  await until(() => run('!!document.querySelector("[data-chat-action=quick-remember]")'), "clean welcome");
+  assert.match(await run(`document.querySelector('${modeTrigger}').title`), /普通模式/);
+  await invoke('[data-chat-action="continue-recent"]');
+  await until(() => run(`document.querySelector('${modeTrigger}').title.includes("高级模式")`), "mode restored when reopening the saved conversation");
+  await invoke("#academy-drawer " + nextChat);
+  await until(() => run('document.activeElement.matches("[data-chat-input]")'), "new dialogue is ready again");
+  messages.length = 0;
+  dialogueSessions = [];
+  await invoke(assistantButton);
+  await waitForPanel(null);
+}
+
+async function verifyMultipleNotes() {
+  noteBlocks = [{ type: "text", text: "原来的共享便签" }];
+  await click('[data-action="show-space"]');
+  await until(() => run(`Boolean(document.querySelector(${JSON.stringify(noteButton)}))`), "Space note entry");
+  await click(assistantButton);
+  await waitForPanel("assistant");
+  await waitForEdge(true);
+  await click(noteButton);
+  await waitForPanel("note");
+  await until(() => run('getComputedStyle(document.querySelector("#super-clipboard")).opacity === "1"'), "note animation");
+  await until(async () => await noteText() === "原来的共享便签", "original note");
+  const fill = text => run(`(() => {
+    const editor = document.querySelector(".clipboard-note-editor");
+    editor.textContent = ${JSON.stringify(text)};
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+  })()`);
+  const select = label => run(`(() => {
+    const picker = document.querySelector(".clipboard-note-switch select");
+    picker.value = Array.from(picker.options).find(option => option.text === ${JSON.stringify(label)}).value;
+    picker.dispatchEvent(new Event("change", { bubbles: true }));
+  })()`);
+  const selectedTitle = () => run('document.querySelector(".clipboard-note-switch select").selectedOptions[0]?.text');
+  const add = async text => {
+    await click('[data-clip="create"]');
+    await until(async () => await selectedTitle() === "未命名便签" && await noteText() === "", "new blank note");
+    await fill(text);
+    await until(async () => await selectedTitle() === text.split("\n")[0], "title based on the first line");
+  };
+  await add("周末安排\n周六看展");
+  await add("采购清单\n咖啡豆");
+  await select("周末安排");
+  await until(async () => await noteText() === "周末安排\n周六看展", "switch to the first extra note");
+  await run('document.querySelector(".clipboard-note-menu").open = true');
+  await click('[data-clip="delete"]');
+  assert.equal(extraNotes.size, 2, "deletion waits for confirmation");
+  await click('[data-clip="confirm"]');
+  await until(async () => await selectedTitle() === "原共享便签" && await noteText() === "原来的共享便签", "return to the preserved note after deleting");
+  assert.equal(extraNotes.size, 1);
+  await select("采购清单");
+  await until(async () => await noteText() === "采购清单\n咖啡豆", "other extra note is intact");
+}
+
+const edgeGeometry = () => run(`(() => {
+  const handle = document.querySelector("#academy-edge-handle");
+  const drawer = document.querySelector("#academy-drawer");
+  const mark = handle.querySelector(".academy-edge-mark");
+  const image = mark.querySelector("img");
+  const button = handle.getBoundingClientRect();
+  const panel = drawer.getBoundingClientRect();
+  return {
+    viewport: innerWidth, handle: button.toJSON(), drawer: panel.toJSON(),
+    inert: drawer.inert, expanded: handle.getAttribute("aria-expanded"),
+    visible: getComputedStyle(drawer).visibility === "visible",
+    seamWidth: getComputedStyle(handle, "::before").width,
+    logoVisible: image.naturalWidth > 0 && getComputedStyle(image).visibility === "visible",
+    logoBackground: getComputedStyle(mark).backgroundColor,
+  };
+})()`);
+
+const waitForEdge = open => until(async () => {
+  const edge = await edgeGeometry();
+  return open
+    ? edge.expanded === "true" && Math.abs(edge.drawer.right - edge.viewport) <= 1
+    : edge.expanded === "false" && !edge.visible && Math.abs(edge.handle.right - edge.viewport) <= 1;
+}, open ? "assistant aligned with the right edge" : "collapsed handle aligned with the right edge");
+
 async function verifyAppearance() {
   await click('[data-action="show-space"]');
   await until(() => run(`Boolean(document.querySelector(${JSON.stringify(workbenchButton)}))`), "Space workbench entry");
@@ -409,6 +601,7 @@ async function verifyAppearance() {
         await click(assistantButton);
         if (panel === "note") await click(noteButton);
         await waitForPanel(panel);
+        await waitForEdge(true);
         if (panel === "note") {
           assert.equal(await run('Boolean(document.querySelector("#academy-note > #super-clipboard"))'), true);
         }
@@ -424,11 +617,13 @@ async function verifyAppearance() {
           for (let y = bounds.top + 2; y < bounds.bottom - 2; y += 20) {
             uninterrupted.push(element.contains(document.elementFromPoint(x, y)));
           }
-          const tabs = document.querySelector("#academy-tabs").getBoundingClientRect();
+          const title = document.querySelector("#academy-title").getBoundingClientRect();
+          const caption = document.querySelector(".academy-title-caption").getBoundingClientRect();
+          const noteTool = document.querySelector("#academy-note-tool").getBoundingClientRect();
           const close = document.querySelector("#academy-close").getBoundingClientRect();
           return { top: bounds.top, bottom: bounds.bottom, left: bounds.left, headerBottom: topbar.bottom,
             bannerBottom: banner.bottom, bannerRight: banner.right, viewportBottom: innerHeight,
-            viewportWidth: innerWidth, tabsEndBeforeClose: tabs.right <= close.left, uninterrupted };
+            viewportWidth: innerWidth, toolbarOrder: Math.max(title.right, caption.right) <= noteTool.left && noteTool.right <= close.left, uninterrupted };
         } + ")()");
         if (process.env.WANX_SIDEBAR_SCREENSHOTS) {
           await run("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
@@ -445,14 +640,14 @@ async function verifyAppearance() {
           assert(Math.abs(geometry.bannerRight - bannerRight) <= 1, "Space keeps its normal banner width under the sidebar");
           assert(geometry.bannerRight > geometry.left, "the sidebar can cover the right side of the banner");
         }
-        assert(geometry.tabsEndBeforeClose, "the tab group and close button do not overlap");
+        assert(geometry.toolbarOrder, "the drawer title, note tool and close button do not overlap");
         assert(Math.abs(geometry.bottom - geometry.viewportBottom) <= 1,
           "the sidebar continues to the bottom of the viewport");
         assert(geometry.uninterrupted.every(Boolean), "no toolbar, divider or file panel cuts through the sidebar");
         await until(() => run('document.querySelector("#academy-edge-handle img")?.complete === true'), "WANX Logo loading");
         const logo = await run("(" + function() {
           const image = document.querySelector("#academy-edge-handle img");
-          const handle = image.parentElement;
+          const handle = image.closest(".academy-edge-mark");
           const bounds = image.getBoundingClientRect(), button = handle.getBoundingClientRect();
           return { src: image.getAttribute("src"), loaded: image.naturalWidth > 0,
             width: bounds.width, height: bounds.height,
@@ -463,13 +658,14 @@ async function verifyAppearance() {
         } + ")()");
         assert.equal(logo.src, "./assets/centaurai-mark.png");
         assert.equal(logo.loaded, true);
-        assert.equal(logo.width, 20);
-        assert.equal(logo.height, 20);
+        assert.equal(logo.width, 17);
+        assert.equal(logo.height, 17);
         assert(Math.abs(logo.offsetX) <= 1 && Math.abs(logo.offsetY) <= 1, "the Logo stays centered in the entry");
         assert.equal(logo.visible, true);
         assert.notEqual(logo.background, "rgba(0, 0, 0, 0)", "the Logo has a solid contrasting surface in either system theme");
         await click("#academy-close");
         await waitForPanel(null);
+        await waitForEdge(false);
       }
     }
   }
@@ -513,16 +709,21 @@ async function verifySwitching() {
   } else {
     assert.equal(await run("typeof window.wanxAcademyCopilot"), "undefined");
     assert.equal(await run(`Array.from(document.querySelectorAll(
-      "#academy-help-toggle, #academy-page-help, #academy-tab-academy"
+      "#academy-help-toggle, #academy-page-help, #academy-resource-tool"
     )).every(element => element.getClientRects().length === 0)`), true);
   }
-  await run('document.querySelector("#academy-tab-assistant").focus()');
-  await key("ArrowRight");
+  assert.equal(await run('document.querySelector("#academy-title").textContent'), "知君");
+  assert.equal(await run('document.querySelector(".academy-title-caption").textContent'), "memory agent");
+  assert.equal(await run('document.querySelector(".academy-toolbar [role=tablist]")'), null);
+  assert.equal(await run('document.querySelector("#academy-note-tool span").textContent'), "便签");
+  await click(noteButton);
   await waitForPanel("note");
-  assert.equal(await run("document.activeElement.id"), "academy-tab-note");
+  assert.equal(await run("document.activeElement.id"), "academy-note-tool");
+  assert.equal(await run('document.querySelector("#academy-title").textContent'), "知君");
+  assert.equal(await run('document.querySelector("#academy-note-tool span").textContent'), "返回对话");
   await waitForEditor();
   await holdNoteSave("便签文字和小助理草稿独立保存");
-  await click(assistantTab);
+  await click(noteButton);
   assert.equal(await shown("note"), true, "stay on the note until the pending local save succeeds");
   releaseSave();
   await waitForPanel("assistant");
@@ -550,7 +751,7 @@ async function verifySwitching() {
 
 async function verifySaveFailure() {
   await holdNoteSave("本机保存失败时仍留在便签");
-  await click(assistantTab);
+  await click(noteButton);
   releaseSave("SECURE_STORAGE_WRITE_FAILED");
   await until(
     () => run('document.querySelector(".clipboard-note-error").textContent.includes("本机草稿保存失败")'),
@@ -558,7 +759,7 @@ async function verifySaveFailure() {
   );
   assert.equal(await shown("note"), true);
   assert.equal(await noteText(), "本机保存失败时仍留在便签");
-  await click(assistantTab);
+  await click(noteButton);
   await waitForPanel("assistant");
   assert.deepEqual(noteBlocks, [{ type: "text", text: "本机保存失败时仍留在便签" }]);
 
@@ -574,7 +775,7 @@ async function verifySaveFailure() {
   await waitForPanel("note");
   await waitForEditor();
   assert.equal(await noteText(), "离开空间时保留未保存的便签");
-  await click(assistantTab);
+  await click(noteButton);
   await waitForPanel("assistant");
   assert.deepEqual(noteBlocks, [{ type: "text", text: "离开空间时保留未保存的便签" }]);
 }
@@ -589,7 +790,7 @@ async function verifyCompositionAndLatestIntent() {
   await key("Escape", { isComposing: true });
   await key("K", { ctrlKey: true, shiftKey: true, isComposing: true });
   assert.equal(await shown("note"), true, "IME shortcuts must leave the editor open");
-  await run('document.querySelector("#academy-tab-assistant").click()');
+  await run('document.querySelector("#academy-note-tool").click()');
   assert.equal(await shown("note"), true, "switching must wait for the current composition");
   assert.equal(noteWrites.length, previousWrites, "do not save unfinished composition");
   await keyboard.sendCommand("Input.insertText", { text: "输入法" });
@@ -600,7 +801,7 @@ async function verifyCompositionAndLatestIntent() {
   await waitForPanel("note");
   await waitForEditor();
   await holdNoteSave("快速切换以后保存");
-  await click(assistantTab);
+  await click(noteButton);
   await key("Escape");
   releaseSave();
   await waitForPanel(null);
@@ -626,8 +827,40 @@ async function verifyHandoffAndOffline() {
   });
   await waitForPanel("assistant");
   await until(async () => await dialogueDraft() === "托盘交接草稿", "tray handoff draft");
+  window.setContentSize(430, 620);
+  await until(() => run("innerWidth <= 430"), "narrow client");
+  const actions = async () => run(`(() => {
+    const footer = document.querySelector("#academy-dialogue .ai-composer-bottom");
+    const primary = footer.querySelector("[data-zhijun-primary]");
+    const shown = [...primary.querySelectorAll("button")].filter(item => item.getClientRects().length);
+    const model = footer.querySelector("[data-chat-action=models]").getBoundingClientRect();
+    const mode = footer.querySelector("[data-chat-action=modes]").getBoundingClientRect();
+    const button = shown[0]?.getBoundingClientRect();
+    const centered = rect => rect.top + rect.height / 2;
+    return { text: shown.map(item => item.getAttribute("aria-label")), aligned: Boolean(button &&
+      model.width > 0 && model.right <= mode.left && mode.right <= button.left &&
+      Math.abs(centered(model) - centered(button)) <= 2 &&
+      Math.abs(centered(mode) - centered(button)) <= 2),
+      width: button?.width, height: footer.getBoundingClientRect().height };
+  })()`);
+  const idle = await actions();
+  assert.deepEqual(idle.text, ["发送"]);
+  await until(() => run(`(() => {
+    const send = document.querySelector("[data-zhijun-primary] [data-chat-send]");
+    return !send.disabled && getComputedStyle(send).backgroundColor === "rgb(166, 83, 63)";
+  })()`), "enabled dark terracotta send button");
+  assert.equal(idle.aligned, true);
+  const request = heldDialogueSend = Promise.withResolvers();
   await run('document.querySelector("#academy-drawer [data-chat-composer]").requestSubmit()');
+  try {
+    await until(async () => (await actions()).text.includes("发送中"), "only the sending action is visible");
+    assert.deepEqual(await actions(), { ...idle, text: ["发送中"] });
+  } finally {
+    request.resolve();
+  }
   await until(async () => messages.length === 1 && await dialogueDraft() === "", "in-flight dialogue turn");
+  assert.deepEqual(await actions(), { ...idle, text: ["停止"] });
+  window.setContentSize(760, 560);
   if (!expectAcademyBridge) assert.equal(messages[0].content, "托盘交接草稿");
   await click(noteButton);
   await waitForPanel("note");
@@ -668,7 +901,7 @@ async function verifyHandoffAndOffline() {
 
 async function verifyAccountSwitch() {
   await holdNoteSave("切换账号前的草稿");
-  await click(assistantTab);
+  await click(noteButton);
   assert.equal(await shown("note"), true);
   hostState = { ...baseState, account: { ...baseState.account, accountId: "other-owner" } };
   send("state", hostState);
@@ -730,10 +963,12 @@ async function verify() {
         if (window.activeSidebar() === "both") window.overlapSeen = true;
       }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ["hidden", "inert"], childList: true });
     } + ")()");
-    send("navigate", "applications");
-    await until(() => run('Boolean(document.querySelector("#applications-panel-wanx"))'), "Applications test view");
-    await verifyWorkshopTab();
-    await verifyMergedExpertApps();
+    if (testMultipleNotes) {
+      await verifyMultipleNotes();
+      console.log("WANX_SIDEBAR_UI_PASS");
+      return;
+    }
+    await verifyZhijunMemory();
     await verifyAppearance();
     await verifySwitching();
     await verifySaveFailure();

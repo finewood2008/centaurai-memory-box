@@ -1,0 +1,5330 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "WANX Octop · personal-space",
+    "description": "**CentaurAI-WANX** is a smarter, self-hosted AI assistant for multiple users and agents. All routes are served under `/api`.\n\n## Authentication\n\nMost endpoints require a JWT bearer token:\n\n1. Complete initial setup via `/api/setup/*` (first install only).\n2. `GET /api/auth/captcha` then `POST /api/auth/login` with `username` and `password`\n   (and `captcha_token` when a strong provider is active), or complete SSO with\n   `/api/auth/oidc/*` or `/api/auth/oauth/*` when a provider is enabled.\n3. Send `Authorization: Bearer <access_token>` on subsequent requests.\n\nAccess tokens use sliding renewal: when less than one-third of\n`access_token_ttl_seconds` remains, authenticated responses may include a fresh\ntoken in the `X-Octop-Access-Token` header. Clients should replace the stored\ntoken when present.\n\nPublic endpoints (no login token): `/api/docs`, `/api/openapi.json`, `/api/health`,\n`/api/setup/*` (wizard authorization applies), `/api/auth/login`, `/api/auth/register`,\n`/api/auth/captcha`, `/api/auth/oidc/status`, `/api/auth/oidc/start`,\n`/api/auth/oidc/callback`, `/api/auth/oidc/exchange`, `/api/auth/oauth/status`,\n`/api/auth/oauth/start`, `/api/auth/oauth/callback`, `/api/auth/oauth/exchange`,\n`/api/auth/invite/validate`,\n`/api/auth/invite/redeem`, `/api/connectors/oauth/callback`,\nand `/api/internal/mcp/*`.\n\n## Agent scope\n\nMany agent-scoped routes use the agent ID in the URL path (`/api/agents/{agent_id}/…`).\nRoutes first check the signed token's application scope; legacy tokens default to WANX.\nResources in another application are treated as not found, including for administrators.\nWithin the same application, each route applies its ownership or shared-resource access\nrules. WANX administrators may bypass ownership where supported; Zhijun personal profiles,\nmemories and uploaded sources require the owner.\n\n## Streaming chat\n\nDashboard live turns use **WebSocket** at `/api/agents/{agent_id}/chat/ws` (pass JWT as\n`?token=` query param). Send `{\"type\":\"user_turn\", ...}` frames; the server replies with JSON\nchunks matching the harness stream format, ending with `{\"type\":\"done\"}` or\n`{\"type\":\"error\",\"message\":\"...\"}`.\n\nText-type dashboard pushes (cron reminders, proactive care) also emit\n`{\"type\":\"dashboard_push\", ...}` on `/api/notifications/ws` (same `?token=` auth) so the\nSPA can show a toast even when the chat socket is not subscribed.\n\nHITL resume still uses `POST /api/agents/{agent_id}/chat/hitl/resume` (SSE).\n\n## Knowledge libraries\n\n`/api/knowledge-bases` uses the signed application scope for creation, visibility,\ndocument access, and citations. Existing libraries remain in WANX. Zhijun libraries\nare private to their owner and use local document parsers, downloaded native ONNX\nembeddings and RapidOCR. Remote WANX embedding/OCR settings do not affect Zhijun;\nmissing local components are reported as unavailable without remote fallback.\n",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/personal-space/overview": {
+      "get": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "Personal space capability and box-wide WANX storage and network resources",
+        "operationId": "overview_api_personal_space_overview_get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Overview"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-wanx-application-contract": {
+          "operationId": "spaceOverview",
+          "summary": "读取空间能力和盒端资源摘要",
+          "responses": {
+            "200": {
+              "description": "Overview",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/WanxApp_Overview"
+                  }
+                }
+              }
+            },
+            "default": {
+              "$ref": "#/components/responses/WanxApp_Error"
+            }
+          },
+          "x-wanx-permission": "space.drive.read",
+          "x-wanx-status": "ready-for-acceptance"
+        },
+        "x-wanx-permission": "space.drive.read",
+        "x-wanx-status": "ready-for-acceptance"
+      }
+    },
+    "/api/personal-space/files": {
+      "get": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "List your files or recycle bin",
+        "operationId": "files_api_personal_space_files_get",
+        "parameters": [
+          {
+            "name": "parent",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 32,
+              "default": "",
+              "title": "Parent"
+            }
+          },
+          {
+            "name": "trash",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Trash"
+            }
+          },
+          {
+            "name": "space_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 32,
+              "default": "personal",
+              "title": "Space Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Listing"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-wanx-application-contract": {
+          "operationId": "spaceList",
+          "summary": "列出当前用户空间文件或回收站",
+          "parameters": [
+            {
+              "$ref": "#/components/parameters/WanxApp_Parent"
+            },
+            {
+              "name": "trash",
+              "in": "query",
+              "schema": {
+                "type": "boolean",
+                "default": false
+              }
+            },
+            {
+              "name": "space_id",
+              "in": "query",
+              "schema": {
+                "type": "string",
+                "maxLength": 32,
+                "default": "personal"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "description": "Listing",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/WanxApp_Listing"
+                  }
+                }
+              }
+            },
+            "default": {
+              "$ref": "#/components/responses/WanxApp_Error"
+            }
+          },
+          "x-wanx-permission": "space.drive.read",
+          "x-wanx-status": "ready-for-acceptance"
+        },
+        "x-wanx-permission": "space.drive.read",
+        "x-wanx-status": "ready-for-acceptance"
+      }
+    },
+    "/api/personal-space/folders": {
+      "post": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "Create a private folder; preserve both names on conflict",
+        "operationId": "mkdir_api_personal_space_folders_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FolderInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Entry"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-wanx-application-contract": {
+          "operationId": "spaceMkdir",
+          "summary": "创建文件夹",
+          "requestBody": {
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WanxApp_FolderInput"
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "description": "Entry",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/WanxApp_Entry"
+                  }
+                }
+              }
+            },
+            "default": {
+              "$ref": "#/components/responses/WanxApp_Error"
+            }
+          },
+          "x-wanx-permission": "space.drive.write",
+          "x-wanx-status": "ready-for-acceptance"
+        },
+        "x-wanx-permission": "space.drive.write",
+        "x-wanx-status": "ready-for-acceptance"
+      }
+    },
+    "/api/personal-space/files/{item_id}": {
+      "patch": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "Move or rename your file or folder",
+        "operationId": "move_api_personal_space_files__item_id__patch",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Item Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FolderInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Entry"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-wanx-application-contract": {
+          "operationId": "spaceMove",
+          "summary": "移动或重命名文件/文件夹",
+          "requestBody": {
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WanxApp_FolderInput"
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "description": "Entry",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/WanxApp_Entry"
+                  }
+                }
+              }
+            },
+            "default": {
+              "$ref": "#/components/responses/WanxApp_Error"
+            }
+          },
+          "x-wanx-permission": "space.drive.write",
+          "x-wanx-status": "ready-for-acceptance",
+          "parameters": [
+            {
+              "$ref": "#/components/parameters/WanxApp_ItemId"
+            }
+          ]
+        },
+        "x-wanx-permission": "space.drive.write",
+        "x-wanx-status": "ready-for-acceptance"
+      },
+      "delete": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "Move your file or folder into the recycle bin",
+        "operationId": "trash_api_personal_space_files__item_id__delete",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Item Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-wanx-application-contract": {
+          "operationId": "spaceTrash",
+          "summary": "移入回收站",
+          "responses": {
+            "204": {
+              "description": "Moved to trash"
+            },
+            "default": {
+              "$ref": "#/components/responses/WanxApp_Error"
+            }
+          },
+          "x-wanx-permission": "space.drive.write",
+          "x-wanx-status": "ready-for-acceptance",
+          "parameters": [
+            {
+              "$ref": "#/components/parameters/WanxApp_ItemId"
+            }
+          ]
+        },
+        "x-wanx-permission": "space.drive.write",
+        "x-wanx-status": "ready-for-acceptance"
+      },
+      "get": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "Read metadata of your own active file",
+        "operationId": "metadata_api_personal_space_files__item_id__get",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Item Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Entry"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-wanx-application-contract": {
+          "operationId": "spaceStat",
+          "summary": "读取文件或文件夹元数据",
+          "responses": {
+            "200": {
+              "description": "Entry",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/WanxApp_Entry"
+                  }
+                }
+              }
+            },
+            "default": {
+              "$ref": "#/components/responses/WanxApp_Error"
+            }
+          },
+          "x-wanx-permission": "space.drive.read",
+          "x-wanx-status": "ready-for-acceptance",
+          "parameters": [
+            {
+              "$ref": "#/components/parameters/WanxApp_ItemId"
+            }
+          ]
+        },
+        "x-wanx-permission": "space.drive.read",
+        "x-wanx-status": "ready-for-acceptance"
+      }
+    },
+    "/api/personal-space/trash/{item_id}/restore": {
+      "post": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "Restore a recycled item; preserve both names on conflict",
+        "operationId": "restore_api_personal_space_trash__item_id__restore_post",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Item Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Entry"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-wanx-application-contract": {
+          "operationId": "spaceRestore",
+          "summary": "恢复回收站项目",
+          "responses": {
+            "200": {
+              "description": "Entry",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/WanxApp_Entry"
+                  }
+                }
+              }
+            },
+            "default": {
+              "$ref": "#/components/responses/WanxApp_Error"
+            }
+          },
+          "x-wanx-permission": "space.drive.write",
+          "x-wanx-status": "ready-for-acceptance",
+          "parameters": [
+            {
+              "$ref": "#/components/parameters/WanxApp_ItemId"
+            }
+          ]
+        },
+        "x-wanx-permission": "space.drive.write",
+        "x-wanx-status": "ready-for-acceptance"
+      }
+    },
+    "/api/personal-space/trash/{item_id}": {
+      "delete": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "Permanently remove your recycled item",
+        "operationId": "purge_api_personal_space_trash__item_id__delete",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Item Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-wanx-application-contract": {
+          "operationId": "spacePurge",
+          "summary": "永久删除回收站项目",
+          "responses": {
+            "204": {
+              "description": "Purged"
+            },
+            "default": {
+              "$ref": "#/components/responses/WanxApp_Error"
+            }
+          },
+          "x-wanx-permission": "space.drive.write",
+          "x-wanx-status": "ready-for-acceptance",
+          "parameters": [
+            {
+              "$ref": "#/components/parameters/WanxApp_ItemId"
+            }
+          ]
+        },
+        "x-wanx-permission": "space.drive.write",
+        "x-wanx-status": "ready-for-acceptance"
+      }
+    },
+    "/api/personal-space/uploads": {
+      "post": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "Create or recover an upload; no visible file until commit",
+        "operationId": "upload_api_personal_space_uploads_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-wanx-application-contract": {
+          "operationId": "spaceCreateUpload",
+          "summary": "创建或恢复上传",
+          "requestBody": {
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WanxApp_UploadInput"
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "description": "Upload status",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/WanxApp_UploadStatus"
+                  }
+                }
+              }
+            },
+            "default": {
+              "$ref": "#/components/responses/WanxApp_Error"
+            }
+          },
+          "x-wanx-permission": "space.drive.write",
+          "x-wanx-status": "ready-for-acceptance"
+        },
+        "x-wanx-permission": "space.drive.write",
+        "x-wanx-status": "ready-for-acceptance"
+      }
+    },
+    "/api/personal-space/uploads/{upload_id}": {
+      "get": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "Read the durable upload offset",
+        "operationId": "upload_status_api_personal_space_uploads__upload_id__get",
+        "parameters": [
+          {
+            "name": "upload_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Upload Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-wanx-application-contract": {
+          "operationId": "spaceUploadStatus",
+          "summary": "读取持久化上传 offset",
+          "responses": {
+            "200": {
+              "description": "Upload status",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/WanxApp_UploadStatus"
+                  }
+                }
+              }
+            },
+            "default": {
+              "$ref": "#/components/responses/WanxApp_Error"
+            }
+          },
+          "x-wanx-permission": "space.drive.read",
+          "x-wanx-status": "ready-for-acceptance",
+          "parameters": [
+            {
+              "$ref": "#/components/parameters/WanxApp_UploadId"
+            }
+          ]
+        },
+        "x-wanx-permission": "space.drive.read",
+        "x-wanx-status": "ready-for-acceptance"
+      },
+      "put": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "Append one SHA-256 checked chunk, at most 4 MiB",
+        "operationId": "chunk_api_personal_space_uploads__upload_id__put",
+        "parameters": [
+          {
+            "name": "upload_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Upload Id"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "integer"
+                  },
+                  "title": "Response Chunk Api Personal Space Uploads  Upload Id  Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-wanx-application-contract": {
+          "operationId": "spaceWriteChunk",
+          "summary": "写入一个 SHA-256 校验分块，最大 4 MiB",
+          "parameters": [
+            {
+              "$ref": "#/components/parameters/WanxApp_UploadId"
+            },
+            {
+              "name": "offset",
+              "in": "query",
+              "required": true,
+              "schema": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          ],
+          "requestBody": {
+            "required": true,
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "description": "Next offset",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "object",
+                    "required": [
+                      "offset"
+                    ],
+                    "properties": {
+                      "offset": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "default": {
+              "$ref": "#/components/responses/WanxApp_Error"
+            }
+          },
+          "x-wanx-permission": "space.drive.write",
+          "x-wanx-status": "ready-for-acceptance"
+        },
+        "x-wanx-permission": "space.drive.write",
+        "x-wanx-status": "ready-for-acceptance"
+      },
+      "delete": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "Discard an unfinished upload",
+        "operationId": "cancel_api_personal_space_uploads__upload_id__delete",
+        "parameters": [
+          {
+            "name": "upload_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Upload Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-wanx-application-contract": {
+          "operationId": "spaceCancelUpload",
+          "summary": "丢弃未完成上传",
+          "responses": {
+            "204": {
+              "description": "Cancelled"
+            },
+            "default": {
+              "$ref": "#/components/responses/WanxApp_Error"
+            }
+          },
+          "x-wanx-permission": "space.drive.write",
+          "x-wanx-status": "ready-for-acceptance",
+          "parameters": [
+            {
+              "$ref": "#/components/parameters/WanxApp_UploadId"
+            }
+          ]
+        },
+        "x-wanx-permission": "space.drive.write",
+        "x-wanx-status": "ready-for-acceptance"
+      }
+    },
+    "/api/personal-space/uploads/{upload_id}/complete": {
+      "post": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "Atomically publish a complete upload",
+        "operationId": "complete_api_personal_space_uploads__upload_id__complete_post",
+        "parameters": [
+          {
+            "name": "upload_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Upload Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompleteInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Entry"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-wanx-application-contract": {
+          "operationId": "spaceCompleteUpload",
+          "summary": "校验并原子发布上传",
+          "requestBody": {
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WanxApp_CompleteInput"
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "description": "Entry",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/WanxApp_Entry"
+                  }
+                }
+              }
+            },
+            "default": {
+              "$ref": "#/components/responses/WanxApp_Error"
+            }
+          },
+          "x-wanx-permission": "space.drive.write",
+          "x-wanx-status": "ready-for-acceptance",
+          "parameters": [
+            {
+              "$ref": "#/components/parameters/WanxApp_UploadId"
+            }
+          ]
+        },
+        "x-wanx-permission": "space.drive.write",
+        "x-wanx-status": "ready-for-acceptance"
+      }
+    },
+    "/api/personal-space/files/{item_id}/content": {
+      "get": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "Read a bounded file range after ownership verification",
+        "operationId": "content_api_personal_space_files__item_id__content_get",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Item Id"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "length",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 4194304,
+              "minimum": 1,
+              "default": 4194304,
+              "title": "Length"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "application/octet-stream": {}
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-wanx-application-contract": {
+          "operationId": "spaceReadRange",
+          "summary": "读取文件的有限字节范围",
+          "responses": {
+            "200": {
+              "description": "Bytes",
+              "headers": {
+                "X-Content-SHA256": {
+                  "schema": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  }
+                },
+                "ETag": {
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              },
+              "content": {
+                "application/octet-stream": {
+                  "schema": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                }
+              }
+            },
+            "default": {
+              "$ref": "#/components/responses/WanxApp_Error"
+            }
+          },
+          "x-wanx-permission": "space.drive.read",
+          "x-wanx-status": "ready-for-acceptance",
+          "parameters": [
+            {
+              "$ref": "#/components/parameters/WanxApp_ItemId"
+            },
+            {
+              "name": "offset",
+              "in": "query",
+              "schema": {
+                "type": "integer",
+                "minimum": 0,
+                "default": 0
+              }
+            },
+            {
+              "name": "length",
+              "in": "query",
+              "schema": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 4194304,
+                "default": 4194304
+              }
+            }
+          ]
+        },
+        "x-wanx-permission": "space.drive.read",
+        "x-wanx-status": "ready-for-acceptance"
+      }
+    },
+    "/api/personal-space/files/{item_id}/previous": {
+      "post": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "Restore the retained previous file version",
+        "operationId": "previous_version_api_personal_space_files__item_id__previous_post",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Item Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviousVersionInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Entry"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/personal-space/agent-links": {
+      "post": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "Create a scoped agent capability; token returned once",
+        "operationId": "create_api_personal_space_agent_links_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateLink"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LinkCreated"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "get": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "List this account's resource links without credentials",
+        "operationId": "listing_api_personal_space_agent_links_get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LinkInfo"
+                  },
+                  "title": "Response Listing Api Personal Space Agent Links Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/personal-space/agent-links/{link_id}": {
+      "delete": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "Revoke a resource link and cancel its pending uploads",
+        "operationId": "revoke_api_personal_space_agent_links__link_id__delete",
+        "parameters": [
+          {
+            "name": "link_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Link Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/personal-space/agent-links/{link_id}/audit": {
+      "get": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "Read the last 100 operations for an owned link",
+        "operationId": "audit_api_personal_space_agent_links__link_id__audit_get",
+        "parameters": [
+          {
+            "name": "link_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Link Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "title": "Response Audit Api Personal Space Agent Links  Link Id  Audit Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/personal-space/agent-access": {
+      "post": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "Execute one capability-scoped operation with transactional boundary checks",
+        "description": "Requires both the signed-in owner session and X-Space-Link token. Read returns a bounded binary chunk; other actions return JSON. Writes require the observed entry version.",
+        "operationId": "execute_api_personal_space_agent_access_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "X-Space-Link",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 100,
+              "title": "X-Space-Link"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/octop__api__routers__space_links__Operation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Execute Api Personal Space Agent Access Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/personal-space/spaces": {
+      "get": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "List your personal and Agent spaces including recycled spaces",
+        "operationId": "list_spaces_api_personal_space_spaces_get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response List Spaces Api Personal Space Spaces Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/personal-space/spaces/{space_id}/manage": {
+      "post": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "Rename, recycle or restore an Agent space",
+        "operationId": "manage_space_api_personal_space_spaces__space_id__manage_post",
+        "parameters": [
+          {
+            "name": "space_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Space Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpaceManagement"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Manage Space Api Personal Space Spaces  Space Id  Manage Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/personal-space/spaces/{space_id}/storage": {
+      "post": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "Migrate one owned space to a host storage directory",
+        "operationId": "change_storage_api_personal_space_spaces__space_id__storage_post",
+        "parameters": [
+          {
+            "name": "space_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Space Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StorageLocation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Change Storage Api Personal Space Spaces  Space Id  Storage Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/personal-space/connections": {
+      "post": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "Owner approval creates a credential-bound Agent space",
+        "operationId": "approve_connection_api_personal_space_connections_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Approval"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Approve Connection Api Personal Space Connections Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/personal-space/connections/{connection}/sync": {
+      "get": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "Inspect owner-selected synchronization rules and the last 50 task summaries",
+        "operationId": "sync_status_api_personal_space_connections__connection__sync_get",
+        "parameters": [
+          {
+            "name": "connection",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Sync Status Api Personal Space Connections  Connection  Sync Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "Change synchronization categories with an observed policy revision",
+        "operationId": "sync_policy_api_personal_space_connections__connection__sync_post",
+        "parameters": [
+          {
+            "name": "connection",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncPolicyInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Sync Policy Api Personal Space Connections  Connection  Sync Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/personal-space/connections/{connection}/tasks/{task_id}": {
+      "get": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "Read a page of task handoff records without granting another Agent access",
+        "operationId": "sync_records_api_personal_space_connections__connection__tasks__task_id__get",
+        "parameters": [
+          {
+            "name": "connection",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection"
+            }
+          },
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Sync Records Api Personal Space Connections  Connection  Tasks  Task Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "Owner deletes task context and retained snapshots; file outputs are kept",
+        "operationId": "delete_sync_task_api_personal_space_connections__connection__tasks__task_id__delete",
+        "parameters": [
+          {
+            "name": "connection",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection"
+            }
+          },
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Delete Sync Task Api Personal Space Connections  Connection  Tasks  Task Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/personal-space/connections/{connection}/manage": {
+      "post": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "Pause, resume or disconnect an Agent",
+        "operationId": "manage_connection_api_personal_space_connections__connection__manage_post",
+        "parameters": [
+          {
+            "name": "connection",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectionAction"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Manage Connection Api Personal Space Connections  Connection  Manage Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/personal-space/connections/{connection}/grants": {
+      "get": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "List extra read-write grants",
+        "operationId": "list_grants_api_personal_space_connections__connection__grants_get",
+        "parameters": [
+          {
+            "name": "connection",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response List Grants Api Personal Space Connections  Connection  Grants Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "Owner grants one resource to an Agent",
+        "operationId": "add_grant_api_personal_space_connections__connection__grants_post",
+        "parameters": [
+          {
+            "name": "connection",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Add Grant Api Personal Space Connections  Connection  Grants Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/personal-space/connections/{connection}/grants/{grant}": {
+      "delete": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "Revoke an extra grant",
+        "operationId": "revoke_grant_api_personal_space_connections__connection__grants__grant__delete",
+        "parameters": [
+          {
+            "name": "connection",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection"
+            }
+          },
+          {
+            "name": "grant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Grant"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/personal-space/connections/{connection}/audit": {
+      "get": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "Recent operations for one Agent identity",
+        "operationId": "connection_audit_api_personal_space_connections__connection__audit_get",
+        "parameters": [
+          {
+            "name": "connection",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Connection Audit Api Personal Space Connections  Connection  Audit Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/personal-space/files/{item_id}/transfer": {
+      "post": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "Owner copy or confirmed move between spaces",
+        "operationId": "transfer_api_personal_space_files__item_id__transfer_post",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Item Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransferInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Transfer Api Personal Space Files  Item Id  Transfer Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/personal-space/app-folders": {
+      "post": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "Resolve or create an application default folder",
+        "operationId": "app_folder_api_personal_space_app_folders_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppFolderInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response App Folder Api Personal Space App Folders Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-wanx-application-contract": {
+          "operationId": "spaceEnsureAppFolder",
+          "summary": "解析或创建当前应用的默认文件夹",
+          "description": "application 使用 Host Context 中的 applicationId。应用应优先调用 host.drive.ensureAppFolder。",
+          "requestBody": {
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "application"
+                  ],
+                  "properties": {
+                    "application": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    },
+                    "name": {
+                      "type": "string",
+                      "maxLength": 240
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "description": "文件夹条目",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/WanxApp_Entry"
+                  }
+                }
+              }
+            },
+            "default": {
+              "$ref": "#/components/responses/WanxApp_Error"
+            }
+          },
+          "x-wanx-permission": "space.drive.write",
+          "x-wanx-status": "ready-for-acceptance"
+        },
+        "x-wanx-permission": "space.drive.write",
+        "x-wanx-status": "ready-for-acceptance"
+      }
+    },
+    "/api/personal-space/connection-access": {
+      "post": {
+        "tags": [
+          "personal-space"
+        ],
+        "summary": "Operate inside an approved Agent space or explicit extra grant",
+        "operationId": "connection_access_api_personal_space_connection_access_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "X-Space-Link",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 100,
+              "title": "X-Space-Link"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentOperation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Connection Access Api Personal Space Connection Access Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "WanxApp_ItemId": {
+        "name": "item_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/WanxApp_Id"
+        }
+      },
+      "WanxApp_Parent": {
+        "name": "parent",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "maxLength": 32,
+          "default": ""
+        }
+      },
+      "WanxApp_UploadId": {
+        "name": "upload_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/WanxApp_Id"
+        }
+      }
+    },
+    "responses": {
+      "WanxApp_Error": {
+        "description": "按 errors.v1.json 返回稳定 code",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/WanxApp_ErrorEnvelope"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "AgentOperation": {
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "access",
+              "describe",
+              "stat",
+              "list",
+              "read",
+              "mkdir",
+              "move",
+              "trash",
+              "restore",
+              "restore-version",
+              "begin-write",
+              "write-chunk",
+              "commit-write",
+              "write-status",
+              "cancel-write",
+              "sync-status",
+              "task-begin",
+              "task-checkpoint",
+              "task-finish",
+              "task-records"
+            ],
+            "title": "Action"
+          },
+          "target": {
+            "type": "string",
+            "pattern": "^([0-9a-f]{32})?$",
+            "title": "Target",
+            "default": ""
+          },
+          "parent": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^([0-9a-f]{32})?$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 240,
+            "title": "Name",
+            "default": ""
+          },
+          "expected": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected"
+          },
+          "upload_id": {
+            "type": "string",
+            "pattern": "^([0-9a-f]{32})?$",
+            "title": "Upload Id",
+            "default": ""
+          },
+          "size": {
+            "type": "integer",
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Size",
+            "default": 0
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Offset",
+            "default": 0
+          },
+          "length": {
+            "type": "integer",
+            "maximum": 4194304.0,
+            "minimum": 1.0,
+            "title": "Length",
+            "default": 200
+          },
+          "digest": {
+            "type": "string",
+            "pattern": "^([a-f0-9]{64})?$",
+            "title": "Digest",
+            "default": ""
+          },
+          "data": {
+            "type": "string",
+            "maxLength": 5592408,
+            "title": "Data",
+            "description": "Base64 chunk, at most 4 MiB decoded.",
+            "default": ""
+          },
+          "agent": {
+            "type": "string",
+            "maxLength": 80,
+            "title": "Agent",
+            "description": "Self-declared display name, not an authenticated identity.",
+            "default": ""
+          },
+          "grant_id": {
+            "type": "string",
+            "pattern": "^([0-9a-f]{32})?$",
+            "title": "Grant Id",
+            "default": ""
+          },
+          "task_id": {
+            "type": "string",
+            "pattern": "^([0-9a-f]{32})?$",
+            "title": "Task Id",
+            "default": ""
+          },
+          "request_id": {
+            "type": "string",
+            "maxLength": 100,
+            "title": "Request Id",
+            "default": ""
+          },
+          "operation_id": {
+            "type": "string",
+            "maxLength": 80,
+            "title": "Operation Id",
+            "default": ""
+          },
+          "policy_revision": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy Revision"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 240,
+            "title": "Title",
+            "default": ""
+          },
+          "categories": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Categories",
+            "description": "Selected task context, progress and outcome summaries; data, never instructions."
+          },
+          "progress": {
+            "type": "string",
+            "maxLength": 8192,
+            "title": "Progress",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "title": "AgentOperation"
+      },
+      "AppFolderInput": {
+        "properties": {
+          "application": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Application"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 240,
+            "title": "Name",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "application"
+        ],
+        "title": "AppFolderInput"
+      },
+      "Approval": {
+        "properties": {
+          "credential": {
+            "type": "string",
+            "pattern": "^([A-Za-z0-9_-]{43})?$",
+            "title": "Credential",
+            "default": ""
+          },
+          "profile": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Profile"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "space_id": {
+            "type": "string",
+            "maxLength": 32,
+            "title": "Space Id",
+            "default": ""
+          },
+          "sync_policy": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sync Policy",
+            "description": "Owner-selected synchronization categories; omitted preserves legacy file-only access."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "profile",
+          "name"
+        ],
+        "title": "Approval"
+      },
+      "BoxNetwork": {
+        "properties": {
+          "addresses": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Addresses"
+          },
+          "scope": {
+            "type": "string",
+            "title": "Scope"
+          },
+          "lanAddresses": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Lanaddresses"
+          },
+          "publicIp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Publicip"
+          },
+          "publicIpCollectedAt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Publicipcollectedat"
+          }
+        },
+        "type": "object",
+        "required": [
+          "addresses",
+          "scope"
+        ],
+        "title": "BoxNetwork"
+      },
+      "Breadcrumb": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "Breadcrumb"
+      },
+      "CPU": {
+        "properties": {
+          "scope": {
+            "type": "string",
+            "title": "Scope"
+          },
+          "percent": {
+            "type": "number",
+            "title": "Percent"
+          }
+        },
+        "type": "object",
+        "required": [
+          "scope",
+          "percent"
+        ],
+        "title": "CPU"
+      },
+      "CompleteInput": {
+        "properties": {
+          "digest": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Digest"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "digest"
+        ],
+        "title": "CompleteInput"
+      },
+      "ConnectionAction": {
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "resume",
+              "disconnect"
+            ],
+            "title": "Action"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "title": "ConnectionAction"
+      },
+      "CreateLink": {
+        "properties": {
+          "root": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$",
+            "title": "Root"
+          },
+          "expires": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "root"
+        ],
+        "title": "CreateLink"
+      },
+      "Entry": {
+        "properties": {
+          "space_id": {
+            "type": "string",
+            "title": "Space Id",
+            "default": "personal"
+          },
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "parent": {
+            "type": "string",
+            "title": "Parent"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "size": {
+            "type": "integer",
+            "title": "Size"
+          },
+          "modified": {
+            "type": "number",
+            "title": "Modified"
+          },
+          "trashed": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trashed"
+          },
+          "digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Digest"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "default": 1
+          },
+          "previous_size": {
+            "type": "integer",
+            "title": "Previous Size",
+            "default": 0
+          },
+          "previous_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Digest"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "parent",
+          "name",
+          "kind",
+          "size",
+          "modified"
+        ],
+        "title": "Entry"
+      },
+      "FolderInput": {
+        "properties": {
+          "space_id": {
+            "type": "string",
+            "maxLength": 32,
+            "title": "Space Id",
+            "default": "personal"
+          },
+          "parent": {
+            "type": "string",
+            "maxLength": 32,
+            "title": "Parent",
+            "description": "Opaque parent folder id; empty is the user's root.",
+            "default": ""
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "FolderInput"
+      },
+      "GrantInput": {
+        "properties": {
+          "root": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$",
+            "title": "Root"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "root"
+        ],
+        "title": "GrantInput"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "LinkCreated": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "token": {
+            "type": "string",
+            "title": "Token"
+          },
+          "root": {
+            "type": "string",
+            "title": "Root"
+          },
+          "expires": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "token",
+          "root",
+          "expires"
+        ],
+        "title": "LinkCreated"
+      },
+      "LinkInfo": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "root": {
+            "type": "string",
+            "title": "Root"
+          },
+          "created": {
+            "type": "number",
+            "title": "Created"
+          },
+          "expires": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires"
+          },
+          "revoked": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked"
+          },
+          "last_used": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "root",
+          "created",
+          "expires",
+          "revoked",
+          "last_used",
+          "name",
+          "kind"
+        ],
+        "title": "LinkInfo"
+      },
+      "Listing": {
+        "properties": {
+          "space_id": {
+            "type": "string",
+            "title": "Space Id",
+            "default": "personal"
+          },
+          "root": {
+            "type": "string",
+            "title": "Root",
+            "default": ""
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Entry"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "breadcrumbs": {
+            "items": {
+              "$ref": "#/components/schemas/Breadcrumb"
+            },
+            "type": "array",
+            "title": "Breadcrumbs"
+          },
+          "parent": {
+            "type": "string",
+            "title": "Parent"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "breadcrumbs",
+          "parent"
+        ],
+        "title": "Listing"
+      },
+      "Memory": {
+        "properties": {
+          "scope": {
+            "type": "string",
+            "title": "Scope"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "used": {
+            "type": "integer",
+            "title": "Used"
+          },
+          "percent": {
+            "type": "number",
+            "title": "Percent"
+          }
+        },
+        "type": "object",
+        "required": [
+          "scope",
+          "total",
+          "used",
+          "percent"
+        ],
+        "title": "Memory"
+      },
+      "Overview": {
+        "properties": {
+          "protocolVersion": {
+            "type": "integer",
+            "title": "Protocolversion"
+          },
+          "chunkSize": {
+            "type": "integer",
+            "title": "Chunksize"
+          },
+          "collectedAt": {
+            "type": "number",
+            "title": "Collectedat"
+          },
+          "filesBytes": {
+            "type": "integer",
+            "title": "Filesbytes"
+          },
+          "pendingBytes": {
+            "type": "integer",
+            "title": "Pendingbytes"
+          },
+          "volume": {
+            "$ref": "#/components/schemas/Volume"
+          },
+          "memory": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Memory"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cpu": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CPU"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "container": {
+            "type": "boolean",
+            "title": "Container"
+          },
+          "syncBytes": {
+            "type": "integer",
+            "title": "Syncbytes",
+            "default": 0
+          },
+          "wanxStorage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WanxStorage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "network": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BoxNetwork"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "protocolVersion",
+          "chunkSize",
+          "collectedAt",
+          "filesBytes",
+          "pendingBytes",
+          "volume",
+          "memory",
+          "cpu",
+          "container"
+        ],
+        "title": "Overview"
+      },
+      "PreviousVersionInput": {
+        "properties": {
+          "expected": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected"
+        ],
+        "title": "PreviousVersionInput"
+      },
+      "SpaceManagement": {
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "rename",
+              "trash",
+              "restore"
+            ],
+            "title": "Action"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 240,
+            "title": "Name",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "title": "SpaceManagement"
+      },
+      "StorageLocation": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "maxLength": 4096,
+            "title": "Path",
+            "description": "Existing absolute directory on the WANX host. Empty restores managed default storage. Existing files are verified and migrated before switching.",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "StorageLocation"
+      },
+      "SyncPolicyInput": {
+        "properties": {
+          "options": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Options"
+          },
+          "expected": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Expected",
+            "description": "Observed synchronization policy revision."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "options",
+          "expected"
+        ],
+        "title": "SyncPolicyInput"
+      },
+      "TransferInput": {
+        "properties": {
+          "parent": {
+            "type": "string",
+            "pattern": "^([0-9a-f]{32})?$",
+            "title": "Parent",
+            "default": ""
+          },
+          "space_id": {
+            "type": "string",
+            "maxLength": 32,
+            "title": "Space Id",
+            "default": "personal"
+          },
+          "copy": {
+            "type": "boolean",
+            "title": "Copy",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "TransferInput"
+      },
+      "UploadInput": {
+        "properties": {
+          "space_id": {
+            "type": "string",
+            "maxLength": 32,
+            "title": "Space Id",
+            "default": "personal"
+          },
+          "parent": {
+            "type": "string",
+            "maxLength": 32,
+            "title": "Parent",
+            "description": "Opaque parent folder id; empty is the user's root.",
+            "default": ""
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$",
+            "title": "Id",
+            "description": "Client-generated idempotency id for this upload."
+          },
+          "size": {
+            "type": "integer",
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Size"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "id",
+          "size"
+        ],
+        "title": "UploadInput"
+      },
+      "UploadStatus": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "parent": {
+            "type": "string",
+            "title": "Parent"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "size": {
+            "type": "integer",
+            "title": "Size"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          },
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "modified": {
+            "type": "number",
+            "title": "Modified"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "parent",
+          "name",
+          "size",
+          "offset",
+          "state",
+          "modified"
+        ],
+        "title": "UploadStatus"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "Volume": {
+        "properties": {
+          "scope": {
+            "type": "string",
+            "title": "Scope"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "used": {
+            "type": "integer",
+            "title": "Used"
+          },
+          "free": {
+            "type": "integer",
+            "title": "Free"
+          }
+        },
+        "type": "object",
+        "required": [
+          "scope",
+          "total",
+          "used",
+          "free"
+        ],
+        "title": "Volume"
+      },
+      "WanxApp_CompleteInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "digest"
+        ],
+        "properties": {
+          "digest": {
+            "$ref": "#/components/schemas/WanxApp_Digest"
+          }
+        }
+      },
+      "WanxApp_Digest": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$"
+      },
+      "WanxApp_Entry": {
+        "type": "object",
+        "required": [
+          "space_id",
+          "id",
+          "parent",
+          "name",
+          "kind",
+          "size",
+          "modified",
+          "trashed",
+          "digest",
+          "version",
+          "previous_size",
+          "previous_digest"
+        ],
+        "properties": {
+          "space_id": {
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/WanxApp_Id"
+          },
+          "parent": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "file",
+              "folder"
+            ]
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "modified": {
+            "type": "number"
+          },
+          "trashed": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "digest": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "previous_size": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "previous_digest": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "WanxApp_ErrorEnvelope": {
+        "type": "object",
+        "properties": {
+          "detail": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "code"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                }
+              }
+            ]
+          },
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "WanxApp_FolderInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "space_id": {
+            "type": "string",
+            "maxLength": 32,
+            "default": "personal"
+          },
+          "parent": {
+            "type": "string",
+            "maxLength": 32,
+            "default": ""
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240
+          }
+        }
+      },
+      "WanxApp_Id": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{32}$"
+      },
+      "WanxApp_Listing": {
+        "type": "object",
+        "required": [
+          "space_id",
+          "root",
+          "items",
+          "breadcrumbs",
+          "parent"
+        ],
+        "properties": {
+          "space_id": {
+            "type": "string"
+          },
+          "root": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WanxApp_Entry"
+            }
+          },
+          "breadcrumbs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "name"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "parent": {
+            "type": "string"
+          }
+        }
+      },
+      "WanxApp_Overview": {
+        "type": "object",
+        "required": [
+          "protocolVersion",
+          "chunkSize",
+          "collectedAt",
+          "filesBytes",
+          "pendingBytes",
+          "volume",
+          "memory",
+          "cpu",
+          "container"
+        ],
+        "properties": {
+          "protocolVersion": {
+            "type": "integer"
+          },
+          "chunkSize": {
+            "const": 4194304
+          },
+          "collectedAt": {
+            "type": "number"
+          },
+          "filesBytes": {
+            "type": "integer"
+          },
+          "pendingBytes": {
+            "type": "integer"
+          },
+          "volume": {
+            "type": "object",
+            "required": [
+              "scope",
+              "total",
+              "used",
+              "free"
+            ],
+            "properties": {
+              "scope": {
+                "type": "string"
+              },
+              "total": {
+                "type": "integer"
+              },
+              "used": {
+                "type": "integer"
+              },
+              "free": {
+                "type": "integer"
+              }
+            }
+          },
+          "memory": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "cpu": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "container": {
+            "type": "boolean"
+          }
+        }
+      },
+      "WanxApp_UploadInput": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/WanxApp_FolderInput"
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "size"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/components/schemas/WanxApp_Id"
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            }
+          }
+        ]
+      },
+      "WanxApp_UploadStatus": {
+        "type": "object",
+        "required": [
+          "id",
+          "parent",
+          "name",
+          "size",
+          "offset",
+          "state",
+          "modified"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/WanxApp_Id"
+          },
+          "parent": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "state": {
+            "type": "string"
+          },
+          "modified": {
+            "type": "number"
+          }
+        }
+      },
+      "WanxStorage": {
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "title": "Bytes"
+          },
+          "complete": {
+            "type": "boolean",
+            "title": "Complete"
+          },
+          "collectedAt": {
+            "type": "number",
+            "title": "Collectedat"
+          },
+          "scope": {
+            "type": "string",
+            "title": "Scope"
+          }
+        },
+        "type": "object",
+        "required": [
+          "bytes",
+          "complete",
+          "collectedAt",
+          "scope"
+        ],
+        "title": "WanxStorage"
+      },
+      "octop__api__routers__space_links__Operation": {
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "describe",
+              "stat",
+              "list",
+              "read",
+              "mkdir",
+              "move",
+              "trash",
+              "restore",
+              "restore-version",
+              "begin-write",
+              "write-chunk",
+              "commit-write",
+              "write-status",
+              "cancel-write"
+            ],
+            "title": "Action"
+          },
+          "target": {
+            "type": "string",
+            "pattern": "^([0-9a-f]{32})?$",
+            "title": "Target",
+            "default": ""
+          },
+          "parent": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^([0-9a-f]{32})?$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 240,
+            "title": "Name",
+            "default": ""
+          },
+          "expected": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected"
+          },
+          "upload_id": {
+            "type": "string",
+            "pattern": "^([0-9a-f]{32})?$",
+            "title": "Upload Id",
+            "default": ""
+          },
+          "size": {
+            "type": "integer",
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Size",
+            "default": 0
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Offset",
+            "default": 0
+          },
+          "length": {
+            "type": "integer",
+            "maximum": 4194304.0,
+            "minimum": 1.0,
+            "title": "Length",
+            "default": 200
+          },
+          "digest": {
+            "type": "string",
+            "pattern": "^([a-f0-9]{64})?$",
+            "title": "Digest",
+            "default": ""
+          },
+          "data": {
+            "type": "string",
+            "maxLength": 5592408,
+            "title": "Data",
+            "description": "Base64 chunk, at most 4 MiB decoded.",
+            "default": ""
+          },
+          "agent": {
+            "type": "string",
+            "maxLength": 80,
+            "title": "Agent",
+            "description": "Self-declared display name, not an authenticated identity.",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "title": "Operation"
+      }
+    },
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "JWT from `POST /api/auth/login` (`access_token` field)."
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "personal-space",
+      "description": "Current-user drive shared by WANX applications; files stay on the connected box."
+    }
+  ],
+  "x-wanx-supplemental-routes": [
+    {
+      "method": "GET",
+      "path": "/api/_client/space-agents/archives",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/_client/space-agents/archives/{aid}",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/space-agents/archives/{aid}/records",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/space-agents/connections",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/space-agents/connections",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/_client/space-agents/connections/{aid}",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/_client/space-agents/connections/{aid}/collection",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/space-agents/connections/{aid}/grants",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/space-agents/connections/{aid}/grants",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/_client/space-agents/connections/{aid}/grants/{gid}",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/space-agents/connections/{aid}/invoke",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/space-agents/connections/{aid}/migrate",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/space-agents/connections/{aid}/records",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/space-agents/folders",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/space-agents/records/{rid}",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/space-mcp",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/space-mcp/archives/{archive_id}",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/space-mcp/connections",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/_client/space-mcp/connections/{aid}",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/space-mcp/connections/{aid}/grants",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/_client/space-mcp/connections/{aid}/grants/{gid}",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/space-mcp/connections/{aid}/manage",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/space-mcp/connections/{aid}/prompt",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/space-mcp/connections/{aid}/rotate",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/space-mcp/drives",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/space-mcp/drives/{aid}/files",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/space-mcp/folders",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/space-previews/{item_id}",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/space-previews/{item_id}",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/space-previews/{item_id}/content",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/space-shares",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/space-shares",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/_client/space-shares/{sid}",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/space-shares/{sid}",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/space-shares/{sid}/dismiss",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/space-links/{token}",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/space-links/{token}",
+      "group": "personal-space",
+      "type": "未纳入 OpenAPI"
+    }
+  ],
+  "x-wanx-contract": "wanx-business-api/1",
+  "x-wanx-catalog": "../api-catalog.v1.json",
+  "x-wanx-permissions": "../permissions.v1.json"
+}

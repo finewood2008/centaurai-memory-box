@@ -1,0 +1,364 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wanx-app-permissions/1",
+  "contract": "wanx-app-permissions/1",
+  "version": "0.3.0",
+  "principle": "应用只在当前 WANX 应用、当前账号和已绑定资源范围内调用；权限不因路由可达而自动获得。",
+  "identity": {
+    "applicationId": "wanx",
+    "subject": "current-user",
+    "box": "current-box",
+    "resourceBinding": "required"
+  },
+  "capabilities": [
+    {
+      "id": "models.read",
+      "description": "读取当前账号可用于对话的模型。",
+      "methods": [
+        "GET"
+      ],
+      "routes": [
+        "/api/dialogue/models"
+      ],
+      "forbiddenFields": [
+        "api_key",
+        "access_token",
+        "client_secret",
+        "authorization",
+        "base_url_credentials"
+      ]
+    },
+    {
+      "id": "agents.read",
+      "description": "读取当前账号可访问且已绑定到应用的 Agent 摘要和运行状态。",
+      "methods": [
+        "GET"
+      ],
+      "routes": [
+        "/api/agents",
+        "/api/agents/{agent_id}",
+        "/api/agents/{agent_id}/status"
+      ],
+      "constraints": [
+        "scope=mine",
+        "application_id must equal wanx",
+        "shared agents expose only read fields"
+      ]
+    },
+    {
+      "id": "threads.read",
+      "description": "读取当前账号拥有或被明确共享的 Thread 列表和历史。",
+      "methods": [
+        "GET"
+      ],
+      "routes": [
+        "/api/agents/{agent_id}/threads",
+        "/api/agents/{agent_id}/threads/{thread_id}/history"
+      ]
+    },
+    {
+      "id": "threads.create",
+      "description": "为当前可访问 Agent 创建当前账号的对话 Thread。",
+      "methods": [
+        "POST"
+      ],
+      "routes": [
+        "/api/agents/{agent_id}/threads"
+      ],
+      "constraints": [
+        "no cross-user thread binding",
+        "server chooses thread id"
+      ]
+    },
+    {
+      "id": "threads.stream",
+      "description": "通过 WebSocket 发送当前账号的对话轮次并接收流式事件。",
+      "methods": [
+        "WS"
+      ],
+      "routes": [
+        "/api/agents/{agent_id}/chat/ws"
+      ],
+      "constraints": [
+        "thread_id must belong to current user",
+        "mcp_servers, skills and knowledge_base_ids are allowlisted by server",
+        "no arbitrary provider or credential fields"
+      ]
+    },
+    {
+      "id": "threads.hitl",
+      "description": "恢复当前账号在当前 Thread 上挂起的人在回路审批。",
+      "methods": [
+        "POST"
+      ],
+      "routes": [
+        "/api/agents/{agent_id}/chat/hitl/resume"
+      ],
+      "constraints": [
+        "decisions are limited to approve/edit/reject/respond",
+        "tool permissions remain server-side"
+      ]
+    },
+    {
+      "id": "dialogue.models.read",
+      "description": "读取多模型对话可用模型。",
+      "methods": [
+        "GET"
+      ],
+      "routes": [
+        "/api/dialogue/models"
+      ]
+    },
+    {
+      "id": "dialogue.sessions.read",
+      "description": "读取当前账号的多模型会话、答案和配额。",
+      "methods": [
+        "GET"
+      ],
+      "routes": [
+        "/api/dialogue/quota",
+        "/api/dialogue/sessions",
+        "/api/dialogue/sessions/{session_id}"
+      ]
+    },
+    {
+      "id": "dialogue.sessions.create",
+      "description": "创建多模型会话并向一至三个已授权模型派发问题。",
+      "methods": [
+        "POST"
+      ],
+      "routes": [
+        "/api/dialogue/sessions"
+      ],
+      "constraints": [
+        "request_id is required",
+        "models must come from the current account model catalog",
+        "prompt is bounded"
+      ]
+    },
+    {
+      "id": "dialogue.sessions.mutate",
+      "description": "追加模型、继续分支、重试或停止当前账号会话中的答案。",
+      "methods": [
+        "POST",
+        "DELETE"
+      ],
+      "routes": [
+        "/api/dialogue/sessions/{session_id}/groups/{group_id}/answers",
+        "/api/dialogue/sessions/{session_id}/answers/{answer_id}/continue",
+        "/api/dialogue/sessions/{session_id}/answers/{answer_id}/retry",
+        "/api/dialogue/sessions/{session_id}/answers/{answer_id}/stop",
+        "/api/dialogue/sessions/{session_id}"
+      ],
+      "constraints": [
+        "request_id and payload fingerprint deduplicate dispatching mutations",
+        "delete permanently removes local dialogue history",
+        "no provider writes"
+      ]
+    },
+    {
+      "id": "dialogue.sessions.stream",
+      "description": "读取可重连的会话快照 SSE。",
+      "methods": [
+        "GET"
+      ],
+      "routes": [
+        "/api/dialogue/sessions/{session_id}/events"
+      ],
+      "constraints": [
+        "stream never dispatches or charges a new generation",
+        "clients must use revision to deduplicate snapshots"
+      ]
+    },
+    {
+      "id": "experts.read",
+      "description": "读取当前盒子内置的专家模板摘要和详情。",
+      "methods": [
+        "GET"
+      ],
+      "routes": [
+        "/api/experts",
+        "/api/experts/{expert_id}"
+      ]
+    },
+    {
+      "id": "experts.instantiate",
+      "description": "从已绑定专家模板创建当前账号的 Agent。",
+      "methods": [
+        "POST"
+      ],
+      "routes": [
+        "/api/agents/from-expert/{expert_id}"
+      ],
+      "constraints": [
+        "template files are server-owned",
+        "backend roots, skills, knowledge bases and MCP servers are validated by the server",
+        "no arbitrary source path"
+      ]
+    },
+    {
+      "id": "agents.lifecycle",
+      "description": "启动或停止当前账号拥有的 Agent。",
+      "methods": [
+        "POST"
+      ],
+      "routes": [
+        "/api/agents/{agent_id}/start",
+        "/api/agents/{agent_id}/stop"
+      ],
+      "constraints": [
+        "owner only",
+        "server controls runtime and provider credentials"
+      ]
+    },
+    {
+      "id": "memory.read",
+      "description": "读取当前账号拥有 Agent 的记忆条目、来源、统计、日志和终端摘要。",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "routes": [
+        "/api/agents/{agent_id}/memory/*"
+      ],
+      "constraints": [
+        "owner only",
+        "no as_user",
+        "no cross-agent namespace access",
+        "raw events may contain personal data"
+      ]
+    },
+    {
+      "id": "memory.write",
+      "description": "由当前账号明确创建、修正、弃用、提升或拒绝记忆。",
+      "methods": [
+        "POST"
+      ],
+      "routes": [
+        "/api/agents/{agent_id}/memory/atoms",
+        "/api/agents/{agent_id}/memory/atoms/{atom_id}:replace",
+        "/api/agents/{agent_id}/memory/atoms/{atom_id}:deprecate",
+        "/api/agents/{agent_id}/memory/candidates/{candidate_id}:promote",
+        "/api/agents/{agent_id}/memory/candidates/{candidate_id}:reject"
+      ],
+      "constraints": [
+        "audit actor is assigned by server",
+        "model cannot impersonate user",
+        "writes are scoped to the owning agent"
+      ]
+    },
+    {
+      "id": "memory.config.read",
+      "description": "读取当前账号 Agent 的记忆提炼配置。",
+      "methods": [
+        "GET"
+      ],
+      "routes": [
+        "/api/agents/{agent_id}/memory/extract-config"
+      ]
+    },
+    {
+      "id": "memory.config.write",
+      "description": "修改当前账号 Agent 的记忆提炼开关和节奏。",
+      "methods": [
+        "PUT"
+      ],
+      "routes": [
+        "/api/agents/{agent_id}/memory/extract-config"
+      ],
+      "constraints": [
+        "server clamps idle and interval bounds",
+        "aux_model must reference a usable model",
+        "owner only"
+      ]
+    },
+    {
+      "id": "starlink.warehouse.read",
+      "description": "使用星图签发的仓库 Key 读取授权范围内的仓库信息、材料、图谱、检索与证据。",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "routes": [
+        "/api/semantica/open/v1/warehouse",
+        "/api/semantica/open/v1/documents",
+        "/api/semantica/open/v1/graph",
+        "/api/semantica/open/v1/search",
+        "/api/semantica/open/v1/evidence/{id}"
+      ],
+      "constraints": [
+        "Key 决定数据仓范围，服务端逐次校验权限、有效期及撤销状态。",
+        "Host 会话与数据仓 Key 分别验证。",
+        "返回内容遵循星图当前的数据保护与交付规则。"
+      ]
+    },
+    {
+      "id": "starlink.warehouse.reasoning",
+      "description": "准备并读取 Key 绑定仓的推理方法和资料。",
+      "methods": [
+        "POST"
+      ],
+      "routes": [
+        "/api/semantica/open/v1/reasoning/{operation}"
+      ],
+      "constraints": [
+        "仓库 Key 必须包含 reasoning 权限。准备记录只在原仓和授权范围内使用。"
+      ]
+    },
+    {
+      "id": "space.drive.read",
+      "description": "读取当前用户在当前盒子的空间目录、文件内容、状态和上传偏移。",
+      "methods": [
+        "GET"
+      ],
+      "routes": [
+        "/api/personal-space/overview",
+        "/api/personal-space/files",
+        "/api/personal-space/files/{item_id}",
+        "/api/personal-space/files/{item_id}/content",
+        "/api/personal-space/uploads/{upload_id}"
+      ],
+      "constraints": [
+        "使用当前用户与当前盒子的 Host 会话。",
+        "具体路径与方法的配对以 octop-modules/personal-space.openapi.json 为准。"
+      ]
+    },
+    {
+      "id": "space.drive.write",
+      "description": "管理当前用户在当前盒子的文件夹、文件、回收站和上传。",
+      "methods": [
+        "POST",
+        "PATCH",
+        "DELETE",
+        "PUT"
+      ],
+      "routes": [
+        "/api/personal-space/folders",
+        "/api/personal-space/files/{item_id}",
+        "/api/personal-space/trash/{item_id}/restore",
+        "/api/personal-space/trash/{item_id}",
+        "/api/personal-space/uploads",
+        "/api/personal-space/uploads/{upload_id}",
+        "/api/personal-space/uploads/{upload_id}/complete",
+        "/api/personal-space/app-folders"
+      ],
+      "constraints": [
+        "使用当前用户与当前盒子的 Host 会话。",
+        "具体路径与方法的配对以 octop-modules/personal-space.openapi.json 为准。"
+      ]
+    }
+  ],
+  "neverGrantedToApp": [
+    "provider.credentials.read",
+    "provider.write",
+    "provider.test",
+    "admin.as_user",
+    "memory.portable.migrate",
+    "star-map.internal",
+    "arbitrary.mcp",
+    "arbitrary.filesystem",
+    "users.manage",
+    "auth.manage",
+    "provider.read"
+  ]
+}

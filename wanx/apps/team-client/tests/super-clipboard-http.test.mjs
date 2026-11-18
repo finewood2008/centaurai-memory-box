@@ -8,7 +8,7 @@ import os from 'node:os';
 import net from 'node:net';
 import {fileURLToPath} from 'node:url';
 import {createDashboardGateway} from '../octop/gateway.mjs';
-import {createPersonalSpace} from '../shell/personal-space.mjs';
+import {createPersonalSpace} from '../build/app/shell/personal-space.mjs';
 import {createSuperClipboard} from '../shell/super-clipboard.mjs';
 
 const waitFor=async fn=>{for(let i=0;i<600;i++){if(await fn())return;await new Promise(r=>setTimeout(r,25));}throw Error('Timed out');};

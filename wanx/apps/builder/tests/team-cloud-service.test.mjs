@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createTeamService } from '../integration/team-client/service.mjs';
 const appId = 'ai.wanx.selfmade.' + 'a'.repeat(32);
-function fixture({ role = 'user', authorization, contextAccount = 'cloud-account', response } = {}) {
+function fixture({ role = 'user', authorization, contextAccount = 'cloud-account', response, applicationId = appId } = {}) {
   const calls = [];
   const me = { id: 42, username: 'cloud-member', role, application_id: 'wanx', team: { permissions: ['applications.manage'] } };
   const context = { protocolVersion: 1, user: { id: 42 }, authorization, boxId: 'box', accountId: contextAccount, clientId: 'client' };
@@ -11,7 +11,7 @@ function fixture({ role = 'user', authorization, contextAccount = 'cloud-account
     applicationConnection: async id => { assert.equal(id, 'wanx'); return { context: () => context, request: async input => {
       calls.push(input);
       if (response) return response;
-      const body = input.path === '/api/auth/me' ? me : input.path === '/api/app-studio/context' ? { features: { teamPublishing: 1 } } : input.path === '/api/app-studio/projects' ? { projects: [{ id: 'a'.repeat(32), appId, name: 'published' }] } : input.path === '/api/admin/applications/' + appId + '/access' ? { accepted: true } : null;
+      const body = input.path === '/api/auth/me' ? me : input.path === '/api/app-studio/context' ? { features: { teamPublishing: 1 } } : input.path === '/api/app-studio/projects' ? { projects: [{ id: 'a'.repeat(32), appId, name: 'published' }] } : input.path === '/api/admin/applications/' + applicationId + '/access' ? { accepted: true } : null;
       return { status: body ? 200 : 403, body: Buffer.from(JSON.stringify(body)), headers: {} };
     } }; }
   };
@@ -49,5 +49,20 @@ test('application access only accepts native positive user IDs', async () => {
     const before = f.calls.filter(call => call.path.endsWith('/access')).length;
     await assert.rejects(f.service.action('access', { applicationId: appId, enabled: true, ...input }), { code: 'TEAM_INPUT_INVALID' });
     assert.equal(f.calls.filter(call => call.path.endsWith('/access')).length, before);
+  }
+});
+
+
+test('native admin can manage generated standard IDs while malformed suffixes never reach the application API', async () => {
+  for(const applicationId of ['dev.wanx.generated-app.1234abcd','dev.wanx.generated-app.a1234abcd']){
+    const valid=fixture({role:'admin',applicationId});
+    await valid.service.action('access',{applicationId,userId:7,enabled:true});
+    assert.equal(valid.calls.at(-1).path,'/api/admin/applications/'+applicationId+'/access');
+  }
+  const f=fixture({role:'admin'});
+  for(const value of ['dev.wanx.app.1234abc','dev.wanx.app.1234abcd.extra','dev.wanx.app.1234abcg','dev.wanx.app/../../admin','other.wanx.app.1234abcd','dev.wanx.app.b1234abcd','dev.wanx.'+'a'.repeat(64)+'.1234abcd']){
+    const before=f.calls.filter(call=>call.path.startsWith('/api/admin/applications/')).length;
+    await assert.rejects(f.service.action('access',{applicationId:value,userId:7,enabled:true}),{code:'TEAM_INPUT_INVALID'});
+    assert.equal(f.calls.filter(call=>call.path.startsWith('/api/admin/applications/')).length,before);
   }
 });

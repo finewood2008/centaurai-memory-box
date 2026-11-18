@@ -22,6 +22,26 @@ async function drain(service: ReturnType<typeof fixture.createTestService>["serv
 
 
 describe("raw-first independent L1 and Episode processing", () => {
+  it("reports a model blocker only while summary work is due", async () => {
+    const { llm } = createTurnJudgeLlm();
+    const complete = llm.completeJson;
+    vi.spyOn(llm, "completeJson").mockImplementation((messages, options) =>
+      options.operation === "capture.summarize"
+        ? Promise.resolve({ title: "Saved setting", summary: "The requested setting was saved." })
+        : complete(messages, options));
+    const { service, db } = fixture.createTestService({ config: turnJudgeConfig() });
+    expect(service.health().pipelineBlockers).toEqual([]);
+    const { sessionId } = service.openSession({});
+    const saved = await service.completeTurn("summary-blocker", { sessionId, query: "Persist this setting", answer: "Saved" });
+    expect(service.health().pipelineBlockers).toContain("summary-model");
+
+    const restored = fixture.createTestMemoryService({ db: new MemoryDb({ path: db.path }), llm, config: turnJudgeConfig() });
+    restored.reconcileWorkerStartup();
+    await drain(restored);
+    expect(restored.health().pipelineBlockers).not.toContain("summary-model");
+    expect(db.db.prepare("SELECT state FROM memory_processing_state WHERE memory_id=?").get(saved.l1MemoryId)).toEqual({ state: "ready" });
+  });
+
   it.each([true, false])("preserves the original capture model contract after exhausted retries and restart (%s)", async enabled => {
     const { llm, judgeCalls } = createTurnJudgeLlm(); const complete = llm.completeJson;
     let fail = true;

@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Preview version matching client base, e.g. 1.0.6-windows-preview.2'
+        description: 'Preview version matching the client base version'
         required: true
-        default: 1.0.6-windows-preview.2
+        default: 1.5.1-windows-preview.1
         type: string
 
 permissions:
@@ -61,7 +61,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ steps.cache_paths.outputs.npm }}
-          key: ${{ runner.os }}-${{ runner.arch }}-memobox-npm-node22-v1-${{ hashFiles('memory/package-lock.json', 'wanx/apps/builder/package-lock.json', 'wanx/octop/dashboard/package-lock.json', 'wanx/apps/personal-client/package-lock.json') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-memobox-npm-node22-v1-${{ hashFiles('memory/package-lock.json', 'wanx/apps/builder/package-lock.json', 'wanx/apps/starlink/frontend/package-lock.json', 'wanx/octop/dashboard/package-lock.json', 'wanx/apps/personal-client/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-memobox-npm-node22-v1-
       - name: Restore Go modules and build cache
@@ -85,6 +85,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Memory dependency installation failed' }
           npm ci --prefix wanx/apps/builder --registry=https://registry.npmjs.org --replace-registry-host=registry.npmmirror.com --no-audit --no-fund
           if ($LASTEXITCODE -ne 0) { throw 'Builder dependency installation failed' }
+          npm ci --prefix wanx/apps/starlink/frontend --registry=https://registry.npmjs.org --replace-registry-host=registry.npmmirror.com --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'Starlink dependency installation failed' }
           npm ci --prefix wanx/octop/dashboard --registry=https://registry.npmjs.org --replace-registry-host=registry.npmmirror.com --no-audit --no-fund
           if ($LASTEXITCODE -ne 0) { throw 'Dashboard dependency installation failed' }
           npm ci --prefix wanx/apps/personal-client --registry=https://registry.npmjs.org --replace-registry-host=registry.npmmirror.com --no-audit --no-fund
@@ -105,8 +107,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Desktop interface build failed' }
       - name: Build branded client workspaces and native helpers
         run: |
-          npm --prefix wanx/apps/personal-client run build:memory
-          if ($LASTEXITCODE -ne 0) { throw 'My AI frontend build failed' }
+          npm --prefix wanx/apps/personal-client run build:studio
+          if ($LASTEXITCODE -ne 0) { throw 'Desktop and Starlink assembly failed' }
+          # The package step stages and verifies the engine and the API.
+          $env:MEMMY_RUNTIME_CONFIG_PATH = Join-Path $env:RUNNER_TEMP 'memobox-build-only-runtime.json'
+          try {
+            npm --prefix wanx/apps/personal-client run build:memory
+            if ($LASTEXITCODE -ne 0) { throw 'Memory frontend build failed' }
+          } finally {
+            Remove-Item Env:MEMMY_RUNTIME_CONFIG_PATH
+          }
           npm --prefix wanx/apps/personal-client run build:renderer
           if ($LASTEXITCODE -ne 0) { throw 'Client renderer build failed' }
           npm --prefix wanx/apps/personal-client run build:maintenance

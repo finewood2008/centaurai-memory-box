@@ -18,7 +18,7 @@ it("keeps advanced controls folded and persists the single backup switch without
     if (init.method === "POST") { const body = JSON.parse(init.body); actions.push(body); enabled = body.action === "enable"; return Response.json({}); }
     return Response.json({ enabled, connected: false, context: "account-ticket" });
   }));
-  await act(async () => root.render(<MemorySyncSummary sessionToken="session" count={3} automatic><div>来源管理</div></MemorySyncSummary>));
+  await act(async () => root.render(<MemorySyncSummary sessionToken="session"><div>来源管理</div></MemorySyncSummary>));
   const toggle = container.querySelector<HTMLButtonElement>('[role="switch"]')!;
   expect(toggle.getAttribute("aria-checked")).toBe("true");
   expect(container.querySelector("details")!.open).toBe(false);
@@ -45,7 +45,7 @@ it("requires explicit source, exact version and confirmation before a restore", 
     }
     return Response.json({ enabled: true, connected: true, context: "box-ticket" });
   }));
-  await act(async () => root.render(<MemorySyncSummary sessionToken="session" count={2} automatic><div /></MemorySyncSummary>));
+  await act(async () => root.render(<MemorySyncSummary sessionToken="session"><div /></MemorySyncSummary>));
   const toggle = container.querySelector<HTMLButtonElement>('[role="switch"]')!;
   await act(async () => toggle.click());
   expect(toggle.getAttribute("aria-checked")).toBe("true");
@@ -75,8 +75,8 @@ it("saves the chosen backup interval", async () => {
     if (init.method === "POST") { const data = JSON.parse(init.body); requests.push(data); intervalMinutes = data.intervalMinutes; return Response.json({}); }
     return Response.json({ enabled: true, connected: false, context: "account-ticket", intervalMinutes });
   }));
-  await act(async () => root.render(<MemorySyncSummary sessionToken="session" count={2} automatic><div /></MemorySyncSummary>));
-  expect(container.querySelector('summary')?.textContent).toBe("采集与备份设置");
+  await act(async () => root.render(<MemorySyncSummary sessionToken="session"><div /></MemorySyncSummary>));
+  expect(container.querySelector('summary')?.textContent).toBe("备份设置");
   const select = container.querySelector<HTMLSelectElement>('#space-backup-interval')!;
   await act(async () => { select.value = "60"; select.dispatchEvent(new Event("change", { bubbles: true })); });
   expect(requests).toEqual([{action:"configure",context:"account-ticket",intervalMinutes:60}]);
@@ -84,7 +84,7 @@ it("saves the chosen backup interval", async () => {
   expect(container.textContent).toContain("每 1 小时备份本机记忆库");
 });
 
-it("passes an unknown profile until server state arrives and fails closed after a status error", async () => {
+it("passes status without mounting backup controls and fails closed after a status error", async () => {
   let finish: ((response: Response) => void) | undefined;
   let calls = 0;
   vi.stubGlobal("fetch", vi.fn(async () => {
@@ -92,14 +92,13 @@ it("passes an unknown profile until server state arrives and fails closed after 
     if (calls === 2) throw new Error("status unavailable");
     return Response.json({ enabled: true, connected: false, context: "profile-context", library: { id: "legacy", name: "本机记忆库" } });
   }));
-  await act(async () => root.render(<MemorySyncSummary sessionToken="session" count={8} automatic>
+  await act(async () => root.render(<MemorySyncSummary sessionToken="session" statusOnly>
     {profile => <div data-testid="collection-profile">{profile?.id ?? "unknown"}</div>}
   </MemorySyncSummary>));
+  expect(container.querySelector('section[aria-label="备份与恢复"]')).toBeNull();
   expect(container.querySelector('[data-testid="collection-profile"]')?.textContent).toBe("unknown");
-  expect(container.querySelector('.my-ai-sync-title')?.textContent).not.toContain("自动采集");
   await act(async () => finish!(Response.json({ enabled: true, connected: false, context: "profile-context", library: { id: "legacy", name: "本机记忆库" } })));
   expect(container.querySelector('[data-testid="collection-profile"]')?.textContent).toBe("legacy");
-  expect(container.querySelector('.my-ai-sync-title')?.textContent).toContain("8 个来源 · 自动采集");
   await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
   expect(container.querySelector('[data-testid="collection-profile"]')?.textContent).toBe("unknown");
   await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
@@ -108,9 +107,9 @@ it("passes an unknown profile until server state arrives and fails closed after 
 
 it("has one unified local collection mode without a per-agent library selector", async () => {
   vi.stubGlobal("fetch", vi.fn(async () => Response.json({ enabled: true, connected: false, context: "local", library: { id: "legacy", name: "本机记忆库" } })));
-  await act(async () => root.render(<MemorySyncSummary sessionToken="session" count={6} automatic><div /></MemorySyncSummary>));
-  expect(container.textContent).toContain("统一采集到本机记忆库");
-  expect(container.textContent).toContain("6 个来源 · 自动采集");
+  await act(async () => root.render(<MemorySyncSummary sessionToken="session"><div /></MemorySyncSummary>));
+  expect(container.querySelector('section[aria-label="备份与恢复"]')).not.toBeNull();
   expect(container.textContent).not.toContain("旧版混合库");
+  expect(container.textContent).toContain("每 1 小时备份本机记忆库");
   expect([...container.querySelectorAll("select")].map(item => item.id)).toEqual(["space-backup-interval"]);
 });

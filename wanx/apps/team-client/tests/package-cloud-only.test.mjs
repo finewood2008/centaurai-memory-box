@@ -68,14 +68,15 @@ test("the archive gate rejects reintroduced identity code even when a build incl
 });
 
 test("packaged startup and preload dependencies resolve without local identity modules", async () => {
-  // Resolve real source imports through esbuild while enforcing the actual builder filter.
+  // Resolve the assembled runtime imports through esbuild with the actual package filter.
   // This catches a hidden top-level import even after its target is excluded from ASAR.
-  const accepts = new FileMatcher(root, root, value => value, pkg.build.files).createFilter();
-  await build({ entryPoints: [path.join(root, "shell/entry.mjs"), path.join(root, "local-ui/remote-preload.cjs")],
+  const applicationRoot = path.join(root, "build/app");
+  const accepts = new FileMatcher(applicationRoot, applicationRoot, value => value, pkg.build.files).createFilter();
+  await build({ entryPoints: [path.join(applicationRoot, "shell/entry.mjs"), path.join(applicationRoot, "local-ui/remote-preload.cjs")],
     outdir: "unused", bundle: true, write: false, platform: "node", format: "esm", packages: "external", logLevel: "silent",
     plugins: [{ name: "packaged-source-closure", setup(builder) {
       builder.onLoad({ filter: /\.[cm]?js$/ }, async args => {
-        const relative = path.relative(root, args.path).replaceAll("\\", "/");
+        const relative = path.relative(applicationRoot, args.path).replaceAll("\\", "/");
         if (relative.startsWith("device-trust/") || !accepts(args.path, await stat(args.path))) {
           return { errors: [{ text: `PACKAGED_IMPORT_EXCLUDED:${relative}` }] };
         }

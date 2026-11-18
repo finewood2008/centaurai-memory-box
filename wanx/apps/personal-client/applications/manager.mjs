@@ -210,6 +210,16 @@ export async function createApplicationManager({
   });
   await installer.recover();
   const mutations = new Map();
+  const mutationAdmissions = new Map();
+  const localRemovalRevisions = new Map();
+  function deploymentSession(id, assertSession) {
+    const revision = localRemovalRevisions.get(id) || 0;
+    return () => {
+      if ((localRemovalRevisions.get(id) || 0) !== revision)
+        throw Object.assign(new Error("APPLICATION_DEPLOYMENT_USER_REMOVED"), { code: "APPLICATION_DEPLOYMENT_USER_REMOVED" });
+      assertSession?.();
+    };
+  }
   const dismissedDefaults = new Set();
   function assertOpen() {
     if (closed) throw Object.assign(new Error("APPLICATIONS_CLOSED"), { code: "APPLICATIONS_CLOSED" });
@@ -223,19 +233,26 @@ export async function createApplicationManager({
     assertOpen();
     if (mutations.has(id)) return Promise.reject(Object.assign(new Error("MARKET_OPERATION_BUSY"), { code: "MARKET_OPERATION_BUSY" }));
     const check = () => { controller.signal.throwIfAborted(); assertSession(); };
+    let admit;
+    const admission = new Promise(resolve => { admit = resolve; });
+    mutationAdmissions.set(id, admission);
     const pending = Promise.resolve().then(async () => {
       check();
-      if (operation === installer.uninstall) dismissedDefaults.add(id);
+      if (operation !== installer.uninstallLocal) await installer.assertUnmanaged(id);
+      check();
+      if (operation === installer.uninstall || operation === installer.uninstallLocal) dismissedDefaults.add(id);
       if (operation === installer.rollback) await installer.assertRollbackCompatible(id);
       check();
+      if (operation === installer.uninstallLocal) localRemovalRevisions.set(id, (localRemovalRevisions.get(id) || 0) + 1);
+      admit(true);
       await launcher.stop(id);
       check();
       // Preserve explicit removal even if the process exits during uninstall.
       // Default delivery must not reinstall an application the user removed.
-      if (operation === installer.uninstall) await defaultApplicationDeliveryStore.dismiss(id, check);
+      if (operation === installer.uninstall || operation === installer.uninstallLocal) await defaultApplicationDeliveryStore.dismiss(id, check);
       check();
       return operation(id, check);
-    }).finally(() => mutations.delete(id));
+    }).finally(() => { admit(false); mutationAdmissions.delete(id); mutations.delete(id); });
     mutations.set(id, pending);
     return track(pending);
   }
@@ -329,14 +346,21 @@ export async function createApplicationManager({
           backendContracts: record.compatibility?.backendContracts || [],
           openWorkshop,
           createConnection: async options => {
+            let connection;
             if (record.preparedConnection?.kind === "local-trust-v1") {
               if (!record.preparedConnection.deriveApplication) throw Object.assign(new Error("APPLICATION_DATA_CONTEXT_REQUIRED"), { code: "APPLICATION_DATA_CONTEXT_REQUIRED" });
-              return bindPersonalTarget(await record.preparedConnection.deriveApplication(options));
-            }
-            return bindPersonalTarget(record.preparedConnection || await createConnection?.(record.applicationId, {
+              connection = await record.preparedConnection.deriveApplication(options);
+            } else connection = record.preparedConnection || await createConnection?.(record.applicationId, {
               launchId: options.launchId, ...(options.capabilities ? { capabilities: options.capabilities } : {}),
               ...(options.backendContracts?.length ? { backendContracts: options.backendContracts } : {}),
-            }) || { context, request, openStream: stream });
+            }) || { context, request, openStream: stream };
+            const admission = mutationAdmissions.get(record.applicationId);
+            if (admission) await admission;
+            try { signal?.throwIfAborted(); } catch (error) {
+              if (connection?.kind === "local-trust-v1") connection.close?.();
+              throw error;
+            }
+            return bindPersonalTarget(connection);
           },
           authorizeRelease: record.authorizeRelease,
           signal,
@@ -357,8 +381,10 @@ export async function createApplicationManager({
     },
     async installDeployment(input, {signal}={}) {
       assertOpen();
+      if (mutations.has(input?.binding?.slotApplicationId)) throw Object.assign(new Error("MARKET_OPERATION_BUSY"), { code: "MARKET_OPERATION_BUSY" });
       const combined=signal?AbortSignal.any([controller.signal,signal]):controller.signal;
-      return track(installer.installDeployment(input,{signal:combined}));
+      const assertSession = deploymentSession(input?.binding?.slotApplicationId, input?.assertSession);
+      return track(installer.installDeployment({...input,assertSession},{signal:combined}));
     },
     async installVerifiedPackage(input) {
       assertOpen();
@@ -380,6 +406,7 @@ export async function createApplicationManager({
       return track(installer.installVerifiedPackage(input, { signal: controller.signal }));
     },
     uninstall: (id, check) => mutate(id, installer.uninstall, check),
+    uninstallLocal: (id, check) => mutate(id, installer.uninstallLocal, check),
     rollback: (id, check) => mutate(id, installer.rollback, check),
     async selectCurrent(id, version) {
       assertOpen();

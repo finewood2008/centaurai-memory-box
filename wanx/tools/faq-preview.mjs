@@ -122,11 +122,11 @@ const server = createServer(async (request, response) => {
     }
     if (url.pathname === "/") {
       const edition = url.searchParams.get("edition") === "team" ? "team-client" : "personal-client";
-      let html = await readFile(path.join(root, "apps", edition, "local-ui/renderer/index.html"), "utf8");
-      html = html.replace("<head>", `<head><base href="/apps/${edition}/local-ui/renderer/"><script src="/__faq-preview-host.js"></script>`);
+      let html = await readFile(path.join(root, "apps", edition, "build/app/local-ui/renderer/index.html"), "utf8");
+      html = html.replace("<head>", `<head><base href="/apps/${edition}/build/app/local-ui/renderer/"><script src="/__faq-preview-host.js"></script>`);
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" }).end(html); return;
     }
-    if (!/^\/apps\/(personal-client|team-client)\/(local-ui\/renderer\/|resources\/)/.test(url.pathname)) { response.writeHead(404).end(); return; }
+    if (!/^\/apps\/(personal-client|team-client)\/build\/app\/(local-ui\/|resources\/)/.test(url.pathname)) { response.writeHead(404).end(); return; }
     const file = path.resolve(root, "." + decodeURIComponent(url.pathname));
     if (!file.startsWith(root + path.sep)) { response.writeHead(404).end(); return; }
     const body = await readFile(file);

@@ -1,0 +1,27 @@
+.release-workbench { margin: 24px 0; }
+.release-layout { display: grid; grid-template-columns: minmax(230px, 1fr) minmax(0, 3fr); gap: 20px; align-items: start; }
+.release-list, .release-detail { padding: 20px; }
+.release-list > button, .release-materials > button { display: flex; flex-direction: column; width: 100%; text-align: left; gap: 6px; margin: 8px 0; padding: 12px; }
+.release-workbench button[aria-pressed="true"] { border-color: var(--accent, #277e79); background: #edf7f5; }
+.release-pager, .release-toolbar { display: flex; gap: 12px; align-items: center; margin: 14px 0; flex-wrap: wrap; }
+.release-document { margin-top: 24px; border-top: 1px solid #d7dfdc; padding-top: 16px; }
+.release-document details { margin: 12px 0; }
+.release-document summary { cursor: pointer; }
+.release-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; padding: 12px; background: #f6f8f6; }
+.release-items article { border-bottom: 1px solid #e0e6e3; padding: 12px 0; overflow-wrap: anywhere; }
+.release-workbench small { display: block; color: #64736e; }
+.release-help { color: #64736e; font-size: .9em; }
+.release-document blockquote { border-left: 3px solid #8caaa4; padding: 8px 16px; margin: 12px 0; }
+@media (max-width: 850px) { .release-layout { grid-template-columns: 1fr; } }
+.release-compare { padding: 20px; background: #fffef9; border: 1px solid #d7dfdc; }
+.release-diff-columns { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 24px; }
+.release-diff-columns > section { min-width: 0; overflow-wrap: anywhere; }
+.release-version-picker select { display: block; width: 100%; padding: 10px; margin-top: 8px; }
+.release-diff-counts { display: flex; gap: 20px; flex-wrap: wrap; }
+.release-item-diffs article, .release-source-diff { padding: 16px 0; border-top: 1px solid #d7dfdc; }
+.release-compare input[type="checkbox"] { width: auto; margin-right: 8px; }
+.release-comparison-result { margin-top: 24px; }
+.release-restore { padding: 16px; border: 1px solid #d7dfdc; margin: 16px 0; }
+.release-restore textarea { display: block; width: 100%; box-sizing: border-box; min-height: 60px; margin-top: 8px; }
+.release-restore article { border-top: 1px solid #d7dfdc; padding: 12px 0; }
+@media (max-width: 700px) { .release-diff-columns { grid-template-columns: 1fr; } .release-compare { padding: 12px; } }

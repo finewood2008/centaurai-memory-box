@@ -6,6 +6,7 @@ from ..contracts import StudioError, digest
 from ..versions import idle, source_artifact, state, verify
 from .adapters import Blocked
 from .expert_runtime import PROFILE, validate_backend
+from .standard_client import CLIENT_FORMAT,RUNTIME_CONTRACT,MANIFEST_CONTRACT
 
 OPERATION = re.compile(r'^[a-f0-9]{32}$')
 
@@ -50,11 +51,26 @@ def capability_contracts(project, capabilities, catalog):
             'states':['queued','running','cancel_requested','succeeded','failed','cancelled','interrupted'],
             'retry':'新请求生成operationId并先用api.data保存operationId/text/scopeId；同请求重试沿用，不自动重放；跨scope复制的pending不能执行。',
         }
+    if contract and project.get('devKit'):
+        if 'foundation' in result:
+            result['foundation'].update(methods=['window.wanx.expertContext','window.wanx.expertInvoke'],
+                transport={'contract':'wanx.expert-app.v1','version':'1.0.0','context':'GET /api/wanx-expert-app/v1/context','invoke':'POST /api/wanx-expert-app/v1/invoke'},
+                envelope='{ok:true,value} 或 {ok:false,code}',
+                retry='新请求生成operationId并用window.wanx.expertInvoke data.put保存到state.json；同请求重试沿用，不自动重放；跨scope复制pending不能执行。')
+        result['data']={'label':'受管应用状态','methods':['window.wanx.expertInvoke'],
+            'collections':deepcopy(RUNTIME_CONTRACT['collections']),
+            'operations':{'data.list':'{collection:"state",offset?:非负整数,limit?:1..200}',
+                'data.get':'{collection:"state",id:1..128字符}',
+                'data.put':'{collection:"state",id:必填稳定记录ID,value:{json:string},expectedRevision?:非负整数}',
+                'data.delete':'{collection:"state",id,expectedRevision?:非负整数}'},
+            'limits':'value编码JSON最多262144字节；记录_id/_revision；CAS冲突RECORD_CHANGED。仅固定state集合，禁止新增或修改legacy集合。'}
     return result
 
 
 def instruction(project):
     if not selected(project):return ''
+    if project.get('devKit'):
+        return '''本项目使用 protocol 3 标准 Host 应用及受管专家后端。必须保留标准Electron shell、原applicationId和manifest，不能生成miniapp或调用/api/app-studio私有接口。main-process通过@centaurai/wanx-host-sdk的host.request调用公共合同wanx.expert-app.v1（版本1.0.0，features context/expert/data）。GET /api/wanx-expert-app/v1/context返回scopeId、environment、generation等受信作用域；POST /api/wanx-expert-app/v1/invoke请求严格为{operation,input}。expert.run输入{operationId:32位小写hex,text:1..12000字符}返回{run}；expert.tasks输入{}或{runId}返回{items,context:{scopeId}}或{run,context:{scopeId}}；expert.cancel输入{runId}返回{run}。run字段id/state/text/result/errorCode/createdAt/updatedAt，状态queued/running/cancel_requested/succeeded/failed/cancelled/interrupted。data.list/get/put/delete只允许集合state，value={json:string}，数据CAS使用expectedRevision，记录输出_id/_revision。不要传owner、slot、environment、agentId、模型、凭据或URL；标准shell为页面提供window.wanx.expertContext()和window.wanx.expertInvoke({operation,input})固定业务桥；返回{ok:true,value}或{ok:false,code}，主进程用SDK host.request固定上述公共route。页面不要自行调用host SDK或任意fetch，不能把任意HTTP代理暴露给页面。保存请求operationId/text/scopeId，同请求重试沿用operationId，新请求重新生成；初始化先读context，再调用expert.tasks({})完成真实只读专家握手（context和data.list本身不表示专家通道就绪），成功后才允许提交。首次data.put也必须传稳定id（如operationId）和expectedRevision=0，后续更新使用返回的_id/_revision；先保存成功再expert.run。重开先读context和tasks，不自动重放未知任务；scopeId变化隔离旧pending。未部署预览明确显示未部署，不伪造专家结果。manifest capabilities固定identity.read/http.request，backendContracts=[{id:wanx.expert-app.v1,range:>=1.0.0 <2.0.0,features:[context,expert,data]}]，resourceDependencies=[]。'''
     return '''本项目已由用户显式选择 wanx-expert-app-v1 文本专家后端。客户端 capabilities 必须包含 foundation，可选 data；不要直接声明 model/files/knowledge/reports 或调用 model.generate。AI执行由部署后隐式绑定的专家提供。请按 availableContracts/handoff 的 foundation.expertDeployment 固定合同生成正常前端，api.foundation.invoke 的 operation 仅 expert.run/tasks/cancel，不传 agentId、URL、凭据、模型或目标环境。schema保持现有miniapp格式。专家在部署联调后可调用，布局预览不得伪造专家结果。持久化未确认请求和scopeId，重开只读历史，不自动重新运行未知任务。配置选择不是 PRD 确认或开发授权，仍走原确认和采用流程。'''
 
 
@@ -89,7 +105,10 @@ class ProjectExpert:
         validate_backend({'schemaVersion':1,'format':'wanx-expert-backend-v1','template':contract['template'],'mode':'ask'})
         validate_verification(contract['verification'])
         caps=set(artifact['manifest']['capabilities'])
-        if 'foundation' not in caps or not caps<={'data','foundation'}:raise StudioError('EXPERT_CLIENT_CAPABILITY_UNSUPPORTED',409)
+        if artifact.get('devKitPackage'):
+            if contract.get('clientFormat')!=CLIENT_FORMAT or contract.get('runtimeContract')!=RUNTIME_CONTRACT:raise StudioError('EXPERT_CONTRACT_REQUIRED',409)
+            if caps!={'identity.read','http.request'} or artifact['manifest'].get('compatibility',{}).get('backendContracts')!=[MANIFEST_CONTRACT]:raise StudioError('EXPERT_CLIENT_CAPABILITY_UNSUPPORTED',409)
+        elif 'foundation' not in caps or not caps<={'data','foundation'}:raise StudioError('EXPERT_CLIENT_CAPABILITY_UNSUPPORTED',409)
         return artifact,deepcopy(contract),{'artifactHash':adopted,'version':artifact['version'],'versionRevision':state(project)['revision'],
             'taskId':artifact['taskId'],'contentHash':artifact['contentHash'],'profile':PROFILE}
 
@@ -126,7 +145,9 @@ class ProjectExpert:
             if spec is None and project['artifacts']:raise StudioError('EXPERT_CONTRACT_LOCKED',409)
             self.svc.invalidate(project)
             project['_deploymentExpertRevision']=revision+1
-            if spec:project['deploymentExpert']={**deepcopy(spec),'revision':revision+1}
+            if spec:
+                project['deploymentExpert']={**deepcopy(spec),'revision':revision+1}
+                if project.get('devKit'):project['deploymentExpert'].update(clientFormat=CLIENT_FORMAT,runtimeContract=deepcopy(RUNTIME_CONTRACT))
             else:project.pop('deploymentExpert',None)
             prep=project['preparation'];prep.update(phase='intake',report=None,handoff=None)
             prep['revision']+=1

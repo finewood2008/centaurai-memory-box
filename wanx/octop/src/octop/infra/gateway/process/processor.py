@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
 from collections.abc import AsyncIterator, Awaitable, Callable
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Literal
@@ -129,7 +130,7 @@ class GlobalProcessor:
     """Routes InboundMessages by ``tenant_id`` to the correct HarnessAgent."""
 
     loop_message_interceptor: (
-        Callable[[InboundMessage], Awaitable[str | FileContent | None]] | None
+        Callable[[InboundMessage], Awaitable[str | FileContent | Literal[True] | None]] | None
     ) = None
 
     def __init__(
@@ -608,9 +609,12 @@ class GlobalProcessor:
 
         METRICS.inc("messages_total")
 
+        verified_zhijun = False
         if self.loop_message_interceptor is not None:
             intercepted = await self.loop_message_interceptor(msg)
-            if intercepted is not None:
+            if intercepted is True:
+                verified_zhijun = True
+            elif intercepted is not None:
                 if isinstance(intercepted, FileContent):
                     yield MessageEvent(content=[intercepted])
                 else:
@@ -643,6 +647,26 @@ class GlobalProcessor:
         session_key = session_key_from_message(msg, agent_id=agent_id)
         channel_type = msg.channel_type or "unknown"
         im_meta = sanitize_im_metadata(msg)
+
+        if verified_zhijun and agent_row and not msg.has_media:
+            from wanx_bridge.zhijun_memory import MemoryConflict, remember_from_channel
+
+            try:
+                receipt = await asyncio.to_thread(
+                    remember_from_channel,
+                    self._agent_manager.paths.root,
+                    user_id,
+                    msg.text,
+                    channel_type,
+                    msg.channel_id,
+                    str(msg.metadata.get("message_id") or msg.metadata.get("event_id") or ""),
+                )
+            except (OSError, sqlite3.Error, MemoryConflict):
+                receipt = "本次记忆保存未确认，请稍后重试。"
+            if receipt is not None:
+                yield MessageEvent.text(receipt)
+                yield MessageEvent.completed()
+                return
 
         cmd = parse_slash(msg.text)
         locale = resolve_user_locale(
@@ -822,6 +846,21 @@ class GlobalProcessor:
         message_kwargs: dict[str, Any] | None = None
         if invitation_id:
             message_kwargs = {"zhijun_invitation_id": invitation_id}
+        prepared_zhijun = None
+        if verified_zhijun:
+            from octop.infra.agents.conversation_mode import (
+                read_zhijun_context,
+                zhijun_answer_evidence,
+            )
+
+            prepared_zhijun = await asyncio.to_thread(
+                read_zhijun_context, self._agent_manager.paths.root, user_id, msg.text, (), True
+            )
+            message_kwargs = {
+                **(message_kwargs or {}),
+                "assistant_persona": "zhijun",
+                "zhijun_evidence": zhijun_answer_evidence(prepared_zhijun),
+            }
         if mcp_servers:
             from octop.infra.gateway.process.message_keys import (  # noqa: PLC0415
                 COMPOSER_CTX_KEY,
@@ -850,6 +889,8 @@ class GlobalProcessor:
             message_kwargs=message_kwargs,
         )
         self.teams.stamp_host_runtime(request, agent_id)
+        if prepared_zhijun is not None:
+            request["zhijun_prepared"] = prepared_zhijun
         self._attach_turn_knowledge_config(
             request,
             user_id=user_id,
@@ -1270,6 +1311,25 @@ class GlobalProcessor:
         )
 
         message_kwargs: dict[str, Any] = {}
+        prepared_zhijun = None
+        if meta.get("assistant_persona") == "zhijun":
+            from octop.infra.agents.conversation_mode import (
+                read_zhijun_context,
+                zhijun_answer_evidence,
+            )
+
+            prepared_zhijun = await asyncio.to_thread(
+                read_zhijun_context,
+                self._agent_manager.paths.root,
+                user_id,
+                msg.text,
+                meta.get("zhijun_references", ()),
+                meta.get("zhijun_memory", True),
+            )
+            if meta.get("zhijun_agent_only"):
+                prepared_zhijun = ([], prepared_zhijun[1])
+            message_kwargs["assistant_persona"] = "zhijun"
+            message_kwargs["zhijun_evidence"] = zhijun_answer_evidence(prepared_zhijun)
         invitation_id = meta.get("zhijun_invitation_id")
         if invitation_id:
             from octop.infra.agents.knowledge_understanding import resolve_invitation
@@ -1335,6 +1395,8 @@ class GlobalProcessor:
             reasoning_overrides=reasoning_overrides,
         )
         self.teams.stamp_host_runtime(request, agent_id)
+        if prepared_zhijun is not None:
+            request["zhijun_prepared"] = prepared_zhijun
         self._attach_turn_knowledge_config(
             request,
             user_id=user_id,
@@ -1412,18 +1474,23 @@ class GlobalProcessor:
         locale: str,
     ) -> dict[str, Any]:
         from octop.infra.agents.assistant_profile import is_assistant_profile
-        from octop.infra.agents.conversation_mode import execute_user_message, stamp_assistant_ask
+        from octop.infra.agents.conversation_mode import (
+            execute_user_message,
+            latest_zhijun_message,
+            stamp_assistant_mode,
+        )
 
         thread = self._thread_registry.get_thread(thread_id)
         if thread is not None and is_assistant_profile(
             self._agent_manager.get_row(getattr(thread, "agent_id", "")), self._user_repo
         ):
+            mode = "craft" if latest_zhijun_message(request.get("messages") or ()) else "ask"
             self._thread_registry.update_composer(
-                thread_id, conversation_mode="ask", pending_plan_path=None
+                thread_id, conversation_mode=mode, pending_plan_path=None
             )
             agent = self._agent_manager.get_agent(thread.agent_id)
-            return stamp_assistant_ask(
-                request, mcp_servers, [tool.name for tool in getattr(agent, "_mcp_tools", [])]
+            return stamp_assistant_mode(
+                request, mcp_servers, [tool.name for tool in getattr(agent, "_mcp_tools", [])], mode
             )
 
         mode, execute_path = self._sync_and_resolve_conversation_mode(
