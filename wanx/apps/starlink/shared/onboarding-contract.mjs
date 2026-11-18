@@ -1,6 +1,6 @@
 // Registered personal onboarding and rule-review operations; no arbitrary paths or scopes.
 export const onboardingActions = new Set(['onboarding-read', 'onboarding-save', 'onboarding-warehouses',
-  'onboarding-create', 'onboarding-context', 'onboarding-confirm', 'onboarding-generate', 'onboarding-suggestion',
+  'onboarding-create', 'onboarding-context', 'onboarding-scope-publish', 'onboarding-confirm', 'onboarding-generate', 'onboarding-suggestion',
   'onboarding-rules', 'onboarding-rule-prepare', 'onboarding-rule-publish', 'onboarding-ontologies']);
 const id = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 const op = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,120}$/.test(value);
@@ -16,11 +16,25 @@ function answers(value, draft) {
   if (draft && (value.flow_step && !['background','purpose','confirm'].includes(value.flow_step) ||
     value.flow_mode && !['create','profile'].includes(value.flow_mode) || value.creation_operation && !op(value.creation_operation))) error();
 }
+export const scopeFieldLimits = Object.freeze({
+  industry:0, occupation:0, service_objects:6, purposes:6, material_sources:6,
+  questions_to_answer:6, excluded_scope:6, uncertain_items:8,
+});
+export function scopePatchError(value) {
+  if (!only(value,Object.keys(scopeFieldLimits))) return 'scope';
+  return Object.keys(value).find(field => {
+    const item = value[field], limit = scopeFieldLimits[field];
+    return limit === 0 ? typeof item !== 'string' || [...item].length > 200 :
+      !Array.isArray(item) || item.length > limit ||
+      item.some(text => typeof text !== 'string' || !text.trim() || [...text].length > 300);
+  });
+}
 export function onboardingRequest(action, input = {}) {
   if (!onboardingActions.has(action)) return null;
   const keys = {
     'onboarding-read':[], 'onboarding-warehouses':[], 'onboarding-save':['body'],
     'onboarding-create':['onboardingId','body'], 'onboarding-context':['warehouseId'],
+    'onboarding-scope-publish':['warehouseId','body'],
     'onboarding-confirm':['warehouseId','body'], 'onboarding-generate':['warehouseId','body'],
     'onboarding-suggestion':['warehouseId','suggestionId'],
     'onboarding-rules':['warehouseId','suggestionId'], 'onboarding-rule-prepare':['warehouseId','body'],
@@ -33,6 +47,7 @@ export function onboardingRequest(action, input = {}) {
     'onboarding-warehouses':'/modeling/warehouses',
     'onboarding-create':`/modeling/onboarding/${input.onboardingId}/warehouse`,
     'onboarding-context':`/warehouses/${input.warehouseId}/modeling/suggestion-context`,
+    'onboarding-scope-publish':`/warehouses/${input.warehouseId}/modeling/warehouse-scope/publish`,
     'onboarding-confirm':`/warehouses/${input.warehouseId}/modeling/answer-confirmations`,
     'onboarding-generate':`/warehouses/${input.warehouseId}/modeling/answer-suggestions`,
     'onboarding-suggestion':`/warehouses/${input.warehouseId}/modeling/answer-suggestions/${input.suggestionId}`,
@@ -46,12 +61,16 @@ export function onboardingRequest(action, input = {}) {
     const b = input.body;
     const fields = action === 'onboarding-save' ? ['operation_id','expected_revision','answers','status']
       : action === 'onboarding-create' ? ['operation_id','expected_revision','name','purpose']
+      : action === 'onboarding-scope-publish' ? ['operation_id','expected_revision','base_ontology_id','changes','confirmed']
       : action === 'onboarding-confirm' ? ['operation_id','expected_revision','onboarding_revision','expected_confirmation_id','answers']
       : action === 'onboarding-rule-prepare' ? ['operation_id','proposal_id','expected_draft_id','name','schema','decisions']
       : action === 'onboarding-rule-publish' ? ['operation_id','schema_digest','confirmed']
       : ['operation_id','confirmation_id','base_ontology_id'];
     if (!only(b,fields) || !op(b.operation_id)) error();
     if (['onboarding-save','onboarding-create','onboarding-confirm'].includes(action) && !revision(b.expected_revision)) error();
+    if (action === 'onboarding-scope-publish' &&
+        (!revision(b.expected_revision) || !id(b.base_ontology_id) || b.confirmed!==true ||
+        scopePatchError(b.changes) || !Object.keys(b.changes).length)) error();
     if (action === 'onboarding-rule-prepare') {
       if (!id(b.proposal_id) || b.expected_draft_id != null && !id(b.expected_draft_id) ||
         typeof b.name !== 'string' || !b.name.trim() || [...b.name].length>120 ||

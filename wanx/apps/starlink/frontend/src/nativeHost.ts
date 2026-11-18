@@ -1,4 +1,4 @@
-export type OntologyCategory = 'published' | 'assistant' | 'drafts';
+export type OntologyCategory = 'published' | 'drafts';
 export type OntologyAction = OntologyCategory | 'suggestions';
 export type OntologySection = OntologyCategory | 'add-entity' | 'add-relation';
 type Controls = {
@@ -15,7 +15,7 @@ export type EmbeddedWorkbenchHost = {
   viewChanged(source: Window, view: string): void;
   ontologySectionChanged(source: Window, section: OntologySection, category: OntologyCategory): void;
   importMaterials(source: Window, documentId?: string): void;
-  openSource(source: Window, documentId: string, versionId: string): void;
+  openSource(source: Window, documentId: string, versionId: string, segmentId?: string): void;
 };
 export function embeddedHost(): EmbeddedWorkbenchHost | undefined {
   if (typeof window === "undefined" || window.parent === window || new URLSearchParams(location.search).get("embedded") !== "1") return;

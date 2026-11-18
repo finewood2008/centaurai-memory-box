@@ -10,8 +10,22 @@ export function nextDialogueQuestion(draft={}){
   for(const q of draft.questions||[]){const state=ledger.find(s=>s.question_id===q.question_id);if(state?.status==='pending')return {...q,...state};}
   return null;
 }
-export function questionCardsHTML(questions,{editable=false}={}){
-  return (questions||[]).map(q=>`<section class="od-question"><p>${esc(q.text)}</p>${q.examples?.length||q.question_id?`<div class="wp-choices">${(q.examples||[]).map(text=>`<button class="ob-button" type="button" data-od-choice="${esc(text)}" ${q.question_id?`data-choice-question="${esc(q.question_id)}"`:''} ${!editable?'disabled':''}>${esc(text)}</button>`).join('')}${q.question_id?actionButton(q,'uncertain','暂不确定，先继续',!editable):''}</div>`:''}<small>选择选项或直接输入，点击发送后继续。</small></section>`).join('');
+export function nextScopeQuestion(draft={}){
+  const questions=(draft.questions||[]).filter(q=>{
+    if(!q.field)return true;
+    const value=draft.scope?.[q.field];
+    return !(Array.isArray(value)?value.some(item=>typeof item==='string'&&item.trim()):typeof value==='string'&&value.trim());
+  });
+  return nextDialogueQuestion({...draft,questions});
+}
+export function questionCardsHTML(questions,{editable=false,allowSkip=false,rangeActions=false,hasInput=false}={}){
+  return (questions||[]).map(q=>`<section class="od-question"><p>${esc(q.text)}</p>${q.examples?.length||q.question_id?`<div class="wp-choices">
+    ${rangeActions&&q.question_id?actionButton(q,'answer','回答',!editable||hasInput):''}
+    ${(q.examples||[]).map(text=>`<button class="ob-button" type="button" data-od-choice="${esc(text)}" ${q.question_id?`data-choice-question="${esc(q.question_id)}"`:''} ${!editable||hasInput?'disabled':''}>${esc(text)}</button>`).join('')}
+    ${q.question_id?actionButton(q,'uncertain',rangeActions?'不确定':'暂不确定，先继续',!editable||hasInput):''}
+    ${allowSkip&&q.question_id?actionButton(q,'skip','跳过这项',!editable||hasInput):''}
+    ${rangeActions&&q.question_id?`<button type="button" class="ob-button" data-od="defer-question" ${!editable||hasInput?'disabled':''}>稍后</button>`:''}
+    </div>`:''}<small>选择选项或直接输入，点击发送后继续。</small></section>`).join('');
 }
 export function questionLedgerHTML(questions,{editable=false,historyOnly=false}={}){
   if(!questions?.length)return '';

@@ -45,10 +45,14 @@ export function createWorkbenchHost({ call, warehouse, container, onView, onImpo
         void onImport(documentId);
       }
     },
-    openSource(source, documentId, versionId) {
+    openSource(source, documentId, versionId, segmentId) {
       const resource = /^[A-Za-z0-9_-]{1,128}$/;
       if (trusted(source) && typeof documentId === 'string' && typeof versionId === 'string' &&
-          resource.test(documentId) && resource.test(versionId)) void onSource?.(documentId, versionId);
+          resource.test(documentId) && resource.test(versionId) &&
+          (segmentId === undefined || typeof segmentId === "string" && resource.test(segmentId))) {
+        if (segmentId === undefined) void onSource?.(documentId, versionId);
+        else void onSource?.(documentId, versionId, segmentId);
+      }
     },
   });
   Object.defineProperty(window, "starlinkWorkbench", { value: host, configurable: false, writable: false });

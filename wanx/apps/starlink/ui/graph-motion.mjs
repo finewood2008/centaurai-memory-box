@@ -248,11 +248,13 @@ export function createGraphMotion({getSvg = () => document.querySelector('#graph
     for (const edge of graph.edges) {
       const element = scene.edges.get(edge.id);
       if (!element) continue;
+      if (element.classList.contains('explore-omitted')) continue;
       const a = points.get(edge.s);
       const b = points.get(edge.t);
       const group = scene.groups.get(JSON.stringify([edge.s, edge.t].sort()));
       const path = edgeGeometry({ id: edge.s, ...a }, { id: edge.t, ...b }, group.indexOf(edge.id), group.length);
       element.querySelectorAll('path').forEach(el => el.setAttribute('d', path.d));
+      element.querySelector('.explore-flag')?.setAttribute('transform',`translate(${path.x} ${path.y - 8})`);
       const label = scene.relationLabels.get(edge.id);
       const emphasized = element.classList.contains('chosen') || scene.hoveredEdge === edge.id || element.contains(document.activeElement);
       element.classList.toggle('is-label-active', emphasized);
@@ -270,9 +272,11 @@ export function createGraphMotion({getSvg = () => document.querySelector('#graph
       element.querySelector('.node-star').setAttribute('r', r);
       element.querySelector('.node-star-glow')?.setAttribute('r', r * 2.05);
       element.querySelector('.node-star-hit').setAttribute('r', Math.max(11, r + 3));
+      element.querySelector('.explore-boundary')?.setAttribute('r',r + 4);
       const name = element.querySelector('.node-name');
-      const half = node.labelWidth / 2 + 4;
-      const extraLine = (node.lines.length - 1) * 15;
+      const type = name.querySelector('.explore-node-type');
+      const half = Math.max(node.labelWidth,(type?.textContent.length || 0)*11) / 2 + 4;
+      const extraLine = (node.lines.length - 1 + Number(Boolean(type))) * 15;
       const sameAsGroup = namedGroups.has(node.constellation) && scene.anchors.get(node.constellation).name === node.name;
       const count = shownPerGroup.get(node.constellation) || 0;
       const candidates = [[0,r+15],[0,-r-7-extraLine],[r+half+5,5-extraLine/2],[-r-half-5,5-extraLine/2]].map(([dx,dy]) => ({
@@ -288,6 +292,11 @@ export function createGraphMotion({getSvg = () => document.querySelector('#graph
         labels.push(box);
         shownPerGroup.set(node.constellation,count+1);
       }
+    }
+    const pair = scene.duplicateLine;
+    if (pair) {
+      const a = points.get(pair.dataset.exploreFrom), b = points.get(pair.dataset.exploreTo);
+      if (a && b) pair.setAttribute('d', edgeGeometry({id:pair.dataset.exploreFrom,...a},{id:pair.dataset.exploreTo,...b}).d);
     }
 
     for (const relation of relations.sort((a,b) => Number(b.chosen)-Number(a.chosen))) {
@@ -375,14 +384,19 @@ export function createGraphMotion({getSvg = () => document.querySelector('#graph
     }
     const previous = state;
     const sameGraph = previous?.graph === graph;
+    const preserve = sameGraph || Boolean(previous && sizeBy.expansion && sizeBy.expansion !== previous.sizeBy.expansion);
     detach();
-    if (!sameGraph) positions.clear();
+    if (!preserve) positions.clear();
     const initial = { yaw: previous?.camera.yaw ?? DEFAULT_YAW, pitch: previous?.camera.pitch ?? DEFAULT_PITCH, zoom: 1, panX: 0, panY: 0 };
     const nodes = graph.nodes.map((node, i) => {
       if (!positions.has(node.id)) {
         // Spread the stable 2D layout along a third axis to make rotation informative.
-        const z = Math.sin(i * 2.39996) * clamp(76 + graph.nodes.length * 2.7, 80, 232);
-        positions.set(node.id, { ...node, z, homeX: node.x, homeY: node.y, homeZ: z });
+        const parent = preserve && positions.get(sizeBy.parents?.get(node.id));
+        const angle = i * 2.39996;
+        const z = parent ? parent.z + 70*Math.sin(angle) : Math.sin(angle) * clamp(76 + graph.nodes.length * 2.7, 80, 232);
+        const x = parent ? parent.x + (155+16*Math.sqrt(i))*Math.cos(angle) : node.x;
+        const y = parent ? parent.y + (125+13*Math.sqrt(i))*Math.sin(angle) : node.y;
+        positions.set(node.id, { ...node, x, y, z, homeX:x, homeY:y, homeZ:z });
       }
       return Object.assign(positions.get(node.id), { r: node.r, labelWidth: node.labelWidth, lines: node.lines });
     });
@@ -407,7 +421,7 @@ export function createGraphMotion({getSvg = () => document.querySelector('#graph
     }));
     const relationLabels = new Map();
     for (const [id,edge] of edges) {
-      const element = edge.querySelector('text');
+      const element = edge.querySelector('.graph-edge-label');
       if (element) relationLabels.set(id,{element,width:Math.ceil(element.getComputedTextLength())});
     }
     const selected = nodeLayer.querySelector('.selected')?.dataset.node;
@@ -415,17 +429,18 @@ export function createGraphMotion({getSvg = () => document.querySelector('#graph
       (sizeBy.counts.get(b.id)?.relations ?? 0)-(sizeBy.counts.get(a.id)?.relations ?? 0) || b.degree-a.degree);
     const scene = state = {
       svg, graph, nodes, nodeLayer, elements, edges, groups, floor, sizeBy, depthOrder: [],
+      duplicateLine:svg.querySelector('.explore-duplicate-line'),
       anchors, relationLabels, ranked,
       byId: new Map(nodes.map(node => [node.id, node])),
       selected,
-      camera: sameGraph ? previous.camera : initial,
+      camera: preserve ? previous.camera : initial,
       // Polling replaces the SVG children even when the graph is unchanged.
       // Retain the projection, too, so existing drag positions do not jump.
-      center: sameGraph ? previous.center : null,
-      distance: sameGraph ? previous.distance : null,
-      region: sameGraph ? previous.region : null,
-      rotation: sameGraph ? previous.rotation : null,
-      viewport: sameGraph ? previous.viewport : null,
+      center: preserve ? previous.center : null,
+      distance: preserve ? previous.distance : null,
+      region: preserve ? previous.region : null,
+      rotation: preserve ? previous.rotation : null,
+      viewport: preserve ? previous.viewport : null,
       abort: new AbortController(), pointer: null, suppress: false, heat: 0, hoveredEdge: null,
     };
     if (!nodes.length) {
@@ -552,9 +567,22 @@ export function createGraphMotion({getSvg = () => document.querySelector('#graph
     pending = raf(() => {
       pending = 0;
       const svg = getSvg();
-      if (svg) mount(svg, graph, sizeBy);
+      if (svg) {
+        mount(svg, graph, sizeBy);
+        sizeBy.afterMount?.();
+      }
     });
   }
 
-  return { schedule, reset, zoom, fit, rotate };
+  function camera() {
+    return state?.viewport ? {...state.camera} : null;
+  }
+  function restoreCamera(value) {
+    if (!state?.viewport) return false;
+    Object.assign(state.camera,value);
+    state.rotation = orientation(state.camera.yaw,state.camera.pitch);
+    paint(state);
+    return true;
+  }
+  return { schedule, reset, zoom, fit, rotate, camera, restoreCamera };
 }

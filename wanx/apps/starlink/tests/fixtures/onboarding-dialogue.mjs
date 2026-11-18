@@ -45,8 +45,16 @@ export function dialogueFixture({guidance=false}={}){
           s.can_preview=true;s.status='ready_for_preview';Object.assign(r,{status:'succeeded',answer:'已更新人才与技能范围，可以继续调整关系、属性或核对。',draft:clone(s.draft)});
         }
         if(guidance)s.active_turn_id=null;
-      }else if(action==='conversation-onboarding-preview'){if(!s.can_preview||s.draft_digest!==input.draftDigest)throw fail('MODELING_ONBOARDING_STALE',409);r={resource_id:'preview-'+(++sequence),conversation_id:input.conversationId,status:'previewed',draft_revision:s.draft.revision,draft_digest:s.draft_digest,preview_digest:'b'.repeat(64),scope:clone(s.draft.scope),schema:clone(s.draft.schema),questions:clone(s.draft.questions),changes:clone(s.draft.changes),publication_performed:false};}
-      else if(action==='conversation-onboarding-publish'){db.publishes++;db.current='published';r={resource_id:input.previewId,conversation_id:input.conversationId,status:'published',ontology_id:'published',version_number:2,changed:true,publication_performed:true,extraction_started:false,scope:clone(s.draft.scope),schema:clone(s.draft.schema),unresolved_items:clone(s.draft.scope.uncertain_items)};s.publication=clone(r);s.status='published';s.publication_effective=true;s.can_preview=false;}
+      }else if(action==='conversation-onboarding-preview'){if(!s.can_preview||s.draft_digest!==input.draftDigest)throw fail('MODELING_ONBOARDING_STALE',409);r={resource_id:'preview-'+(++sequence),conversation_id:input.conversationId,status:'previewed',draft_revision:s.draft.revision,draft_digest:s.draft_digest,preview_digest:'b'.repeat(64),base_ontology_id:s.draft.base_ontology_id,scope:clone(s.draft.scope),schema:clone(s.draft.schema),questions:clone(s.draft.questions),changes:clone(s.draft.changes),publication_performed:false};}
+      else if(action==='conversation-onboarding-publish'){
+        db.publishes++;
+        const changed=s.draft.changes.length>0;
+        if(changed)db.current='published';
+        r={resource_id:input.previewId,conversation_id:input.conversationId,status:'published',ontology_id:db.current,
+          version_number:2,changed,publication_performed:true,extraction_started:false,scope:clone(s.draft.scope),
+          schema:clone(s.draft.schema),unresolved_items:clone(s.draft.scope.uncertain_items)};
+        s.publication=clone(r);s.status='published';s.publication_effective=true;s.can_preview=false;
+      }
       else throw Error('Unexpected fixture action '+action);
       if(guidance&&['conversation-onboarding-preview','conversation-onboarding-publish'].includes(action)){r.question_states=clone(s.draft.question_states);if(action.endsWith('publish')){r.unresolved_questions=clone(s.draft.question_states.filter(q=>['pending','skipped','uncertain'].includes(q.status)));s.publication=clone(r);}}
       receipts.set(op,clone(r));

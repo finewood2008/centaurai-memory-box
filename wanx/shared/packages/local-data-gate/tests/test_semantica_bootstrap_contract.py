@@ -35,6 +35,23 @@ class BootstrapContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             contract.validate_body('GET', '/warehouses/runtime', {'actor_id': 'other'})
 
+    def test_warehouse_deletion_requires_a_target_path_and_confirmation(self):
+        contract = self.contract()
+        path = '/warehouses/10000000-0000-4000-8000-000000000001/delete'
+        self.assertEqual(
+            contract.validate_body('POST', path + '/prepare', {'operation_id': 'prepare'}),
+            'prepare',
+        )
+        body = {'operation_id': 'delete', 'confirmation_token': 'intent', 'typed_name': '测试仓'}
+        self.assertEqual(contract.validate_body('POST', path, body), 'delete')
+        for changed in (
+            {'confirmation_token': ''}, {'typed_name': []}, {'typed_name': ' '},
+            {'warehouse_id': '20000000-0000-4000-8000-000000000002'},
+        ):
+            with self.subTest(changed=changed):
+                with self.assertRaises(ValueError):
+                    contract.validate_body('POST', path, {**body, **changed})
+
     def test_initial_suggestion_and_model_check_shapes(self):
         contract = self.contract()
         root = '/modeling/warehouses/10000000-0000-4000-8000-000000000001'

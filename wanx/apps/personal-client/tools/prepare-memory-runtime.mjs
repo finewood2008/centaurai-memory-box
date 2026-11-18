@@ -26,7 +26,7 @@ try{
   memory('sqlite-vec').load(db);
   vector=typeof db.prepare('SELECT vec_version() AS version').get().version==='string';
 }catch{}finally{db?.close()}
-console.log(JSON.stringify({arch:process.arch,modules,vector,ok:modules.length>0&&modules.every(item=>item.ok)&&vector}));
+console.log(JSON.stringify({platform:process.platform,arch:process.arch,abi:process.versions.modules,modules,vector,ok:modules.length>0&&modules.every(item=>item.ok)&&vector}));
 `;
 
 function clientTools(clientRoot) {
@@ -35,10 +35,13 @@ function clientTools(clientRoot) {
 }
 
 // Probe in the actual Electron Node runtime, never the build host's Node ABI.
-export function probeMemoryRuntime({runtime, clientRoot, env = process.env, run = execFileSync}) {
-  const {executable} = clientTools(clientRoot);
+export function probeMemoryRuntime({runtime, clientRoot, executable = clientTools(clientRoot).executable,
+  env = process.env, run = execFileSync}) {
+  const childEnv = {...env, ELECTRON_RUN_AS_NODE:'1'};
+  delete childEnv.NODE_OPTIONS;
+  delete childEnv.NODE_PATH;
   return JSON.parse(run(executable, ['-e', probeCode, runtime], {
-    cwd:clientRoot, env:{...env, ELECTRON_RUN_AS_NODE:'1'},
+    cwd:clientRoot ?? runtime, env:childEnv,
     encoding:'utf8', stdio:'pipe', windowsHide:true, timeout:30_000,
   }).toString().trim());
 }

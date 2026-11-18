@@ -46,7 +46,7 @@ test('personal Starlink onboarding and ontology modeling use the service-only ma
     ['GET', root+'/modeling/suggestion-context'], ['POST', root+'/modeling/answer-confirmations'],
     ['POST', root+'/modeling/answer-suggestions'], ['GET', root+'/modeling/answer-suggestions/proposal'],
     ['GET', root+'/modeling/answer-suggestions/proposal/rules'], ['POST', root+'/modeling/rule-previews'],
-    ['POST', root+'/modeling/rule-previews/preview/publish'],
+    ['POST', root+'/modeling/rule-previews/preview/publish'], ['POST', root+'/modeling/warehouse-scope/publish'],
   ]) {
     const response = await f.client.request(path, {method, ...(method==='POST'?{body:{operation_id:'synthetic-operation'}}:{})});
     assert.equal(response.status,200,path); assert.equal(f.seen.at(-1).origin,undefined,path);

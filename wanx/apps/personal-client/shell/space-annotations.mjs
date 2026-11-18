@@ -359,7 +359,8 @@ function bindingValid(value, pending = false) {
   const fields = ["scope", "id", "warehouseId", "documentId", "digest", "annotationRevision", "snapshot", ...(pending ? [] : ["versionId"])];
   if (!value || Array.isArray(value) || Object.keys(value).some(field => !fields.includes(field)) ||
     !resource(value.id) || !warehouseValid(value.warehouseId) || !documentValid(value.documentId) || !pending && !documentValid(value.versionId) ||
-    typeof value.digest !== "string" || !/^[a-f0-9]{64}$/.test(value.digest) || !Number.isSafeInteger(value.annotationRevision) || value.annotationRevision < 1) return false;
+    typeof value.digest !== "string" || !/^[a-f0-9]{64}$/.test(value.digest) || !Number.isSafeInteger(value.annotationRevision) ||
+    value.annotationRevision < (pending && value.snapshot === undefined ? 0 : 1)) return false;
   const snapshot = value.snapshot;
   return snapshot === undefined || snapshot && !Array.isArray(snapshot) && tagsValid(snapshot.tags, 2048) &&
     typeof snapshot.description === "string" && snapshot.description.length <= 2000 &&

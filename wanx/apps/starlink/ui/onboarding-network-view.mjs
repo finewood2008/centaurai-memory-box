@@ -14,7 +14,7 @@ export function ontologyGraphHTML(schema,changes=[],prefix='ob-draft',{label:gra
     for(const s of sources){for(const t of targets){if(edges.length>=240)break;edges.push({s,t,r,ri});}if(edges.length>=240)break;}
   });
   const graph=layoutGraph({nodes:entities.map((d,i)=>({id:d.name,name:label(d),d,i})),edges});
-  graph.nodes.forEach(n=>{n.r=Math.min(23,10+Math.sqrt(n.degree)*3);});
+  graph.nodes.forEach(n=>{n.r=7;});
   const points=new Map(graph.nodes.map(n=>[n.id,n])),groups=new Map();
   edges.forEach(e=>{const key=[e.s,e.t].sort().join('\0');if(!groups.has(key))groups.set(key,[]);groups.get(key).push(e);});
   const state=(kind,name)=>{const c=changes.find(c=>c.kind===kind&&c.name===name);return c?.after?(c.before?'modified':'added'):'existing';};

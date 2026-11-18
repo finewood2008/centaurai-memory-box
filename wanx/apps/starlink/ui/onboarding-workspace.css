@@ -21,6 +21,7 @@
   overflow-wrap: anywhere;
 }
 .od-inline .od-heading p { margin: 0; }
+.od-heading-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .od-inline .od-crumb { font-size: 12px; color: var(--muted); }
 .od-inline .od-steps {
   display: flex;
@@ -134,3 +135,90 @@
 @container (max-width: 700px) {
   .od-inline .od-review .wp-grid { grid-template-columns: minmax(0, 1fr); }
 }
+.od-inline.od-update { --setup-action: #a2523b; width: min(100%, 1120px); }
+.od-update .od-heading { padding-bottom: 12px; border-bottom: 1px solid var(--border); margin-bottom: 14px; }
+.od-calibration-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+.od-calibration-meta > span, .od-scope-state {
+  border-radius: 999px; padding: 2px 8px; color: #6b5b49; background: #efe7db; font-size: 11px;
+}
+.od-calibration-meta [data-state=review] { color: #8a4d2f; background: #f6e9dc; }
+.od-scope-state[data-tone=missing] { color: #943c32; background: #f9e7e3; }
+.od-scope-state[data-tone=deferred] { color: #765529; background: #f6eddb; }
+.od-scope-state[data-tone=covered] { color: #326b57; background: #e7f0e9; }
+.od-calibration, .od-calibration-review, .od-calibration-receipt { display: grid; gap: 12px; }
+.od-scope-card > header, .od-review-section > header {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 7px;
+}
+.od-scope-card h3, .od-review-section h2, .od-scope-review-list h3 { margin: 0; font-size: 15px; }
+.od-scope-cards { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 9px; }
+.od-scope-card, .od-calibration-compose, .od-review-section {
+  min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface);
+}
+.od-scope-card { display: flex; flex-direction: column; align-items: stretch; }
+.od-scope-card[data-tone=missing] { border-top-color: #c77a70; }
+.od-scope-card h3 { font-size: 14px; }
+.od-scope-card > .od-scope-columns { flex: 1; margin-bottom: 4px; }
+.od-scope-card > button { min-height: 28px; padding: 4px 8px; margin-top: 6px; font-size: 11px; align-self: flex-start; }
+.od-scope-columns { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 6px; margin-top: 7px; }
+.od-scope-columns > div { padding: 6px 8px; background: var(--bg); border-radius: 6px; min-width: 0; }
+.od-scope-columns > div + div { background: #f4ecdf; }
+.od-scope-columns :is(span,small) { display: block; color: var(--muted); font-size: 11px; }
+.od-scope-columns small { margin-top: 3px; }
+.od-scope-columns p { margin: 2px 0 0; line-height: 1.5; font-size: 12px; overflow-wrap: anywhere; white-space: pre-line; }
+.od-scope-empty { color: var(--muted); font-size: 12px; }
+.od-scope-question { border-left: 2px solid var(--setup-action); border-radius: 6px; padding: 8px 10px; background: var(--bg); margin-bottom: 8px; }
+.od-scope-question > :is(header,footer) { color: var(--muted); font-size: 11px; }
+.od-scope-question > footer { margin-top: 5px; }
+.od-scope-question .od-question > p { margin: 4px 0; font-size: 13px; font-weight: 640; }
+.od-scope-question .wp-choices { margin: 5px 0; }
+.od-scope-question .wp-choices .ob-button { padding: 4px 7px; }
+.od-scope-question .od-question > small { display: none; }
+.od-inline .od-calibration-compose > .wp-composer { padding: 0; }
+.od-calibration-compose :is(.wp-muted,.od-turn-error) { margin: 0 0 7px; }
+.od-calibration .od-sessions { padding: 6px 0; }
+.od-review-section > header { border-bottom: 1px solid var(--border); margin-bottom: 9px; padding-bottom: 7px; }
+.od-review-section h2, .od-receipt-results p { margin: 0; }
+.od-calibration-conflict {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+  gap: 8px; border: 1px solid #e1cdbc; border-radius: 8px; padding: 10px 12px; background: #f8eee3;
+}
+.od-calibration-conflict p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+.od-unresolved ul { margin: 0; padding-inline-start: 18px; }
+.od-unresolved li { margin-block: 4px; }
+.od-unresolved li > span { margin-inline-end: 8px; color: var(--muted); font-size: 12px; }
+.od-unresolved p, .od-impact-note, .od-receipt-actions p { margin: 0; }
+.od-impact-note { color: var(--muted); font-size: 12px; }
+.od-receipt-results { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }
+.od-receipt-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+
+.od-review-section > header span { color: var(--muted); font-size: 12px; }
+.od-scope-review-list { display: grid; gap: 9px; }
+.od-scope-review-list h3 { font-size: 12px; }
+.od-review-tabs { display: flex; gap: 5px; margin-bottom: 8px; }
+.od-review-tabs [aria-pressed=true] { background: var(--setup-selected); color: var(--setup-action); }
+.od-calibration-review .od-review-actions p { margin: 0 0 6px; }
+.od-calibration-review #od-review-definitions { margin-top: 8px; }
+@container (min-width: 760px) {
+  .od-scope-review-list { grid-template-columns: repeat(2,minmax(0,1fr)); }
+}
+@container (min-width: 960px) {
+  .od-scope-review-list { grid-template-columns: repeat(3,minmax(0,1fr)); }
+}
+@container (max-width: 800px) {
+  .od-scope-cards { grid-template-columns: repeat(2,minmax(0,1fr)); }
+}
+@container (max-width: 490px) {
+  .od-scope-cards, .od-receipt-results { grid-template-columns: minmax(0,1fr); }
+}
+
+.od-direct-scope .od-direct-hint { margin: 0 0 10px; color: var(--muted); font-size: 12px; }
+.od-direct-scope .od-scope-card { gap: 7px; }
+.od-direct-scope .od-scope-card header { margin-bottom: 2px; }
+.od-direct-scope .od-scope-card label:not(.wp-sr) { color: var(--muted); font-size: 12px; }
+.od-direct-scope .od-scope-card :is(input,textarea) {
+  width: 100%; margin: 0; padding: 7px 8px; border-radius: 6px; font-size: 12px; line-height: 1.5;
+}
+.od-direct-scope .od-scope-card textarea { min-height: 62px; resize: vertical; }
+.od-direct-scope .od-calibration-review [aria-label="规则差异"] p { margin: 0; }
+.od-direct-scope .od-review-actions { margin-top: 0; }
+.od-direct-scope .od-scope-review-list:has(> article:only-child) { grid-template-columns: minmax(0, 1fr); }

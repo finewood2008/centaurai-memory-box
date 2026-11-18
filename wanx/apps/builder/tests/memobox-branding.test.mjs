@@ -33,8 +33,8 @@ test('bundled template copy has a matching hash and keeps permissions and IDs',a
 
 test('personal build brands both bundled templates on Windows and POSIX paths',()=>{
  const hooks=[];memoboxBuildPlugin().setup({onLoad(options,load){hooks.push({...options,load});}});
- for(const name of ['knowledge-qa','zhike']) {
-  for(const root of ['/repo/templates/', 'D:\\repo\\templates\\']) {
+ for(const name of ['knowledge-template','zhike-template']) {
+  for(const root of ['/repo/dist/', 'D:\\repo\\dist\\']) {
    const separator=root.includes('\\')?'\\':'/';
    assert.equal(hooks.filter(hook=>hook.filter.test(`${root}${name}${separator}wanx.editable.json`)).length,1);
   }

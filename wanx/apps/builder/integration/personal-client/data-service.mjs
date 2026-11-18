@@ -198,6 +198,10 @@ export function createPersonalDataService({client, personalSpace, applications, 
       } else {
         if (['create-warehouse','retry-job','build-index'].includes(action)) input = {...input, operationId:operationId(input.operationId)};
         if (['select-files','select-space-files','upload'].includes(action) && !value.service.capabilities) value.service.capabilities = await value.service.api('/capabilities');
+        if (action === 'search' && !value.service.capabilities) {
+          try { value.service.capabilities = await value.service.api('/capabilities', {timeoutMs:5000}); }
+          catch { live(value); }
+        }
         live(value); result = await value.annotations.run(action, input, () => value.service.call(action, input));
       }
       live(value); return result;

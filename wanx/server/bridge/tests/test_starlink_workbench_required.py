@@ -22,6 +22,7 @@ CASES = [
     ("POST", "/ontologies", "create_ontology"),
     ("POST", "/ontologies/rule-a/publish", "publish_ontology"),
     ("GET", "/ontology-updates/rule-a?scope=selectable&offset=0", "read_ontology_impact"),
+    ("POST", "/ontology-updates/rule-a/start", "start_ontology_update"),
 ]
 
 
@@ -140,7 +141,7 @@ def test_required_document_detail_rejects_invalid_or_duplicate_pagination(query)
         ("GET", "/settings/models"),
         ("PUT", "/settings/status"),
         ("GET", "/ontology-suggestions/materials"),
-        ("POST", "/ontology-updates/rule-a/start"),
+        ("POST", "/ontology-updates/rule-a/retry"),
         ("GET", "/jobs?limit=201"),
         ("GET", "/jobs?offset=0&offset=1"),
         ("GET", "/documents?workspace_id=foreign"),
@@ -164,7 +165,7 @@ def test_required_workbench_read_grant_never_authorizes_manual_writes(team):
     if team:
         ctx.update(team={"roleId": "member", "permissions": []}, ownershipEpoch=1)
     assert selected(ctx, "/ontologies", "GET", team=team)[0]["action"] == "read"
-    for path in ["/ontologies", "/ontologies/rule-a/publish"]:
+    for path in ["/ontologies", "/ontologies/rule-a/publish", "/ontology-updates/rule-a/start"]:
         with pytest.raises(DataProtocolError):
             selected(ctx, path, "POST", team=team)
 
@@ -199,6 +200,26 @@ async def test_required_workbench_checks_business_operation_before_forwarding(bo
     else:
         with pytest.raises(DataProtocolError):
             await work
+
+
+@pytest.mark.asyncio
+async def test_required_batch_update_binds_confirmation_and_preview_tokens():
+    route, observation = selected(context("semantica"), "/ontology-updates/rule-a/start", "POST")
+    selection = {"document_id": "sample-doc", "preview_token": "a" * 64}
+    body = {"_native_operation_id": "sample-batch", "operation_id": "sample-batch",
+            "confirmed": True, "selections": [selection]}
+    envelopes = [body, {**body, "confirmed": False}, {**body, "operation_id": "different"},
+                 {**body, "selections": [selection, selection]},
+                 {**body, "selections": [{**selection, "preview_token": "unverified"}]}]
+    for envelope in envelopes:
+        raw = json.dumps(envelope).encode()
+        staging = SimpleNamespace(length=len(raw), read=AsyncMock(return_value=raw))
+        work = validate_staged(None, {"route": route, "observation": observation}, staging)
+        if envelope == body:
+            await work
+        else:
+            with pytest.raises(DataProtocolError):
+                await work
 
 
 @pytest.mark.asyncio

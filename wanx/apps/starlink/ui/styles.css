@@ -942,32 +942,6 @@ p {
   align-items: center;
 }
 .page-kicker:empty { display: none; }
-.ontology-actions { position: relative; z-index: 8; }
-.ontology-actions summary { cursor: pointer; list-style: none; white-space: nowrap; }
-.ontology-actions summary::-webkit-details-marker { display: none; }
-.ontology-actions summary svg { transform: rotate(90deg); }
-.ontology-actions:not([open]) > .ontology-actions-list { display: none; }
-.ontology-actions-list {
-  position: absolute;
-  inset: calc(100% + 5px) 0 auto auto;
-  display: grid;
-  min-width: 140px;
-  padding: 5px;
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  background: var(--surface);
-  box-shadow: 0 8px 20px #4030201a;
-}
-.ontology-actions-list button {
-  padding: 8px 9px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  text-align: start;
-  color: var(--ink);
-  white-space: nowrap;
-}
-.ontology-actions-list button:is(:hover, [aria-current="page"]) { background: var(--bg); }
 .heading-actions:has(#page-batch-import:not([hidden])) {
   flex-wrap: wrap;
   justify-content: flex-end;
@@ -1414,40 +1388,7 @@ mark {
   gap: 10px;
   flex-wrap: wrap;
 }
-.search-home {
-  max-width: 850px;
-  margin: 0 auto;
-}
-.query-box {
-  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
-  padding: 17px;
-  border-radius: 14px;
-  background: var(--surface);
-  box-shadow: 0 3px 15px color-mix(in srgb, var(--fg) 3%, transparent);
-}
-.query-box textarea {
-  width: 100%;
-  border: 0;
-  resize: none;
-  min-height: 58px;
-  background: transparent;
-  outline: none;
-  font-size: 13px;
-  line-height: 1.7;
-}
-.query-bottom {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  color: var(--muted);
-  font-size: 10px;
-  margin-top: 10px;
-}
-.query-bottom .icon {
-  width: 13px;
-  height: 13px;
-}
+.annotation-search-match { overflow-wrap: anywhere; }
 .example-queries {
   display: flex;
   gap: 7px;
@@ -1461,13 +1402,6 @@ mark {
   border: 1px solid var(--border);
   border-radius: 99px;
 }
-.results-summary {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin: 23px 0 12px;
-  font-size: 12px;
-}
 .result-card {
   padding: 20px;
   border: 1px solid var(--border);
@@ -1475,31 +1409,12 @@ mark {
   background: var(--surface);
   margin-bottom: 12px;
 }
-.result-meta {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 10px;
-  color: var(--muted);
-  gap: 10px;
-}
 .result-card h3 {
   margin: 12px 0 9px;
 }
 .result-card p {
   font-size: 12px;
   line-height: 1.95;
-}
-.result-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-top: 15px;
-  gap: 10px;
-}
-.result-channels {
-  display: flex;
-  gap: 5px;
 }
 .settings-grid {
   display: grid;
@@ -2062,16 +1977,6 @@ dialog::backdrop {
     border-left: 0;
     border-top: 1px solid var(--border);
   }
-  .query-bottom > span {
-    max-width: 170px;
-    font-size: 9px;
-  }
-  .result-meta {
-    align-items: start;
-  }
-  .result-channels .pill {
-    font-size: 9px;
-  }
   .task-row {
     padding: 16px 14px;
     gap: 10px;
@@ -2141,9 +2046,6 @@ dialog::backdrop {
 }
 .connection-notice button {
   white-space: nowrap;
-}
-.search-index-state {
-  margin: 13px 0 24px;
 }
 .source-segment {
   padding: 15px 0;
@@ -3544,8 +3446,6 @@ dialog.warehouse-picker {
 #import-batch-status { margin: 0 auto 0 0; }
 #import-dialog [hidden] { display: none !important; }
 .import-context { margin: 12px 0 18px; padding: 10px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; font-size: 12px; overflow-wrap: anywhere; }
-.import-tabs { display: flex; gap: 8px; margin-bottom: 14px; }
-.import-tabs .active { background: var(--fg); color: var(--surface); border-color: var(--fg); }
 #space-browser { border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
 .space-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
 #space-breadcrumbs { display: flex; flex-wrap: wrap; gap: 8px; flex: 1; min-width: 0; font-size: 12px; }

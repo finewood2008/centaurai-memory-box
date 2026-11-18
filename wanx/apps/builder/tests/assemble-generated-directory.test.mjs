@@ -28,6 +28,8 @@ for (const edition of ['personal', 'team']) {
     const runtime = edition === 'personal' ? 'workshop/runtime' : 'applications/studio-runtime';
     await put(source, 'release/wanx-studio-1/ui/assets/old.js', 'old');
     await put(source, 'dist/runtime/old.mjs', 'old-runtime');
+    await put(source, 'dist/knowledge-template/wanx.editable.json', 'knowledge template');
+    await put(source, 'dist/zhike-template/wanx.editable.json', 'zhike template');
     await put(client, 'user-data/saved.json', 'business-data');
     await put(client, `${path.dirname(workbench)}/embedded-preload.cjs`, 'sibling');
     await assembleWorkbench(source, client, edition, '1');
@@ -37,10 +39,15 @@ for (const edition of ['personal', 'team']) {
     await put(source, 'release/wanx-studio-2/ui/assets/new.js', 'new');
     await put(source, 'dist/runtime/new.mjs', 'new-runtime');
     await assembleWorkbench(source, client, edition, '2');
-    assert.deepEqual(await files(path.join(client, workbench)), await files(path.join(source, 'release/wanx-studio-2')));
+    const expected = await files(path.join(source, 'release/wanx-studio-2'));
+    if (edition === 'team') {
+      expected['templates/knowledge-qa/wanx.editable.json'] = 'knowledge template';
+      expected['templates/zhike/wanx.editable.json'] = 'zhike template';
+    }
+    assert.deepEqual(await files(path.join(client, workbench)), expected);
     assert.deepEqual(await files(path.join(client, runtime)), await files(path.join(source, 'dist/runtime')));
     await assembleWorkbench(source, client, edition, '2');
-    assert.deepEqual(await files(path.join(client, workbench)), await files(path.join(source, 'release/wanx-studio-2')));
+    assert.deepEqual(await files(path.join(client, workbench)), expected);
     assert.equal(await readFile(path.join(client, 'user-data/saved.json'), 'utf8'), 'business-data');
     assert.equal(await readFile(path.join(client, path.dirname(workbench), 'embedded-preload.cjs'), 'utf8'), 'sibling');
   });
@@ -53,5 +60,10 @@ for (const edition of ['personal', 'team']) {
     const before = await files(client);
     await assert.rejects(assembleWorkbench(source, client, edition, 'missing'), {code:'ENOENT'});
     assert.deepEqual(await files(client), before);
+    if (edition === 'team') {
+      await put(source, 'release/wanx-studio-1/ui/index.html', 'new');
+      await assert.rejects(assembleWorkbench(source, client, edition, '1'), {code:'ENOENT'});
+      assert.deepEqual(await files(client), before);
+    }
   });
 }

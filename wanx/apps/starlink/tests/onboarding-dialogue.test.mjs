@@ -99,3 +99,37 @@ test('a failed preflight read leaves the name editable without a pending creatio
   m.setName('修改后的仓');m.call=original;await m.create();
   assert.equal(f.db.warehouses[0].name,'修改后的仓');
 });
+
+test('range calibration can publish only with the current ontology and no rule changes', async () => {
+  const f=fixture(),m=await ready(f);
+  m.saved.setupMode='update';
+  await m.preview();
+  assert.equal(m.state.page,'review');
+  assert.equal(m.scopePublicationAllowed,false);
+  m.state.confirmed=true;
+  await m.publish();
+  assert.equal(m.state.errorCode,'MODELING_SCOPE_RULE_CHANGE');
+  assert.equal(f.db.publishes,0);
+
+  const draft=f.db.snapshots[m.saved.conversationId].draft;
+  draft.changes=[];
+  await m.preview();
+  assert.equal(m.scopePublicationAllowed,false,'an empty diff cannot bypass the schema comparison');
+  m.saved.pending={
+    action:'conversation-onboarding-publish',
+    input:{...m.ids(),operationId:'old-confirm',previewId:m.saved.preview.resource_id,
+      previewDigest:m.saved.preview.preview_digest,confirmed:true},
+  };
+  await m.recover();
+  assert.equal(m.saved.pending,null);
+  assert.equal(f.db.publishes,0);
+
+  const {items:[base]}=await f.call('conversation-ontologies');
+  draft.schema=base.schema;
+  await m.preview();
+  assert.equal(m.scopePublicationAllowed,true);
+  m.state.confirmed=true;
+  await m.publish();
+  assert.equal(f.db.publishes,1);
+  assert.equal(f.db.current,base.id);
+});

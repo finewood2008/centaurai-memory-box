@@ -6,7 +6,7 @@ on:
       version:
         description: 'Preview version matching the client base version'
         required: true
-        default: 1.5.1-windows-preview.1
+        default: 1.5.2-windows-preview.1
         type: string
 
 permissions:
@@ -132,6 +132,10 @@ jobs:
         run: |
           node --test tests/space-annotation-workbench-ui.test.mjs tests/space-annotations-batch.test.mjs tests/annotation-workbench-integration.test.mjs tests/space-annotations-preload.test.mjs tests/codex-context-config.test.mjs tests/codex-context-repair.test.mjs tests/my-ai-scoped-access.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Client contract validation failed' }
+      - name: Validate Starlink reading and warehouse scope
+        run: |
+          node --test wanx/apps/starlink/tests/onboarding-scope-editor.test.mjs wanx/apps/starlink/tests/material-import.test.mjs wanx/apps/starlink/tests/graph-exploration-tools.test.mjs wanx/apps/personal-client/tests/starlink-workbench-gateway.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Starlink validation failed' }
       - name: Validate mixed local collection and per-device backups
         working-directory: wanx/apps/personal-client
         run: |

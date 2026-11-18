@@ -167,6 +167,8 @@ test("formal Windows build pins certificate, publisher, current-user NSIS scope 
   assert.equal(config.extraMetadata.wanxBuild.installationScope, "per-user");
   assert.ok(config.files.includes("updates/**"));
   assert.ok(config.extraResources.some(resource => resource.to === "security/verify-signed.ps1"));
+  assert.deepEqual(config.extraResources.filter(resource => resource.to.startsWith("local-memory")).map(resource => resource.to),
+    ["local-memory", "local-memory/node_modules"]);
   assert.equal(config.win.signtoolOptions.certificatePassword, undefined, "secrets are provided only through the signing environment");
   assert.throws(() => windowsReleaseConfiguration({ ...input, certificateSha1: undefined }), /SIGNING_CONFIGURATION_REQUIRED/);
   assert.throws(() => windowsReleaseConfiguration({ ...input, certificateFile: "also.pfx" }), /SIGNING_CONFIGURATION_REQUIRED/);
@@ -198,6 +200,9 @@ test("formal macOS builds require trust before invoking build or notarization to
 });
 
 for (const version of [undefined, "2.0.0"]) for (const arch of ["arm64", "x64"]) test(`formal macOS ${arch} (${version ?? "package.json"}) verifies the actual builder layout and notarizes the update ZIP`, { skip: process.platform !== "darwin" }, async t => {
+  const hostArch = Object.getOwnPropertyDescriptor(process, "arch");
+  Object.defineProperty(process, "arch", { ...hostArch, value: arch });
+  t.after(() => Object.defineProperty(process, "arch", hostArch));
   const directory = await mkdtemp(path.join(os.tmpdir(), "wanx-formal-package-fixture-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const out = path.join(directory, "out"), trustFile = path.join(directory, "trust.json");
@@ -209,6 +214,7 @@ for (const version of [undefined, "2.0.0"]) for (const arch of ["arm64", "x64"])
   const sourceManifest = await readFile(new URL("../package.json", import.meta.url), "utf8");
   const app = path.join(out, arch === "x64" ? "mac" : "mac-arm64", `${pkg.build.productName}.app`);
   const calls = []; let packed;
+  const memoryResources = [{ from: path.join(directory, "staged-memory"), to: "local-memory" }];
   t.mock.method(require("@electron/asar"), "extractFile", () => Buffer.from(JSON.stringify(packed)));
   t.mock.method(childProcess, "execFileSync", (command, args) => {
     calls.push([command, ...args]);
@@ -228,6 +234,7 @@ for (const version of [undefined, "2.0.0"]) for (const arch of ["arm64", "x64"])
       const config = JSON.parse(fs.readFileSync(args[args.indexOf("--config") + 1], "utf8"));
       assert.equal(config.forceCodeSigning, true);
       assert.equal(config.mac.defaultArch, "x64");
+      assert.ok(config.extraResources.some(resource => resource.from === memoryResources[0].from && resource.to === "local-memory"));
       packed = config.extraMetadata;
       fs.mkdirSync(path.join(app, "Contents/MacOS"), { recursive: true });
       fs.mkdirSync(path.join(app, "Contents/Resources/network"), { recursive: true });
@@ -250,7 +257,23 @@ for (const version of [undefined, "2.0.0"]) for (const arch of ["arm64", "x64"])
   });
   syncBuiltinESMExports();
   t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
-  const report = await packageClient({ version, arch, out, trustFile, notaryProfile: "fixture" });
+  const report = await packageClient({ version, arch, out, trustFile, notaryProfile: "fixture" }, {
+    prepareMemory: async target => {
+      assert.equal(target.arch, arch);
+      assert.equal(target.platform, "darwin");
+      assert.ok(calls.some(call => call[0] === "npm" && call[2] === "build:studio"));
+      return { extraResources: memoryResources };
+    },
+    verifyMemory: async ({ resourcesPath, executable, platform, arch: verifiedArch }) => {
+      assert.equal(resourcesPath, path.join(app, "Contents/Resources"));
+      assert.equal(executable, path.join(app, "Contents/MacOS/WANX"));
+      assert.equal(verifiedArch, arch);
+      assert.equal(platform, "darwin");
+      assert.ok(calls.some(call => call[0] === "codesign" && call[1] === "--verify"));
+      return { ok: true };
+    },
+  });
+  assert.deepEqual(report.memoryRuntime, { ok: true });
   assert.equal(report.version, expectedVersion);
   assert.equal(packed.version, expectedVersion);
   assert.equal(JSON.parse(await readFile(path.join(out, "verification-client.json"), "utf8")).version, expectedVersion);

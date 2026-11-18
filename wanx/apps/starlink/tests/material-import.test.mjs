@@ -5,19 +5,65 @@ import {materialIndexState,materialImportHTML} from '../ui/material-import.mjs';
 import {materialAutomaticCard,materialAgentTools,materialRecoveryHTML} from '../ui/material-agent.mjs';
 const index=(version='v')=>({embedding_configured:true,compatible:true,fresh:true,document_coverage:[{document_id:'d',version_id:version,indexed:true}],items:[]});
 function fixture(store=new Map()){
-  let version='v',failIndex=null,failDocument=null,indexReady=true,textReply=null,workflowExtra={};const calls=[];
+  let version='v',failIndex=null,failDocument=null,indexReady=true,textReply=null,workflowExtra={},knowledge=null,sourcePages=null;const calls=[];
   const f=new ConversationFlow({warehouseId:'w',identity:{boxId:'b',user:{id:1}},storage:{getItem:k=>store.get(k),setItem:(k,v)=>store.set(k,v)},call:async(action,input)=>{
     calls.push({action,input});
     if(action==='conversation-list')return {items:[],has_more:false};
     if(action==='conversation-ontologies')return {items:[]};
-    if(action==='document'){if(failDocument===input.id)throw Object.assign(Error('offline'),{status:503});return {document:{id:input.id,segment_count:1},version:{id:version},segments:[{id:'s',text:'完整正文 <实体>'}]};}
+    if(action==='document'){if(failDocument===input.id)throw Object.assign(Error('offline'),{status:503});return {document:{id:input.id,segment_count:sourcePages?.length||1},version:{id:version},segments:sourcePages?.slice(input.offset,input.offset+1)||[{id:'s',text:'完整正文 <实体>'}]};}
     if(action==='conversation-material-workflow')return {document_id:input.documentId,document:{id:input.documentId,status:'ready',original_name:'资料.txt'},document_version_id:version,tasks:[],conversations:[],actions:{start_dialogue:{allowed:true},prepare_automatic:{allowed:true}},label:'正文已解析',...workflowExtra};
+    if(action==='conversation-published-run')return knowledge;
     if(action==='workbench-request'){if(input.url.includes('/text?'))return textReply;if(failIndex)throw failIndex;return {...index(version),fresh:indexReady};}
     throw Error(action);
   }});
   f.state.loaded=true;f.state.materialPage='import';f.state.warehouseMaterials=[{id:'d'},{id:'second'}];
-  return {f,calls,store,changeVersion:v=>version=v,failIndex:e=>failIndex=e,failDocument:id=>failDocument=id,indexReady:value=>indexReady=value,textReply:value=>textReply=value,workflow:value=>workflowExtra=value};
+  return {f,calls,store,changeVersion:v=>version=v,failIndex:e=>failIndex=e,failDocument:id=>failDocument=id,indexReady:value=>indexReady=value,textReply:value=>textReply=value,workflow:value=>workflowExtra=value,knowledge:value=>knowledge=value,sourcePages:value=>sourcePages=value};
 }
+
+test('the reader hides the knowledge column by default and reads the current publication on demand',async()=>{
+  const h=fixture(),f=h.f;
+  h.workflow({stage:'published',publication:{id:'run',status:'published',document_version_id:'v'}});
+  h.knowledge({run:{id:'run',status:'published',document_id:'d',document_version_id:'v'},candidates:[
+    {kind:'entity',status:'published',payload:{name:'已发布条目'}},{kind:'entity',status:'rejected',payload:{name:'被拒绝的条目'}},
+  ]});
+  await f.importer.first();
+  let html=materialImportHTML(f,'');
+  assert.doesNotMatch(html,/aria-label="知识栏"|data-cv-disclosure="reader-progress-quiet" open/);
+  assert.equal(h.calls.some(c=>c.action==='conversation-published-run'),false);
+  await f.importer.toggleKnowledge();
+  html=materialImportHTML(f,'');
+  assert.match(html,/aria-label="知识栏"[\s\S]*已发布条目/);
+  assert.doesNotMatch(html,/被拒绝的条目/);
+  await f.importer.select('second');
+  assert.doesNotMatch(materialImportHTML(f,''),/aria-label="知识栏"|已发布条目/);
+});
+
+test('pending extraction opens a read-only comparison and follows a version-bound relationship citation across source pages',async()=>{
+  const h=fixture(),f=h.f;
+  h.workflow({stage:'awaiting_review',processing_mode:'automatic',extraction_review:{run_id:'current'}});
+  h.sourcePages([{id:'s1',text:'# 标题'},{id:'s2',text:'前文\n公司创建了 <小组>。\n后文'}]);
+  h.knowledge({run:{id:'current',status:'review',document_id:'d',document_version_id:'v'},candidates:[
+    {kind:'entity',candidate_key:'a',payload:{name:'公司'}},{kind:'entity',candidate_key:'b',payload:{name:'小组'}},
+    {kind:'relation',payload:{type:'创建',source_candidate_key:'a',target_candidate_key:'b'},evidence:[{segment_id:'s2',excerpt:'公司创建了 <小组>。'}]},
+    {kind:'relation',payload:{type:'过期链接'},evidence:[{document_version_id:'old',segment_id:'s2',excerpt:'已过期引文'}]},
+  ]});
+  await f.importer.first();f.importer.filterKnowledge('relation');
+  const html=materialImportHTML(f,'');
+  assert.match(html,/材料正文[\s\S]*aria-label="知识栏"[\s\S]*抽取结果[\s\S]*开始核对/);
+  assert.match(html,/公司 <span aria-hidden="true">→<\/span> 小组/);
+  assert.doesNotMatch(html,/已过期引文/);
+  await f.importer.locateEvidence(2);
+  assert.equal(f.importer.view.offset,1);
+  assert.match(materialImportHTML(f,''),/<mark>公司创建了 &lt;小组&gt;。<\/mark>/);
+  assert.ok(h.calls.every(c=>c.action!=='workbench-request'||c.input.method==='GET'));
+  assert.ok(h.calls.every(c=>!/claim|confirm|publish$/.test(c.action)));
+  f.importer.lastRead=0;await f.importer.tick();
+  assert.equal(h.calls.filter(c=>c.action==='conversation-published-run').length,1);
+  h.changeVersion('v2');f.importer.lastRead=0;await f.importer.tick();
+  const newer=materialImportHTML(f,'');
+  assert.doesNotMatch(newer,/<mark>|公司 <span aria-hidden/);
+  assert.match(newer,/知识条目暂时无法读取/);
+});
 
 test('materials page has no dialogue adjustment action in ready, active, review, published or recovery states',async()=>{
   const h=fixture(),f=h.f;await f.importer.first();await f.importer.confirm();

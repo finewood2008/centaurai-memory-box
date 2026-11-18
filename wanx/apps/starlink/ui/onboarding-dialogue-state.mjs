@@ -1,19 +1,30 @@
 import {identityKey,onboardingRequest} from '../shared/onboarding-contract.mjs';
 import {conversationRequest} from '../shared/conversation-contract.mjs';
 import {validateQuestionActions,questionActionsFromReceipt} from '../shared/onboarding-dialogue-contract.mjs';
-import {nextDialogueQuestion} from './onboarding-dialogue-questions.mjs';
+import {nextDialogueQuestion,nextScopeQuestion} from './onboarding-dialogue-questions.mjs';
 const clone=structuredClone;
+function canonicalSchema(value){
+  if(Array.isArray(value))return value.map(canonicalSchema);
+  if(value&&typeof value==='object')return Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonicalSchema(value[key])]));
+  return value;
+}
 function restoreInputMode(value){
-  value.inputMode??=value.input?'free':'answer';value.inputQuestionId??=null;
+  value.inputMode??=value.input?'free':'answer';
+  value.inputQuestionId??=null;
+  value.deferredQuestionId??=null;
   if(!['answer','free'].includes(value.inputMode))throw Error();
-  if(value.inputQuestionId!==null)validateQuestionActions([{question_id:value.inputQuestionId,action:'answer',answer:''}],{draft:true});
+  for(const id of [value.inputQuestionId,value.deferredQuestionId]){
+    if(id!==null)validateQuestionActions([{question_id:id,action:'answer',answer:''}],{draft:true});
+  }
 }
 const fail=(code,status=0)=>Object.assign(Error(code),{code,status});
+export const scopeOnlyInstruction = '本轮仅校准业务范围，原样保留现行本体的类型、关系与属性。';
 export const onboardingUnavailable = (code, status) => code === 'SEMANTICA_UPGRADE_REQUIRED' ||
   ['SEMANTICA_RESOURCE_NOT_FOUND','SEMANTICA_OPERATION_NOT_ALLOWED'].includes(code) && (status === undefined || status === 404);
 const messages={MODELING_ONBOARDING_BUSY:'本轮正在生成，请读取原轮次进度。',MODELING_ONBOARDING_STALE:'本体、用途或草稿已变化。已保留历史，请读取最新状态；必要时基于当前规则开始新的建仓对话。',MODELING_ONBOARDING_NOT_READY:'请先明确服务对象、用途，并形成至少一个实体类型。',MODELING_ONBOARDING_TIMEOUT:'本轮生成超时，原草稿保留。请先读取进度，再决定是否重试。',MODELING_ONBOARDING_INVALID_OUTPUT:'模型结果不完整或结构无效，原草稿保留。',MODELING_ONBOARDING_MODEL_FAILED:'本轮生成失败，原草稿保留。请检查处理模型后重试。',MODELING_CONTEXT_BUDGET:'当前对话或本体超出模型预算。请精简要求、调整模型，或使用已有本体编辑流程。',MODELING_OPERATION_CONFLICT:'操作号与原请求不一致，请恢复原请求。',MODELING_SCENARIO_MISMATCH:'会话类型不匹配，请重新选择建仓会话。',MODELING_INVALID_REQUEST:'请检查输入长度、名称和请求内容。',MODELING_LOCAL_SAVE_FAILED:'本机恢复记录无法保存。请求未继续提交，请检查可用空间或存储权限。',MODELING_LOCAL_RECORD_INVALID:'恢复记录无法读取，请保留记录并检查客户端版本。',MODELING_REQUEST_PENDING:'上次请求结果尚未确认，请先恢复原请求。',MODELING_CONFIRMATION_REQUIRED:'请先核对最新的完整预览并勾选发布确认。',MODELING_RESOURCE_NOT_FOUND:'知识仓或会话不存在，或当前账号无权访问。',HOST_SESSION_EXPIRED:'账号会话已失效，请重新登录。',WAREHOUSE_NAME_CONFLICT:'已有同名知识仓，请修改名称。',MODELING_REVIEW_REQUIRED:'内容已更新，请重新核对后提交。',SEMANTICA_UPGRADE_REQUIRED:'当前 Bridge 尚未提供建仓对话接口，请更新并重启服务。',MODELING_PUBLICATION_REPLACED:'本次规则已发布，随后已有新版生效。进入数据仓可查看当前规则。',MODELING_PUBLISHED_ENTRY_FAILED:'规则已发布，暂时无法打开工作区。',MODELING_HOST_CREATION_REQUIRED:'请从万象个人空间打开星图后继续。'};
 export function dialogueError(error) {
   const code = error?.code || error?.error_code || '';
+  if (code === 'MODELING_SCOPE_RULE_CHANGE') return '范围向导仅更新业务范围。请移除草稿中的规则变更，或前往规则总览手动编辑本体。';
   if (code === 'MODELING_UNSENT_ANSWER') return '还有尚未发送的回答或修改要求，请先发送，或清空输入后核对现有范围。';
   if (code === 'MODEL_BILLING_REQUIRED') return '云端模型因计费问题无法调用。请在「模型设置」选择可用的模型后重试。草稿已保留。';
   if (code === 'MODELING_CONTEXT_BUDGET') {
@@ -34,7 +45,7 @@ export class OnboardingDialogue {
   constructor({call,storage,identity,onChange=()=>{},onEnter=async()=>{},uuid=()=>crypto.randomUUID()}){
     this.call=call;this.storage=storage;this.onChange=onChange;this.onEnter=onEnter;this.uuid=uuid;this.live=true;this.readSequence=0;
     this.key='starlink.onboarding-dialogue.v1.'+identityKey(identity);
-    this.saved={version:1,warehouse:null,conversationId:null,creation:null,pending:null,preview:null,input:'',inputMode:'answer',inputQuestionId:null,name:'',questionActions:[],openingAttempts:[],activeTurn:null,composers:{},warehouseDrafts:{},setupMode:null,publication:null,entryPending:false};
+    this.saved={version:1,warehouse:null,conversationId:null,creation:null,pending:null,preview:null,input:'',inputMode:'answer',inputQuestionId:null,deferredQuestionId:null,name:'',questionActions:[],openingAttempts:[],activeTurn:null,composers:{},warehouseDrafts:{},setupMode:null,publication:null,entryPending:false};
     this.state={loaded:false,busy:false,error:'',errorCode:'',page:'name',snapshot:null,turns:[],sessions:[],tab:'graph',confirmed:false,pollError:false};
   }
   check(){if(!this.live)throw fail('HOST_SESSION_EXPIRED');}
@@ -90,9 +101,18 @@ export class OnboardingDialogue {
   get questions(){return this.state.snapshot?.draft.question_states||this.state.snapshot?.draft.questions||[];}
   get unsent(){return !!this.saved.input.trim()||!!this.saved.questionActions.length;}
   get editable(){return this.state.loaded&&!!this.saved.conversationId&&this.state.snapshot?.conversation_id===this.saved.conversationId&&!this.saved.pending&&!this.state.busy&&!this.generating&&!['published','stale'].includes(this.state.snapshot.status);}
-  get inputQuestion(){if(this.saved.inputMode==='free')return null;return this.saved.inputQuestionId?this.questions.find(q=>q.question_id===this.saved.inputQuestionId)||{question_id:this.saved.inputQuestionId,text:'原问题已变化，请重新选择回答对象'}:nextDialogueQuestion(this.state.snapshot?.draft);}
-  rememberComposer(){if(this.saved.warehouse&&this.saved.conversationId)this.saved.composers[this.saved.warehouse.id+':'+this.saved.conversationId]={input:this.saved.input,inputMode:this.saved.inputMode,inputQuestionId:this.saved.inputQuestionId,questionActions:clone(this.saved.questionActions)};}
-  restoreComposer(){const c=this.saved.composers[this.saved.warehouse.id+':'+this.saved.conversationId];this.saved.input=c?.input||'';this.saved.inputMode=c?.inputMode||'answer';this.saved.inputQuestionId=c?.inputQuestionId||null;this.saved.questionActions=clone(c?.questionActions||[]);}
+  get canPreview(){return this.editable&&this.state.snapshot?.can_preview===true;}
+  get scopePublicationAllowed(){
+    const {preview}=this.saved,{baseRule,snapshot}=this.state;
+    return !!preview&&Array.isArray(preview.changes)&&preview.changes.length===0&&
+      !!baseRule?.schema&&baseRule.id===snapshot?.draft.base_ontology_id&&
+      baseRule.id===preview.base_ontology_id&&preview.draft_digest===snapshot.draft_digest&&
+      JSON.stringify(canonicalSchema(preview.schema))===JSON.stringify(canonicalSchema(baseRule.schema));
+  }
+  get currentQuestion(){return (this.saved.setupMode==='update'?nextScopeQuestion:nextDialogueQuestion)(this.state.snapshot?.draft);}
+  get inputQuestion(){if(this.saved.inputMode==='free')return null;return this.saved.inputQuestionId?this.questions.find(q=>q.question_id===this.saved.inputQuestionId)||{question_id:this.saved.inputQuestionId,text:'原问题已变化，请重新选择回答对象'}:this.currentQuestion;}
+  rememberComposer(){if(this.saved.warehouse&&this.saved.conversationId)this.saved.composers[this.saved.warehouse.id+':'+this.saved.conversationId]={input:this.saved.input,inputMode:this.saved.inputMode,inputQuestionId:this.saved.inputQuestionId,deferredQuestionId:this.saved.deferredQuestionId,questionActions:clone(this.saved.questionActions)};}
+  restoreComposer(){const c=this.saved.composers[this.saved.warehouse.id+':'+this.saved.conversationId];this.saved.input=c?.input||'';this.saved.inputMode=c?.inputMode||'answer';this.saved.inputQuestionId=c?.inputQuestionId||null;this.saved.deferredQuestionId=c?.deferredQuestionId||null;this.saved.questionActions=clone(c?.questionActions||[]);}
   async listSessions(){let offset=0,items=[];
     for(let page=0;page<200;page++){const r=await this.read('conversation-list',{warehouseId:this.saved.warehouse.id,offset,limit:50});if(!Array.isArray(r.items))throw fail('SEMANTICA_INVALID_RESPONSE');items.push(...r.items.filter(c=>c.scenario==='onboarding'));
       if(!r.has_more){this.state.sessions=items;return items;}if(!Number.isSafeInteger(r.next_offset)||r.next_offset<=offset)throw fail('SEMANTICA_INVALID_RESPONSE');offset=r.next_offset;}
@@ -119,7 +139,7 @@ export class OnboardingDialogue {
     if((warehouse&&warehouse.id!==this.saved.warehouse?.id||fresh)&&(this.saved.pending||this.saved.creation))throw fail('MODELING_REQUEST_PENDING');
     if(fresh&&this.saved.warehouse){
       this.rememberWarehouseDraft();
-      Object.assign(this.saved,{warehouse:null,conversationId:null,preview:null,name:'',purpose:'',activeTurn:null,setupMode:null,publication:null,entryPending:false,input:'',inputMode:'answer',inputQuestionId:null,questionActions:[]});
+      Object.assign(this.saved,{warehouse:null,conversationId:null,preview:null,name:'',purpose:'',activeTurn:null,setupMode:null,publication:null,entryPending:false,input:'',inputMode:'answer',inputQuestionId:null,deferredQuestionId:null,questionActions:[]});
       this.persist();
     }
     if(fresh&&template){if(typeof template.name!=='string'||typeof template.purpose!=='string'||[...template.purpose].length>16000)throw fail('MODELING_INVALID_REQUEST');this.saved.name=template.name;this.saved.purpose=template.purpose;this.persist();}
@@ -131,6 +151,9 @@ export class OnboardingDialogue {
       this.persist();
     }
     await this.authorize();this.state.loaded=true;
+    if(startUpdate&&warehouse&&warehouse.id===this.saved.warehouse?.id&&this.saved.setupMode!=='update'&&!this.saved.pending&&!this.saved.entryPending){
+      this.saved.setupMode='update';this.persist();
+    }
     if(this.saved.warehouse){this.state.page='chat';const sessions=await this.listSessions();
       if(this.saved.conversationId&&!sessions.some(c=>c.id===this.saved.conversationId))throw fail('MODELING_RESOURCE_NOT_FOUND',404);
       this.restoreSession(sessions);
@@ -146,7 +169,9 @@ export class OnboardingDialogue {
     this.state.loaded=true;await this.maybeStart();
   });}
   async createSession(){await this.write('conversation-create',{warehouseId:this.saved.warehouse.id,operationId:this.uuid(),scenario:'onboarding'});await this.listSessions();}
-  async write(action,input){if(this.saved.pending&&this.saved.pending.action!==action)throw fail('MODELING_REQUEST_PENDING');
+  async write(action,input){
+    if(action==='conversation-onboarding-publish'&&this.saved.setupMode==='update'&&!this.scopePublicationAllowed)throw fail('MODELING_SCOPE_RULE_CHANGE');
+    if(this.saved.pending&&this.saved.pending.action!==action)throw fail('MODELING_REQUEST_PENDING');
     if(!this.saved.pending){this.validate(action,input);this.saved.pending={action,input:clone(input),...(action==='conversation-onboarding-send'?{composer:{input:this.saved.input,questionActions:clone(this.saved.questionActions)}}:{})};}
     this.persist();const p=this.saved.pending;this.inFlight=p.action;this.emit();let result;
     try{result=await this.read(p.action,p.input);}catch(e){
@@ -216,6 +241,7 @@ export class OnboardingDialogue {
     // Only the first visit to a pristine server conversation may start a model.
     // Refresh, failed attempts, unknown outcomes and unfinished user input never do.
     if(!this.state.loaded||!s?.can_start||this.generating||this.saved.pending||this.unsent||this.saved.openingAttempts.includes(this.saved.conversationId)||s.turns.items.length||s.turns.has_more)return;
+    if(this.saved.setupMode==='update'&&!this.currentQuestion)return;
     await this.startCurrent();
   }
   start(){return this.run(()=>this.startCurrent());}
@@ -233,10 +259,41 @@ export class OnboardingDialogue {
     if(sequence!==this.readSequence||ids.conversationId!==this.saved.conversationId)return;
     if(!validSnapshot(r)||r.conversation_id!==ids.conversationId)throw fail('SEMANTICA_INVALID_RESPONSE');
     this.state.snapshot=r;this.state.turns=offset?[...this.state.turns.filter(t=>!r.turns.items.some(n=>n.resource_id===t.resource_id)),...r.turns.items]:r.turns.items;
+    const baseId=r.draft.base_ontology_id;
+    if(this.saved.setupMode==='update'&&baseId&&(this.state.baseRule?.id!==baseId||!this.state.baseRule?.schema||r.status==='stale'||r.status==='published')){
+      this.state.baseRule={id:baseId,version:null};
+      this.state.currentRuleVersion=null;
+      try{
+        const versions=await this.read('conversation-ontologies',{warehouseId:ids.warehouseId});
+        if(sequence===this.readSequence&&ids.conversationId===this.saved.conversationId){
+          const base=versions.items?.find(item=>item.id===baseId);
+          const version=base?.version_number;
+          if(base?.schema)this.state.baseRule.schema=base.schema;
+          const active=versions.items?.find(item=>item.status==='published');
+          if(Number.isSafeInteger(version))this.state.baseRule.version=version;
+          if(Number.isSafeInteger(active?.version_number))this.state.currentRuleVersion=active.version_number;
+        }
+      }catch(error){
+        if([401,403].includes(error.status)||error.code==='HOST_SESSION_EXPIRED')throw error;
+        // Older boxes may not return version metadata for historical drafts.
+      }
+      if(sequence!==this.readSequence||ids.conversationId!==this.saved.conversationId)return;
+    }
     // A known generating receipt must survive a failed follow-up GET. Clear it
     // only when an authoritative snapshot says idle or contains its final turn.
     if(this.saved.activeTurn&&('active_turn_id' in r&&!r.active_turn_id||r.turns.items.some(t=>t.resource_id===this.saved.activeTurn.turnId&&t.status!=='generating'))){this.saved.activeTurn=null;this.persist();}
-    if(this.saved.preview&&(this.saved.preview.conversation_id!==r.conversation_id||this.saved.preview.draft_digest!==r.draft_digest||JSON.stringify(this.saved.preview.scope)!==JSON.stringify(r.draft.scope)||JSON.stringify(this.saved.preview.schema)!==JSON.stringify(r.draft.schema)||this.saved.preview.question_states&&r.draft.question_states&&JSON.stringify(this.saved.preview.question_states)!==JSON.stringify(r.draft.question_states)||r.draft.ontology_proposed===false||['published','stale'].includes(r.status)||this.generating)){this.saved.preview=null;this.state.confirmed=false;this.state.page='chat';this.persist();}
+    const preview=this.saved.preview;
+    if(preview&&(
+      preview.conversation_id!==r.conversation_id||
+      preview.draft_digest!==r.draft_digest||
+      JSON.stringify(preview.scope)!==JSON.stringify(r.draft.scope)||
+      JSON.stringify(preview.schema)!==JSON.stringify(r.draft.schema)||
+      preview.question_states&&r.draft.question_states&&JSON.stringify(preview.question_states)!==JSON.stringify(r.draft.question_states)||
+      this.saved.setupMode!=='update'&&r.draft.ontology_proposed===false||
+      ['published','stale'].includes(r.status)||this.generating
+    )){
+      this.saved.preview=null;this.state.confirmed=false;this.state.page='chat';this.persist();
+    }
     if(this.state.readFailure){this.state.error='';this.state.errorCode='';this.state.readFailure=false;}
     this.state.pollError=false;
   }
@@ -248,8 +305,15 @@ export class OnboardingDialogue {
   });}
   more(){return this.run(async()=>{const t=this.state.snapshot?.turns;if(t?.has_more)await this.snapshot(t.next_offset);});}
   setInput(value){if(value&&this.saved.inputMode==='answer'&&!this.saved.inputQuestionId){this.saved.inputQuestionId=this.inputQuestion?.question_id||null;if(!this.saved.inputQuestionId)this.saved.inputMode='free';}this.saved.input=value;try{this.persist();}catch(e){this.error(e);this.emit();}}
-  setInputMode(mode){if(!this.editable||!['answer','free'].includes(mode))return;const q=nextDialogueQuestion(this.state.snapshot?.draft);if(mode==='answer'&&q?.question_id)return this.answerQuestion(q.question_id);this.saved.inputMode='free';this.saved.inputQuestionId=null;try{this.persist();}catch(e){this.error(e);}this.emit();}
+  setInputMode(mode){if(!this.editable||!['answer','free'].includes(mode))return;const q=this.currentQuestion;if(mode==='answer'&&q?.question_id)return this.answerQuestion(q.question_id);this.saved.inputMode='free';this.saved.inputQuestionId=null;try{this.persist();}catch(e){this.error(e);}this.emit();}
+  deferQuestion(){
+    const question=this.currentQuestion;
+    if(!this.editable||this.unsent||this.saved.setupMode!=='update'||!question?.question_id)return;
+    this.saved.deferredQuestionId=question.question_id;
+    this.setInputMode('free');
+  }
   answerQuestion(id,value){if(!this.editable)return;const q=this.questions.find(q=>q.question_id===id);if(!q)return;
+    if(this.saved.deferredQuestionId===id)this.saved.deferredQuestionId=null;
     this.saved.inputMode='answer';this.saved.inputQuestionId=id;this.saved.questionActions=this.saved.questionActions.filter(a=>a.question_id!==id);this.saved.input=value??this.saved.input;
     this.state.confirmed=false;try{this.persist();}catch(e){this.error(e);}this.emit();
   }
@@ -279,7 +343,11 @@ export class OnboardingDialogue {
   sendComposer(){return this.send({answerQuestionId:this.inputQuestion?.question_id||null});}
   send({answerQuestionId=null}={}){return this.run(async()=>{
     if(!this.state.loaded||this.saved.pending)throw fail('MODELING_REQUEST_PENDING');
-    const content=answerQuestionId?'':this.saved.input,questionActions=clone(this.saved.questionActions),seen=this.state.snapshot?.draft_digest;
+    const raw=answerQuestionId?'':this.saved.input;
+    const content=this.saved.setupMode==='update'?
+      [scopeOnlyInstruction,raw].filter(Boolean).join('\n'):
+      raw;
+    const questionActions=clone(this.saved.questionActions),seen=this.state.snapshot?.draft_digest;
     if(answerQuestionId){if(questionActions.some(a=>a.question_id===answerQuestionId))throw fail('MODELING_ONBOARDING_QUESTION_STALE');questionActions.push({question_id:answerQuestionId,action:'answer',answer:this.saved.input});validateQuestionActions(questionActions);}
     await this.authorize();await this.snapshot();
     if(this.generating)throw fail('MODELING_ONBOARDING_BUSY');
@@ -292,24 +360,48 @@ export class OnboardingDialogue {
     if(!this.state.loaded||this.saved.pending)throw fail('MODELING_REQUEST_PENDING');
     if(this.unsent)throw fail('MODELING_UNSENT_ANSWER');
     const seen=this.state.snapshot?.draft_digest;await this.authorize();await this.snapshot();
-    if(seen!==this.state.snapshot.draft_digest)throw fail('MODELING_ONBOARDING_STALE');if(this.generating)throw fail('MODELING_ONBOARDING_BUSY');if(!this.state.snapshot.can_preview||this.state.snapshot.draft.ontology_proposed===false)throw fail('MODELING_ONBOARDING_NOT_READY');
-    await this.write('conversation-onboarding-preview',{...this.ids(),operationId:this.uuid(),revision:this.state.snapshot.draft.revision,draftDigest:seen,name:(this.saved.warehouse.name+' · 初始本体').slice(0,120)});
+    const snapshot=this.state.snapshot;
+    if(seen!==snapshot.draft_digest||snapshot.status==='stale')throw fail('MODELING_ONBOARDING_STALE');
+    if(this.generating)throw fail('MODELING_ONBOARDING_BUSY');
+    if(!snapshot.can_preview||this.saved.setupMode!=='update'&&snapshot.draft.ontology_proposed===false)throw fail('MODELING_ONBOARDING_NOT_READY');
+    const title=this.saved.setupMode==='update'?'范围校准':'初始本体';
+    await this.write('conversation-onboarding-preview',{...this.ids(),operationId:this.uuid(),revision:this.state.snapshot.draft.revision,draftDigest:seen,name:(this.saved.warehouse.name+' · '+title).slice(0,120)});
   });}
   publish(){return this.run(async()=>{
     if(!this.state.loaded||this.saved.pending||!this.saved.preview||!this.state.confirmed)throw fail('MODELING_CONFIRMATION_REQUIRED');
     if(this.unsent)throw fail('MODELING_UNSENT_ANSWER');
     const p=clone(this.saved.preview);await this.authorize();await this.snapshot();
     if(!this.saved.preview||!this.state.confirmed||this.generating||this.state.snapshot.draft_digest!==p.draft_digest)throw fail('MODELING_ONBOARDING_STALE');
-    await this.write('conversation-onboarding-publish',{...this.ids(),operationId:this.uuid(),previewId:p.resource_id,previewDigest:p.preview_digest,confirmed:true});await this.finishPublication(true);
+    await this.write('conversation-onboarding-publish',{...this.ids(),operationId:this.uuid(),previewId:p.resource_id,previewDigest:p.preview_digest,confirmed:true});await this.afterPublication();
   });}
   recover(){return this.run(async()=>{
     await this.authorize();const p=this.saved.pending;
-    if(p){await this.write(p.action,p.input);if(p.action==='conversation-onboarding-publish'){await this.finishPublication(true);return;}}
+    if(p?.action==='conversation-onboarding-publish'&&this.saved.setupMode==='update'){
+      await this.snapshot();
+      const publication=this.state.snapshot?.publication;
+      if(publication?.resource_id===p.input.previewId){
+        this.accept(p,publication);
+        this.saved.pending=null;
+        this.persist();
+        return;
+      }
+      if(!this.scopePublicationAllowed){
+        this.saved.pending=null;
+        this.persist();
+        if(this.state.snapshot?.status!=='published')throw fail('MODELING_SCOPE_RULE_CHANGE');
+        return;
+      }
+    }
+    if(p){await this.write(p.action,p.input);if(p.action==='conversation-onboarding-publish'){await this.afterPublication();return;}}
     if(this.saved.creation||this.saved.warehouse&&!this.saved.conversationId)await this.continueCreation();else if(this.saved.conversationId)await this.snapshot();
     this.state.loaded=true;await this.maybeStart();
   });}
   newSession(){return this.run(async()=>{if(!this.state.loaded||this.saved.pending||this.generating)throw fail('MODELING_REQUEST_PENDING');await this.authorize();await this.createSession();await this.snapshot();await this.maybeStart();});}
   chooseSession(id){return this.run(async()=>{if(this.saved.pending||this.generating)throw fail('MODELING_REQUEST_PENDING');if(id===this.saved.conversationId)return;await this.authorize();await this.listSessions();if(!this.state.sessions.some(s=>s.id===id))throw fail('MODELING_RESOURCE_NOT_FOUND');this.rememberComposer();this.saved.conversationId=id;this.saved.activeTurn=null;this.saved.preview=null;this.saved.publication=null;this.saved.entryPending=false;this.restoreComposer();this.state.confirmed=false;this.state.page='chat';this.persist();await this.snapshot();await this.maybeStart();});}
+  async afterPublication(){
+    if(this.saved.setupMode==='update')await this.snapshot();
+    else await this.finishPublication(true);
+  }
   async finishPublication(requireOwn){
     try { await this.enterCurrent(requireOwn); }
     catch(error){

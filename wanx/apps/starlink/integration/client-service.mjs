@@ -6,16 +6,17 @@ import drive from '../../personal-client/host-sdk/drive.cjs';
 import { dataInteractionKey } from '../../personal-client/device-trust/data-context.mjs';
 import { createStarlinkSpaceAnnotations } from '../../builder/integration/personal-client/starlink-space-annotations.mjs';
 
+const warehouseUuid = /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/;
 const actions = new Set(['initialize', 'warehouses', 'warehouse', 'select-warehouse', 'runtime',
-  'create-warehouse', 'documents', 'document', 'document-text', 'delete-document', 'download', 'correct', 'warehouse-import-status', 'jobs',
+  'create-warehouse', 'prepare-delete', 'delete-warehouse', 'documents', 'document', 'document-text', 'delete-document', 'download', 'correct', 'warehouse-import-status', 'jobs',
   'graph', 'search', 'evidence', 'retrieval', 'retry-job', 'build-index', 'processing',
   'model-catalog', 'check-models', 'save-models', 'reprocess-models',
-  'select-files', 'select-space-files', 'space-list', 'release-files', 'upload', 'workbench-request',
+  'select-space-files', 'space-list', 'release-files', 'upload', 'workbench-request',
   ...onboardingActions, ...conversationActions]);
 const fail = code => Object.assign(new Error(code), { code });
 
 // Uses the client's current application connection, never desktop environment credentials.
-export function createStarlinkPanelService({ client, personalSpace, selectFiles, selectSave, emit = () => {}, openModels = () => {} }) {
+export function createStarlinkPanelService({ client, personalSpace, selectSave, emit = () => {}, openModels = () => {} }) {
   let active, pending, revision = 0, disposed = false;
   const key = () => dataInteractionKey(client.snapshot());
   let observedKey = key();
@@ -63,7 +64,7 @@ export function createStarlinkPanelService({ client, personalSpace, selectFiles,
           },
         };
         host.drive = drive.createDriveClient(host);
-        value.service = new SemanticaService({ host, selectFiles, selectSave, emit: event => {
+        value.service = new SemanticaService({ host, selectFiles: async () => { throw fail('SEMANTICA_OPERATION_NOT_ALLOWED'); }, selectSave, emit: event => {
           if (disposed || value.revision !== revision || value.key !== key()) return;
           if (event.type === 'invalidated') {
             if (active === value) invalidate();
@@ -87,6 +88,12 @@ export function createStarlinkPanelService({ client, personalSpace, selectFiles,
         // echo this reset back as a session failure and destroy that document.
         if (action === 'reset') { invalidate(false); return { ok: true, value: null }; }
         if (!actions.has(action) && !['launch-target', 'launch-target-applied', 'open-model-management'].includes(action)) throw fail('SEMANTICA_OPERATION_NOT_ALLOWED');
+        if (action === 'prepare-delete' || action === 'delete-warehouse') {
+          if (typeof input.warehouseId !== 'string' || !warehouseUuid.test(input.warehouseId) ||
+              typeof input.operationId !== 'string' || !warehouseUuid.test(input.operationId)) throw fail('INVALID_RESOURCE');
+          if (action === 'delete-warehouse' && (typeof input.token !== 'string' || !input.token.length ||
+              typeof input.typedName !== 'string' || !input.typedName.trim())) throw fail('INVALID_RESOURCE');
+        }
         const value = await entry(); live(value);
         if (action === 'launch-target') return { ok: true, value: null };
         if (action === 'launch-target-applied') return { ok: true, value: { applied: true } };

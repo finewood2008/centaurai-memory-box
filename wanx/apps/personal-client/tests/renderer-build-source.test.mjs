@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { clientBuildSource } from "../tools/package-client-source.mjs";
+import { clientBuildSource as teamBuildSource } from "../../team-client/tools/package-client-source.mjs";
 
 const clientRoot = fileURLToPath(new URL("../", import.meta.url));
 const manifest = JSON.parse(await readFile(path.join(clientRoot, "package.json"), "utf8"));
@@ -113,4 +114,32 @@ test("generated artwork metadata stays outside source proof while canonical meta
   await mkdir(path.join(client, "local-ui/renderer/assets/material-v1"), { recursive: true });
   await writeFile(path.join(client, "local-ui/renderer/assets/material-v1/unreviewed.json"), "{}\n");
   assert.throws(() => clientBuildSource(client), /CLIENT_SOURCE_TREE_DIRTY/);
+});
+
+test("release source proof includes personal memory and the shared annotation implementation", async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "wanx-release-source-"));
+  t.after(() => rm(directory, {recursive:true, force:true}));
+  const personal = path.join(directory, "apps/personal-client");
+  const team = path.join(directory, "apps/team-client");
+  const memory = path.join(directory, "apps/memory/package-lock.json");
+  const stage = path.join(directory, "tools/stage-local-memory.mjs");
+  const shared = path.join(personal, "shell/space-annotation-service.mjs");
+  for (const file of [memory, stage, shared, path.join(team, "package.json")]) {
+    await mkdir(path.dirname(file), {recursive:true});
+    await writeFile(file, "fixture\n");
+  }
+  const git = args => execFileSync("git", args, {cwd:directory, encoding:"utf8"});
+  git(["init", "-q"]);
+  git(["add", "."]);
+  git(["-c", "user.name=Package Fixture", "-c", "user.email=package@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "fixture"]);
+  const clean = clientBuildSource(personal);
+  assert.deepEqual(teamBuildSource(team), clean);
+  for (const file of [memory, stage]) {
+    await writeFile(file, "modified\n");
+    assert.throws(() => clientBuildSource(personal), /CLIENT_SOURCE_TREE_DIRTY/);
+    assert.deepEqual(teamBuildSource(team), clean);
+    await writeFile(file, "fixture\n");
+  }
+  await writeFile(shared, "modified\n");
+  assert.throws(() => teamBuildSource(team), /CLIENT_SOURCE_TREE_DIRTY/);
 });

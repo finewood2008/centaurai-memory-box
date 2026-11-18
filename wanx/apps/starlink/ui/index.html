@@ -30,7 +30,6 @@
             <button type="button" class="nav-item" data-view="graph" aria-current="page">
               <span data-icon="network"></span><span>知识星图</span>
             </button>
-            <button type="button" class="nav-item" data-view="search"><span data-icon="search"></span><span>知识检索</span></button>
           </nav>
         </div>
         <div class="starlink-rail-group">
@@ -44,6 +43,7 @@
           <p class="nav-group-label" id="starlink-ontology">本体与关系</p>
           <nav class="nav-list" aria-labelledby="starlink-ontology">
             <button type="button" class="nav-item" data-view="ontology" data-ontology-action="published"><span data-icon="network"></span><span>规则总览</span></button>
+            <button type="button" class="nav-item" id="rules-guide-entry" data-action="update-warehouse-rules" hidden><span data-icon="list"></span><span>规则调整向导</span></button>
           </nav>
         </div>
         <div class="starlink-rail-group">
@@ -107,14 +107,6 @@
                 </p>
               </div>
               <div class="heading-actions">
-                <details id="ontology-actions" class="ontology-actions" hidden>
-                  <summary class="btn btn-secondary">规则操作 <span aria-hidden="true" data-icon="chevron"></span></summary>
-                  <div class="ontology-actions-list">
-                    <button type="button" data-ontology-action="assistant">对话调整</button>
-                    <button type="button" data-ontology-action="drafts">待发布草稿</button>
-                    <button type="button" data-action="update-warehouse-rules" hidden>规则调整向导</button>
-                  </div>
-                </details>
                 <button class="btn btn-secondary" id="page-ontology-suggestions" data-ontology-action="suggestions" hidden>从资料生成本体建议</button>
                 <button class="btn btn-secondary" id="page-batch-import" data-action="import-batch" hidden>批量导入</button>
                 <button
@@ -170,7 +162,12 @@
                           <label class="graph-isolated-toggle" for="graph-show-isolated"><span>显示孤立节点</span><input id="graph-show-isolated" type="checkbox" role="switch" /></label>
                         </div>
                         <div class="graph-reference-note" id="graph-reference-note" hidden>概览已收起 <span id="graph-reference-count">0</span> 个原文编号节点。可搜索或查看全部实体。</div>
+                        <label id="graph-exact-type" class="graph-explore-fields" hidden>仅看实体类型<select id="graph-exact-type-select"></select></label>
                       </div>
+                    </details>
+                    <details class="graph-filter-menu graph-explore-menu" id="graph-explore-menu" hidden>
+                      <summary>探索工具</summary>
+                      <div class="graph-filter-card" id="graph-explore-choices"></div>
                     </details>
                     <div class="segmented graph-mode" aria-label="星图显示方式">
                       <button class="active" data-mode="graph" aria-pressed="true" title="3D 视图"><span data-icon="network"></span><span>3D</span></button>
@@ -291,6 +288,7 @@
                 </div>
                 <aside class="panel detail-panel graph-inspector" aria-label="实体关系与来源" hidden>
                   <header class="graph-inspector-bar"><div id="graph-inspector-trail" class="graph-inspector-trail" aria-label="图谱详情位置"></div><button type="button" class="icon-btn" data-action="close-graph-details" data-icon="close" aria-label="收起实体详情"></button></header>
+                  <div id="graph-explore-details" hidden></div>
                   <div id="graph-details"></div>
                 </aside>
               </div>
@@ -384,28 +382,6 @@
                 </div>
                 <button class="btn btn-danger-outline" data-action="prepare-delete">删除当前数据仓</button>
               </div>
-            </section>
-            <section
-              class="view search-home"
-              id="view-search"
-              data-od-id="evidence-search"
-              hidden
-            >
-              <form id="search-form" class="query-box">
-                <div class="query-input-row">
-                <textarea
-                  id="search-query"
-                  aria-label="检索问题"
-                  placeholder="输入问题或关键词，查找材料里有依据的信息…"
-                  rows="2"
-                  required
-                  maxlength="2000"
-                ></textarea>
-                <button class="btn btn-primary" type="submit"><span data-icon="search"></span>检索证据</button>
-                </div>
-                <div class="search-index-state" id="search-index-state" role="status">正在读取检索索引状态</div>
-              </form>
-              <div id="search-results" aria-live="polite"></div>
             </section>
             <section
               class="view"
@@ -514,10 +490,6 @@
           材料将导入当前数据仓，按所选模型配置整理为可追溯的知识。
         </p>
         <div class="import-context" id="import-context"></div>
-        <div class="import-tabs" role="group" aria-label="材料来源">
-          <button class="btn btn-secondary active" id="source-space" aria-pressed="true">从万象空间选择</button>
-          <button class="btn btn-secondary" id="source-computer" aria-pressed="false">从电脑选择</button>
-        </div>
         <button class="text-link" id="import-link-existing" type="button" hidden>关联当前仓已有材料</button>
         <section id="space-browser" aria-label="万象空间文件选择">
           <div class="space-toolbar">
@@ -531,11 +503,6 @@
           <div id="space-entries" class="space-entries" aria-label="万象空间文件"></div>
           <button class="text-link" id="space-load-more" type="button" hidden>加载更多匹配文件</button>
         </section>
-        <div class="drop-zone" id="computer-browser" hidden>
-          <span data-icon="upload"></span>
-          <p><button class="text-link" id="choose-files">选择电脑文件</button></p>
-          <small>文件将复制到当前数据仓，原文件保持不变。</small>
-        </div>
         <p id="import-formats" class="import-formats">正在读取支持的格式与大小限制</p>
         <div class="import-selection-heading"><strong id="import-selection-count">已选 0 份材料</strong><span id="import-selection-hint">可跨文件夹选择</span></div>
         <div class="import-model"><p id="import-model-summary" class="muted">正在读取处理模型…</p><button class="text-link" id="import-model-config" type="button">配置模型与处理 ↗</button></div>

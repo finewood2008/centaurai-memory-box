@@ -1,10 +1,56 @@
 import {warehouseMaterialEntries} from './material-library.mjs';
+import {materialAnnotationHTML} from './import-annotation.mjs';
 import {materialListHTML} from './material-workspace.mjs';
 import {materialAutomaticCard,materialAutomaticPublished,materialProcessingActive,materialReviewPending,materialRecoveryHTML} from './material-agent.mjs';
 import {materialRoundsHTML,unfinishedRound} from './material-rounds.mjs';
-import {automaticMaterialReview,materialDraftChanges,materialWorkflowLabel,publishedMaterialQuality} from './material-state.mjs';
+import {automaticMaterialReview,materialDraftChanges,materialWorkflowLabel,publishedMaterial,publishedMaterialQuality} from './material-state.mjs';
+import {createGraphPresentation} from './graph-presentation.mjs';
+import {factSchema} from './material-fact-cards.mjs';
+import {candidatesReady} from './conversation-progress.mjs';
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fail=code=>Object.assign(Error(code),{code});
+const readerBatch=12;
+function readerKnowledgeTarget(f,v){
+  if(!v)return null;
+  const w=v.workflow,pending=materialReviewPending(f,w);
+  if(pending){
+    const round=w.processing_mode==='automatic'?null:unfinishedRound(f,w);
+    if(round?.execution_status==='awaiting_review')return {kind:'review',id:round.intent_id,round};
+    return {kind:'review',id:w.extraction_review?.run_id};
+  }
+  if(v.knowledgeOpen&&publishedMaterial(w))return {kind:'published',id:w.publication.id};
+  return null;
+}
+function readerKnowledgeKey(target,v){
+  return target?.id?JSON.stringify([target.kind,target.id,v.source.version?.id,v.workflow.draft?.revision]):null;
+}
+function readerEvidence(item,v){
+  return (Array.isArray(item?.evidence)?item.evidence:[]).find(e=>typeof e?.segment_id==='string'&&e.segment_id&&
+    (!e.document_id||e.document_id===v.documentId)&&(!e.document_version_id||e.document_version_id===v.source.version?.id));
+}
+async function readReaderCandidates(f,v,target){
+  if(target.round){
+    const link=target.round,ids={conversationId:link.conversation_id,intentId:link.intent_id};
+    const detail=await f.read('conversation-intent',ids);
+    if(!candidatesReady(detail)||detail.document_id!==v.documentId||detail.document_version_id!==v.source.version?.id||
+      detail.id!==link.intent_id||!detail.execution?.id)throw fail('MODELING_SNAPSHOT_CHANGED');
+    const items=[];
+    let more=true;
+    while(more){
+      const page=await f.read('conversation-candidates',{...ids,offset:items.length,limit:50});
+      if(page.execution_id!==detail.execution.id||!Array.isArray(page.items)||page.has_more&&!page.items.length)throw fail('MODELING_SNAPSHOT_CHANGED');
+      items.push(...page.items);more=page.has_more;
+    }
+    const latest=await f.read('conversation-intent',ids);
+    if(!candidatesReady(latest)||latest.revision!==detail.revision||latest.execution?.id!==detail.execution.id||
+      latest.document_version_id!==detail.document_version_id)throw fail('MODELING_SNAPSHOT_CHANGED');
+    return items;
+  }
+  const data=await f.read('conversation-published-run',{runId:target.id}),run=data?.run;
+  if(run?.id!==target.id||run.document_id!==v.documentId||run.document_version_id!==v.source.version?.id||
+    run.status!==target.kind||!Array.isArray(data.candidates))throw fail('MODELING_SNAPSHOT_CHANGED');
+  return data.candidates;
+}
 export function materialIndexState(value,id,version){
   const covered=value?.document_coverage?.find(d=>d.document_id===id&&d.version_id===version);
   if(value?.embedding_configured===true&&value.compatible===true&&value.fresh===true&&covered?.indexed===true)return 'ready';
@@ -48,13 +94,68 @@ export class MaterialImport {
     try{if(!workflow.preparation)index=await f.read('workbench-request',{method:'GET',url:'/api/search/indexes'});}
     catch(e){if([401,403].includes(e.status))throw e;indexError=true;}
     const previous=this.view?.documentId===id&&this.view.source.version?.id===source.version?.id?this.view:null;
-    this.view={documentId:id,source,workflow,index,indexError,offset,pageSize:previous?.pageSize||source.segments.length||100,textWindow:previous?.textWindow};this.lastRead=Date.now();
+    this.view={...previous,documentId:id,source,workflow,index,indexError,offset,pageSize:previous?.pageSize||source.segments.length||100};this.lastRead=Date.now();
     f.rounds.reconcile(workflow);
     if(automaticMaterialReview(workflow))f.state.dialogueExitNotice=null;
     f.state.librarySelection={document:{...workflow.document,workflow},links:[]};
     const row=f.state.warehouseMaterials?.find(d=>d.id===id);if(row)Object.assign(row,f.state.librarySelection.document);
     f.saved.libraryDocumentId=id;f.persist();
+    await this.readKnowledge();
   }
+  async readKnowledge(retry=false){
+    const v=this.view,target=readerKnowledgeTarget(this.f,v),key=readerKnowledgeKey(target,v);
+    if(!key||v.knowledge?.key!==key){
+      if(v){v.knowledge=null;v.knowledgeLimit=readerBatch;v.knowledgeFilter='all';v.sourceMatch=null;v.sourceNotice='';}
+    }else if(!retry)return;
+    if(!key)return;
+    const loading=v.knowledge={key,status:'loading'};
+    this.f.emit();
+    try{
+      const candidates=await readReaderCandidates(this.f,v,target);
+      const items=candidates.filter(i=>i&&['entity','relation'].includes(i.kind)&&
+        (target.kind==='review'||i.status==='published'));
+      if(this.view?.knowledge===loading)this.view.knowledge={key,status:'ready',items};
+    }catch{
+      if(this.view?.knowledge===loading)this.view.knowledge={key,status:'error'};
+    }
+    this.f.emit();
+  }
+  async toggleKnowledge(){
+    const v=this.view;if(!v||this.f.state.busy||materialReviewPending(this.f,v.workflow))return;
+    v.knowledgeOpen=!v.knowledgeOpen;
+    await this.readKnowledge();
+    this.f.emit();
+  }
+  filterKnowledge(filter){
+    if(!this.view||!['all','entity','relation'].includes(filter))return;
+    this.view.knowledgeFilter=filter;this.view.knowledgeLimit=readerBatch;this.f.emit();
+  }
+  moreKnowledge(){
+    if(this.view){this.view.knowledgeLimit+=readerBatch;this.f.emit();}
+  }
+  locateEvidence(index){return this.f.run(async()=>{
+    const v=this.view,k=v?.knowledge;
+    if(!v||this.blocked||k?.status!=='ready')return;
+    const evidence=readerEvidence(k.items[index],v);
+    if(!evidence)return;
+    let page=v.source,offset=v.offset;
+    const matching=()=>page.segments?.find(s=>s.id===evidence.segment_id);
+    if(!matching()){
+      // Search by the source's stable segment ID within the verified document version.
+      for(offset=0;offset<v.source.document.segment_count;offset+=page.segments.length){
+        if(offset===v.offset)page=v.source;
+        else page=await this.f.read('document',{id:v.documentId,offset});
+        if(this.view!==v||page.document?.id!==v.documentId||page.version?.id!==v.source.version?.id||
+          !Array.isArray(page.segments)||!page.segments.length)break;
+        if(matching())break;
+      }
+    }
+    if(this.view!==v)return;
+    const segment=page.version?.id===v.source.version?.id&&page.document?.id===v.documentId&&matching();
+    if(!segment){v.sourceNotice='当前正文版本中找不到这个引用片段。';return;}
+    v.source=page;v.offset=offset;v.textWindow=null;v.sourceNotice='';
+    v.sourceMatch={id:segment.id,index,request:(v.sourceMatch?.request||0)+1};
+  });}
   select(id){return this.f.run(async()=>{
     const f=this.f;if(this.blocked)throw fail('MODELING_REQUEST_PENDING');
     f.rounds.clear();
@@ -228,14 +329,55 @@ function importStepsHTML(f,v,off){
     <p class="mw-import-limit">${!automaticAllowed&&v.workflow.actions?.prepare_automatic?.reason?`${esc(v.workflow.actions.prepare_automatic.reason)}。`:""}${preparation?`${reviewExempt?'当前正文无需重复确认':confirmed?'当前版本已在服务端确认':'当前正文尚未完成确认'} · ${indexStatusText}。`:`${confirmed?'当前版本已核对':'正文核对记录保存在本机'} · ${indexStatusText}。索引由服务端自动维护，可能在正文确认前开始。`}</p>
   </section>`;
 }
-function importSourceHTML(v,off,confirmed){
+function readerParagraph(segment,match){
+  const text=String(segment.text||'').replace(/\r\n/g,'\n');
+  const quote=match?.excerpt;
+  const index=typeof quote==='string'&&quote?text.indexOf(quote):-1;
+  if(index>=0&&text.indexOf(quote,index+1)<0){
+    return `<p>${esc(text.slice(0,index))}<mark>${esc(quote)}</mark>${esc(text.slice(index+quote.length))}</p>`;
+  }
+  const heading=text.match(/^(#{1,6}) +([^\n]+)(?:\n+([\s\S]*))?$/);
+  if(!heading)return `<p>${esc(text)}</p>`;
+  const level=Math.min(heading[1].length+2,6);
+  return `<h${level}>${esc(heading[2])}</h${level}>${heading[3]?`<p>${esc(heading[3])}</p>`:''}`;
+}
+function importSourceHTML(v,off){
   const total=v.source.document.segment_count;
   const count=Number.isSafeInteger(total)&&total>=0?`${total} 个内容片段`:'正文片段数量待确认';
-  return `<section class="mw-import-source"><header><div><small>解析结果</small><h3>材料正文</h3><p>${count}，${confirmed?'可查看当前版本正文':'请核对内容后确认正文'}。</p></div></header>
+  const match=v.sourceMatch,evidence=match&&readerEvidence(v.knowledge?.items?.[match.index],v);
+  return `<section class="mw-import-source mw-reader-source"><header><h3>材料正文</h3><span>${count}</span></header>
     ${v.textWindow?`<div class="mw-full-text"><p>${esc(v.textWindow.text)}</p></div><div class="mw-source-pagination"><small>${v.textWindow.start}–${v.textWindow.end} / ${v.textWindow.total_chars} 字符</small><button class="btn btn-secondary" data-cv="import-text-prev" ${off||!v.textWindow.start?'disabled':''}>上一段正文</button><button class="btn btn-secondary" data-cv="import-text-next" ${off||v.textWindow.end>=v.textWindow.total_chars?'disabled':''}>下一段正文</button></div>`:
-    `<div class="mw-source-segments">${v.source.segments.map((s,n)=>`<article><span class="mw-segment-number">${String(v.offset+n+1).padStart(2,'0')}</span><div><small>正文片段</small><p>${esc(s.text)}</p>${s.text_truncated?`<small>此长段落仅显示部分内容。</small><button class="btn btn-secondary" data-cv="import-text" ${off?'disabled':''}>读取完整正文</button>`:''}</div></article>`).join('')||'<p class="mw-source-empty">正文尚未准备好。</p>'}</div>
-    <div class="mw-source-pagination"><small>${v.source.segments.length?`显示 ${v.offset+1}–${v.offset+v.source.segments.length} 个片段`:''}</small><button class="btn btn-secondary" data-cv="import-prev" ${off||!v.offset?'disabled':''}>上一页</button><button class="btn btn-secondary" data-cv="import-next" ${off||!v.source.segments.length||v.offset+v.source.segments.length>=(total||0)?'disabled':''}>下一页</button></div>`}
+    `<div class="mw-source-segments">${v.source.segments.map(s=>`<article ${evidence&&s.id===match.id?`data-reader-match="${match.request}" tabindex="-1"`:''}>${readerParagraph(s,evidence&&s.id===match.id?evidence:null)}${s.text_truncated?`<small>此长段落仅显示部分内容。</small><button class="btn btn-secondary" data-cv="import-text" ${off?'disabled':''}>读取完整正文</button>`:''}</article>`).join('')||'<p class="mw-source-empty">正文尚未准备好。</p>'}</div>
+    ${v.offset||v.source.segments.length<total?`<div class="mw-source-pagination"><small>${v.source.segments.length?`显示 ${v.offset+1}–${v.offset+v.source.segments.length} 个片段`:''}</small><button class="btn btn-secondary" data-cv="import-prev" ${off||!v.offset?'disabled':''}>上一页</button><button class="btn btn-secondary" data-cv="import-next" ${off||!v.source.segments.length||v.offset+v.source.segments.length>=(total||0)?'disabled':''}>下一页</button></div>`:''}`}
   </section>`;
+}
+function readerKnowledgeHTML(f,v,target,off){
+  const k=v.knowledge?.key===readerKnowledgeKey(target,v)?v.knowledge:null;
+  const pending=target.kind==='review',items=k?.items||[],filter=v.knowledgeFilter||'all',limit=v.knowledgeLimit||readerBatch;
+  const entities=new Map(items.filter(i=>i.kind==='entity').map(i=>[i.candidate_key,i.payload?.name]));
+  const entityCount=items.filter(i=>i.kind==='entity').length;
+  const visible=items.map((item,index)=>({item,index})).filter(({item})=>filter==='all'||item.kind===filter);
+  const presentation=createGraphPresentation(factSchema(f));
+  const renderItem=({item,index})=>{
+    const p=item.payload||{},relation=item.kind==='relation',e=readerEvidence(item,v);
+    const label=relation?presentation.relation(p.type):presentation.entity(p.type).label;
+    const endpoint=key=>item.endpoints?.[key]?.name||entities.get(p[key])||'待核对对象';
+    return `<article class="mw-knowledge-item" ${v.sourceMatch?.index===index?'data-reader-selected':''}><small>${relation?'关系':'实体'} · ${esc(label)}</small>
+      <strong>${relation?`${esc(endpoint('source_candidate_key'))} <span aria-hidden="true">→</span> ${esc(endpoint('target_candidate_key'))}`:esc(p.name||'未命名实体')}</strong>
+      ${e?.excerpt?`<blockquote>${esc(e.excerpt)}</blockquote>`:''}
+      ${e?`<button class="mw-reader-link" data-cv="import-source-jump" data-index="${index}" ${off?'disabled':''}>定位原文 <span aria-hidden="true">↗</span></button>`:''}</article>`;
+  };
+  const retry='<button class="mw-reader-link" data-cv="import-knowledge-retry">重新读取</button>';
+  const content=k?.status==='ready'?`${items.length?`<div class="mw-knowledge-filters" aria-label="筛选知识条目">${[['all','全部',items.length],['entity','实体',entityCount],['relation','关系',items.length-entityCount]].map(([key,label,count])=>`<button type="button" data-cv="import-knowledge-filter" data-id="${key}" aria-pressed="${filter===key}">${label} ${count}</button>`).join('')}</div>`:''}
+    ${visible.slice(0,limit).map(renderItem).join('')||'<p class="mw-knowledge-note">当前没有可预览的条目。</p>'}
+    ${visible.length>limit?'<button class="mw-reader-link mw-knowledge-more" data-cv="import-knowledge-more">显示更多</button>':''}`:
+    !target.id?'<p class="mw-knowledge-note">打开核对，查看这份资料的草稿和待核对条目。</p>':
+    k?.status==='error'?`<p class="mw-knowledge-note" role="status">知识条目暂时无法读取。</p>${retry}`:'<p class="mw-knowledge-note" role="status">正在读取知识条目…</p>';
+  return `<aside class="mw-reader-knowledge" aria-label="知识栏"><header><div><h3>${pending?'抽取结果':'已发布知识'}</h3>
+    <span class="mw-reader-state ${pending?'is-pending':'is-published'}">${pending?'待核对':'已发布'}</span></div>
+    ${pending?`<button class="btn btn-primary" data-cv="import-review" ${off||materialProcessingActive(f,v.workflow)?'disabled':''}>开始核对</button>`:
+    '<button class="mw-reader-link" aria-label="关闭知识栏" data-cv="import-knowledge">关闭</button>'}</header>
+    <div class="mw-knowledge-content">${v.sourceNotice?`<p class="mw-knowledge-note" role="status">${esc(v.sourceNotice)}</p>`:''}${content}</div></aside>`;
 }
 export function materialImportHTML(f,welcome){
   const v=f.importer?.view,off=f.state.busy||f.importer?.blocked;
@@ -250,11 +392,24 @@ export function materialImportHTML(f,welcome){
       <p>${esc(f.state.error)}</p>${pendingWork?'':'<button class="btn btn-secondary" data-action="reload-materials">重新读取资料库</button>'}</div>`
     : f.state.importDocumentId ? '<p role="status">当前材料尚未读取成功，请从材料列表重新选择当前材料，或选择其他材料。</p>'
     : f.state.loaded && !pendingWork ? welcome : '<p role="status">正在读取材料或提交导入…</p>';
-  return `<div class="material-workspace mw-import-layout"><aside class="mw-library" aria-label="材料列表">${materialListHTML(f)}</aside><section class="mw-review" aria-label="导入材料与正文"><header><div class="mw-import-file"><span aria-hidden="true">▤</span><div><small>当前材料</small><h2>${esc(v?.workflow.document.original_name || emptyTitle)}</h2></div></div><div class="mw-material-tools"><button class="btn btn-secondary" data-warehouse-id="${esc(f.warehouseId)}" data-warehouse-view="tasks">处理记录</button>${v?`<button class="btn btn-secondary" data-cv="material-delete" ${off?'disabled':''}>删除材料</button>`:''}</div></header><div class="mw-review-content">
+  const target=readerKnowledgeTarget(f,v),pending=target?.kind==='review';
+  const name=v?.workflow.document.original_name||emptyTitle;
+  const published=publishedMaterial(v?.workflow);
+  const status=v&&(materialWorkflowLabel(v.workflow)||v.workflow.label||'资料');
+  const operation=v&&currentImportOperation(f,v),active=['queued','running','publishing'].includes(operation?.current.stage);
+  const processAttention=!!(v&&(!f.importer.complete&&!pending&&!published||f.agent.record.preview||active||['failed','cancelled'].includes(operation?.current.stage)));
+  return `<div class="material-workspace mw-import-layout ${target?'mw-has-knowledge':''}"><aside class="mw-library" aria-label="材料列表">${materialListHTML(f,true)}</aside><section class="mw-review mw-reader" aria-label="阅读台">
+    <header class="mw-reader-heading"><div class="mw-reader-file"><div class="mw-reader-location"><span>阅读台</span>${status?`<span class="mw-reader-state ${pending?'is-pending':published?'is-published':''}">${esc(status)}</span>`:''}</div><h2 title="${esc(name)}">${esc(name)}</h2></div>
+    <div class="mw-reader-tools">${!pending&&published?`<button class="btn btn-secondary" id="cv-reader-knowledge" data-cv="import-knowledge" aria-pressed="${!!target}" ${off?'disabled':''}>知识</button>`:''}
+    <details class="mw-reader-menu"><summary aria-label="资料操作" title="资料操作">···</summary><div><button data-warehouse-id="${esc(f.warehouseId)}" data-warehouse-view="tasks">处理记录</button>
+    ${published&&!pending&&!processAttention&&f.importer.complete&&v.workflow.actions?.prepare_automatic?.allowed===true?`<button data-cv="import-auto" ${off||materialProcessingActive(f,v.workflow)?'disabled':''}>重新抽取</button>`:''}
+    ${v?`<button class="mw-reader-delete" data-cv="material-delete" ${off?'disabled':''}>删除材料</button>`:''}</div></details></div></header>
+    <div class="mw-review-content">
     ${feedback?`<p class="mw-refresh-feedback" role="status">${esc(feedback)}</p>`:''}${errors}${f.state.deletionNotice?`<p role="status">${esc(f.state.deletionNotice)}</p>`:''}${f.saved.pending?'<p>上次操作结果尚未确认。</p><button class="btn btn-secondary" data-cv="retry-pending">恢复原请求</button>':''}${f.saved.upload&&!f.saved.pending?
       f.saved.upload.replacementError?'<p>请取消这次上传，再选择可打开的文件。</p><button class="btn btn-secondary" data-cv="abandon-upload">取消未完成上传</button>'
       :'<p>材料上传尚未完成。</p><button class="btn btn-secondary" data-cv="resume-upload">继续上传</button>':''}${f.saved.intakeSubmission&&!f.saved.pending?'<p>材料导入尚未完成。</p><button class="btn btn-secondary" data-cv="import-resume">继续导入</button>':''}
     ${v&&f.state.dialogueExitNotice?.documentId===v.documentId?`<p class="cv-notice" role="status">${esc(f.state.dialogueExitNotice.message)}</p>`:''}${materialRoundsHTML(f)}
-    ${v?`${importStepsHTML(f,v,off)}${f.agent.record.preview||materialReviewPending(f,v.workflow)||['queued','running','publishing'].includes(currentImportOperation(f,v)?.current.stage)?'':materialAutomaticCard(f)}${importSourceHTML(v,off,f.importer.confirmed)}`:emptyReview}
-  </div></section></div>`;
+    ${v?`<details class="mw-reader-progress" data-cv-disclosure="reader-progress-${processAttention?'attention':'quiet'}" ${processAttention?'open':''}>
+      <summary>处理进度</summary>${importStepsHTML(f,v,off)}${f.agent.record.preview||pending||active?'':materialAutomaticCard(f)}${materialAnnotationHTML(v.source)}</details>${importSourceHTML(v,off)}`:emptyReview}
+  </div></section>${target?readerKnowledgeHTML(f,v,target,off):''}</div>`;
 }

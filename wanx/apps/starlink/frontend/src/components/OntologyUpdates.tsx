@@ -11,6 +11,7 @@ type Row={document_id:string;name:string;preview_token:string;reasons:string[];p
   extraction_status:string;publication_status:string;graph_ready:boolean;text_index_ready:boolean;retrieval_ready:boolean;retry_job_id:string|null;error:string|null;outcome:KnowledgeSummary|null};
 export type Impact={target:{id:string;name:string;version_number:number};previous_version:number|null;total:number;offset:number;limit:number;items:Row[];
   read_only?:boolean;
+  batch_update_available?:boolean;
   changes:Array<{kind:string;name:string;change:string;before:unknown;after:unknown}>};
 const labels:Record<string,string>={not_started:'尚未开始',queued:'排队中',running:'处理中',succeeded:'完成',failed:'失败',cancelled:'已取消',review:'待人工核对',published:'已发布'};
 
@@ -20,7 +21,7 @@ export default function OntologyUpdates(props:Props) {
   // Web endpoints below are not authorized by the Bridge workbench contract.
   const host=embeddedHost();
   return host || new URLSearchParams(location.search).get('native')==='1'
-    ? <HostedOntologyImpact workspace={props.workspace} ontologyId={props.ontologyId} onProcessMaterials={props.onProcessMaterials||(host?documentId=>host.importMaterials(window,documentId):undefined)} />
+    ? <HostedOntologyImpact workspace={props.workspace} ontologyId={props.ontologyId} onBusy={props.onBusy} onProcessMaterials={props.onProcessMaterials||(host?documentId=>host.importMaterials(window,documentId):undefined)} />
     : <StandaloneOntologyUpdates {...props} />;
 }
 

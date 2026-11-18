@@ -5,6 +5,7 @@ import { enterOnboardingWarehouse } from './onboarding-navigation.mjs';
 import { conversationHTML } from './conversation.js';
 import {changeUserInstruction} from './conversation-changes-view.mjs';
 import {evidenceReferenceHTML} from './material-evidence-view.mjs';
+import {pendingAnnotationHTML} from './import-annotation.mjs';
 import {materialReplySuggestions} from './conversation-view.mjs';
 import {ConversationFlow} from './conversation-state.mjs';
 import {mountMaterialWorkspace,openMaterialUpload} from './material-workspace.mjs';
@@ -19,6 +20,7 @@ import { createSkillsUI } from "./native-skills.js";
 import { icon, icons } from "./icons.js";
 import { selectGraph, layoutGraph, edgeGeometry } from "./graph.js";
 import { createGraphMotion } from './graph-motion.mjs';
+import { createGraphExploration } from './graph-exploration-view.mjs';
 const graphMotion = createGraphMotion();
 import {createGraphPresentation, presentGraph} from './graph-presentation.mjs';
 const $ = (selector) => document.querySelector(selector);
@@ -111,8 +113,8 @@ const messages = {
   MODEL_CALL_FAILED: "模型检查或调用失败，请检查万象模型连接与输出能力。",
   MODEL_CANCELLED: "模型调用已取消。",
   MODEL_INPUT_TOO_LARGE: "本次模型输入超限，请缩小材料片段后重试。",
-  SPACE_UPGRADE_REQUIRED: "当前设备尚不支持万象空间，请更新万象服务，或从电脑选择文件。",
-  SPACE_REQUEST_FAILED: "万象空间暂时无法读取，请检查连接并刷新，或从电脑选择文件。",
+  SPACE_UPGRADE_REQUIRED: "当前设备尚不支持万象空间，请更新万象服务。",
+  SPACE_REQUEST_FAILED: "万象空间暂时无法读取，请检查连接并刷新。",
   SPACE_REMOTE_FILE_CHANGED: "万象空间文件已变化。请移除旧选择，再刷新并选择新版本。",
   SPACE_TAG_RESULTS_CHANGED: "空间搜索进度已失效，请刷新后重新搜索。",
   SPACE_NOT_FOUND: "万象空间文件已删除或移入回收站。请移除旧选择，再刷新并选择可用文件。",
@@ -125,6 +127,7 @@ const messages = {
   HOST_SESSION_EXPIRED: "万象连接已失效。请重新连接盒子后进入星图。",
   SEMANTICA_UPGRADE_REQUIRED: "当前盒子尚未接入星图，请更新盒端服务。",
   SEMANTICA_NOT_CONFIGURED: "盒端尚未配置星图服务。",
+  SEMANTICA_ANNOTATION_SEARCH_UNAVAILABLE: "当前无法按标签筛选，请更新盒端服务或清除标签后重试。",
   SEMANTICA_CONNECTION_FAILED: "当前连接不可用，请检查万象与盒子的连接后重试。",
   WAREHOUSE_BUSY: "当前数据仓正在处理或清理，可切换其他仓，或稍后重试。",
   NETWORK_NOT_READY:
@@ -151,6 +154,7 @@ const state = {
   managementStats: null,
   importFailure: null,
   clearIntent: null,
+  preparingWarehouseChange: false,
   invalid: false,
   view: "graph",
   ontologySection: "published",
@@ -160,7 +164,6 @@ const state = {
   jobTotal: 0,
   jobOffset: 0,
   graph: { nodes: [], edges: [] },
-  retrieval: null,
   policy: null,
   selectedNode: null,
   selectedEdge: null,
@@ -173,7 +176,6 @@ const state = {
   get files() { return this.importFiles[this.importContext]; },
   set files(files) { this.importFiles[this.importContext] = files; },
   uploading: false,
-  importSource: "space",
   importContext: "standard",
   space: { parent: "", breadcrumbs: [], items: [] },
   spaceResults: null,
@@ -186,13 +188,15 @@ const state = {
   sourceEvidence: null,
   sourceRequest: 0,
   sourceLoading: false,
-  searching: false,
-  searchRequest: 0,
   editing: false,
   saving: false,
   graphError: null,
   graphPresentation: createGraphPresentation(),
+  graphOntology: null,
 };
+const explorer = createGraphExploration({state,pick:$,esc,call,readReply:readWorkbenchReply,
+  present:graphLayout,motion:graphMotion,redraw:() => {renderFilters();renderGraph();},
+  selectEdge,notice:error => toast(errorText(error)),typeDisplay});
 let managementStatsRequest = 0;
 let toastTimer,
   refreshAt = 0;
@@ -219,20 +223,18 @@ function banner(message) {
     : "";
   $("#connection-notice").hidden = !message;
 }
-async function call(action, input) {
+async function call(action, input, warehouseId = state.warehouseId) {
   if (
     state.preview &&
     [
       "import-skill", "delete-skill", "download-skill",
       "check-models", "save-models", "reprocess-models",
-      "select-files",
       "select-space-files",
       "upload",
       "download",
       "save-sensitive",
       "correct",
       "retry-job",
-      "build-index",
       "create-warehouse",
       "create-key",
       "revoke-key",
@@ -256,7 +258,7 @@ async function call(action, input) {
   const generation = state.generation;
   const reply = await bridge.call(action, {
     ...input,
-    warehouseId: state.warehouseId,
+    warehouseId,
   });
   const envelope = ['create-warehouse','reprocess-models'].includes(action);
   if (envelope && !reply?.ok) throw Object.assign(new Error(reply?.message || '请求结果尚未确认'), {
@@ -308,15 +310,13 @@ function syncControls() {
   $("#confirm-import").disabled =
     !state.ready || state.uploading || state.spaceSelecting ||
     (state.importContext === "conversation" ? state.files.length !== 1 || state.files[0].done : !state.files.some(canUploadFile));
-  $("#choose-files").disabled = !state.ready || state.uploading || state.spaceSelecting ||
-    (state.importContext === "conversation" && state.files.length > 0);
   $("#space-search-descendants").disabled = !state.ready || state.uploading || state.spaceSelecting ||
     state.spaceLoading || !$("#space-query").value.trim();
   $("#space-select-visible").disabled = !state.ready || state.uploading || state.spaceSelecting || state.spaceLoading;
   $("#space-load-more").disabled = $("#space-select-visible").disabled;
   $("#import-model-config").disabled = state.uploading || state.spaceSelecting;
   $("#import-link-existing").disabled = !state.ready || state.uploading || state.spaceSelecting || state.files.length > 0;
-  document.querySelectorAll("#source-space,#source-computer,#space-refresh,#space-query,#space-entries input,#space-entries button,#space-breadcrumbs button,[data-remove-file]").forEach(el => {
+  document.querySelectorAll("#space-refresh,#space-query,#space-entries input,#space-entries button,#space-breadcrumbs button,[data-remove-file]").forEach(el => {
     el.disabled = !state.ready || state.uploading || state.spaceSelecting || el.dataset.unsupported === "true" ||
       (state.spaceLoading && el.matches('[data-space-file]')) ||
       (state.importContext === "conversation" && el.matches('[data-space-file]') && state.files.length > 0 && !el.checked);
@@ -324,7 +324,6 @@ function syncControls() {
   document
     .querySelectorAll("#import-dialog [data-close]")
     .forEach((b) => (b.disabled = state.uploading || state.spaceSelecting));
-  $("#search-form button[type=submit]").disabled = !state.ready || state.searching || currentWarehouse()?.state !== "active";
   document
     .querySelectorAll("[data-setting]")
     .forEach(
@@ -352,7 +351,7 @@ function connection(ready) {
 function invalidate() {
   if (state.invalid) return;
   state.invalid = true;
-  state.searching = state.saving = state.sourceLoading = false;
+  state.saving = state.sourceLoading = false;
   state.modelOnboarding=null;
   stopConversation();
   onboarding.reset();
@@ -373,6 +372,8 @@ function invalidate() {
   state.jobs = [];
   state.graph = { nodes: [], edges: [] };
   state.graphPresentation = createGraphPresentation();
+  state.graphOntology = null;
+  explorer.reset();
   state.jobTotal = 0;
   state.jobOffset = 0;
   resetImportDrafts();
@@ -384,14 +385,10 @@ function invalidate() {
   state.source = null;
   state.selectedNode = state.selectedEdge = null;
   state.policy = null;
-  state.retrieval = null;
   state.identity = null;
-  renderRetrieval();
   document.querySelectorAll("dialog[open]").forEach((d) => d.close());
   $("#source-body").replaceChildren();
   $("#source-actions").replaceChildren();
-  $("#search-query").value = "";
-  $("#search-results").replaceChildren();
   $("#user-avatar").textContent = "我";
   connection(false);
   renderTasks();
@@ -512,7 +509,11 @@ function graphLayout(raw) {
 }
 let graphViewCache;
 function visibleGraph() {
-  const options = {query: state.selectedNode ? "" : $("#graph-query").value, type: state.type, overview: state.graphOverview, focus: state.selectedNode, showIsolated: state.showIsolated};
+  const retain = explorer.keepsOverview;
+  const expanded = explorer.expanded(state.selectedNode);
+  const options = {query: state.selectedNode && (!retain || expanded) ? "" : $("#graph-query").value,
+    type: expanded ? "all" : state.type, overview: !expanded && state.graphOverview,
+    focus: retain ? null : state.selectedNode, showIsolated: expanded || state.showIsolated};
   const key = JSON.stringify(options);
   if (graphViewCache?.graph !== state.graph || graphViewCache?.key !== key)
     graphViewCache = {graph:state.graph, key, value:layoutGraph(selectGraph(state.graph, options))};
@@ -521,6 +522,29 @@ function visibleGraph() {
 function renderFilters() {
   const ts = [...new Set(state.graph.nodes.map((n) => n.type))];
   const filters = $("#graph-filters");
+  const enhanced = explorer.enabled();
+  const exact = $("#graph-exact-type");
+  exact.hidden = !enhanced;
+  $("#graph-types-label").textContent = enhanced ? '本体标签' : '实体类型';
+  explorer.menu();
+  if (enhanced) {
+    const all = [...new Set([...explorer.types().map(type => type.name),...ts])];
+    const select = $("#graph-exact-type-select");
+    const options = '<option value="all">全部类型</option>' + all.map(type =>
+      `<option value="${esc(type)}">${esc(typeDisplay(type).label)}</option>`).join('');
+    if (select.innerHTML !== options) select.innerHTML = options;
+    select.value = state.type;
+    const current = filters.contains(document.activeElement) ? document.activeElement.dataset.value : null;
+    const scroll = filters.scrollLeft;
+    filters.innerHTML = ['all',...all].map(type => {
+      const label = typeDisplay(type), active = (explorer.type || 'all') === type;
+      return `<button type="button" class="filter-chip ${active ? 'active' : ''}" aria-pressed="${active}" data-explore="type" data-value="${esc(type)}">${type === 'all' ? '全部' :
+        `<span class="type-dot" style="--type-color:${label.color}"></span>${esc(label.label)}`}</button>`;
+    }).join('');
+    filters.scrollLeft = scroll;
+    if (current) [...filters.querySelectorAll('button')].find(item => item.dataset.value === current)?.focus({preventScroll:true});
+    return;
+  }
   const activeType = filters.contains(document.activeElement) ? document.activeElement.dataset.type : null;
   const scroll = filters.scrollLeft;
   filters.innerHTML =
@@ -549,6 +573,7 @@ function transformScene() {
   const counts = new Map(graph.nodes.map(n => [n.id, {relations:n.degree}]));
   graphMotion.schedule(graph, JSON.stringify([state.generation, state.warehouseId]), {
     counts, metric:'relations', max:Math.max(1, ...graph.nodes.map(n => n.degree)),
+    expansion:explorer.revision, parents:explorer.parents, afterMount:explorer.applyCamera,
   });
 }
 function fact(e) {
@@ -598,6 +623,7 @@ function renderGraph() {
     b.setAttribute("aria-pressed", String(active));
   });
   const positions = new Map(g.nodes.map(n => [n.id,n]));
+  const look = explorer.enabled() ? explorer.appearance(g) : null;
   const groups = new Map();
   for (const e of g.edges) {
     const key = JSON.stringify([e.s,e.t].sort());
@@ -611,17 +637,22 @@ function renderGraph() {
     const chosen = e.id === state.selectedEdge;
     const connected = state.selectedNode && (e.s === state.selectedNode || e.t === state.selectedNode);
     const labeled = chosen || connected || g.edges.length <= 12;
-    return `<g class="graph-link ${connected ? "connected" : ""} ${chosen ? "chosen" : ""}"><title>${esc(node(e.s)?.name)} → ${esc(e.label)} → ${esc(node(e.t)?.name)}</title><path class="graph-edge-hit" d="${path.d}" data-edge="${esc(e.id)}"/><path class="graph-edge ${chosen ? "selected" : ""}" d="${path.d}" data-edge="${esc(e.id)}" marker-end="url(#${chosen ? "arrow-selected" : "arrow"})"/>${labeled ? `<text class="graph-edge-label" transform="translate(${path.x} ${path.y}) rotate(${path.angle})" text-anchor="middle" y="-7">${esc(e.label)}</text>` : ""}</g>`;
+    const appearance = look ? [look.edgeClasses.get(e.id),look.highlight && !look.markedEdges.has(e.id) && !chosen && 'explore-muted',
+      look.omitted.has(e.id) && 'explore-omitted'].filter(Boolean).join(' ') : '';
+    return `<g class="graph-link ${connected ? "connected" : ""} ${chosen ? "chosen" : ""} ${appearance}"><title>${esc(node(e.s)?.name)} → ${esc(e.label)} → ${esc(node(e.t)?.name)}</title><path class="graph-edge-hit" d="${path.d}" data-edge="${esc(e.id)}"/><path class="graph-edge ${chosen ? "selected" : ""}" d="${path.d}" data-edge="${esc(e.id)}" marker-end="url(#${chosen ? "arrow-selected" : "arrow"})"/>${labeled ? `<text class="graph-edge-label" transform="translate(${path.x} ${path.y}) rotate(${path.angle})" text-anchor="middle" y="-7">${esc(e.label)}</text>` : ""}${look?.queued.has(e.id) ? '<text class="explore-flag" aria-hidden="true">⚑</text>' : ''}</g>`;
   }).join("") + '</g><g class="graph-space-nodes">' + g.nodes.map(n => {
     const selected = n.id === state.selectedNode;
     const match = $("#graph-query").value.trim() && n.name.toLocaleLowerCase().includes($("#graph-query").value.trim().toLocaleLowerCase());
     const display = typeDisplay(n.type);
-    return `<g class="graph-node ${selected ? "selected" : ""} ${match ? "search-match" : ""}" data-node="${esc(n.id)}" transform="translate(${n.x} ${n.y})" style="--type-color:${display.color}" role="button" tabindex="0" aria-label="${esc(n.name)}，${esc(display.label)}，点击聚焦关联"><title>${esc(n.name)} · ${esc(display.label)} (${esc(n.type)})</title><circle class="node-star-hit" r="${n.r+8}"/><circle class="core node-star" r="${n.r}"/><text class="node-name" y="${n.r+20}">${n.lines.map((line,i) => `<tspan x="0" dy="${i ? 15 : 0}">${esc(line)}</tspan>`).join("")}</text></g>`;
-  }).join("") + '</g>';
+    const appearance = look ? [look.nodeClasses.get(n.id),look.highlight && !look.markedNodes.has(n.id) && !selected && 'explore-muted',
+      look.omittedNodes.has(n.id) && 'explore-omitted'].filter(Boolean).join(' ') : '';
+    const shownType = look && (selected || look.markedNodes.has(n.id)) ? `<tspan x="0" dy="14" class="explore-node-type">${esc(display.label)}</tspan>` : '';
+    return `<g class="graph-node ${selected ? "selected" : ""} ${match ? "search-match" : ""} ${appearance}" data-node="${esc(n.id)}" transform="translate(${n.x} ${n.y})" style="--type-color:${display.color}" role="button" tabindex="0" aria-label="${esc(n.name)}，${esc(display.label)}，点击聚焦关联"><title>${esc(n.name)} · ${esc(display.label)} (${esc(n.type)})</title><circle class="node-star-hit" r="${n.r+8}"/><circle class="core node-star" r="${n.r}"/>${look && explorer.boundary(n,n.degree) ? '<circle class="explore-boundary"/>' : ''}<text class="node-name" y="${n.r+20}">${n.lines.map((line,i) => `<tspan x="0" dy="${i ? 15 : 0}">${esc(line)}</tspan>`).join("")}${shownType}</text></g>`;
+  }).join("") + '</g>' + (look?.pair ? `<path class="explore-duplicate-line" data-explore-from="${esc(look.pair.a.id)}" data-explore-to="${esc(look.pair.b.id)}"/>` : '');
   transformScene();
   $(
     "#relation-list",
-  ).innerHTML = `<table class="relation-table"><thead><tr><th>主体</th><th>关系</th><th>客体</th><th>来源</th></tr></thead><tbody>${g.edges
+  ).innerHTML = `<table class="relation-table"><thead><tr><th>主体</th><th>关系</th><th>客体</th><th>来源</th></tr></thead><tbody>${g.edges.filter(edge => !look?.omitted.has(edge.id))
     .map(
       (e) =>
         `<tr data-edge="${esc(
@@ -638,6 +669,17 @@ function renderGraph() {
     !g.edges.length ? '<div class="empty">当前没有可显示的关系</div>' : ""
   }`;
   renderDetails(g);
+  const tools = $("#graph-explore-details");
+  const markup = look ? explorer.layer(g,look) : '';
+  if (tools.renderedMarkup !== markup) {
+    tools.innerHTML = markup;
+    tools.renderedMarkup = markup;
+  }
+  tools.hidden = !markup;
+  if (markup) {
+    $(".graph-inspector").hidden = false;
+    if (!state.selectedNode && !state.selectedEdge) $("#graph-inspector-trail").textContent = '星图探索';
+  }
 }
 function renderGraphEmpty(query, warehouse) {
   let title = "正在连接星图", message = "连接盒子后会显示当前账号的星图。", actionName = "", label = "";
@@ -688,15 +730,16 @@ function renderDetails(g) {
   const inspector = $(".graph-inspector");
   inspector.hidden = !(n || e) || state.detailsDismissed;
   if (inspector.hidden) {
-    $("#graph-details").replaceChildren();
+    const details = $("#graph-details");
+    details.replaceChildren();
+    details.renderedMarkup = undefined;
     return;
   }
   $("#graph-inspector-trail").innerHTML = `<button type="button" class="text-link" data-action="leave-graph-focus">${$("#graph-focus-back").textContent}</button>
     <span aria-hidden="true">›</span>${e ? `<button type="button" class="text-link" data-action="graph-entity-details">${esc(n?.name || "实体")}</button>
     <span aria-hidden="true">›</span><span>关系来源</span>` : `<span>${esc(n?.name || "相关关系")}</span>`}`;
-  $(
-    "#graph-details",
-  ).innerHTML = `<div class="detail-top"><div class="type-line"><span>${
+  const details = $("#graph-details");
+  const markup = `<div class="detail-top"><div class="type-line"><span>${
     n ? esc(typeDisplay(n.type).label) : "知识图谱"
   }</span><span>${n ? "实体详情" : "选择实体或关系"}</span></div><h2>${
     n ? esc(n.name) : "从一个节点开始"
@@ -704,7 +747,7 @@ function renderDetails(g) {
     n
       ? "正在聚焦这个实体的直接关联。点击关系核对来源，或返回全图继续探索。"
       : "材料中的明确陈述形成知识关系，点击图中节点进行探索。"
-  }</p></div><div class="detail-section"><div class="section-caption"><span>相关关系</span><span class="muted mono">${
+  }</p>${explorer.nodeControls(n)}</div><div class="detail-section"><div class="section-caption"><span>相关关系</span><span class="muted mono">${
     related.length
   } 条</span></div>${
     related
@@ -720,7 +763,7 @@ function renderDetails(g) {
       )
       .join("") ||
     '<p class="detail-empty">导入材料并完成知识处理后，显示相关关系。</p>'
-  }</div><div class="detail-section"><div class="section-caption"><span>关系来源</span><span class="muted">${
+  }</div>${explorer.edgeControls(e)}<div class="detail-section"><div class="section-caption"><span>关系来源</span><span class="muted">${
     e ? e.evidence.length + " 个片段" : "尚未选择"
   }</span></div>${
     e
@@ -729,9 +772,8 @@ function renderDetails(g) {
             (v, i) =>
               `<div class="source-card"><div class="source-title">${icon(
                 "file",
-              )}<span>${esc(
-                doc(v.document_id)?.original_name || "来源材料",
-              )}</span></div><p>${
+              )}${explorer.enabled() ? `<button type="button" class="text-link" data-explore="source" data-value="${esc(v.document_id)}">${esc(doc(v.document_id)?.original_name || '来源材料')}</button>`
+                : `<span>${esc(doc(v.document_id)?.original_name || '来源材料')}</span>`}</div><p>${
                 v.excerpt
                   ? highlight(v.excerpt, [node(e.s)?.name, node(e.t)?.name])
                   : "来源正在完成保护检测，请稍后刷新。"
@@ -739,6 +781,8 @@ function renderDetails(g) {
                 locator(v.locator_json),
               )}</span><button class="text-link" data-source="${esc(
                 v.document_id,
+              )}" data-source-version="${esc(
+                v.document_version_id || v.version_id || "",
               )}" data-edge-source="${esc(
                 e.id,
               )}" data-evidence-index="${i}">查看来源 ${icon(
@@ -749,6 +793,10 @@ function renderDetails(g) {
         '<p class="detail-note">来源片段用于核对关系，片段数量不代表独立证明次数。</p>'
       : '<p class="detail-empty">点击关系或图中连线，查看来源位置与摘录。</p>'
   }</div>`;
+  if (details.renderedMarkup !== markup) {
+    details.innerHTML = markup;
+    details.renderedMarkup = markup;
+  }
 }
 function selectNode(id) {
   state.detailsDismissed = false;
@@ -774,7 +822,7 @@ const workbench = createWorkbenchHost({ call, warehouse: () => state.invalid ? n
   container: () => $("#mw-editor-content")||$("#view-workbench"),
   onView: view => { if (!$('#mw-editor-dialog')&&workbench.has(state.view) && pages[view]) setView(view, true); },
   onImport: openMaterialFromWorkbench,
-  onSource: (id, versionId) => showSource(id, null, versionId),
+  onSource: (id, versionId, segment) => showSource(id, null, versionId, {segment}),
   onOntologySection: (section, category = section) => {
     state.ontologySection = section;
     state.ontologyCategory = category;
@@ -808,11 +856,6 @@ const pages = {
     "把你的资料，连成可追溯、可调用的知识。",
   ],
   conversation: ['资料库','IMPORT MATERIALS','导入资料，查看正文和知识处理进度。'],
-  search: [
-    "知识检索",
-    "EVERY FINDING HAS A SOURCE",
-    "使用问题或关键词检索材料中的证据。",
-  ],
   tasks: [
     "处理任务",
     "FROM MATERIALS TO KNOWLEDGE",
@@ -827,8 +870,6 @@ const pages = {
 const ontologyHeadings = {
   "add-entity": ["添加实体类型", "设置要从材料中识别的实体及其属性。"],
   "add-relation": ["添加关系类型", "指定关系方向、可连接的实体类型及其属性。"],
-  assistant: ["对话调整", "用对话修改类型、关系和属性。"],
-  drafts: ["待发布草稿", "核对已保存的修改，再确认发布。"],
 };
 function updatePageHeading() {
   const [title, kicker, description] = pages[state.view];
@@ -838,9 +879,9 @@ function updatePageHeading() {
   $("#page-description").textContent = subtitle;
 }
 function updateCurrentNavigation() {
-  document.querySelectorAll('[data-view], [data-ontology-action]').forEach(el => {
+  document.querySelectorAll('[data-view], [data-ontology-action], #rules-guide-entry').forEach(el => {
     const current = state.view === "onboarding"
-      ? state.onboardingSection === "ontology" ? el.dataset.ontologyAction === "published" : el.dataset.view === "warehouses"
+      ? state.onboardingSection === "ontology" ? el.id === "rules-guide-entry" : el.dataset.view === "warehouses"
       : state.view === "ontology" ? el.dataset.view === "ontology" || el.dataset.ontologyAction === state.ontologyCategory : el.dataset.view === state.view;
     if (current) el.setAttribute("aria-current", "page");
     else el.removeAttribute("aria-current");
@@ -865,9 +906,6 @@ function setView(view, fromWorkbench = false, ontologyAction, onboardingHandoff 
   if (previousView === 'models' && view !== 'models') state.modelOnboarding=null;
   if (previousView === 'onboarding' && view !== 'onboarding' && !onboardingHandoff) onboarding.close();
   $(".page-heading").hidden = view === 'onboarding';
-  const rulesMenu = $("#ontology-actions");
-  rulesMenu.hidden = view !== "ontology";
-  rulesMenu.open = false;
   $("#app").classList.toggle("is-setting-up", view === "onboarding");
   if (view !== "ontology" && previousView === "ontology") workbench.clearOntologyAction();
   if(view!=='conversation')stopConversation();
@@ -891,7 +929,7 @@ function setView(view, fromWorkbench = false, ontologyAction, onboardingHandoff 
   updatePageHeading();
   $("#page-secondary").hidden = view !== "graph";
   const directory = view === "warehouses";
-  $("#page-primary").hidden = directory ? typeof bridge?.setCreationEnabled === "function" : view !== "conversation" && view !== "search";
+  $("#page-primary").hidden = directory ? typeof bridge?.setCreationEnabled === "function" : view !== "conversation";
   $(".page-scroll").classList.toggle("workbench-page", integrated);
   $("#page-primary").dataset.action = directory ? "new-warehouse" : "import";
   $("#page-primary").innerHTML = icon("plus") + (directory ? "新建数据仓" : "导入资料");
@@ -923,7 +961,7 @@ function focusConversationCard(selector) {
 function renderConversation() {
   syncControls();
   const conversationRoot=$('#view-conversation');
-  const disclosureScope=JSON.stringify([state.generation,state.warehouseId,conversationFlow?.saved.conversationId,conversationFlow?.state.selectedIntent]);
+  const disclosureScope=JSON.stringify([state.generation,state.warehouseId,conversationFlow?.saved.conversationId,conversationFlow?.state.selectedIntent,conversationFlow?.state.importDocumentId]);
   const disclosureState=new Map(conversationRoot.dataset.disclosureScope===disclosureScope
     ? [...conversationRoot.querySelectorAll('[data-cv-disclosure]')].map(el=>[el.dataset.cvDisclosure,el.open]):[]);
   const focus=document.activeElement,focusId=focus?.id?.startsWith('cv-')?focus.id:null;
@@ -932,6 +970,9 @@ function renderConversation() {
   const contextScroll=$('#view-conversation .conversation-context')?.scrollTop;
   const reviewScroll=$('#view-conversation .mw-review-content')?.scrollTop;
   const listScroll=$('#view-conversation .mw-material-list')?.scrollTop;
+  const knowledgeScroll=$('#view-conversation .mw-knowledge-content')?.scrollTop;
+  const sourceMatch=conversationFlow?.importer.view?.sourceMatch;
+  const sourceMatchStamp=sourceMatch?JSON.stringify([disclosureScope,sourceMatch.id,sourceMatch.request]):'';
   const sourceScroll=$('#view-conversation .cv-source-review')?.scrollTop;
   const proposalStamp=JSON.stringify(conversationFlow?.changes.state.proposals.map(p=>[p.id,p.status])||[]);
   const newProposal=conversationRoot.dataset.proposalStamp!==proposalStamp;
@@ -951,6 +992,7 @@ function renderConversation() {
   if(contextScroll!==undefined&&$('#view-conversation .conversation-context'))$('#view-conversation .conversation-context').scrollTop=contextScroll;
   if(reviewScroll!==undefined&&$('#view-conversation .mw-review-content'))$('#view-conversation .mw-review-content').scrollTop=newMaterialState?0:reviewScroll;
   if(listScroll!==undefined&&$('#view-conversation .mw-material-list'))$('#view-conversation .mw-material-list').scrollTop=listScroll;
+  if(knowledgeScroll!==undefined&&!newMaterialState&&$('#view-conversation .mw-knowledge-content'))$('#view-conversation .mw-knowledge-content').scrollTop=knowledgeScroll;
   if(!['cv-goal','cv-instructions','cv-message'].includes(focusId)&&!focusId?.startsWith('cv-source-')){
     if(newProposal&&conversationFlow?.changes.state.proposals.length)focusConversationCard('.cv-proposal-current');
     else if(newMaterialState&&conversationFlow?.state.detail){
@@ -960,6 +1002,13 @@ function renderConversation() {
   }
   conversationRoot.dataset.proposalStamp=proposalStamp;
   conversationRoot.dataset.materialStamp=materialStamp;
+  if(sourceMatchStamp&&conversationRoot.dataset.readerSourceMatch!==sourceMatchStamp){
+    const match=conversationRoot.querySelector('[data-reader-match]');
+    match?.focus({preventScroll:true});
+    const quote=match?.querySelector('mark');
+    (quote||match)?.scrollIntoView({block:quote?'center':'start',inline:'nearest'});
+  }
+  conversationRoot.dataset.readerSourceMatch=sourceMatchStamp;
 }
 function basicMaterialLibrary() {
   const rows=state.documents.map(item=>`<li><button type="button" class="text-link" data-source="${esc(item.id)}">${esc(item.original_name||item.name)}</button></li>`).join('');
@@ -1038,8 +1087,15 @@ async function openConversationReview(documentId,reviewTarget){
   if(!workbench.openMaterial(documentId,reviewTarget)){dialog.close();dialog.remove();}
 }
 function bindConversationEvents(){
+const filterMaterialList=event=>{
+  if(!conversationFlow||event.target.id!=='cv-material-query'||event.isComposing)return;
+  const s=conversationFlow.state;if(s.readerQuery===event.target.value)return;
+  s.readerQuery=event.target.value;conversationFlow.emit();
+};
+$('#view-conversation').addEventListener('compositionend',filterMaterialList);
 $('#view-conversation').addEventListener('input',event=>{
   if(!conversationFlow)return;const s=conversationFlow.state;
+  if(event.target.id==='cv-material-query'){filterMaterialList(event);return;}
   if(event.target.id==='cv-message')s.input=event.target.value;
   if(event.target.dataset.intakeSegment){
     conversationFlow.intake.edit(event.target.dataset.intakeSegment,event.target.value);
@@ -1075,6 +1131,7 @@ $('#view-conversation').addEventListener('keydown',event=>{
   if(item&&['Enter',' '].includes(event.key)){event.preventDefault();item.dispatchEvent(new MouseEvent('click',{bubbles:true}));}
 });
 $('#view-conversation').addEventListener('change',event=>{
+  if(event.target.id==='cv-material-sort'&&conversationFlow){conversationFlow.state.readerSort=event.target.value;conversationFlow.emit();}
   if(event.target.id==='cv-candidate-focus'&&conversationFlow){const g=currentCandidateGraph(conversationFlow);if(g){g.focus=event.target.value;g.selected=null;g.zoom=1;conversationFlow.emit();}}
   if(event.target.id==='cv-session'&&event.target.value)void conversationFlow?.select(event.target.value);
   if(event.target.id==='cv-message-mode'&&conversationFlow)conversationFlow.state.messageMode=event.target.value;
@@ -1094,6 +1151,7 @@ $('#view-conversation').addEventListener('submit',event=>{
 $('#view-conversation').addEventListener('click',event=>{
   const el=event.target.closest('[data-cv]'),f=conversationFlow;if(!el||!f||el.disabled)return;
   const commandName=el.dataset.cv,offset=f.state.candidates?.offset||0,mergeOffset=f.state.merge?.plan.offset||0;
+  const menu=el.closest('.mw-reader-menu');if(menu)menu.open=false;
   if(commandName==='import-dialogue'||commandName==='material-dialogue'&&f.state.materialPage==='import')return;
   if(['candidate-inspect','candidate-zoom-in','candidate-zoom-out','candidate-zoom-reset'].includes(commandName)){
     const g=currentCandidateGraph(f);if(!g)return;
@@ -1125,6 +1183,9 @@ $('#view-conversation').addEventListener('click',event=>{
     'library-start':()=>startWarehouseMaterialDialogue(f),'library-select':()=>f.state.materialPage?f.importer.select(el.dataset.id):selectWarehouseMaterial(f,el.dataset.id),'library-more':()=>f.run(()=>readWarehouseMaterials(f,true)),
     'import-refresh':()=>f.importer.refresh(),
     'import-confirm':()=>f.importer.confirm(),'import-auto':()=>f.importer.automatic(),'import-review':()=>f.importer.review((id,target)=>f===conversationFlow&&openConversationReview(id,target)),
+    'import-knowledge':()=>f.importer.toggleKnowledge(),'import-knowledge-retry':()=>f.importer.readKnowledge(true),
+    'import-knowledge-filter':()=>f.importer.filterKnowledge(el.dataset.id),'import-knowledge-more':()=>f.importer.moreKnowledge(),
+    'import-source-jump':()=>f.importer.locateEvidence(Number(el.dataset.index)),
     'material-review':()=>f.importer.reviewAutomatic((id,target)=>f===conversationFlow&&openConversationReview(id,target)),
     'import-index-retry':()=>f.importer.retryIndex(),
     'import-close-dialogue':()=>f.importer.exitDialogue(),'import-prev':()=>f.importer.page(-1),'import-next':()=>f.importer.page(1),
@@ -1415,15 +1476,14 @@ async function refresh() {
   const scoped = currentWarehouse()?.state === "active";
   let newlyActive = false;
   try {
-    const [d, j, g, r, w, ontology] = await Promise.allSettled([
+    const [d, j, g, w, ontology] = await Promise.allSettled([
       scoped ? call("documents", { limit: 100 }) : Promise.resolve({items:[]}),
       scoped ? call("jobs", { offset: state.jobOffset }) : Promise.resolve({items:[],total:0}),
       scoped ? call("graph") : Promise.resolve({nodes:[],edges:[]}),
-      scoped ? call("retrieval") : Promise.resolve(null),
       call("warehouses"),
       scoped ? call('conversation-ontologies').then(readWorkbenchReply).then(result => {
         if (!Array.isArray(result?.items)) throw Object.assign(new Error('SEMANTICA_INVALID_RESPONSE'), {code:'SEMANTICA_INVALID_RESPONSE'});
-        return result.items.find(item => item.status === 'published')?.schema || null;
+        return result.items.find(item => item.status === 'published') || null;
       }) : Promise.resolve(null),
     ]);
     if (state.invalid || generation !== state.generation) return;
@@ -1435,12 +1495,14 @@ async function refresh() {
       state.jobTotal = j.value.total;
     }
     // Never retain another warehouse's labels or substitute a generic ontology.
-    const schema = ontology.status === 'fulfilled' ? ontology.value : null;
+    state.graphOntology = ontology.status === 'fulfilled' ? ontology.value : null;
+    const schema = state.graphOntology?.schema;
     state.graphPresentation = createGraphPresentation(schema);
     if (g.status === "fulfilled") {
       const fingerprint = JSON.stringify([g.value, schema]);
       if (fingerprint !== state.graphFingerprint) {
         const first = !state.graphFingerprint;
+        explorer.resetExpansion();
         state.graph = graphLayout(g.value);
         state.graphFingerprint = fingerprint;
         if (first) fitGraph();
@@ -1451,10 +1513,6 @@ async function refresh() {
       state.graph = graphLayout(state.graph);
       state.graphFingerprint = null;
     }
-    if (r.status === "fulfilled") {
-      state.retrieval = r.value;
-      renderRetrieval();
-    }
     if (w.status === "fulfilled") {
       const previousState = currentWarehouse()?.state;
       state.warehouses = w.value.items;
@@ -1464,7 +1522,7 @@ async function refresh() {
       if (state.view === "conversation" && previousState !== currentWarehouse()?.state) void loadConversation();
       if (currentWarehouse()?.state === "import_failed") void loadImportFailure();
     }
-    const failed = [d, j, r, w].find((v) => v.status === "rejected");
+    const failed = [d, j, w].find((v) => v.status === "rejected");
     const directory = state.view === "warehouses";
     if (failed && !directory) banner(errorText(failed.reason));
     else if (ontology.status === 'rejected' && !directory) banner('当前仓库本体名称读取失败，图谱暂按原始类型编码显示；请重新读取。');
@@ -1474,11 +1532,12 @@ async function refresh() {
       state.jobs = [];
       state.graph = { nodes: [], edges: [] };
       state.graphPresentation = createGraphPresentation();
+      state.graphOntology = null;
+      explorer.reset();
       state.jobTotal = 0;
       state.graphFingerprint = null;
       state.source = null;
       state.policy = null;
-      state.retrieval = null;
       state.graphError = {
         publicMessage: currentWarehouse()?.state === "import_failed"
           ? "迁入未完成，图谱暂不可读取。请到数据管理查看失败原因。"
@@ -1487,7 +1546,6 @@ async function refresh() {
       $("#source-dialog").close();
       $("#source-body").replaceChildren();
       $("#source-actions").replaceChildren();
-      $("#search-results").replaceChildren();
       if (!directory) banner(currentWarehouse()?.state === "clear_failed"
         ? "当前数据仓清理未完成，请到数据管理查看；其他数据仓仍可正常使用。"
         : currentWarehouse()?.state === "import_failed"
@@ -1508,24 +1566,6 @@ async function refresh() {
     }
   }
 }
-function renderRetrieval() {
-  const r = state.retrieval;
-  const status = $("#search-index-state");
-  if (r?.compatible && r?.fresh) {
-    status.innerHTML = `<span class="index-state-ready">${icon("check")} 索引已就绪</span>`;
-  } else if (!r) {
-    status.textContent = "暂未读取到检索索引状态";
-  } else if (r.items?.some(item => item.status === "building" && ["queued", "running"].includes(item.job_status))) {
-    status.textContent = "正在建立检索索引，完成后即可查询。";
-  } else if (r.embedding_configured === false) {
-    status.textContent = "检索向量模型尚未配置，请查看模型设置。";
-  } else if (r.publishable_segments === 0) {
-    status.textContent = "等待材料解析，解析完成后可建立索引。";
-  } else {
-    status.innerHTML = `<span>${r.active ? "材料已更新" : "材料已解析"}</span>
-      <button type="button" class="text-link" data-action="build-index">${r.active ? "更新索引" : "建立索引"}</button>`;
-  }
-}
 async function initialize() {
   if (state.invalid) return;
   state.hostNavigationReady = false;
@@ -1534,8 +1574,8 @@ async function initialize() {
     const v = await call("initialize");
     if (state.invalid) return;
     state.identity = v.identity;
+    state.initialization = v;
     state.preview = v.identity.connection === "preview";
-    state.retrieval = v.retrieval;
     state.warehouses = v.warehouses.items;
     state.runtime = v.runtime;
     void loadProcessingSummary();
@@ -1550,7 +1590,6 @@ async function initialize() {
       bytes(v.capabilities.document_max_bytes);
     connection(true);
     banner("");
-    renderRetrieval();
     await selectWarehouse(
       state.warehouseId || rememberedWarehouse() ||
         state.warehouses.find((w) => w.state === "active")?.id ||
@@ -1586,7 +1625,8 @@ async function applyLaunchTarget(value) {
       : active(state.warehouseId) ? state.warehouseId : state.warehouses.find(w => w.state === "active")?.id || null;
     // Opening an unavailable warehouse is still a successful application open.
     // Issue no new clear/delete request; let the user choose from their directory.
-    const view = unavailable || target.view === "skills" ? "warehouses" : target.view;
+    const view = unavailable || target.view === "skills" ? "warehouses"
+      : target.view === "search" ? "graph" : target.view;
     const selected = view === "warehouses" && (!target.warehouseId || unavailable) ? null : warehouseId;
     await selectWarehouse(selected, view);
     if(target.documentId&&!unavailable){
@@ -1603,119 +1643,12 @@ async function applyLaunchTarget(value) {
       await call("launch-target-applied", { requestId: value.requestId, ok }).catch(() => {});
   }
 }
-async function runSearch(annotationAfter) {
-  if (!state.ready || state.invalid || currentWarehouse()?.state !== "active") return;
-  const generation = state.generation;
-  const prior = state.searchResult;
-  const query = annotationAfter ? prior?.query : $("#search-query").value.trim();
-  if (!query) return;
-  if (annotationAfter && (state.searching || prior.generation !== generation ||
-    prior.reply.annotationSearch?.nextCursor !== annotationAfter)) return;
-  if (!annotationAfter) state.searchResult = null;
-  const request = state.searchRequest = (state.searchRequest || 0) + 1;
-  state.searching = true;
-  const button = $("#search-form button[type=submit]");
-  button.disabled = true;
-  if (!annotationAfter) $("#search-results").innerHTML = '<div class="empty">正在检索当前版本的材料…</div>';
-  const more = $("#search-more-annotations");
-  if (more) more.disabled = true;
-  try {
-    const result = await call("search", { query, ...(annotationAfter ? {annotationAfter} : {}) });
-    if (
-      state.invalid ||
-      generation !== state.generation ||
-      request !== state.searchRequest ||
-      currentWarehouse()?.state !== "active"
-    )
-      return;
-    let r = result;
-    if (annotationAfter) {
-      const documents = new Map((prior.reply.annotationDocuments || []).map(item => [item.documentId, item]));
-      const nativeIds = new Set((prior.reply.items || []).map(item => item.document_id));
-      for (const document of result.annotationDocuments || []) {
-        if (!nativeIds.has(document.documentId)) documents.set(document.documentId, document);
-      }
-      r = {...prior.reply, annotationDocuments:[...documents.values()], annotationSearch:{...result.annotationSearch,
-        verificationIncomplete: prior.reply.annotationSearch.verificationIncomplete ||
-          (result.annotationSearch?.verificationIncomplete ?? result.annotationSearch?.incomplete)}};
-    }
-    state.searchResult = {generation, query, reply:r};
-    const items = [
-      ...(r.items || []),
-      ...(r.annotationDocuments || []).map(document => ({
-        document_id: document.documentId,
-        document_version_id: document.versionId,
-        original_name: document.title,
-        spaceFolderPath: document.folderPath,
-        text: "打开来源查看对应版本。",
-        channels: ["space-tag"],
-      })),
-    ];
-    const channels = { vector: "向量", keyword: "关键词", graph: "知识关系", "space-tag": "空间标签" };
-    $("#search-results").innerHTML =
-      `<div class="results-summary"><span>找到 <b class="mono">${
-        items.length
-      }</b> 项相关结果</span><span class="muted small">当前材料版本</span></div>${
-        r.sensitive?.withheld
-          ? `<div class="inline-error">${r.sensitive.withheld} 条内容尚未完成保护检测，暂不交付。</div>`
-          : ""
-      }${(r.annotationSearch?.verificationIncomplete ?? r.annotationSearch?.incomplete) ? '<p class="modal-warning" role="status">部分空间标签尚未核验，检索结果可能不完整。</p>' : ""}${r.message ? `<p class="modal-warning">${esc(r.message)}</p>` : ""}${
-        r.graph_warning
-          ? `<p class="modal-warning">${esc(r.graph_warning)}</p>`
-          : ""
-      }` +
-      items
-        .map(
-          (v) =>
-            `<article class="result-card"><header class="result-meta"><h3>${icon("file")}${esc(
-              v.original_name || doc(v.document_id)?.original_name || "来源材料",
-            )}</h3><span>${esc(locator(v.locator))}</span></header>${
-              v.spaceFolderPath ? `<p class="muted small">空间目录 · ${esc(v.spaceFolderPath)}</p>` : ''
-            }${
-              v.spaceSourceStatus ? `<small class="muted">${v.spaceSourceStatus === 'updated' ? '空间原文件已更新 · 此处引用先前导入的正文' : '与空间原文件一致'}</small>` : ''
-            }<p>${highlight(v.text, [
-              query,
-              ...(v.matched_entities || []),
-            ])}</p><div class="result-footer"><div class="result-channels">${v.matched_entities?.length ? `<span class="result-entities">${esc(v.matched_entities.join(" · "))}</span>` : ""}${(
-              v.channels || []
-            )
-              .map((c) => `<span class="pill">${esc(channels[c] || c)}</span>`)
-              .join("")}</div><button class="text-link" data-source="${esc(
-              v.document_id,
-            )}" data-source-version="${esc(v.document_version_id || v.version_id || '')}" data-source-location="${esc(locator(v.locator))}" data-source-start="${
-              citationStart(v.locator) ?? ""
-            }" data-source-segment="${esc(citationSegment(v))}" data-source-offset="${citationOffset(v.locator)}">查看来源 ${icon("external")}</button></div></article>`,
-        )
-        .join("") +
-      (!items.length
-        ? '<div class="empty">没有找到符合当前版本与交付规则的证据。</div>'
-        : "") +
-      (r.annotationSearch?.nextCursor ? '<button id="search-more-annotations" class="btn btn-secondary" type="button">显示更多空间标签结果</button>' : "");
-  } catch (e) {
-    if (generation !== state.generation || request !== state.searchRequest || state.invalid) return;
-    if (annotationAfter && e.code !== 'SPACE_TAG_RESULTS_CHANGED') {
-      $("#search-more-error")?.remove();
-      $("#search-results").insertAdjacentHTML('beforeend', `<p id="search-more-error" role="alert">${esc(errorText(e))}</p>`);
-    } else {
-      state.searchResult = null;
-      $("#search-results").innerHTML = '<div class="empty subpage-error" role="alert">' +
-        esc(e.code === 'SPACE_TAG_RESULTS_CHANGED' ? '空间标签结果已变化，请重新检索。' : errorText(e)) + '</div>';
-    }
-    if (["SEMANTICA_INDEX_REQUIRED", "SEMANTICA_INDEX_STALE"].includes(e.code)) void refresh();
-  } finally {
-    if (generation === state.generation && request === state.searchRequest) {
-      state.searching = false;
-      button.disabled = !state.ready || currentWarehouse()?.state !== "active";
-      if (more?.isConnected) more.disabled = false;
-    }
-  }
-}
 async function sourceRange(id, versionId, start = 0, end) {
   const page = await call("document-text", { id, versionId, start, ...(end === undefined ? {} : {end}) });
   if (page.document_id !== id || page.version_id !== versionId || page.start !== start ||
       (end !== undefined && page.end !== end)) {
     throw Object.assign(new Error("SOURCE_VERSION_CONFLICT"), {
-      publicMessage: "无法核对引用的正文版本，请重新检索后打开来源。",
+      publicMessage: "无法核对引用的正文版本，请重新打开来源。",
     });
   }
   return page;
@@ -1959,15 +1892,6 @@ async function saveCorrection() {
     if (current()) { state.saving = false; renderSource(); }
   }
 }
-function renderImportSource() {
-  const space = state.importSource === "space";
-  $("#space-browser").hidden = !space;
-  $("#computer-browser").hidden = space;
-  for (const [id, selected] of [["#source-space", space], ["#source-computer", !space]]) {
-    $(id).classList.toggle("active", selected);
-    $(id).setAttribute("aria-pressed", String(selected));
-  }
-}
 function matchingSpaceItems() {
   if (state.spaceResults) return [...state.spaceResults.items];
   const query = $("#space-query").value.trim().toLocaleLowerCase();
@@ -1989,7 +1913,7 @@ function renderSpace() {
   $("#space-load-more").hidden = !search?.nextCursor;
   const searchStatus = search
     ? `已显示 ${items.length} 份匹配文件${search.nextCursor ? "，可继续搜索后续资料" : ""}${search.scanLimited ? "。部分目录未覆盖，可缩小搜索范围。" : ""}`
-    : !items.length ? (query ? "当前文件夹没有匹配的文件。" : "此文件夹还没有文件，可先在万象空间上传，或从电脑选择。") : "";
+    : !items.length ? (query ? "当前文件夹没有匹配的文件。" : "此文件夹还没有文件，可先在万象空间上传。") : "";
   $("#space-status").textContent = state.spaceLoading
     ? search && state.spaceSelecting ? `正在读取其余结果，已找到 ${items.length} 份匹配文件…` : "正在读取万象空间…"
     : state.spaceError ? errorText(state.spaceError) : searchStatus;
@@ -2054,14 +1978,6 @@ function resetImportDrafts() {
   state.importFiles = { standard: [], conversation: [] };
   $("#import-note").value = "";
 }
-$("#source-space").addEventListener("click", () => {
-  state.importSource = "space";
-  renderImportSource();
-});
-$("#source-computer").addEventListener("click", () => {
-  state.importSource = "computer";
-  renderImportSource();
-});
 $("#space-query").addEventListener("input", () => {
   state.spaceResults = null;
   state.spaceError = null;
@@ -2178,7 +2094,7 @@ function renderPending(changedFile) {
       (f) =>
         `<div class="file-preview">${icon("file")}<span class="pending-name">${esc(
           f.name,
-        )}<small>${f.source === "space" ? "万象空间" : "电脑文件"}${f.folderPath ? " · " + esc(f.folderPath) : ""}</small></span><span class="file-meta mono">${bytes(
+        )}<small>万象空间${f.folderPath ? " · " + esc(f.folderPath) : ""}</small>${pendingAnnotationHTML(f)}</span><span class="file-meta mono">${bytes(
           f.size,
         )}</span><button class="text-link" data-remove-file="${esc(f.handle)}" aria-label="${batch && needsNewFileSelection(f) ? "移除旧选择" : "移除"} ${esc(f.name)}">${batch && needsNewFileSelection(f) ? "移除旧选择" : "移除"}</button><span class="file-state${f.error ? " file-state-error" : ""}" data-import-status="${esc(f.handle)}">${esc(pendingFileStatus(f))}</span></div>`,
     )
@@ -2205,6 +2121,7 @@ async function uploadFiles() {
       const r = await call("upload", { handle: f.handle });
       f.done = true;
       f.documentId = r.document?.id;
+      f.annotationIndex = r.annotationIndex;
       f.reused = r.reused === true;
     } catch (e) {
       f.error = e;
@@ -2257,6 +2174,7 @@ async function uploadConversationFile() {
   }
 }
 function resetGraph() {
+  explorer.close();
   state.type = "all";
   state.selectedNode = state.selectedEdge = null;
   $("#graph-query").value = "";
@@ -2277,8 +2195,8 @@ function setNavigationOpen(open, restoreFocus = false) {
   else if (restoreFocus || focusedInRail) toggle.focus();
 }
 
-async function action(name) {
-  if (await warehouseAction(name)) return;
+async function action(name, targetWarehouseId) {
+  if (await warehouseAction(name, targetWarehouseId)) return;
   if (name === "nav") setNavigationOpen(!$("#app").classList.contains("nav-open"), true);
   else if (name === "help") $("#help-dialog").showModal();
   else if (name === "graph-tasks") setView("tasks");
@@ -2286,10 +2204,19 @@ async function action(name) {
     if (state.view === "conversation" && !conversationFlow?.state.loaded && !conversationFlow?.state.busy) await loadConversation();
   }
   else if (name === "close-graph-details") {
+    if (explorer.keepsOverview) {
+      explorer.close();
+      renderFilters();
+      renderGraph();
+      $("#graph-explore-menu summary")?.focus({preventScroll:true});
+      return;
+    }
     state.detailsDismissed = true;
     $(".graph-inspector").hidden = true;
     $("#graph-focus-back").focus({ preventScroll: true });
   } else if (name === "leave-graph-focus") {
+    explorer.close();
+    renderFilters();
     state.selectedNode = state.selectedEdge = null;
     renderGraph();
     $("#graph-query").focus({ preventScroll: true });
@@ -2321,7 +2248,6 @@ async function action(name) {
         if (state.importOpening !== opening || generation !== state.generation || warehouseId !== state.warehouseId || view !== state.view || flow !== conversationFlow || !state.ready) return;
         state.importFiles[context] = [];
       }
-      state.importSource = "space";
       state.importContext = context;
       $("#import-intro").textContent = state.importContext === "conversation"
         ? "选择一份材料导入当前数据仓；导入后先核对正文，再确认后续整理。"
@@ -2335,7 +2261,6 @@ async function action(name) {
       $("#import-selection-hint").textContent = state.importContext === "conversation" ? "每次选择一份材料" : "可跨文件夹选择";
       $("#import-error").hidden = true;
       $("#import-context").textContent = `万象空间 · ${state.identity?.boxName || state.identity?.boxId || "当前设备"} → ${currentWarehouse()?.name || "当前数据仓"}`;
-      renderImportSource();
       renderPending();
       $("#import-dialog").showModal();
       void loadSpace("");
@@ -2367,21 +2292,11 @@ async function action(name) {
   else if (name === "download-source") {
     const r = await call("download", { id: state.source.document.id });
     if (r.saved) toast("材料原件已保存。");
-  } else if (name === "build-index") {
-    const generation = state.generation;
-    await call("build-index", { operationId: crypto.randomUUID() });
-    if (state.invalid || generation !== state.generation) return;
-    toast("索引任务已提交。");
-    await refresh();
+
   }
 }
 document.addEventListener("click", (event) => {
-  const rulesMenu = $("#ontology-actions");
   const el = event.target.closest("button,[data-node],[data-edge]");
-  if (rulesMenu.open && (!rulesMenu.contains(event.target) || el)) {
-    rulesMenu.open = false;
-    if (el && rulesMenu.contains(el)) rulesMenu.querySelector("summary").focus();
-  }
   if (!el) return;
   void (async () => {
     if (el.dataset.warehouseId) {
@@ -2398,12 +2313,15 @@ document.addEventListener("click", (event) => {
       }
     } else if (el.dataset.ontologyAction) setView("ontology", false, el.dataset.ontologyAction);
     else if (el.dataset.view) setView(el.dataset.view);
-    else if (el.dataset.action) await action(el.dataset.action);
+    else if (el.dataset.action) await action(el.dataset.action, el.dataset.deleteWarehouse);
     else if (el.dataset.close) {
       if (el.dataset.close === "import-dialog" && (state.uploading || state.spaceSelecting)) return;
       if (el.dataset.close === "source-dialog" && state.saving) return;
+      if (el.dataset.close === "clear-dialog" && state.clearIntent?.submitting) return;
       $("#" + el.dataset.close).close();
-    } else if (el.dataset.node) selectNode(el.dataset.node);
+    } else if (el.dataset.node) {
+      if (!explorer.takePathNode(el.dataset.node,event.shiftKey)) selectNode(el.dataset.node);
+    }
     else if (el.dataset.edge) selectEdge(el.dataset.edge);
     else if (el.dataset.source) {
       const e = edge(el.dataset.edgeSource);
@@ -2444,31 +2362,10 @@ document.addEventListener("click", (event) => {
     }
   })().catch((e) => toast(errorText(e)));
 });
-$("#choose-files").addEventListener(
-  "click",
-  () =>
-    void (async () => {
-      state.spaceSelecting = true;
-      syncControls();
-      try {
-        const files = await call("select-files", {multiple:state.importContext !== "conversation", selectionMode:state.importContext});
-        for (const file of files) if (!state.files.some(f => f.handle === file.handle)) state.files.push(file);
-      } finally {
-        state.spaceSelecting = false;
-        renderPending();
-      }
-    })().catch((e) => toast(errorText(e))),
-);
 bindConversationEvents();
 $("#confirm-import").addEventListener("click", () => void uploadFiles());
 $("#import-dialog").addEventListener("cancel", (event) => {
   if (state.uploading || state.spaceSelecting) event.preventDefault();
-});
-$("#ontology-actions").addEventListener("keydown", event => {
-  if (event.key !== "Escape" || !event.currentTarget.open) return;
-  event.currentTarget.open = false;
-  event.currentTarget.querySelector("summary").focus();
-  event.stopPropagation();
 });
 $("#source-dialog").addEventListener("cancel", event => { if (state.saving) event.preventDefault(); });
 $("#source-dialog").addEventListener("close", () => {
@@ -2514,12 +2411,12 @@ $("#graph-show-isolated").addEventListener("change", (event) => {
   fitGraph();
   transformScene();
 });
-$("#search-form").addEventListener("submit", (event) => {
-  event.preventDefault();
-  void runSearch();
-});
-$("#search-results").addEventListener("click", event => {
-  if (event.target.closest("#search-more-annotations")) void runSearch(state.searchResult?.reply.annotationSearch?.nextCursor);
+$("#graph-exact-type-select").addEventListener("change", event => {
+  state.type = event.target.value;
+  state.selectedNode = state.selectedEdge = null;
+  renderGraph();
+  fitGraph();
+  transformScene();
 });
 document.addEventListener("keydown", (event) => {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
@@ -2559,6 +2456,7 @@ bridge?.subscribe((event) => {
   }
 });
 icons();
+explorer.bind();
 renderFilters();
 renderGraph();
 renderTasks();
@@ -2582,6 +2480,10 @@ function currentWarehouse() {
 function warehouseStatus(w) {
   const statuses = {clearing:"正在清理",clear_failed:"清理未完成",deleting:"正在删除",delete_failed:"删除未完成",importing:"正在迁入",import_failed:"迁入未完成"};
   return statuses[w.state] || (w.active_jobs ? `${w.active_jobs} 项处理中` : w.document_count ? "可进入" : "待导入资料");
+}
+function canDeleteWarehouse(warehouse) {
+  return canCreateWarehouse() && Boolean(warehouse) &&
+    ["active", "clear_failed", "import_failed", "delete_failed"].includes(warehouse.state);
 }
 function warehouseSelectionKey() {
   return state.identity && !state.preview ? "xingtu.warehouse." + JSON.stringify([state.identity.boxId, state.identity.user.id]) : null;
@@ -2620,7 +2522,7 @@ function renderWarehouseCollection(container, query, compact) {
         ? `<span class="warehouse-choice-icon">${icon("folder")}</span><span class="warehouse-choice-content"><span class="warehouse-choice-title"><strong data-field="name"></strong><span data-field="current" class="warehouse-current-indicator"></span></span><span data-field="description" class="warehouse-choice-description"></span><span class="warehouse-choice-meta"><span data-field="counts"></span><span data-field="status" class="warehouse-state"></span></span></span><span class="warehouse-choice-arrow">${icon("arrow")}</span>`
         : `<div class="warehouse-card-head"><span class="warehouse-card-icon">${icon("folder")}</span><div class="warehouse-card-main"><div class="warehouse-card-name"><h2 data-field="name"></h2><span data-field="current" class="warehouse-current-indicator"></span></div><p data-field="description" class="warehouse-card-description"></p></div><span data-field="status" class="warehouse-state"></span></div>
           <dl class="warehouse-card-statistics"><div><dt>材料</dt><dd data-field="documents"></dd></div><div><dt>实体</dt><dd data-field="entities"></dd></div><div><dt>关系</dt><dd data-field="relations"></dd></div></dl>
-          <footer><span data-field="created" class="warehouse-card-date"></span><div><button class="text-link" data-warehouse-view="conversation">资料库</button><button class="warehouse-card-open" data-warehouse-view="graph"><span data-field="open"></span>${icon("arrow")}</button></div></footer>`;
+          <footer><span data-field="created" class="warehouse-card-date"></span><div><button type="button" class="text-link warehouse-card-delete" data-action="prepare-delete" data-delete-warehouse>删除</button><button class="text-link" data-warehouse-view="conversation">资料库</button><button class="warehouse-card-open" data-warehouse-view="graph"><span data-field="open"></span>${icon("arrow")}</button></div></footer>`;
       if (compact) card.dataset.warehouseId = w.id;
       else {
         const reviewButton=document.createElement('button');
@@ -2653,15 +2555,19 @@ function renderWarehouseCollection(container, query, compact) {
       update(card, "created", "建立于 " + date(w.created_at));
       update(card, "open", "打开图谱");
       card.querySelectorAll("[data-warehouse-id]").forEach(b => b.disabled = blocked);
+      const remove = card.querySelector('[data-delete-warehouse]');
+      remove.dataset.deleteWarehouse = w.id;
+      remove.hidden = state.preview || state.identity?.dataScope !== 'personal';
+      remove.disabled = !canDeleteWarehouse(w);
+      remove.textContent = w.state === 'delete_failed' ? '继续删除' : '删除';
+      remove.setAttribute('aria-label', `${remove.textContent}「${w.name}」`);
       const reviewButton=card.querySelector('[data-warehouse-view="onboarding"]');
       reviewButton.hidden=state.preview || state.identity?.dataScope!=='personal';
       reviewButton.disabled=blocked || w.state!=='active';
       const draft=Object.hasOwn(drafts,w.id)?drafts[w.id]:null;
-      reviewButton.dataset.startUpdate=String(!draft||!!draft.publication&&!draft.entryPending);
-      if (draft&&(!draft.publication||draft.entryPending)) {
-        reviewButton.textContent='继续建仓';
-        if (draft.setupMode==='new'&&!draft.conversationId) update(card,'status','等待设置');
-      } else reviewButton.textContent='基于当前规则调整';
+      reviewButton.dataset.startUpdate='true';
+      reviewButton.textContent='编辑业务范围';
+      if (draft?.setupMode==='new'&&!draft.conversationId) update(card,'status','等待设置');
       card.querySelector('[data-warehouse-view="graph"]').setAttribute("aria-label", `打开「${w.name}」的知识图谱`);
       card.querySelector('[data-warehouse-view="conversation"]').setAttribute("aria-label", `管理「${w.name}」的资料`);
     }
@@ -2697,7 +2603,7 @@ function renderWarehouses() {
   $("#crumb-warehouse").textContent = state.view === "warehouses" ? "全部数据仓" : selected?.name || "尚未建仓";
   $("#graph-warehouse").textContent = selected?.name || "你的第一座知识仓";
   const switchingDisabled = !state.ready || state.uploading || state.view === 'onboarding';
-  document.querySelector('[data-action="update-warehouse-rules"]').hidden = !canCreateWarehouse() || selected?.state !== 'active';
+  $("#rules-guide-entry").hidden = !canCreateWarehouse() || selected?.state !== 'active';
   $("#crumb-warehouse").disabled = switchingDisabled;
   renderWarehouseDirectory();
   // Keep the picker's buttons and search focus stable during background updates.
@@ -2715,11 +2621,10 @@ function renderWarehouses() {
         ? "重新确认并继续清理"
         : "清空当前数据仓";
   });
-  document.querySelectorAll('[data-action="prepare-delete"]').forEach((b) => {
-    b.disabled = !state.ready || !selected || !["active", "clear_failed", "import_failed", "delete_failed"].includes(selected.state);
+  document.querySelectorAll('[data-action="prepare-delete"]:not([data-delete-warehouse])').forEach((b) => {
+    b.disabled = !canDeleteWarehouse(selected);
     b.textContent = selected?.state === "delete_failed" ? "重新确认并继续删除" : "删除当前数据仓";
   });
-  $("#search-form button[type=submit]").disabled = !state.ready || state.searching || selected?.state !== "active";
 }
 async function selectWarehouse(id, nextView, onboardingHandoff = false) {
   if (state.uploading || state.spaceSelecting || onboarding.busy && !onboardingHandoff) return;
@@ -2729,7 +2634,7 @@ async function selectWarehouse(id, nextView, onboardingHandoff = false) {
   }
   if (id && !state.warehouses.some((w) => w.id === id)) return;
   state.generation++;
-  state.searching = state.saving = state.sourceLoading = false;
+  state.saving = state.sourceLoading = false;
   skillsUi.reset();
   const selection = bridge?.call("select-warehouse", {});
   if (!onboardingHandoff) void selection?.catch(()=>{});
@@ -2753,9 +2658,9 @@ async function selectWarehouse(id, nextView, onboardingHandoff = false) {
   state.graphFingerprint = null;
   state.graphError = null;
   state.graphPresentation = createGraphPresentation();
+  state.graphOntology = null;
+  explorer.reset();
   state.policy = null;
-  state.retrieval = null;
-  renderRetrieval();
   resetImportDrafts();
   state.spaceRequest++;
   state.space = { parent: "", breadcrumbs: [], items: [] };
@@ -2766,10 +2671,7 @@ async function selectWarehouse(id, nextView, onboardingHandoff = false) {
   state.selectedNode = state.selectedEdge = null;
   state.type = "all";
   document.querySelectorAll("dialog[open]").forEach((d) => d.close());
-  $("#search-query").value = "";
   $("#graph-query").value = "";
-  $("#search-results").innerHTML =
-    '<div class="empty">从一个具体的问题开始，找到这个仓中的相关证据。</div>';
   $("#source-body").replaceChildren();
   $("#source-actions").replaceChildren();
   renderWarehouses();
@@ -2868,7 +2770,7 @@ async function openWarehouseSetup(options) {
   $("#warehouse-picker").close();
   onboarding.open(state.identity, options);
 }
-async function warehouseAction(name) {
+async function warehouseAction(name, targetWarehouseId) {
   if (name === "choose-warehouse") {
     if (!state.ready || state.uploading) return true;
     $("#warehouse-picker-query").value = "";
@@ -2888,12 +2790,23 @@ async function warehouseAction(name) {
   }
   if (name === "prepare-clear" || name === "prepare-delete") {
     const deleting = name === "prepare-delete";
-    const intent = await call(name, {
-      operationId: crypto.randomUUID(),
-    });
-    state.clearIntent = intent;
-    intent.action = deleting ? "delete" : "clear";
-    $("#clear-title").textContent = deleting ? "删除当前数据仓？" : "清空当前数据仓？";
+    const selectedId = state.warehouseId;
+    const target = deleting && targetWarehouseId ? state.warehouses.find(w => w.id === targetWarehouseId) : currentWarehouse();
+    if (!target || deleting && !canDeleteWarehouse(target) ||
+        state.preparingWarehouseChange || $("#clear-dialog").open) return true;
+    if (target.id === selectedId && !workbench.canLeave()) return true;
+    state.preparingWarehouseChange = true;
+    let intent;
+    try {
+      intent = await call(name, {operationId: crypto.randomUUID()}, target.id);
+    } finally {
+      state.preparingWarehouseChange = false;
+    }
+    if (intent?.warehouse?.id !== target.id || typeof intent.warehouse.name !== 'string' ||
+        typeof intent.confirmation_token !== 'string' || !intent.confirmation_token)
+      throw Object.assign(new Error('SEMANTICA_INVALID_RESPONSE'), {publicMessage:'未收到有效的仓库确认，请重新发起操作。'});
+    state.clearIntent = {...intent, selectedId, action: deleting ? "delete" : "clear"};
+    $("#clear-title").textContent = deleting ? "永久删除数据仓？" : "清空当前数据仓？";
     $('#clear-dialog .icon-btn').setAttribute('aria-label', deleting ? '取消删除' : '取消清空');
     $('#clear-dialog .btn-secondary').textContent = deleting ? '保留数据仓' : '保留数据';
     $("#clear-scope").innerHTML = `<p class="modal-intro">将清空「${esc(
@@ -2937,8 +2850,12 @@ $("#clear-name").addEventListener(
       $("#clear-name").value !== state.clearIntent?.warehouse.name),
 );
 $("#clear-dialog").addEventListener("close", () => {
+  if ($("#clear-dialog").open) return;
   state.clearIntent = null;
   $("#clear-name").value = "";
+});
+$("#clear-dialog").addEventListener("cancel", event => {
+  if (state.clearIntent?.submitting) event.preventDefault();
 });
 $("#clear-next").addEventListener("click", () => {
   if ($("#clear-second").hidden) {
@@ -2949,19 +2866,26 @@ $("#clear-next").addEventListener("click", () => {
     return;
   }
   const intent = state.clearIntent;
-  if (!intent || $("#clear-name").value !== intent.warehouse.name) return;
-  if (state.warehouseId !== intent.warehouse.id) return toast("数据仓已切换，请重新确认。");
+  if (!intent || intent.submitting || $("#clear-name").value !== intent.warehouse.name) return;
+  if (state.warehouseId !== intent.selectedId || !state.warehouses.some(w => w.id === intent.warehouse.id))
+    return toast("数据仓已变化，请重新确认。");
+  intent.submitting = true;
+  $("#clear-name").disabled = true;
   $("#clear-next").disabled = true;
+  const cancelButtons = [...$("#clear-dialog").querySelectorAll('[data-close="clear-dialog"]')];
+  cancelButtons.forEach(button => button.disabled = true);
   void (async () => {
     const deleting = intent.action === "delete";
     await call(deleting ? "delete-warehouse" : "clear-warehouse", {
       token: intent.confirmation_token,
       typedName: $("#clear-name").value,
       operationId: (intent.operationId ||= crypto.randomUUID()),
-    });
+    }, intent.warehouse.id);
     $("#clear-dialog").close();
     if (deleting) {
-      await selectWarehouse("", "warehouses");
+      state.warehouses = state.warehouses.map(w => w.id === intent.warehouse.id ? {...w, state:"deleting"} : w);
+      if (state.warehouseId === intent.warehouse.id) await selectWarehouse("", "warehouses");
+      else renderWarehouses();
       await refresh();
       toast("删除已提交，清理完成后会从数据仓列表移除；访问凭证已撤销。");
     } else {
@@ -2970,7 +2894,12 @@ $("#clear-next").addEventListener("click", () => {
     }
   })()
     .catch((e) => toast(errorText(e)))
-    .finally(() => ($("#clear-next").disabled = false));
+    .finally(() => {
+      intent.submitting = false;
+      $("#clear-name").disabled = false;
+      cancelButtons.forEach(button => button.disabled = false);
+      $("#clear-next").disabled = $("#clear-name").value !== state.clearIntent?.warehouse.name;
+    });
 });
 
 function actualModel(config, role = "extraction") {

@@ -12,6 +12,8 @@ export type GraphNode = {
 export type GraphEvidence = {
   id: string;
   document_id: string;
+  document_version_id?: string;
+  version_id?: string;
   segment_id: string;
   locator_json: string;
   excerpt: string;
@@ -122,4 +124,54 @@ export function excerptParts(text: string, names: string[]): Array<{ text: strin
   }
   if (cursor < text.length) parts.push({ text: text.slice(cursor), matched: false });
   return parts;
+}
+
+function formatTimestamp(value: number) {
+  const seconds = Math.max(0, Math.floor(value));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainder = seconds % 60;
+  return hours
+    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`
+    : `${minutes}:${String(remainder).padStart(2, "0")}`;
+}
+
+export function sourceLabel(locator: Record<string, unknown>) {
+  if (typeof locator.sheet === "string" || typeof locator.slide === "number" || typeof locator.row === "number") {
+    return [
+      typeof locator.sheet === "string" ? `工作表 ${locator.sheet}` : "",
+      typeof locator.slide === "number" ? `第 ${locator.slide} 张幻灯片` : "",
+      typeof locator.row === "number" ? `第 ${locator.row} 行` : "",
+    ].filter(Boolean).join(" · ");
+  }
+  if (
+    typeof locator.start_seconds === "number" &&
+    typeof locator.end_seconds === "number"
+  ) {
+    return `${formatTimestamp(locator.start_seconds)}–${formatTimestamp(locator.end_seconds)}`;
+  }
+  if (locator.page) {
+    const confidence =
+      typeof locator.confidence === "number"
+        ? ` · 置信度 ${(locator.confidence * 100).toFixed(1)}%`
+        : "";
+    const first = Number(locator.line_start ?? locator.line_index ?? 0) + 1;
+    const last = Number(locator.line_end ?? locator.line_index ?? 0) + 1;
+    const lines = first === last ? `${first}` : `${first}–${last}`;
+    return `第 ${locator.page} 页 · 行 ${lines}${confidence}`;
+  }
+  if (locator.table_index !== undefined)
+    return `表格 ${Number(locator.table_index) + 1} · 行 ${Number(locator.row_index ?? 0) + 1} · 列 ${Number(locator.column_index ?? 0) + 1}`;
+  if (locator.paragraph_index !== undefined)
+    return `段落 ${Number(locator.paragraph_index) + 1}`;
+  if (locator.paragraph_start !== undefined) {
+    const first = Number(locator.paragraph_start) + 1;
+    const last = Number(locator.paragraph_end ?? locator.paragraph_start) + 1;
+    return first === last ? `段落 ${first}` : `段落 ${first}–${last}`;
+  }
+  if (locator.line_start) {
+    const end = locator.line_end === locator.line_start ? "" : `–${locator.line_end}`;
+    return `原文行 ${locator.line_start}${end}`;
+  }
+  return "来源位置";
 }

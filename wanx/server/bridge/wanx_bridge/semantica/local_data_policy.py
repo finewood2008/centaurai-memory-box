@@ -11,6 +11,7 @@ from centuarai_local_data_gate.semantica_models import warehouse_workspace
 from centuarai_local_data_gate.team import resource_binding_route, team_resource
 
 from ..local_data_protocol import DataProtocolError, need
+from . import annotation_contract
 from .document_contract import BLOCK_QUERY, validate_block_page
 
 MCP_OPERATIONS = {
@@ -20,6 +21,8 @@ MCP_OPERATIONS = {
     "tools/list": "mcp_tools_list",
 }
 MCP_TOOLS = frozenset({"search_knowledge", "search_workspaces", "get_evidence", "retrieval_status"})
+SOURCE_ANNOTATION = rf"/documents/{ID}/source-annotation"
+SOURCE_ANNOTATION_OPERATIONS = frozenset({"get_source_annotation", "save_source_annotation"})
 SEMANTICA_RULES = (
     ("GET", "/capabilities", "get_capabilities", "read"),
     ("GET", "/status", "get_status", "read"),
@@ -31,6 +34,8 @@ SEMANTICA_RULES = (
     ("GET", rf"/documents/{ID}", "get_document", "read"),
     ("GET", rf"/documents/{ID}/text", "get_document_text", "read"),
     ("GET", rf"/documents/{ID}/blob", "get_document_blob", "read"),
+    ("GET", SOURCE_ANNOTATION, "get_source_annotation", "read"),
+    ("PUT", SOURCE_ANNOTATION, "save_source_annotation", "write"),
     ("PUT", rf"/documents/{ID}/text", "replace_text_document", "write"),
     ("POST", rf"/documents/{ID}/extraction", "reextract_document", "write"),
     ("DELETE", rf"/documents/{ID}", "delete_document", "write"),
@@ -124,7 +129,7 @@ def route_policy(context, observation, *, result, native=False):
         if selected:
             need(scoped["warehouse"] == selected[1], "LOCAL_DATA_SCOPE_DENIED")
         bound_warehouse = scoped["warehouse"]
-        if scoped["path"]:
+        if scoped["path"] and scoped["path"] not in {"/delete", "/delete/prepare"}:
             suffix = scoped["path"]
             if suffix.startswith("/modeling/"):
                 workspace = _warehouse(context, "", resource, bound_warehouse)["workspaceId"]
@@ -181,8 +186,6 @@ def route_policy(context, observation, *, result, native=False):
         if remainder and remainder not in {
             "/clear",
             "/clear/prepare",
-            "/delete",
-            "/delete/prepare",
         }:
             # Existing warehouse UI aliases map only onto the same finite
             # integration operations. No alias introduces a key/settings API.
@@ -210,24 +213,15 @@ def route_policy(context, observation, *, result, native=False):
                 "execute",
             ),
             ("POST", rf"/warehouses/{re.escape(selected[1])}/clear", "clear_warehouse", "execute"),
-            (
-                "POST",
-                rf"/warehouses/{re.escape(selected[1])}/delete/prepare",
-                "prepare_delete_warehouse",
-                "execute",
-            ),
-            (
-                "POST",
-                rf"/warehouses/{re.escape(selected[1])}/delete",
-                "delete_warehouse",
-                "execute",
-            ),
         )
         if selected
         else ()
     )
     for method, pattern, operation, action in SEMANTICA_RULES + (() if alias else warehouse_rules):
         if method == observation["method"] and re.fullmatch(pattern, suffix):
+            if operation in SOURCE_ANNOTATION_OPERATIONS:
+                need(not selected and bound_warehouse is not None, "LOCAL_DATA_SCOPE_DENIED")
+                need(not query, "LOCAL_DATA_ROUTE_DENIED")
             if selected:
                 need(operation != "owner_graph", "LOCAL_DATA_SCOPE_DENIED")
                 if operation in {"build_index", "create_ontology", "publish_ontology"}:
@@ -284,6 +278,14 @@ def mcp_route(context, observation, *, families, result):
 async def validate_staged(sessions, operation, staging, *, business_object):
     route = operation["route"]
     path = urlsplit(route["upstreamPath"]).path
+    if route["audience"] == "semantica" and route["serviceContext"]["operation"] in SOURCE_ANNOTATION_OPERATIONS:
+        method = operation["observation"]["method"]
+        need(method != "GET" or staging.length == 0, "LOCAL_DATA_ROUTE_DENIED")
+        body = business_object(await staging.read(2 * MIB)) if method != "GET" else None
+        try:
+            annotation_contract.validate(method, body, query_values(route["upstreamPath"]))
+        except ValueError as exc:
+            raise DataProtocolError("LOCAL_DATA_ROUTE_DENIED") from exc
     if route["audience"] == "semantica" and path.startswith("/api/integration/workbench/"):
         method = operation["observation"]["method"]
         need(method != "GET" or staging.length == 0, "LOCAL_DATA_ROUTE_DENIED")

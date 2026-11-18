@@ -1,7 +1,7 @@
 const warehouse = { id: 'fixture', name: '迁移验收仓', description: '合成测试资料', state: 'active',
   document_count: 0, entity_count: 2, relation_count: 1, created_at: '2026-11-17T00:00:00Z' };
 const graph = { nodes: [{ entity_id: 'person', canonical_name: '测试人员', entity_type: 'PERSON' }, { entity_id: 'project', canonical_name: '测试项目', entity_type: 'PROJECT' }],
-  edges: [{ fact_id: 'relation', subject_entity_id: 'person', object_entity_id: 'project', relation_type: 'WORKS_ON', evidence: [{ document_id: 'doc', document_version_id: 'cited-version', excerpt: '引用版正文', segment_id: 'cited-segment', locator_json: JSON.stringify({ page: 2, source_char_start: 0, source_char_end: 5 }) }] }] };
+  edges: [{ fact_id: 'relation', subject_entity_id: 'person', object_entity_id: 'project', relation_type: 'WORKS_ON', evidence: [{ id: 'source', document_id: 'doc', document_version_id: 'cited-version', excerpt: '引用版正文', segment_id: 'cited-segment', locator_json: JSON.stringify({ page: 2, source_char_start: 0, source_char_end: 5 }) }] }] };
 const sampleSchema = { entity_types: [
   { name: "PERSON", label: "人物" }, { name: "PROJECT", label: "项目" },
   { name: "DOCUMENT", label: "资料" }, { name: "EVENT", label: "事件" },
@@ -13,6 +13,7 @@ const publishedSchema = {
   ] : [] })),
   relation_types: [{ ...sampleSchema.relation_types[0], source_types: ['PERSON'], target_types: ['PROJECT'], properties: [] }],
 };
+let rulesDialogue;
 const ontologyVersions = [{ id: 'sample-schema', name: '验收本体', status: 'published', version_number: 1, schema: publishedSchema }];
 if (document.documentElement.dataset.sample === "true") {
   const items = [
@@ -38,7 +39,7 @@ const fixtureProcessing = { revision: 1, inherit: false, stages: [], affected_wa
 const fixtureJob = { id: 'failed-job', kind: 'search_index', status: 'failed', stage: 'failed', document_name: '测试材料.txt',
   updated_at: '2026-11-17T00:00:00Z', error_message: '合成失败原因', completed_units: 2, total_units: 5 };
 window.fixtureWarehouses = [warehouse, { ...warehouse, id: 'second', name: '第二验收仓' }];
-window.fixtureLaunchTarget = { requestId: 'fixture', target: { warehouseId: warehouse.id, view: 'graph' } };
+window.fixtureLaunchTarget = { requestId: 'fixture', target: { warehouseId: warehouse.id, view: 'search' } };
 window.fixtureCalls = [];
 window.fixtureOverrides = {};
 window.wanxClient = { onStarlinkEvent() {} };
@@ -49,7 +50,7 @@ window.fixturePanel = window.createStarlinkPanelView({
     if (window.fixtureOverrides[action]) return window.fixtureOverrides[action](input);
     let value = {};
     if (action === 'initialize') value = { identity: { accountId: 'fixture', boxId: 'fixture-box', dataScope:'personal', user: { id: 1, name: '验收用户' } },
-      warehouses: { items: window.fixtureWarehouses }, runtime: {}, capabilities: { accepted_suffixes: ['txt', 'pdf'], document_max_bytes: 10000000 } };
+      warehouses: { items: window.fixtureWarehouses }, runtime: {}, capabilities: { accepted_suffixes: ['txt', 'pdf'], document_max_bytes: 10000000, source_annotations: {search_version:1} } };
     else if (action === 'warehouses' || action === 'onboarding-warehouses') value = { items: window.fixtureWarehouses };
     else if (action === 'onboarding-read') value = {id:'fixture-record', revision:0, status:'in_progress', answers:{}, created_workspace_id:null};
     else if (action === 'warehouse') value = warehouse;
@@ -62,7 +63,6 @@ window.fixturePanel = window.createStarlinkPanelView({
     else if (action === 'processing') value = fixtureProcessing;
     else if (action === 'model-catalog') value = { items: [fixtureModel], default: fixtureModel };
     else if (action === 'launch-target') value = window.fixtureLaunchTarget;
-    else if (action === 'search') value = { items: [{ document_id: 'doc', original_name: '测试材料.txt', text: '检索验收片段', channels: ['keyword'] }] };
     else if (action === 'space-list') value = { parent: input.parent || '', items: [], breadcrumbs: [] };
     else if (action === 'document-text' && input.id === 'doc' && input.versionId === 'cited-version' && input.start === 0 && input.end === undefined)
       value = { document_id: 'doc', version_id: 'cited-version', start: 0, end: 25, total_chars: 25, text: '引用版上一段引用版正文',
@@ -82,6 +82,55 @@ window.fixturePanel = window.createStarlinkPanelView({
       else if (input.url.includes('ontologies')) value = { items: ontologyVersions };
       else if (input.url.includes('settings/status')) value = { version: 'fixture', phase: 'ready', native_owner_management: true, document_formats: [], local_models: {} };
       else if (input.url.startsWith('/api/jobs?')) value = { items: [], total: 0, activity: { foreground_count: 0, sensitive_job: null } };
+      else if (input.url.startsWith('/api/conversations?')) {
+        value = { items: rulesDialogue ? [{id: rulesDialogue.conversation_id, scenario: 'change', created_at: '2026-11-19T00:00:00Z'}] : [], has_more: false };
+      }
+      else if (input.url === '/api/conversations' && input.method === 'POST') {
+        rulesDialogue = {conversation_id: 'rules-round', current_ontology_id: 'sample-schema', initialized: false, status: 'uninitialized'};
+        value = {resource_id: 'rules-round'};
+      }
+      else if (input.url === '/api/conversations/rules-round/ontology-edit') value = structuredClone(rulesDialogue);
+      else if (input.url.endsWith('/ontology-edit/initialize')) {
+        Object.assign(rulesDialogue, {status: 'editing', initialized: true, base_ontology_id: 'sample-schema',
+          draft_digest: 'a'.repeat(64), draft: {revision: 0, name: '验收草稿', schema: structuredClone(publishedSchema), questions: []},
+          history: {items: []}});
+        value = {resource_id: 'initialized'};
+      }
+      else if (input.url.endsWith('/ontology-edit/proposals')) {
+        const {instruction} = JSON.parse(input.body);
+        const schema = structuredClone(publishedSchema);
+        schema.entity_types[0].properties.push({name:'role',label:'职务',required:false});
+        rulesDialogue.proposal = {resource_id:'fixture-proposal', proposal_digest:'b'.repeat(64),
+          expected_revision: 0, draft_digest: rulesDialogue.draft_digest, status:'proposed',
+          summary:'为人物增加职务属性。', schema, questions:[], dependencies:[]};
+        rulesDialogue.history.items.unshift({resource_id:'fixture-proposal', status:'proposed',
+          instruction, answer:rulesDialogue.proposal.summary});
+        value = {resource_id:'fixture-proposal',status:'proposed'};
+      }
+      else if (input.url.endsWith('/ontology-edit/proposals/fixture-proposal/apply')) {
+        rulesDialogue.draft.revision++;
+        rulesDialogue.draft.schema = rulesDialogue.proposal.schema;
+        rulesDialogue.draft_digest = 'c'.repeat(64);
+        rulesDialogue.proposal.status = 'applied';
+        value = {resource_id:'fixture-applied',status:'applied'};
+      }
+      else if (input.url.endsWith('/ontology-edit/preview')) {
+        value = {resource_id:'fixture-preview',draft_revision:rulesDialogue.draft.revision,
+          draft_digest:rulesDialogue.draft_digest,preview_digest:'d'.repeat(64),impact:{
+            valid:true,total:2,offset:0,has_more:false,items:[{document_id:'doc-0',name:'合成资料甲.txt',
+              certainty:'possible',protected:true,reasons:['已发布资料可能包含职务信息。']}]},
+        };
+      }
+      else if (input.url.startsWith('/api/owner/graph?')) value = graph;
+      else if (input.url.startsWith('/api/ontology-updates/sample-schema?')) {
+        value = { target: ontologyVersions.find(row=>row.status==='published'), changes: [], total: 2, offset: 0, limit: 20,
+          batch_update_available: true, items: ['合成资料甲.txt','合成资料乙.txt'].map((name,i)=>({
+            document_id: 'doc-'+i, name, preview_token: 'a'.repeat(64), reasons: [], selectable: true, protected: i===0,
+          })) };
+      }
+      else if (input.url === '/api/ontology-updates/sample-schema/start' && input.method === 'POST') {
+        value = {items: JSON.parse(input.body).selections.map(row=>({document_id:row.document_id}))};
+      }
       else if (input.url.includes('graph')) value = { nodes: [], edges: [] };
       else value = { items: [], total: 0 };
     }

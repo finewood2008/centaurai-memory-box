@@ -21,6 +21,7 @@ from centuarai_local_data_gate import semantica_bootstrap, starlink_workbench
 from wanx_bridge.semantica import conversation_contract, modeling_contract
 from wanx_bridge.semantica import desktop_workbench as starlink_legacy_workbench
 from wanx_bridge.semantica.document_contract import BLOCK_QUERY, validate_block_page
+from wanx_bridge.semantica import annotation_contract
 from wanx_bridge.semantica.maintenance import MaintenanceError, request_guard
 from wanx_bridge.semantica.transport_contract import grant_ttl, operation_timeout, owner_error, private_import_error, private_search_error
 
@@ -289,12 +290,19 @@ class SemanticaClient:
             ):
                 raise SemanticaError("SEMANTICA_INVALID_REQUEST", 422)
         searching = method == "POST" and path == "/search"
+        annotation_route = method in {"GET", "PUT"} and warehouse_id is not None and re.fullmatch(r"/documents/[A-Za-z0-9_-]{1,128}/source-annotation", path)
+        if annotation_route:
+            try:
+                annotation_contract.validate(method, payload, query or {})
+            except ValueError as exc:
+                raise SemanticaError('SEMANTICA_INVALID_REQUEST', 422) from exc
         write = method in {"POST", "PUT", "PATCH", "DELETE"} and not searching
         if (
             not managed
             and not searching
             and not deleting_document
             and not native_workbench
+            and not annotation_route
             and not (_WRITE if write else _READ).fullmatch(path)
         ):
             raise SemanticaError("SEMANTICA_OPERATION_NOT_ALLOWED", 404)
@@ -362,8 +370,16 @@ class SemanticaClient:
         if set(query or {}) - allowed_query:
             raise SemanticaError("SEMANTICA_QUERY_NOT_ALLOWED", 422)
         if searching:
-            if set(body) - {"query", "document_ids", "entity_types", "limit"}:
+            keys = {"query", "document_ids", "entity_types", "limit"}
+            if warehouse_id is not None and not self.team:
+                keys.add("annotation_search")
+            if set(body) - keys:
                 raise SemanticaError("SEMANTICA_QUERY_NOT_ALLOWED", 422)
+            if "annotation_search" in body:
+                try:
+                    annotation_contract.AnnotationSearch.model_validate(body["annotation_search"])
+                except ValueError as exc:
+                    raise SemanticaError("SEMANTICA_INVALID_REQUEST", 422) from exc
             body["delivery_mode"] = "masked"
         if method == "PATCH" and (
             path.startswith("/imports/") or path.startswith("/warehouses/imports/")

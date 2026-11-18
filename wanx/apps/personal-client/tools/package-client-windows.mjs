@@ -1,15 +1,18 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { access, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { npmCommand } from "../../../tools/npm-command.mjs";
 import { editionForApplicationId, editionMatchesChannel } from "../updates/edition.mjs";
 import { resolveClientVersion, readSourceClientManifest, assertSourceClientManifestUnchanged, readPackagedClientManifest } from "./client-package-manifest.mjs";
 import { clientBuildSource } from "./package-client-source.mjs";
 import { clientTrustFingerprints, validateClientTrust } from "./package-client-trust.mjs";
 import { readPackagedNativeBinaries } from "./package-client-native.mjs";
+import { assertPackagedMemoryTarget, packagedMemoryResources, preparePackagedMemory, verifyPackagedMemory } from "./package-client-memory.mjs";
 import { createClientBlockMap } from "./client-blockmap.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -34,7 +37,8 @@ export function windowsReleaseConfiguration({ pkg, version, arch, out, trustFile
     asar: true, npmRebuild: false, nodeGypRebuild: false, forceCodeSigning: true,
     directories: { ...pkg.build.directories, output: path.resolve(out) },
     extraMetadata: { version, wanxEdition: pkg.wanxEdition, wanxBuild: { ...build, distributionClass: "formal", installationScope: "per-user" } },
-    extraResources: [...pkg.build.extraResources, { from: path.resolve(trustFile), to: "wanx-update-trust.json" },
+    extraResources: [...pkg.build.extraResources, ...packagedMemoryResources(projectRoot),
+      { from: path.resolve(trustFile), to: "wanx-update-trust.json" },
       { from: path.join(projectRoot, "shell/windows-private-acl.ps1"), to: "security/windows-private-acl.ps1" },
       { from: path.join(projectRoot, "shell/verify-signed.ps1"), to: "security/verify-signed.ps1" }],
     win: { ...pkg.build.win, executableName: "WANX", requestedExecutionLevel: "asInvoker",
@@ -52,9 +56,10 @@ export function windowsReleaseConfiguration({ pkg, version, arch, out, trustFile
   };
 }
 
-export async function packageWindowsClient({ version, arch = "x64", out, trustFile, publisherName,
+export async function packageWindowsClient({ version, arch = process.arch, out, trustFile, publisherName,
   certificateFile, certificateSha1, channel = "stable", securityEpoch = 0 }) {
   if (process.platform !== "win32") throw new Error("正式 Windows 客户端必须在有签名证书的 Windows 构建机上生成。");
+  assertPackagedMemoryTarget({ platform: "win32", arch });
   const manifest = await readSourceClientManifest(root);
   const { pkg } = manifest;
   version = resolveClientVersion(pkg, version);
@@ -80,15 +85,23 @@ export async function packageWindowsClient({ version, arch = "x64", out, trustFi
     if (result.error) throw result.error;
     if (result.status !== 0) throw new Error(`${path.basename(command)} 退出码 ${result.status}`);
   }
-  run(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "build:studio"]);
+  run(...npmCommand(["run", "build:studio"]));
+  await preparePackagedMemory({ clientRoot: root, platform: "win32", arch });
   run(process.execPath, [path.join(root, "tools/build-network.mjs"), `win32-${arch}`]);
   run(process.execPath, [path.join(root, "tools/build-discovery.mjs"), "win32-x64"]);
-  run(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "build:renderer"]);
-  run(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "build:maintenance"]);
+  run(...npmCommand(["run", "build:renderer"]));
+  run(...npmCommand(["run", "build:maintenance"]));
   const { build: buildElectron, Platform, Arch } = await import("electron-builder");
+  const configurationDirectory = await mkdtemp(path.join(os.tmpdir(), "wanx-client-build-"));
   try {
-    await buildElectron({ projectDir: root, publish: "never", targets: Platform.WINDOWS.createTarget(["nsis"], arch === "arm64" ? Arch.arm64 : Arch.x64), config });
-  } finally { await assertSourceClientManifestUnchanged(manifest); }
+    // A complete configuration file avoids merging package.json resource sets twice.
+    const configurationFile = path.join(configurationDirectory, "builder.json");
+    await writeFile(configurationFile, JSON.stringify(config));
+    await buildElectron({ projectDir: root, publish: "never", targets: Platform.WINDOWS.createTarget(["nsis"], arch === "arm64" ? Arch.arm64 : Arch.x64), config: configurationFile });
+  } finally {
+    await rm(configurationDirectory, { recursive: true, force: true });
+    await assertSourceClientManifestUnchanged(manifest);
+  }
   const artifacts = (await readdir(out)).filter(name => name.endsWith(".exe"));
   if (artifacts.length !== 1) throw new Error("正式构建必须恰好生成一个 NSIS 安装器。");
   const installer = path.resolve(out, artifacts[0]);
@@ -104,13 +117,15 @@ export async function packageWindowsClient({ version, arch = "x64", out, trustFi
     throw new Error("包内更新信任根与已验证配置不一致。");
   const nativeBinaries = await readPackagedNativeBinaries({ resourcesPath: path.join(unpacked, "resources"),
     platform: "win32", arch });
+  const memoryRuntime = await verifyPackagedMemory({ resourcesPath: path.join(unpacked, "resources"),
+    executable: path.join(unpacked, "WANX.exe"), platform: "win32", arch });
   clientBuildSource(root, { expectedCommit: source.sourceCommit });
   const blockMap = await createClientBlockMap(installer);
   const sha256 = createHash("sha256"), sha512 = createHash("sha512");
   for await (const chunk of createReadStream(installer)) { sha256.update(chunk); sha512.update(chunk); }
   const digest = sha256.digest("hex");
   const report = { version, edition: pkg.wanxEdition, appId: pkg.build.appId, name: pkg.build.productName, platform: "windows", arch,
-    signed: true, authenticodeVerified: true, publisherName, distributionClass: "formal", build, updateTrust, nativeBinaries,
+    signed: true, authenticodeVerified: true, publisherName, distributionClass: "formal", build, updateTrust, nativeBinaries, memoryRuntime,
     updateArtifact: { path: installer, kind: "nsis", sha256: digest, sha512: sha512.digest("base64"), sizeBytes: (await stat(installer)).size, blockMap } };
   await mkdir(out, { recursive: true });
   await writeFile(path.join(out, "SHA256SUMS.txt"), `${digest}  ${path.basename(installer)}\n${blockMap.sha256}  ${path.basename(blockMap.path)}\n`);

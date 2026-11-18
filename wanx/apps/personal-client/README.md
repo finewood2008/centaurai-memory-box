@@ -17,7 +17,7 @@ npm run dev:web
 
 # 桌面源码开发：Node >= 22.14，Go >= 1.26；macOS 还需 Xcode Command Line Tools
 npm ci --prefix apps/builder
-npm ci --prefix apps/starlink/frontend
+npm ci --include=dev --prefix apps/starlink/frontend
 npm ci --prefix octop/dashboard
 npm ci --prefix apps/personal-client
 npm ci --prefix apps/memory
@@ -160,7 +160,7 @@ npm --prefix apps/personal-client run build:network:all
 # macOS 名称读取助手，默认当前架构；可追加 darwin-arm64 darwin-x64
 npm --prefix apps/personal-client run build:discovery
 
-# 打包；发布签名/公证使用相应平台的发布环境和证书
+# 在相应平台按当前 Node 架构打包
 npm --prefix apps/personal-client run package:mac
 npm --prefix apps/personal-client run package:windows
 ```
@@ -181,7 +181,9 @@ macOS 正式客户端请从仓库根目录运行独立入口（市场应用使�
 ./package-client.sh --edition all --arch arm64 --formal
 ```
 
-统一入口支持 `--edition personal|team|all`，省略时仍打个人版。`apps/personal-client/package-client.sh` 与 `apps/team-client/package-client.sh` 仍保留为版别入口。企业版默认输出到 `apps/team-client/release/client/<版本>/`；`all` 依次调用两个版本的构建脚本，任一失败即停止。使用 `--out <目录>` 时，单版直接使用该目录，`all` 分别写入 `<目录>/personal/` 和 `<目录>/team/`，目标目录必须尚不存在。个人版、企业版默认更新渠道分别为 `stable`、`stable-studio`；`all` 不接受共用的 `--channel`，需要自定义渠道时请分别打包。首次打包需先安装 `apps/builder/`、`octop/dashboard/` 及所选客户端的依赖；两版脚本都会自动构建所需的 Builder 资源。
+统一入口支持 `--edition personal|team|all`，省略时仍打个人版。`apps/personal-client/package-client.sh` 与 `apps/team-client/package-client.sh` 仍保留为版别入口。企业版默认输出到 `apps/team-client/release/client/<版本>/`；`all` 依次调用两个版本的构建脚本，任一失败即停止。使用 `--out <目录>` 时，单版直接使用该目录，`all` 分别写入 `<目录>/personal/` 和 `<目录>/team/`，目标目录必须尚不存在。个人版、企业版默认更新渠道分别为 `stable`、`stable-studio`；`all` 不接受共用的 `--channel`，需要自定义渠道时请分别打包。首次打包先按[源码开发步骤](#使用与开发)安装各工程依赖。两版脚本都会自动构建所需的 Builder 资源。
+
+个人版打包会装入记忆界面和独立运行时。构建机的 Node、Electron 和安装的原生依赖必须与目标系统及架构一致。发布 arm64 和 x64 时分别构建。正式打包会通过成品的 Electron 验证 SQLite、向量扩展和本地记忆服务，并将结果写进 `verification-client.json` 的 `memoryRuntime`。
 
 脚本生成当前版别的 DMG、更新 ZIP、`.blockmap`、`SHA256SUMS.txt` 和 `verification-client.json`，默认输出到 `apps/personal-client/release/client/<版本>/` 下的新目录。macOS 和 Windows 正式打包默认读取所选客户端 `package.json` 的 `version`。可选 `--version` 只覆盖本次安装包元数据与验证报告，不改源码 `package.json`；`--arch` 可选 `arm64` 或 `x64`。
 

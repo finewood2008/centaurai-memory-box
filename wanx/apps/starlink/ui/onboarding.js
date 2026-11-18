@@ -1,3 +1,4 @@
+import { mountScopeEditor } from './onboarding-scope-editor.mjs';
 import { OnboardingDialogue } from './onboarding-dialogue-state.mjs';
 import { OnboardingHome } from './onboarding-home-state.mjs';
 import { readWorkbenchReply } from './native-workbench.js';
@@ -34,20 +35,40 @@ export function createOnboardingUI({ bridge, enter, leave, show, openModels, onC
       const { guided, legacy, quick } = records(identity);
       const drafts = { ...guided.warehouseDrafts };
       if (guided.warehouse) drafts[guided.warehouse.id] = guided;
-      return { drafts, pending: Boolean(quick || guided.pending || guided.creation || guided.entryPending || legacy.creation), entryPending:guided.entryPending, quickCreated:!!quick?.warehouse };
+      const creation = guided.setupMode !== 'update';
+      return { drafts, pending: Boolean(quick || creation && (guided.pending || guided.creation || guided.entryPending) || legacy.creation), entryPending:creation && guided.entryPending, quickCreated:!!quick?.warehouse };
     } catch {
       return { drafts: {}, pending: true };
     }
   }
   function open(identity, { warehouse = null, fresh = false, startUpdate = false } = {}) {
     if (identity?.dataScope !== 'personal' || active?.page.busy) return;
+    if (startUpdate && warehouse) {
+      const replacing = !!active;
+      close();
+      if (!show({returningToRules:true, replacing})) return;
+      const entry = {};
+      active = entry;
+      entry.page = mountScopeEditor({
+        host:root, storage, identity, warehouse,
+        call:async (action, input) => {
+          if (active !== entry) throw expired();
+          const result = readWorkbenchReply(await bridge.call(action, input));
+          if (active !== entry) throw expired();
+          return result;
+        },
+        onClose:() => { if (active === entry) { close(); leave(); } },
+      });
+      entry.page.focus();
+      return;
+    }
     let quick, legacy, guided, recoveryError;
     try { ({ quick, legacy, guided } = records(identity)); }
     catch { recoveryError = 'MODELING_LOCAL_RECORD_INVALID'; }
 
     // An unresolved write always opens its original flow, even via 新建.
     const legacyCreation = legacy?.creation && !guided?.pending && !guided?.creation && !quick;
-    const guidedRecovery = guided?.pending || guided?.creation || guided?.entryPending;
+    const guidedRecovery = guided?.setupMode !== 'update' && (guided?.pending || guided?.creation || guided?.entryPending);
     const requestedWarehouse = quick || legacyCreation || guidedRecovery || recoveryError ? null : warehouse;
     const returningToRules = startUpdate&&!!requestedWarehouse || !!requestedWarehouse && (guided?.warehouse?.id === requestedWarehouse.id
       ? guided.setupMode !== 'new' : guided?.warehouseDrafts[requestedWarehouse.id]?.setupMode !== 'new');

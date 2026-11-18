@@ -4,9 +4,9 @@ import PointLineGraph, {type NetworkLink} from './PointLineGraph';
 import SpatialOntologyGraph from './SpatialOntologyGraph';
 type Selection={kind:'entity'|'relation';name:string};
 
-export default function OntologyRelationGraph({schema,selected,select,statusLabel='已发布定义',compact=false}:{schema:OntologyDefinition;selected:Selection;select:(value:Selection)=>void;statusLabel?:string;compact?:boolean}) {
-  const [filter,setFilter]=useState('');
-  const [view,setView]=useState<'focus'|'all'>('all');
+export default function OntologyRelationGraph({schema,selected,select,statusLabel='已发布定义',compact=false,catalogView=false}:{schema:OntologyDefinition;selected:Selection;select:(value:Selection)=>void;statusLabel?:string;compact?:boolean;catalogView?:boolean}) {
+  const [filter,setFilter]=useState(catalogView&&selected.kind==='relation'?selected.name:'');
+  const [view,setView]=useState<'focus'|'all'>(catalogView&&selected.kind==='entity'?'focus':'all');
   const [highlight,setHighlight]=useState<string>();
   const [focus,setFocus]=useState(selected.kind==='entity'?selected.name:'');
   const activeFilter=!compact&&schema.relation_types.some(item=>item.name===filter)?filter:'';
@@ -34,7 +34,7 @@ export default function OntologyRelationGraph({schema,selected,select,statusLabe
     return nodes.filter(node=>visible.has(node.id));
   },[nodes,visibleLinks,view,focusedNode]);
   function chooseNode(name:string){setFocus(name);setHighlight(name);select({kind:'entity',name});}
-  const Canvas=compact?PointLineGraph:SpatialOntologyGraph;
+  const Canvas=compact||catalogView?PointLineGraph:SpatialOntologyGraph;
   return <section className="ontology-relation-graph" aria-label={`${statusLabel}关联图谱`}>
     {!compact&&<><div className="ontology-graph-toolbar"><div className="ontology-graph-filters"><label>展示范围<select aria-label="展示范围" value={view} onChange={event=>{setView(event.target.value as 'focus'|'all');setHighlight(undefined);}}><option value="all">全部关系视图</option><option value="focus">选中类型的直接关联</option></select></label>
       {view==='focus'&&<label>中心类型<select aria-label="中心类型" value={focusedNode?.id??''} disabled={!nodes.length} onChange={event=>chooseNode(event.target.value)}>{!nodes.length&&<option value="">暂无类型</option>}{nodes.map(node=><option key={node.id} value={node.id}>{node.label}（{node.id}）</option>)}</select></label>}

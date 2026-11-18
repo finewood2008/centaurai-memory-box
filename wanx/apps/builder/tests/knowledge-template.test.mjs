@@ -1,6 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile} from 'node:fs/promises';
+import {cp,mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
 import {createRepository} from '../templates/knowledge-qa/src/repository.js';
 import {answer,retrieve,validateAnswer,parseJSON,fingerprint,allowedScores} from '../templates/knowledge-qa/src/engine.js';
 import {packTemplate} from '../templates/pack.mjs';
@@ -32,6 +34,16 @@ test('editable source matches the current compiler, catalog and recursive source
  assert.ok(workshopTemplates()[0].description.includes('星图知识库'));
  installed.files['src/config.json']='{}';assert.notEqual(workshopTemplate('template:knowledge-qa').files['src/config.json'],'{}');
  assert.equal(workshopTemplate('unknown'),null);
+});
+test('editable template files and their digest are stable across Git checkout line endings',async t=>{
+ const directory=await mkdtemp(path.join(tmpdir(),'wanx-template-line-endings-'));
+ t.after(()=>rm(directory,{recursive:true,force:true}));
+ await cp(templateRoot,directory,{recursive:true});
+ const identity={applicationId:'centaurai.wanx.template.knowledge-qa',version:'0.3.0'};
+ const original=await packTemplate(directory,identity);
+ const file=path.join(directory,'src/app.js');
+ await writeFile(file,original.files['src/app.js'].replace(/\n/g,'\r\n'));
+ assert.deepEqual(await packTemplate(directory,identity),original);
 });
 test('only published documents are retrieved and evidence ids refer to actual text',()=>{
  const result=retrieve('培训证明',[document,{...document,_id:'draft',status:'draft'},{...document,_id:'retired',status:'retired'}],0.2);

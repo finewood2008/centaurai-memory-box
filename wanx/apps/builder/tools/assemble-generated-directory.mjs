@@ -3,7 +3,7 @@ import path from 'node:path';
 
 // Stage the complete bundle before touching the current one. A failed copy must
 // not remove a usable build; failed promotion restores the previous directory.
-async function replaceGeneratedDirectory(source, target) {
+async function replaceGeneratedDirectory(source, target, prepare) {
   if (!(await stat(source)).isDirectory()) throw Error('GENERATED_SOURCE_NOT_DIRECTORY');
   const parent = path.dirname(target);
   await mkdir(parent, {recursive: true});
@@ -12,6 +12,7 @@ async function replaceGeneratedDirectory(source, target) {
   let previousSaved = false;
   try {
     await cp(source, next, {recursive: true});
+    await prepare?.(next);
     try {
       await rename(target, previous);
       previousSaved = true;
@@ -39,6 +40,13 @@ export async function assembleWorkbench(root, client, edition, version) {
   if (!['personal', 'team'].includes(edition)) throw Error('EDITION_REQUIRED');
   const workbench = edition === 'personal' ? 'workshop/workbench' : 'studio/workbench';
   const runtime = edition === 'personal' ? 'workshop/runtime' : 'applications/studio-runtime';
-  await replaceGeneratedDirectory(path.join(root, `release/wanx-studio-${version}`), path.join(client, workbench));
+  const templates = edition === 'team' ? async next => {
+    for (const [source, name] of [['knowledge-template', 'knowledge-qa'], ['zhike-template', 'zhike']]) {
+      const target = path.join(next, 'templates', name);
+      await mkdir(target, {recursive:true});
+      await cp(path.join(root, 'dist', source, 'wanx.editable.json'), path.join(target, 'wanx.editable.json'));
+    }
+  } : undefined;
+  await replaceGeneratedDirectory(path.join(root, `release/wanx-studio-${version}`), path.join(client, workbench), templates);
   await replaceGeneratedDirectory(path.join(root, 'dist/runtime'), path.join(client, runtime));
 }

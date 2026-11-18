@@ -6,7 +6,7 @@ import {canDeleteMaterial} from './material-deletion.mjs';
 import {materialWorkflowLabel} from './material-state.mjs';
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const labels={awaiting_upload:'等待上传',parsing:'正在解析',awaiting_goal:'核对正文与目标',ready_for_confirmation:'待确认计划',queued:'排队中',running:'抽取中',awaiting_review:'待核对知识',failed:'处理失败',cancelled:'已停止',stale:'来源已变化'};
-export function materialListHTML(flow){
+export function materialListHTML(flow,reader=false){
   if(!flow)return '<p>正在读取材料…</p>';
   const s=flow.state,off=s.busy||!s.loaded||!!flow.saved.pending||!!flow.saved.upload||!!flow.saved.intakeSubmission||!!flow.saved.roundOpening;
   const groups={...s.materialIndex,[flow.saved.conversationId]:s.intents};
@@ -27,10 +27,24 @@ export function materialListHTML(flow){
   };
   const empty = !s.loaded ? s.error ? '资料列表暂不可读' : '正在读取资料列表…'
     : s.warehouseMaterialError ? '资料列表暂不可读' : '这个仓还没有资料';
-  const total = s.loaded ? `<small>${s.warehouseMaterialTotal??entries.length}</small>` : '';
+  const query=reader?String(s.readerQuery||'').trim().toLocaleLowerCase():'';
+  const visible=query?entries.filter(i=>String(i.original_name||'').toLocaleLowerCase().includes(query)):[...entries];
+  if(reader&&s.readerSort==='name')visible.sort((a,b)=>String(a.original_name||'').localeCompare(String(b.original_name||''),'zh-CN',{numeric:true}));
+  const total = s.loaded ? `<small>${query?`${visible.length} / `:''}${s.warehouseMaterialTotal??entries.length}</small>` : '';
+  const tools=reader?`<div class="mw-reader-list-tools"><input id="cv-material-query" type="text" autocomplete="off" aria-label="搜索资料名称" placeholder="${s.warehouseMaterialMore?'搜索已加载的资料':'搜索资料'}" value="${esc(s.readerQuery)}">
+    <select id="cv-material-sort" aria-label="资料排序"><option value="recent">最近</option><option value="name" ${s.readerSort==='name'?'selected':''}>名称</option></select></div>`:'';
+  const rowHTML=i=>{
+    const label=status(i),name=i.original_name||'待上传材料';
+    const selected=s.librarySelection?s.librarySelection.document.id===i.document_id:i.conversationId===flow.saved.conversationId&&i.id===s.selectedIntent;
+    const tone=label?.includes('待核对')||label?.includes('草稿')||label?.includes('待发布')?'pending':label?.includes('发布')&&!label?.includes('未发布')?'published':/失败|停止/.test(label)?'issue':'';
+    return `<button type="button" class="mw-material ${selected?'selected':''}" ${selected?'aria-current="true"':''}
+      data-cv="${i.inventory?'library-select':'material-select'}" data-session="${esc(i.conversationId)}" data-id="${esc(i.inventory?i.document_id:i.id)}" ${off?'disabled':''} ${reader?`title="${esc(name)} · ${esc(label)}" aria-label="${esc(name)} · ${esc(label)}"`:''}>
+      <span class="mw-file-icon" aria-hidden="true">▤</span><span><strong>${esc(name)}</strong>${reader?'':`<small>${esc(label)}</small>`}</span>${reader?`<span aria-hidden="true" class="mw-reader-dot ${tone?`is-${tone}`:''}"></span>`:''}</button>`;
+  };
   return `<header><strong>资料</strong>${total}</header>
+    ${tools}
     ${flow.saved.materialDeletion?`<p role="alert">材料删除结果尚未确认。</p><button class="btn btn-secondary" data-cv="material-delete" ${s.busy?'disabled':''}>恢复删除请求</button>`:''}
-    <div class="mw-material-list">${entries.map(i=>`<button type="button" class="mw-material ${s.librarySelection?s.librarySelection.document.id===i.document_id?'selected':'':i.conversationId===flow.saved.conversationId&&i.id===s.selectedIntent?'selected':''}" data-cv="${i.inventory?'library-select':'material-select'}" data-session="${esc(i.conversationId)}" data-id="${esc(i.inventory?i.document_id:i.id)}" ${off?'disabled':''}><span class="mw-file-icon" aria-hidden="true">▤</span><span><strong>${esc(i.original_name||'待上传材料')}</strong><small>${esc(status(i))}</small></span></button>`).join('')||`<p class="mw-list-empty">${empty}</p>`}</div>
+    <div class="mw-material-list">${visible.map(rowHTML).join('')||`<p class="mw-list-empty">${query?'没有匹配的资料':empty}</p>`}</div>
     ${s.warehouseMaterialError?'<p role="alert">全仓材料列表读取失败，当前仅保留已读取的材料。</p><button class="btn btn-secondary" data-cv="material-refresh">重试读取材料</button>':''}
     ${s.warehouseMaterialMore?'<button class="btn btn-secondary" data-cv="library-more">加载更多仓库材料</button>':''}
     ${s.materialIndexError?'<p role="alert">部分材料列表未读取成功。</p><button class="btn btn-secondary" data-cv="material-refresh">重试读取列表</button>':''}
@@ -116,7 +130,7 @@ export function openMaterialUpload(flow){
   function render(){
     const s=flow.state,staged=flow.intake.staged,busy=working;
     dialog.innerHTML=`<header><div><h2 id="mw-upload-title">导入材料</h2><p>选择一份材料，导入后先解析并核对正文。</p></div><button type="button" class="btn btn-secondary" data-upload="cancel" ${busy?'disabled':''}>关闭</button></header>
-      <div class="mw-upload-body"><div class="mw-upload-zone"><span aria-hidden="true">↑</span><strong>${staged?esc(staged.name):'选择需要整理的材料'}</strong><p>文件只会在点击下方确认按钮后提交。</p><button class="btn btn-secondary" data-upload="file" ${busy?'disabled':''}>${staged?'重新选择文件':'选择本地文件'}</button><button class="btn btn-secondary" data-upload="documents" ${busy?'disabled':''}>关联已有材料</button></div>
+      <div class="mw-upload-body"><div class="mw-upload-zone"><span aria-hidden="true">↑</span><strong>${staged?esc(staged.name):'关联当前仓已有材料'}</strong><p>新文件请通过页面右上角从万象空间导入。</p><button class="btn btn-secondary" data-upload="documents" ${busy?'disabled':''}>关联已有材料</button></div>
       ${s.documents.length?`<div class="mw-link-list">${s.documents.map(d=>`<button class="btn btn-secondary" data-document="${esc(d.id)}" ${busy?'disabled':''}>${esc(d.original_name||d.id)}</button>`).join('')}${s.documentMore?'<button class="btn btn-secondary" data-upload="more">加载更多</button>':''}</div>`:''}
       <label for="mw-upload-note">材料说明（选填）</label><textarea id="mw-upload-note" rows="3" maxlength="8000" placeholder="例如：这是一份采购合同，重点关注付款与违约责任。" ${busy?'disabled':''}>${esc(note)}</textarea>
       ${s.error?`<p role="alert">${esc(s.error)}</p>`:''}</div><footer><button class="btn btn-secondary" data-upload="cancel" ${busy?'disabled':''}>取消</button><button class="btn btn-primary" data-upload="submit" ${busy||!staged?'disabled':''}>${staged?.kind==='document'?'关联并开始核对':'上传并解析'}</button></footer>`;
@@ -137,7 +151,7 @@ export function openMaterialUpload(flow){
       if(!flow.intake.staged){close();if(flow.state.materialPage==='import'&&flow.state.detail?.document_id&&!flow.saved.pending)await flow.importer.select(flow.state.detail.document_id);}else render();return;
     }
     working=true;render();
-    await (b.dataset.document?flow.intake.stageDocument(b.dataset.document):action==='file'?flow.intake.stageFile():flow.listDocuments(action==='more'?flow.state.documentOffset:0));
+    await (b.dataset.document?flow.intake.stageDocument(b.dataset.document):flow.listDocuments(action==='more'?flow.state.documentOffset:0));
     working=false;if(!closed&&dialog.isConnected)render();
   });
   document.body.append(dialog);render();dialog.showModal();

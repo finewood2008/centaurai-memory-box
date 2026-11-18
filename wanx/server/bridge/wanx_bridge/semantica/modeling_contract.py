@@ -20,6 +20,7 @@ ROOT_RULES = [
 ]
 WAREHOUSE_RULES = [
     ("GET", r"/modeling/suggestion-context", frozenset()),
+    ("POST", r"/modeling/warehouse-scope/publish", frozenset()),
     ("POST", r"/modeling/answer-confirmations", frozenset()),
     ("POST", r"/modeling/answer-suggestions", frozenset()),
     ("GET", rf"/modeling/answer-suggestions/{ID}", frozenset()),
@@ -102,6 +103,12 @@ class CreateWarehouse(Revision):
     warehouse_scope: WarehouseScope | None = None
 
 
+class PublishWarehouseScope(Revision):
+    base_ontology_id: str = Field(min_length=1, max_length=120)
+    changes: dict
+    confirmed: Literal[True]
+
+
 class ConfirmAnswers(Revision):
     onboarding_revision: int = Field(ge=0)
     expected_confirmation_id: str | None = Field(default=None, min_length=1, max_length=120)
@@ -118,6 +125,8 @@ def body_model(path: str) -> type[BaseModel]:
         return SaveOnboarding
     if re.fullmatch(rf"/modeling/onboarding/{ID}/warehouse", path):
         return CreateWarehouse
+    if path == "/modeling/warehouse-scope/publish":
+        return PublishWarehouseScope
     if path == "/modeling/answer-confirmations":
         return ConfirmAnswers
     if path == "/modeling/answer-suggestions":
@@ -141,6 +150,12 @@ def prepare(method, path, body, query):
         return None, None
     parsed = body_model(path).model_validate(body)
     # Do not fill omitted optional fields: the owner stores request digests.
+    if isinstance(parsed, PublishWarehouseScope):
+        from centuarai_local_data_gate.semantica_bootstrap import validate_scope_changes
+
+        validate_scope_changes(parsed.changes)
+        if body["confirmed"] is not True:
+            raise ValueError("Warehouse scope confirmation is required")
     return dict(body), parsed.operation_id
 
 
@@ -173,6 +188,12 @@ API_ROUTES = [
         "/warehouses/{warehouse_id}/modeling/suggestion-context",
         "Read the selected warehouse's initial suggestion context",
         None,
+    ),
+    (
+        "POST",
+        "/warehouses/{warehouse_id}/modeling/warehouse-scope/publish",
+        "Confirm and save warehouse business scope",
+        PublishWarehouseScope,
     ),
     (
         "POST",

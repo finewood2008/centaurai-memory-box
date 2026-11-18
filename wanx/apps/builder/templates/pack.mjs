@@ -12,7 +12,7 @@ export async function packTemplate(directory,{applicationId,version}){
     if(info.isSymbolicLink())throw Error('TEMPLATE_SYMLINK_DENIED');
     if(info.isDirectory()){for(const entry of (await readdir(full)).sort())await read(name+'/'+entry);return;}
     if(!info.isFile()||info.size>512*1024)throw Error('TEMPLATE_SOURCE_INVALID');
-    files[name]=await readFile(full,'utf8');
+    files[name]=(await readFile(full,'utf8')).replace(/\r\n/g,'\n');
   }
   await read('miniapp.manifest.json');await read('src');validateSources(files);
   const compiled=await compileArtifact(files);

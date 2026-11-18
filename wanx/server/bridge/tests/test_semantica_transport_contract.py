@@ -333,6 +333,30 @@ def test_rename_gateway_grants_only_personal_write_or_current_team_execute():
         route_policy(context("semantica",["read"]),observed(path,"PATCH"))
 
 
+@pytest.mark.parametrize(
+    "suffix,operation",
+    [("/delete/prepare", "prepare_delete_warehouse"), ("/delete", "delete_warehouse")],
+)
+def test_delete_routes_require_warehouse_scope_and_mutation_grant(suffix, operation):
+    relative = f"/warehouses/{WAREHOUSE}" + suffix
+    path = "/api/semantica" + relative
+    personal = route_policy(context("semantica", ["read", "write"]), observed(path, "POST"))
+    assert personal["action"] == "write"
+    assert personal["upstreamPath"] == "/api/integration" + relative
+    assert personal["serviceContext"]["operation"] == operation
+    assert personal["serviceContext"]["warehouseId"] == WAREHOUSE
+    team, request = team_request("", suffix=suffix, method="POST")
+    assert route_policy(team, request)["action"] == "execute"
+    other_path = path.replace(WAREHOUSE, "20000000-0000-4000-8000-000000000002")
+    with pytest.raises(DataProtocolError):
+        route_policy(team, {**request, "rawTarget": other_path})
+    for change in ({"method": "GET"}, {"rawTarget": path + "?limit=1"}):
+        with pytest.raises(DataProtocolError):
+            route_policy(context("semantica", ["read", "write"]), {**observed(path, "POST"), **change})
+    with pytest.raises(DataProtocolError):
+        route_policy(context("semantica", ["read"]), observed(path, "POST"))
+
+
 async def test_mounted_rename_on_older_owner_requires_upgrade(monkeypatch):
     real=httpx.AsyncClient
     monkeypatch.setattr(mounted.httpx,"AsyncClient",lambda **kw:real(**kw,transport=httpx.MockTransport(lambda _:httpx.Response(405,json={"detail":"Method Not Allowed"}))))

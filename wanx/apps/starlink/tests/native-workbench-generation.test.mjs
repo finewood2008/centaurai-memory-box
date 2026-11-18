@@ -59,9 +59,11 @@ test('an ontology citation opens the exact version only from the current warehou
   window.starlinkWorkbench.openSource({}, 'doc', 'version');
   window.starlinkWorkbench.openSource(name, 'doc', '../latest');
   window.starlinkWorkbench.openSource(name, 'doc', 'quoted-version');
+  window.starlinkWorkbench.openSource(name, 'doc', 'quoted-version', '../segment');
+  window.starlinkWorkbench.openSource(name, 'doc', 'quoted-version', 'quoted-segment');
   selected = 'different';
   window.starlinkWorkbench.openSource(name, 'doc', 'version');
-  assert.deepEqual(opened,[['doc','quoted-version']]);
+  assert.deepEqual(opened,[['doc','quoted-version'],['doc','quoted-version','quoted-segment']]);
 });
 
 test('the published-rule impact list passes only its chosen material from the current warehouse', () => {

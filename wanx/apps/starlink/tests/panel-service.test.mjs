@@ -79,11 +79,30 @@ test('closing the service refuses a file chooser that completes after logout', a
 test('removed application management actions never reach the backend', async () => {
   const f = fixture();
   try {
-    for (const action of ['create-key', 'import-skill', 'clear-warehouse', 'delete-warehouse', 'open-starlink']) {
+    for (const action of ['select-files', 'create-key', 'import-skill', 'clear-warehouse', 'open-starlink']) {
       const result = await f.service.action(action, {});
       assert.equal(result.ok, false);
     }
     assert.equal(f.requests.length, 0); assert.equal(f.links.length, 0);
+  } finally { f.service.close(); }
+});
+
+test('personal panel submits deletion only through the explicit warehouse and confirmation routes', async () => {
+  const f = fixture();
+  const warehouseId = '10000000-0000-4000-8000-000000000001';
+  const operationId = '20000000-0000-4000-8000-000000000002';
+  try {
+    for (const input of [{operationId}, {warehouseId,operationId}, {warehouseId,operationId,token:'test',typedName:''}]) {
+      assert.equal((await f.service.action('delete-warehouse', input)).code, 'INVALID_RESOURCE');
+    }
+    assert.equal(f.requests.length, 0);
+    assert.equal((await f.service.action('prepare-delete',{warehouseId,operationId})).ok,true);
+    assert.equal((await f.service.action('delete-warehouse',{warehouseId,operationId,token:'fixture-token',typedName:'测试仓'})).ok,true);
+    assert.deepEqual(f.requests.map(({path,method,body})=>[path,method,JSON.parse(body)]), [
+      [`/api/semantica/warehouses/${warehouseId}/delete/prepare`, 'POST', {operation_id:operationId}],
+      [`/api/semantica/warehouses/${warehouseId}/delete`, 'POST',
+        {operation_id:operationId,confirmation_token:'fixture-token',typed_name:'测试仓'}],
+    ]);
   } finally { f.service.close(); }
 });
 

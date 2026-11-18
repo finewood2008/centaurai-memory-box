@@ -1,6 +1,8 @@
 # 好问 · 0.3.0
 
-好问是一个配置模型、本地盒子知识库、文件空间与标准 Channel 的智能对话应用，同时是可在万象工坊继续改造的模板。
+好问是万象开物的内置问答模板，可配置模型、本地盒子知识库、文件空间与标准 Channel。企业版随开物工作台交付模板，个人版工坊可用它继续创建和修改项目。创建副本后可试用，再按项目发布流程安装。
+
+运行 `node apps/builder/tools/build-knowledge-template.mjs` 可预览模板构建结果。可编辑包和预览文件生成在 `apps/builder/dist/knowledge-template/`。
 
 ## 配置与使用
 

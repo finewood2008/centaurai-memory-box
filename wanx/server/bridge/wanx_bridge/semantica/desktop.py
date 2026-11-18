@@ -20,7 +20,13 @@ from centuarai_local_data_gate import semantica_bootstrap, starlink_workbench
 from . import conversation_contract, desktop_workbench, modeling_contract, warehouse_contract
 from .config import DEFAULT_URL, upstream_origin
 from .document_contract import BLOCK_QUERY, validate_block_page
-from .transport_contract import operation_timeout, owner_error, private_import_error, private_search_error
+from . import annotation_contract
+from .transport_contract import (
+    operation_timeout,
+    owner_error,
+    private_import_error,
+    private_search_error,
+)
 
 APPS = {"wanx", "semantica", "centaurai.wanx.semantica"}
 NAMESPACE = uuid.UUID("8ae54f40-4054-4bba-a2e2-06e1c43d7514")
@@ -175,6 +181,8 @@ RULES = [
     ("GET", r"/(?:graph|owner/graph)", GRAPH),
     ("GET", rf"/documents/{ID}", frozenset({"segment_offset", "segment_limit"}) | BLOCK_QUERY),
     ("GET", rf"/documents/{ID}/text", frozenset({"version_id", "start", "end"})),
+    ("GET", rf"/documents/{ID}/source-annotation", frozenset()),
+    ("PUT", rf"/documents/{ID}/source-annotation", frozenset()),
     ("GET", rf"/documents/{ID}/blob", BLOB),
     ("GET", rf"/(?:jobs|evidence|operations)/{ID}", frozenset()),
     ("GET", r"/skills", PAGE | {"keyword"}),
@@ -311,6 +319,11 @@ def prepare(
 ) -> tuple[dict[str, Any] | None, str | None]:
     if set(query) - operation.query_keys:
         raise DesktopError("SEMANTICA_QUERY_NOT_ALLOWED", 422)
+    if re.fullmatch(rf'/documents/{ID}/source-annotation', operation.path):
+        try:
+            return body, annotation_contract.validate(method, body, query)
+        except ValueError as exc:
+            raise DesktopError('SEMANTICA_INVALID_REQUEST', 422) from exc
     if method == "DELETE":
         if (
             not operation.warehouse
@@ -392,6 +405,13 @@ def prepare(
             if operation.path.startswith("/reasoning/")
             else {"query", "document_ids", "entity_types", "limit"}
         )
+        if operation.path == "/search" and operation.warehouse and not operation.public:
+            keys.add("annotation_search")
+            if "annotation_search" in payload:
+                try:
+                    annotation_contract.AnnotationSearch.model_validate(payload["annotation_search"])
+                except ValueError as exc:
+                    raise DesktopError("SEMANTICA_INVALID_REQUEST", 422) from exc
         if set(payload) - keys:
             raise DesktopError("SEMANTICA_QUERY_NOT_ALLOWED", 422)
         if not operation.public:
@@ -419,6 +439,28 @@ def strict_json(raw: bytes | str) -> Any:
         return json.loads(raw, parse_constant=invalid_constant, parse_float=finite_float)
     except RecursionError as exc:
         raise ValueError("JSON nesting too deep") from exc
+
+
+_MODEL_JSON_TOKENS = re.compile(r'\\.|["\[\]{}]', re.DOTALL)
+_MAX_MODEL_JSON_DEPTH = 128
+
+
+def parse_model_output(raw: str) -> Any:
+    # Limit nesting before decoding, independently of the Python JSON decoder.
+    depth = 0
+    in_string = False
+    for match in _MODEL_JSON_TOKENS.finditer(raw):
+        token = match[0]
+        if token == '"':
+            in_string = not in_string
+        elif not in_string and len(token) == 1:
+            if token in "[{":
+                depth += 1
+                if depth > _MAX_MODEL_JSON_DEPTH:
+                    raise ValueError("JSON nesting too deep")
+            else:
+                depth -= 1
+    return strict_json(raw)
 
 
 def decode(

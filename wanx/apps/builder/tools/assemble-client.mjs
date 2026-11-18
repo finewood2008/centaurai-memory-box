@@ -5,12 +5,11 @@ import { prepareClientBuild } from './client-build-directory.mjs';
 import { assembleStarlink } from './assemble-starlink.mjs';
 import { assembleStarlinkPanel } from '../../starlink/tools/assemble-panel.mjs';
 import { assembleWorkbench } from './assemble-generated-directory.mjs';
-import {buildKnowledgeTemplate} from './build-knowledge-template.mjs';
-import {buildZhikeTemplate} from './build-zhike-template.mjs';
 import { cp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { npmCommand } from '../../../tools/npm-command.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const edition = process.argv[2];
@@ -50,9 +49,9 @@ if (edition === 'team') for (const file of ['shell/personal-space.mjs','shell/sp
 }
 // Mini reuses only the iterative workspace; new-product creation stays in Studio.
 if (edition === 'personal') {
-  await buildKnowledgeTemplate();
-  await buildZhikeTemplate();
-  for (const script of ['build','package']) execFileSync(process.platform==='win32'?'npm.cmd':'npm',['run',script],{cwd:root,stdio:'inherit',shell:process.platform==='win32',env:{...process.env,WANX_CLIENT_PRODUCT:'memobox'}});
+  for (const script of ['build', 'package']) execFileSync(...npmCommand(['run', script]), {
+    cwd: root, stdio: 'inherit', env: { ...process.env, WANX_CLIENT_PRODUCT: 'memobox' },
+  });
   const personalVersion=JSON.parse(await readFile(path.join(root,'package.json'),'utf8')).version;
   await mkdir(path.join(client,'workshop'),{recursive:true});
   await assembleWorkbench(root, client, edition, personalVersion);
@@ -78,7 +77,9 @@ if (edition === 'personal') {
 }
 const version = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version;
 for (const script of ['build', 'package']) {
-  execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', script], { cwd: root, stdio: 'inherit', shell: process.platform === 'win32' });
+  execFileSync(...npmCommand(['run', script]), {
+    cwd: root, stdio: 'inherit', env: { ...process.env, WANX_CLIENT_PRODUCT: 'studio' },
+  });
 }
 await mkdir(path.join(client, 'studio'), { recursive: true });
 await assembleWorkbench(root, client, edition, version);

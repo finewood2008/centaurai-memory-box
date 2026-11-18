@@ -50,6 +50,8 @@ app.whenReady().then(async () => {
   const js = code => win.webContents.mainFrame.frames.find(f=>f.url.endsWith('/starlink/ui/index.html')).executeJavaScript(code);
   await until(() => js('document.querySelector("#crumb-warehouse").textContent'), text => text.includes('迁移验收仓'), 'warehouse initialization failed');
   await until(() => win.webContents.executeJavaScript('window.fixtureCalls.some(call=>call.action==="launch-target-applied")'), Boolean, 'initial warehouse navigation did not settle');
+  assert.equal(await win.webContents.executeJavaScript('window.fixtureCalls.find(call=>call.action==="launch-target-applied").input.ok'), true);
+  assert.equal(await js('document.querySelector("#view-graph").hidden'),false);
   if (preview) {
     clearTimeout(deadline);
     app.on('window-all-closed', () => app.quit());
@@ -166,10 +168,15 @@ app.whenReady().then(async () => {
   assert.equal(await js('document.querySelector(".mobile-toggle").getAttribute("aria-expanded")'), 'false');
   assert.equal(await js('document.querySelectorAll("#graph-scene .node-star-glow").length'), 0);
   assert.equal(await js('document.querySelector("#graph-filters").closest("details") === null'), true);
-  await js('document.querySelector("#graph-filters [data-type=PROJECT]").focus(); document.activeElement.click()');
-  assert.equal(await js('document.activeElement.getAttribute("aria-pressed")'), 'true');
+  const enhancedFilters = await js('!document.querySelector("#graph-exact-type").hidden');
+  const selectGraphType = type => js(enhancedFilters ? `{
+    const select = document.querySelector("#graph-exact-type-select");
+    select.value = "${type}";
+    select.dispatchEvent(new Event("change", {bubbles:true}));
+  }` : `document.querySelector("#graph-filters [data-type=${type}]").click(); void 0`);
+  await selectGraphType('PROJECT');
   assert.equal(await js('document.querySelector("#graph-scene .graph-node[data-node=person]")'), null);
-  await js('document.querySelector("#graph-filters [data-type=all]").click()');
+  await selectGraphType('all');
   await js(`(() => {
     const search = document.querySelector("#graph-query");
     search.focus(); search.value="测试项目"; search.dispatchEvent(new Event("input",{bubbles:true}));
@@ -254,17 +261,22 @@ app.whenReady().then(async () => {
   assert.equal(await js('document.querySelectorAll(".mw-library [data-cv=material-add]").length'), 0);
   await writeFile(join(output, 'subpage-material.png'), (await win.webContents.capturePage()).toPNG());
 
-  await js('document.querySelector("[data-view=search]").click(); document.querySelector("#search-query").value="验收"; document.querySelector("#search-form").requestSubmit();');
-  await until(() => js('document.querySelector("#search-results").textContent'), text => text.includes('检索验收片段'), 'material search failed');
-  assert.equal(await js('document.querySelector("#search-results .result-meta h3").textContent'), '测试材料.txt');
-  await writeFile(join(output, 'subpage-search.png'), (await win.webContents.capturePage()).toPNG());
+  assert.deepEqual(await js('[...document.querySelectorAll("[aria-labelledby=starlink-browse] button")].map(button => button.textContent.trim())'), ['知识星图']);
+  assert.equal(await js('Boolean(document.querySelector("#view-search"))'), false);
   await js('document.querySelector("#page-primary").click()');
   await until(() => js('document.querySelector("#import-dialog").open'), Boolean, 'header import did not open the shared dialog');
-  assert.equal(await js('Boolean(document.querySelector("#import-dialog #source-space")) && Boolean(document.querySelector("#import-dialog #source-computer"))'), true);
+  assert.equal(await js('Boolean(document.querySelector("#import-dialog #space-browser")) && !document.querySelector("#source-computer,#computer-browser,#choose-files")'), true);
   await js('document.querySelector("#import-dialog [data-close]").click()');
   await until(() => js('document.querySelector("#import-dialog").open'), open => !open, 'header import did not close cleanly');
+  const openCurrentSource = () => js(`{
+    const link = document.createElement("button");
+    link.dataset.source = "doc";
+    document.querySelector("#view-conversation").append(link);
+    link.click();
+    link.remove();
+  }`);
   await win.webContents.executeJavaScript('window.fixtureOverrides.correct=()=>({ok:false,code:"SEMANTICA_CONNECTION_FAILED"});void 0');
-  await js('document.querySelector("#search-results [data-source]").click()');
+  await openCurrentSource();
   await until(() => js('Boolean(document.querySelector("[data-action=edit-source]"))'), Boolean, 'source detail missing');
   await js('document.querySelector("[data-action=edit-source]").click()');
   await until(() => js('Boolean(document.querySelector("#source-body textarea"))'), Boolean, 'source correction editor missing');
@@ -279,18 +291,16 @@ app.whenReady().then(async () => {
   await until(() => js('Boolean(document.querySelector("[data-action=save-correction]:not(:disabled)"))'), Boolean, 'correction retry did not settle');
   await js('document.querySelector("#source-actions [data-close]").click()');
   await until(() => js('document.querySelector("#source-dialog").open'), open => !open, 'source dialog did not close');
-  assert.deepEqual(await js('[...document.querySelectorAll("[aria-labelledby=starlink-ontology] button")].map(button => button.textContent)'), ['规则总览']);
-  assert.equal(await js('document.querySelector("#ontology-actions").hidden'), true);
-  const chooseOntology = action => js(`(() => {
-    if ("${action}" !== "published") document.querySelector("#ontology-actions summary").click();
-    document.querySelector("[data-ontology-action=${action}]").click();
-  })()`);
+  assert.deepEqual(await js('[...document.querySelectorAll("[aria-labelledby=starlink-ontology] button")].map(button => button.textContent)'), ['规则总览','规则调整向导']);
+  assert.equal(await js('Boolean(document.querySelector("#ontology-actions"))'), false);
+  const chooseOntology = action => action === 'published'
+    ? js('document.querySelector(".starlink-rail [data-ontology-action=published]").click()')
+    : ontologyJs(`[...document.querySelectorAll(".rules-workspace-header button")].find(button => ["待发布草稿", "查看草稿"].includes(button.textContent.trim())).click()`);
   await chooseOntology('published');
   assert.equal(await js('document.querySelector(".starlink-rail [aria-current=page]")?.dataset.view'), 'ontology');
   await until(() => js('document.querySelector("#page-title").textContent'), text => text === '本体与关系', 'ontology navigation did not complete');
   await until(() => win.webContents.mainFrame.framesInSubtree.map(f => f.url), urls => urls.some(url => url.includes('/workbench/index.html')), 'ontology workbench missing');
-  assert.equal(await js('document.querySelector("#ontology-actions").open'), false);
-  assert.equal(await js('document.querySelector("#ontology-actions [data-ontology-action=assistant]").getClientRects().length'), 0);
+  assert.equal(await js('document.querySelector("#rules-guide-entry").hidden'), false);
   await until(() => js('document.querySelector("#view-workbench iframe")?.contentDocument?.body.textContent || ""'), text => text.includes('本体'), 'ontology content did not render');
   assert.equal(await js('document.querySelector("#view-workbench iframe").contentDocument.body.textContent.includes("页面加载失败")'), false);
   const ontologyFrame = win.webContents.mainFrame.framesInSubtree.find(f => f.url.includes('/workbench/index.html'));
@@ -320,19 +330,17 @@ app.whenReady().then(async () => {
   assert.equal(await ontologyJs('document.querySelectorAll(".ontology-type-page .ontology-endpoints").length'), 2);
   await delay(130);
   await writeFile(join(output, 'subpage-ontology-relation.png'), (await win.webContents.capturePage()).toPNG());
-  await chooseOntology('assistant');
-  await until(() => ontologyJs('Boolean(document.querySelector(".ontology-assistant.workbench-inline .assistant-composer"))'), Boolean, 'ontology dialogue did not open in the main content');
-  assert.equal(await ontologyJs('document.querySelector(".assistant-workspace").firstElementChild.className'), 'assistant-conversation');
-  assert.equal(await ontologyJs('document.querySelector(".assistant-proposal").hidden'), true);
-  await ontologyJs('document.querySelector(".rules-assistant-tabs button:last-child").click()');
-  assert.equal(await ontologyJs('document.querySelector(".assistant-conversation").hidden'), true);
-  await ontologyJs('document.querySelector(".rules-assistant-tabs button:first-child").click()');
-  await delay(130);
-  await writeFile(join(output, 'subpage-ontology-assistant.png'), (await win.webContents.capturePage()).toPNG());
+  await ontologyJs('document.querySelector(".ontology-type-page footer button").click()');
+  await until(() => ontologyJs('Boolean(document.querySelector(".rules-workspace-tabs"))'), Boolean, 'rule workspace did not return after closing the relation form');
+  assert.equal(await ontologyJs('Boolean(document.querySelector(".rules-assistant-page"))'), false);
+  assert.equal(await ontologyJs('[...document.querySelectorAll(".rules-workspace-tabs button")].some(button => button.textContent.includes("对话"))'), false);
+  await catalogTab('实体类型');
+  assert.equal(await ontologyJs('[...document.querySelectorAll(".rules-catalog-detail button")].some(button => button.textContent.includes("对话"))'), false);
+  assert.equal(await ontologyJs('[...document.querySelectorAll(".rules-catalog-detail button")].some(button => button.textContent.includes("手动编辑"))'), true);
   await chooseOntology('drafts');
   await until(() => ontologyJs('Boolean(document.querySelector(".ontology-editor:not([hidden])"))'), Boolean, 'draft management did not open');
   assert.equal(await js('document.querySelector(".starlink-rail [aria-current=page]")?.dataset.view'), 'ontology');
-  assert.equal(await js('document.querySelector("#ontology-actions [aria-current=page]")?.dataset.ontologyAction'), 'drafts');
+  assert.match(await ontologyJs('document.querySelector(".rules-workspace-version [aria-current=page], .rules-draft-banner [aria-current=page]")?.textContent || ""'), /^(待发布草稿|查看草稿)/);
   assert.equal(await ontologyJs('Boolean(document.querySelector(".ontology-editor table[aria-label=实体类型列表]"))'), true);
   await ontologyJs('document.querySelector(".rules-draft-tabs button:last-child").click()');
   assert.equal(await ontologyJs('Boolean(document.querySelector(".ontology-editor table[aria-label=关系类型列表]"))'), true);
@@ -340,24 +348,43 @@ app.whenReady().then(async () => {
   await ontologyJs('document.querySelector(".ontology-editor .ontology-list-heading button").click()');
   await until(() => ontologyJs('Boolean(document.querySelector(".ontology-type-page"))'), Boolean, 'adding directly from the draft list did not open the form');
   assert.equal(await js('document.querySelector(".starlink-rail [aria-current=page]")?.dataset.view'), 'ontology');
-  assert.equal(await js('document.querySelector("#ontology-actions [aria-current=page]")?.dataset.ontologyAction'), 'drafts');
   await ontologyJs('document.querySelector(".ontology-type-page footer button").click()');
   await until(() => ontologyJs('Boolean(document.querySelector(".ontology-editor:not([hidden])"))'), Boolean, 'cancel did not return to the draft list');
+  assert.match(await ontologyJs('document.querySelector(".rules-workspace-version [aria-current=page], .rules-draft-banner [aria-current=page]")?.textContent || ""'), /^(待发布草稿|查看草稿)/);
   await chooseOntology('published');
   await until(() => ontologyJs('Boolean(document.querySelector(".rules-catalog-grid"))'), Boolean, 'published ontology did not return');
   assert.equal(await js('document.querySelector(".starlink-rail [aria-current=page]")?.dataset.ontologyAction'), 'published');
-  assert.match(await ontologyJs('document.querySelector(".rules-catalog-detail").textContent'), /人物.*姓名.*必填/);
+  await catalogTab('实体类型');
+  await until(() => ontologyJs('document.querySelector(".rules-catalog-detail").textContent'), text=>/人物.*姓名.*必填/.test(text), 'entity definition did not return');
   assert.equal(await ontologyJs('document.querySelectorAll(".rules-catalog-detail").length'), 1);
   await catalogTab('关系类型');
   assert.match(await ontologyJs('document.querySelector(".rules-catalog-detail .rules-type-direction").textContent'), /人物 → 参与 → 项目/);
+  await until(() => ontologyJs('Boolean(document.querySelector(".rules-instances .rules-instance-row > button"))'), Boolean, 'published relation instance was not displayed');
+  await ontologyJs('document.querySelector(".rules-instances .rules-instance-row > button").click()');
+  await until(() => ontologyJs('Boolean(document.querySelector(".rules-instance-sources button"))'), Boolean, 'relation sources did not load');
+  await ontologyJs('document.querySelector(".rules-instance-sources button").click()');
+  await until(() => js('document.querySelector("#source-body").textContent.includes("引用版正文")'), Boolean, 'instance source did not locate the exact version and segment');
+  await writeFile(join(output, 'subpage-ontology-source.png'), (await win.webContents.capturePage()).toPNG());
+  await js('document.querySelector("#source-dialog").close()');
   await catalogTab('实体类型');
   await ontologyJs('const search=document.querySelector(".rules-catalog-search input");Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").set.call(search,"姓名");search.dispatchEvent(new Event("input",{bubbles:true}));void 0');
   await until(() => ontologyJs('document.querySelectorAll(".rules-type-list li").length'), count => count === 1, 'published rule search did not filter by property');
-  await ontologyJs('[...document.querySelectorAll(".ontology-current button")].find(button => button.textContent === "版本与影响").click()');
+  await ontologyJs('[...document.querySelectorAll(".rules-workspace-version button")].find(button => button.textContent === "版本与影响").click()');
   await until(() => ontologyJs('Boolean(document.querySelector(".ontology-history-page.workbench-inline"))'), Boolean, 'version history did not open in the workspace');
+  await ontologyJs('[...document.querySelectorAll(".ontology-history-page button")].find(button => button.textContent === "查看影响与更新材料").click()');
+  await until(() => ontologyJs('document.querySelectorAll(".rules-material-row input").length'), n=>n===2, 'batch choices are missing');
+  await ontologyJs('document.querySelectorAll(".rules-material-row input").forEach(el=>el.click()); document.querySelector(".rules-material-selection .primary").click()');
+  assert.equal(await win.webContents.executeJavaScript('window.fixtureCalls.filter(call=>call.input.url?.endsWith("/ontology-updates/sample-schema/start")).length'),0);
+  assert.equal(await ontologyJs('document.querySelectorAll(".rules-batch-confirm li").length'),2);
+  await writeFile(join(output, 'subpage-ontology-batch.png'), (await win.webContents.capturePage()).toPNG());
+  await ontologyJs('document.querySelector(".rules-batch-confirm .primary").click()');
+  await until(() => ontologyJs('document.querySelector(".rules-material-impact").textContent'), text=>text.includes("已提交 2 份资料"), 'batch receipt did not render');
+  assert.equal(await win.webContents.executeJavaScript('window.fixtureCalls.filter(call=>call.input.url?.endsWith("/ontology-updates/sample-schema/start")).length'),1);
+  await ontologyJs('document.querySelector(".ontology-updates-drawer > header button").click()');
   await ontologyJs('document.querySelector(".ontology-history-page > header button").click()');
-  await catalogTab('关联图谱');
-  await until(() => ontologyJs('Boolean(document.querySelector(".ontology-spatial-graph"))'), Boolean, 'ontology graph no longer accessible');
+  await catalogTab('规则关系图');
+  await until(() => ontologyJs('Boolean(document.querySelector(".rules-catalog-graph .network-canvas"))'), Boolean, 'ontology graph no longer accessible');
+  assert.equal(await ontologyJs('document.querySelector("select[aria-label=展示范围]").value'), 'focus');
   await catalogTab('实体类型');
   await delay(130);
   await writeFile(join(output, 'subpage-ontology.png'), (await win.webContents.capturePage()).toPNG());
@@ -367,7 +394,7 @@ app.whenReady().then(async () => {
   await ontologyJs('document.querySelector(".ontology-type-page footer .primary").click()');
   await until(() => ontologyJs('Boolean(document.querySelector(".ontology-editor:not([hidden]) [data-type-name=NEW_TYPE]"))'), Boolean, 'applying a type did not show it in pending rules');
   assert.equal(await js('document.querySelector(".starlink-rail [aria-current=page]")?.dataset.view'), 'ontology');
-  assert.equal(await js('document.querySelector("#ontology-actions [aria-current=page]")?.dataset.ontologyAction'), 'drafts');
+  assert.match(await ontologyJs('document.querySelector(".rules-workspace-version [aria-current=page], .rules-draft-banner [aria-current=page]")?.textContent || ""'), /^(待发布草稿|查看草稿)/);
   await ontologyJs('document.querySelector(".ontology-draft-actions .primary").click()');
   await until(() => ontologyJs('Boolean(document.querySelector(".ontology-saved-drafts .workflow-draft-row"))'), Boolean, 'saving the type did not add it to the draft list');
   assert.equal(await ontologyJs('Boolean(document.querySelector(".ontology-history-page"))'), false);
@@ -385,6 +412,8 @@ app.whenReady().then(async () => {
   assert.equal(await ontologyFrame.executeJavaScript('document.querySelector(".ontology-drawer input").value'), 'DRAFT_TYPE');
   await ontologyFrame.executeJavaScript('window.confirm=()=>true;document.querySelector("[aria-label=关闭配置抽屉]").click()');
   await js('document.querySelector("#warehouse-picker").close()');
+  await catalogTab('实体类型');
+  assert.equal(await ontologyJs('Boolean(document.querySelector(".rules-assistant-page"))'), false);
   // A normal host broadcast must keep the original browsing document alive.
   await win.webContents.executeJavaScript('window.fixturePanel.mount()');
   assert.equal(frame.detached, false);
@@ -404,7 +433,7 @@ app.whenReady().then(async () => {
   await delay(100);
   assert.equal(await win.webContents.executeJavaScript('window.fixtureCalls.some(call=>call.action==="upload")'),false);
   assert.deepEqual(errors, []);
-  const result = { passed: true, checks: ['packaged UI', 'current warehouse', 'scoped bridge', 'feature menu', 'desktop and narrow 3D layout', 'host sizes and zoom levels', 'graph search, focus and inspector', 'shared import entry', 'material search', 'correction failure preserves text and retry identity', 'ontology workbench', 'unapplied type edits block warehouse switch', 'retained document', 'unblocked onboarding', 'reload revokes old document'], layouts, errors };
+  const result = { passed: true, checks: ['packaged UI', 'current warehouse', 'scoped bridge', 'feature menu', 'desktop and narrow 3D layout', 'host sizes and zoom levels', 'graph search, focus and inspector', 'shared import entry', 'retired search route opens the graph', 'correction failure preserves text and retry identity', 'ontology workbench', 'unapplied type edits block warehouse switch', 'retained document', 'unblocked onboarding', 'reload revokes old document'], layouts, errors };
   await writeFile(join(output, 'result.json'), JSON.stringify(result, null, 2));
   await writeFile(join(output, 'panel.png'), (await win.webContents.capturePage()).toPNG());
   console.log('STARLINK_PANEL_SMOKE_PASS');

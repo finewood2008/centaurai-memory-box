@@ -7,7 +7,7 @@ import SigmaGraph, { type GraphEdgeData, type GraphNodeData } from "./components
 import GraphDetails from "./components/GraphDetails";
 import { DeleteIndexNotice, KnowledgeOutcome, MergedScanInfo } from "./components/ProcessingStatus";
 import { isMergedScan, jobExecutionLabel, knowledgeStage, type DeleteResult, type KnowledgeSummary } from "./processing";
-import { edgeId, nodeId, relationLabel, detectionNotice, withoutIsolatedNodes, type GraphDetection, type GraphEdge, type GraphNode } from "./graph";
+import { edgeId, nodeId, relationLabel, detectionNotice, sourceLabel, withoutIsolatedNodes, type GraphDetection, type GraphEdge, type GraphNode } from "./graph";
 import "./styles.css";
 import "./workbench.css";
 import { DesignIcon, WorkbenchDrawer, type IconName } from "./components/WorkbenchUI";
@@ -18,9 +18,7 @@ import { startVisiblePolling, taskPollDelay } from "./polling";
 import OntologyEditor, {ConfigurationDrawer, type OntologyEditRequest} from "./components/OntologyEditor";
 import OntologyChangeSummary from './components/OntologyChangeSummary';
 import OntologyCatalog from "./components/OntologyCatalog";
-import OntologyAssistant from './components/OntologyAssistant';
 import OntologyVersionSummary from './components/OntologyVersionSummary';
-import type {DialogueTarget} from './ontologyDialogue';
 import SearchTypeFilter from "./components/SearchTypeFilter";
 import SearchSourceDetails, { type IndexSource } from "./components/SearchSourceDetails";
 import OntologySuggestions from "./components/OntologySuggestions";
@@ -418,56 +416,6 @@ function formatBytes(value: number) {
   return `${(value / 1024 / 1024).toFixed(1)} MiB`;
 }
 
-function formatTimestamp(value: number) {
-  const seconds = Math.max(0, Math.floor(value));
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const remainder = seconds % 60;
-  return hours
-    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`
-    : `${minutes}:${String(remainder).padStart(2, "0")}`;
-}
-
-function sourceLabel(locator: Record<string, unknown>) {
-  if (typeof locator.sheet === "string" || typeof locator.slide === "number" || typeof locator.row === "number") {
-    return [
-      typeof locator.sheet === "string" ? `工作表 ${locator.sheet}` : "",
-      typeof locator.slide === "number" ? `第 ${locator.slide} 张幻灯片` : "",
-      typeof locator.row === "number" ? `第 ${locator.row} 行` : "",
-    ].filter(Boolean).join(" · ");
-  }
-  if (
-    typeof locator.start_seconds === "number" &&
-    typeof locator.end_seconds === "number"
-  ) {
-    return `${formatTimestamp(locator.start_seconds)}–${formatTimestamp(locator.end_seconds)}`;
-  }
-  if (locator.page) {
-    const confidence =
-      typeof locator.confidence === "number"
-        ? ` · 置信度 ${(locator.confidence * 100).toFixed(1)}%`
-        : "";
-    const first = Number(locator.line_start ?? locator.line_index ?? 0) + 1;
-    const last = Number(locator.line_end ?? locator.line_index ?? 0) + 1;
-    const lines = first === last ? `${first}` : `${first}–${last}`;
-    return `第 ${locator.page} 页 · 行 ${lines}${confidence}`;
-  }
-  if (locator.table_index !== undefined)
-    return `表格 ${Number(locator.table_index) + 1} · 行 ${Number(locator.row_index ?? 0) + 1} · 列 ${Number(locator.column_index ?? 0) + 1}`;
-  if (locator.paragraph_index !== undefined)
-    return `段落 ${Number(locator.paragraph_index) + 1}`;
-  if (locator.paragraph_start !== undefined) {
-    const first = Number(locator.paragraph_start) + 1;
-    const last = Number(locator.paragraph_end ?? locator.paragraph_start) + 1;
-    return first === last ? `段落 ${first}` : `段落 ${first}–${last}`;
-  }
-  if (locator.line_start) {
-    const end = locator.line_end === locator.line_start ? "" : `–${locator.line_end}`;
-    return `原文行 ${locator.line_start}${end}`;
-  }
-  return "来源位置";
-}
-
 function highlightStyle(segment: Segment | null) {
   if (!segment) return undefined;
   const locator = segment.source_locator;
@@ -523,12 +471,8 @@ function OntologyView({ report: onReport, onLeaveStateChange, initialPreview, on
   const [pageApplied, setPageApplied] = useState<{kind:'entity'|'relation';name:string}|null>(null);
   const [operationBusy, setBusy] = useState(false);
   const [impactBusy, setImpactBusy] = useState(false);
-  const [assistantTarget,setAssistantTarget]=useState<DialogueTarget>();
-  const [assistantText,setAssistantText]=useState('');
-  const [assistantBusy,setAssistantBusy]=useState(false);
-  const [assistantDirty,setAssistantDirty]=useState(false);
   const [drawerDirty,setDrawerDirty]=useState(false);
-  const busy=operationBusy||impactBusy||assistantBusy;
+  const busy=operationBusy||impactBusy;
   const [loaded, setLoaded] = useState(false);
   const initialized = useRef(false);
   const loadSequence = useRef(0);
@@ -558,44 +502,41 @@ function OntologyView({ report: onReport, onLeaveStateChange, initialPreview, on
   const consumedNavigation = useRef<typeof navigation>(undefined);
   const host = embeddedHost();
   const adding = pageSelection?.index === null;
-  const category: OntologyCategory = assistantTarget ? 'assistant' : configOpen ? 'drafts' : 'published';
+  const category: OntologyCategory = configOpen ? 'drafts' : 'published';
   const section: OntologySection = adding ? (pageSelection.kind === 'entity' ? 'add-entity' : 'add-relation') : category;
   const showSection = !host || (!versionsOpen && !impact);
   const showPublished = showSection && (!host || section === 'published');
   const showDrafts = showSection && (!host ? configOpen || !currentOntology : section === 'drafts');
   const savedDrafts = items.filter(item => item.status === 'draft');
+  const draftCount = savedDrafts.length;
 
   useEffect(() => {
     host?.ontologySectionChanged?.(window, section, category);
     if (host) document.querySelector('.app-content')?.scrollTo({ top: 0 });
   }, [host, section, category, versionsOpen, impact]);
 
-  useEffect(() => {
-    if (!loaded || !navigation || consumedNavigation.current === navigation) return;
-    consumedNavigation.current = navigation;
-    onNavigationHandled();
+  function navigateRules(action:OntologyAction) {
     if (busy) {
       report('本体操作正在处理中，请等待完成后再试。', true);
       return;
     }
-    if (navigation.action === section && showSection &&
-      (section !== 'assistant' || assistantTarget?.scope === 'rules')) return;
-    if (navigation.action === 'assistant' && dirty) {
-      report('请先保存当前手动修改，再进入对话调整。', true);
-      return;
-    }
-    if ((drawerDirty || assistantDirty) && !window.confirm('当前页面有未提交的修改。放弃修改并切换页面？')) return;
-    if (assistantDirty) setAssistantText('');
+    if (action === section && showSection) return;
+    if (drawerDirty && !window.confirm('放弃尚未加入草稿的手动编辑？')) return;
     setPageSelection(null);
-    setAssistantTarget(undefined);
     setVersionsOpen(false);
     setImpact(undefined);
-    switch (navigation.action) {
+    if (versionFeedback) { setVersionFeedback(null); onReport(''); }
+    switch (action) {
       case 'published': setConfigOpen(false); break;
       case 'drafts': setConfigOpen(true); break;
       case 'suggestions': setConfigOpen(true); setSuggestionFocus(value => value + 1); break;
-      case 'assistant': setAssistantTarget({ scope: 'rules' }); break;
     }
+  }
+  useEffect(() => {
+    if (!loaded || !navigation || consumedNavigation.current === navigation) return;
+    consumedNavigation.current = navigation;
+    onNavigationHandled();
+    navigateRules(navigation.action);
   });
 
   useEffect(()=>{
@@ -633,12 +574,12 @@ function OntologyView({ report: onReport, onLeaveStateChange, initialPreview, on
   }
 
   useEffect(() => {
-    onLeaveStateChange({ dirty:dirty||assistantDirty||drawerDirty, busy });
-    if (!dirty && !assistantDirty && !drawerDirty && !busy) return;
+    onLeaveStateChange({ dirty:dirty||drawerDirty, busy });
+    if (!dirty && !drawerDirty && !busy) return;
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
-  }, [dirty, assistantDirty, drawerDirty, busy, onLeaveStateChange]);
+  }, [dirty, drawerDirty, busy, onLeaveStateChange]);
   useEffect(() => () => {
     loadSequence.current++;
     onLeaveStateChange({ dirty: false, busy: false });
@@ -648,15 +589,6 @@ function OntologyView({ report: onReport, onLeaveStateChange, initialPreview, on
     if (JSON.stringify(value) === JSON.stringify(definition)) return;
     setDefinition(value);
     if (change) setSuggestionTypeChanges(previous => [...previous, change]);
-  }
-
-  function closeOntologyAssistant() {
-    if (host && assistantDirty && !window.confirm('放弃尚未发送的对话内容？')) return;
-    if (host) {
-      setAssistantText('');
-      setConfigOpen(false);
-    }
-    setAssistantTarget(undefined);
   }
 
   function applyPageTypeEdit(value: OntologyDefinition, change?: OntologyTypeChange) {
@@ -748,12 +680,6 @@ function OntologyView({ report: onReport, onLeaveStateChange, initialPreview, on
     load().catch((reason: Error) => report(reason.message, true));
   }, [load, report]);
 
-  async function onAssistantPublished(){
-    setLoaded(false);
-    try{await load();}catch(reason){report('规则发布状态已读取，但本体列表刷新失败。手动编辑暂不可用，请重新读取生效本体或打开版本历史刷新列表。',true);throw reason;}
-    window.dispatchEvent(new Event('starlink:graph-changed'));
-  }
-
   async function createVersion(openHistory=true) {
     if (!loaded || busy || operationPending.current || created || issues.length || !name.trim()) return;
     operationPending.current = true;
@@ -822,14 +748,29 @@ function OntologyView({ report: onReport, onLeaveStateChange, initialPreview, on
   return (
     <div className="ontology-page">
       {!host && <div className="ontology-page-actions"><button className="primary" disabled={busy||!loaded} onClick={()=>openTypeEditor('entity')}><DesignIcon name="plus" />添加实体类型</button>
-        <button disabled={busy||!loaded||dirty||!currentOntology} onClick={()=>setAssistantTarget({scope:'rules'})}>对话管理类型与知识</button>
         <button disabled={busy||!loaded} onClick={()=>openTypeEditor('relation')}><DesignIcon name="plus" />添加关系类型</button>
         <button disabled={busy||!loaded} onClick={()=>setConfigOpen(!configOpen)}>{configOpen&&currentOntology?'查看当前生效定义':'管理待发布修改'}{dirty?'（未保存）':''}</button></div>}
       {host && !loaded && <section className="knowledge-card ontology-page-state">
         {versionFeedback?.failed ? <><p role="alert">{versionFeedback.text}</p><button onClick={() => void load().catch((reason: Error) => report(reason.message, true))}>重新读取规则</button></>
           : <p role="status">正在读取本体规则…</p>}
       </section>}
-      {showPublished && currentOntology && <section className="knowledge-card ontology-current">
+      {host && loaded && showSection && !adding && <div className="rules-workspace-header">
+        <div className="rules-workspace-top">
+          <nav className="rules-workspace-tabs" aria-label="本体与关系">
+            <button type="button" aria-current={category==='published'?'page':undefined} disabled={busy} onClick={()=>navigateRules('published')}>规则总览</button>
+          </nav>
+          <div className="rules-workspace-version">
+            {currentOntology&&<><strong>{currentOntology.name}</strong><span className="badge published">v{currentOntology.version_number} · 生效</span>
+              <button type="button" disabled={busy} onClick={()=>setVersionsOpen(true)}>版本与影响</button></>}
+            {draftCount===0 && <button type="button" aria-current={category==='drafts'?'page':undefined} disabled={busy} onClick={()=>navigateRules('drafts')}>待发布草稿</button>}
+          </div>
+        </div>
+        {draftCount>0 && <div className="rules-draft-banner" aria-label="未发布规则">
+          <div><strong>{draftCount} 份待发布草稿</strong>{currentOntology && <span>当前生效 v{currentOntology.version_number}</span>}</div>
+          <button type="button" aria-current={category==='drafts'?'page':undefined} disabled={busy} onClick={()=>navigateRules('drafts')}>查看草稿</button>
+        </div>}
+      </div>}
+      {!host && showPublished && currentOntology && <section className="knowledge-card ontology-current">
         <div><h2>{currentOntology.name} <span className="badge published">v{currentOntology.version_number} · 当前生效</span></h2><p>新导入材料按这套规则提取知识。</p></div>
         <button disabled={busy} onClick={() => setVersionsOpen(true)}>{host ? '版本与影响' : '查看版本历史'}</button>
       </section>}
@@ -838,20 +779,15 @@ function OntologyView({ report: onReport, onLeaveStateChange, initialPreview, on
         <h2>当前数据仓还没有生效规则</h2><p>核对实体和关系后，可以发布首个版本。</p>
         <button type="button" onClick={() => setConfigOpen(true)}>查看待发布草稿</button>
       </section>}
-      {(host ? showDrafts && loaded && savedDrafts.length > 0 : savedDrafts.length > 0) && <section className="workflow-next ontology-saved-drafts" aria-label="待发布规则草稿">
-        <div className="ontology-saved-heading"><h2>已保存的草稿 <span className="badge">{savedDrafts.length}</span></h2>
+      {(host ? showDrafts && loaded && savedDrafts.length > 0 : savedDrafts.length > 0) && <section className="workflow-next ontology-saved-drafts" aria-label="手动编辑草稿">
+        <div className="ontology-saved-heading"><h2>{host?'手动编辑草稿':'已保存的草稿'} <span className="badge">{savedDrafts.length}</span></h2>
           {host && <button type="button" disabled={busy} onClick={() => setVersionsOpen(true)}>查看版本历史</button>}
         </div>
         {savedDrafts.map(item=><div className="workflow-draft-row" key={item.id}><span>v{item.version_number} · {item.name}</span><button disabled={busy} onClick={()=>resumeVersion(item)}>继续核对此版本</button></div>)}
       </section>}
-      {!host&&dirty&&<p className="muted">请先保存当前手动修改，再进入独立的对话调整。新对话以当前生效版本为起点。</p>}
-      {showPublished && !configOpen && currentOntology && <OntologyCatalog schema={currentOntology.schema} onAdd={host ? openTypeEditor : undefined} onEdit={openTypeEditor} onDiscuss={target=>{if(!dirty)setAssistantTarget(target);else report('请先保存当前手动修改，再进入对话调整。',true);}} disabled={busy||!loaded} />}
-      {host && loaded && assistantTarget && !currentOntology && <section className="knowledge-card ontology-page-state">
-        <h2>发布首个规则版本后即可开始对话</h2><p>对话会以当前生效的实体和关系定义为起点。</p>
-        <button type="button" onClick={() => { setAssistantTarget(undefined); setConfigOpen(true); }}>查看待发布草稿</button>
-      </section>}
-      {assistantTarget&&currentOntology&&<OntologyAssistant inline={Boolean(host)} baseId={currentOntology.id} schema={currentOntology.schema} target={assistantTarget} initialText={assistantText} onTextChange={setAssistantText} onClose={closeOntologyAssistant} onBusy={setAssistantBusy} onDirty={setAssistantDirty}
-        onPublished={onAssistantPublished}/>}
+      {currentOntology&&(host||showPublished&&!configOpen)&&<div hidden={!!host&&(!showPublished||configOpen)}>
+        <OntologyCatalog schema={currentOntology.schema} active={showPublished&&!configOpen} onAdd={host ? openTypeEditor : undefined} onEdit={openTypeEditor} disabled={busy||!loaded} />
+      </div>}
       {pageSelection&&(host||currentOntology)&&<ConfigurationDrawer inline={Boolean(host) && adding} key={`${pageSelection.kind}:${pageSelection.index}`} value={pageEditorBase} selection={pageSelection}
         disabled={busy} onDirtyChange={setDrawerDirty} onApply={applyPageTypeEdit} onClose={()=>setPageSelection(null)}
         applyLabel={host ? "加入待发布修改" : undefined} hint="应用后进入待发布修改，核对并保存，再确认发布。" />}

@@ -89,7 +89,7 @@ state = {}
 
 @asynccontextmanager
 async def lifespan(app):
-    source = json.loads((root / "templates/knowledge-qa/wanx.editable.json").read_text())
+    source = json.loads((root / "dist/knowledge-template/wanx.editable.json").read_text(encoding="utf-8"))
     p = await service.copy_source(
         "synthetic", {"operationId": uuid4().hex, "name": "智能客服", "source": source}
     )

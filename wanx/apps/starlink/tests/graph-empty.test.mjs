@@ -17,7 +17,7 @@ function render({ warehouses = [], warehouseId = "selected", graphError = null, 
   vm.runInNewContext(`${renderSource}\n${warehouseSource}\nrenderGraph();`, {
     state, $, visibleGraph: () => ({ nodes: [], edges: [] }),
     errorText: error => error.message, document: { querySelectorAll: () => [] },
-    transformScene() {}, renderDetails() {}, canCreateWarehouse: () => true,
+    explorer: { enabled: () => false }, transformScene() {}, renderDetails() {}, canCreateWarehouse: () => true,
   });
   const empty = $("#graph-empty");
   const title = $("#graph-empty-title").textContent;

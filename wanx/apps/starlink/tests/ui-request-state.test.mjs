@@ -3,6 +3,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
+import {pendingAnnotationHTML} from '../ui/import-annotation.mjs';
 
 const source = await readFile(new URL('../ui/app.js', import.meta.url), 'utf8');
 const section = (start, end) => source.slice(source.indexOf(start), source.indexOf(end));
@@ -22,6 +23,7 @@ function fixture() {
   const context = vm.createContext({ state, bridge: null, $, CSS: {escape: String}, crypto: { randomUUID }, document: { querySelectorAll: () => [] },
     currentWarehouse: () => ({ state: 'active' }), onboarding: { visible: false }, basicMaterialWarehouse: null,
     esc: value => String(value ?? ''), highlight: value => value, icon: () => '', locator: () => '', bytes: () => '', actualModel: () => '', doc: () => null,
+    pendingAnnotationHTML,
     errorText: error => error.message, toast: text => notices.push(text), refresh: async () => {},
     call: (action, input) => { const pending = deferred(); calls.push({ action, input, ...pending }); return pending.promise; },
   });
@@ -34,9 +36,9 @@ function importFixture() {
   let opened = 0;
   h.$('#import-dialog').open = false; h.$('#import-dialog').showModal = () => { opened++; h.$('#import-dialog').open = true; };
   Object.assign(h.context, { conversationFlow: { state: { loaded: true, busy: false }, saved: {} }, warehouseAction: async () => false,
-    renderImportSource() {}, renderPending() {}, loadSpace: async () => {} });
+    renderPending() {}, loadSpace: async () => {} });
   h.context.document.querySelectorAll = selector => selector === '[data-action="import"]' ? [h.$('#page-primary')] : [];
-  vm.runInContext(section('function canCreateWarehouse()', 'function connection(') + section('async function action(name)', 'document.addEventListener("click"'), h.context);
+  vm.runInContext(section('function canCreateWarehouse()', 'function connection(') + section('async function action(', 'document.addEventListener("click"'), h.context);
   return { ...h, get opened() { return opened; } };
 }
 
@@ -51,7 +53,7 @@ test('repeated import clicks share one opening operation and preserve its disabl
 test('leaving a page while import is opening cannot show its dialog in the new page', async () => {
   const h = importFixture();
   const opening = h.context.action('import'); await new Promise(resolve => setImmediate(resolve));
-  h.state.view = 'search'; h.calls[0].resolve({}); await opening;
+  h.state.view = 'tasks'; h.calls[0].resolve({}); await opening;
   assert.equal(h.opened, 0); assert.equal(h.$('#page-primary').disabled, false);
 });
 
@@ -183,99 +185,6 @@ test('selecting all Space matches resumes a failed page before staging bounded g
   assert.equal(h.state.spaceSelecting,false);
 });
 
-for (const oldFailure of [false, true]) test(`only the latest search can update results or release its lock (old failure: ${oldFailure})`, async () => {
-  const h = fixture();
-  vm.runInContext(section('async function runSearch(', 'async function showSource(') + section('function canCreateWarehouse()', 'function connection('), h.context);
-  h.$('#search-query').value = 'first'; const first = h.context.runSearch();
-  h.context.syncControls();
-  assert.equal(h.$('#search-form button[type=submit]').disabled, true, 'background refresh must preserve the search lock');
-  h.$('#search-query').value = 'second'; const second = h.context.runSearch();
-  if (oldFailure) h.calls[0].reject(Error('old search failed'));
-  else h.calls[0].resolve({ items: [], message: 'old results' });
-  await first;
-  assert.equal(h.$('#search-form button[type=submit]').disabled, true);
-  assert.doesNotMatch(h.$('#search-results').innerHTML, /old results|old search failed/);
-  h.calls[1].resolve({ items: [], message: 'latest results' }); await second;
-  assert.match(h.$('#search-results').innerHTML, /latest results/);
-  assert.equal(h.$('#search-form button[type=submit]').disabled, false);
-});
-
-test('knowledge search renders tag matches with a source link alongside native evidence', async () => {
-  const h = fixture();
-  vm.runInContext(section('async function runSearch(', 'async function showSource('), h.context);
-  h.$('#search-query').value = '空间测试标签';
-  const pending = h.context.runSearch();
-  h.calls[0].resolve({
-    items: [{ document_id: 'native-doc', original_name: '关键词资料', text: '原有检索片段', channels: ['keyword'] }],
-    annotationDocuments: [{ documentId: 'tag-doc', versionId: 'tag-version', title: '空间资料', text: '由空间标签召回的原文' }],
-    annotationSearch: { incomplete: true },
-  });
-  await pending;
-  const markup = h.$('#search-results').innerHTML;
-  assert.match(markup, /关键词资料/);
-  assert.match(markup, /空间资料/);
-  assert.doesNotMatch(markup, /由空间标签召回的原文/);
-  assert.match(markup, /打开来源查看对应版本/);
-  assert.match(markup, /class="pill">空间标签/);
-  assert.match(markup, /data-source="tag-doc"/);
-  assert.match(markup, /data-source-version="tag-version"/);
-  assert.match(markup, /检索结果可能不完整/);
-});
-
-test('more tag results append pinned sources without replacing the original evidence', async () => {
-  const h = fixture();
-  vm.runInContext(section('async function runSearch(', 'async function showSource('), h.context);
-  h.$('#search-query').value = '课程备案';
-  const pending = h.context.runSearch();
-  const tag = {documentId:'tag-one',versionId:'v-one',title:'第一份材料'};
-  h.calls[0].resolve({items:[{document_id:'native',text:'关键词命中',channels:['keyword']}],
-    annotationDocuments:[tag],annotationSearch:{incomplete:true,verificationIncomplete:false,nextCursor:'next'}});
-  await pending;
-  assert.match(h.$('#search-results').innerHTML,/显示更多空间标签结果/);
-  assert.doesNotMatch(h.$('#search-results').innerHTML,/检索结果可能不完整/);
-  h.$('#search-query').value = '尚未提交的新检索';
-  const more = h.context.runSearch('next');
-  assert.equal(h.calls[1].input.query,'课程备案');
-  assert.equal(h.calls[1].input.annotationAfter,'next');
-  h.calls[1].resolve({items:[],annotationDocuments:[tag,{documentId:'native',versionId:'none'},
-    {documentId:'tag-two',versionId:'v-two',title:'第二份材料'}],annotationSearch:{verificationIncomplete:false,nextCursor:null}});
-  await more;
-  const markup = h.$('#search-results').innerHTML;
-  assert.match(markup,/关键词命中/);
-  assert.equal(markup.match(/data-source="tag-one"/g).length,1);
-  assert.match(markup,/data-source="tag-two" data-source-version="v-two"/);
-  assert.doesNotMatch(markup,/显示更多空间标签结果/);
-});
-
-test('index recovery guides the user from parsed materials through an active build to search readiness', async () => {
-  const h = fixture();
-  vm.runInContext(section('function renderRetrieval()', 'async function initialize()') +
-    section('async function runSearch(', 'async function showSource('), h.context);
-  const status = h.$('#search-index-state');
-  h.state.retrieval = { embedding_configured: true, publishable_segments: 0 };
-  h.context.renderRetrieval();
-  assert.match(status.textContent, /等待材料解析/);
-  h.state.retrieval.publishable_segments = 1;
-  h.context.renderRetrieval();
-  assert.match(status.innerHTML, /data-action="build-index">建立索引/);
-  h.state.retrieval.items = [{ status: 'building', job_status: 'running' }];
-  h.context.renderRetrieval();
-  assert.match(status.textContent, /正在建立检索索引/);
-  h.state.retrieval = { compatible: true, fresh: true };
-  h.context.renderRetrieval();
-  assert.match(status.innerHTML, /索引已就绪/);
-
-  let refreshed = 0;
-  h.context.refresh = async () => { refreshed++; };
-  h.$('#search-query').value = '查询验收材料';
-  const pending = h.context.runSearch();
-  h.calls[0].reject(Object.assign(new Error('材料已有更新。请查看索引进度。'), { code: 'SEMANTICA_INDEX_STALE' }));
-  await pending;
-  assert.equal(refreshed, 1);
-  assert.match(h.$('#search-results').innerHTML, /请查看索引进度/);
-  assert.equal(h.$('#search-query').value, '查询验收材料');
-});
-
 const detail = id => ({ document: { id, original_name: id, segment_count: 2 }, version: { id: 'version-' + id }, segments: [{ id: 's-' + id, text: 'original' }] });
 const sourceReads = section('async function sourceRange(', 'function renderSource()') + section('async function sourceMore(', 'async function saveCorrection()');
 test('closing and reopening a source ignores the previous document response', async () => {
@@ -340,7 +249,7 @@ test('reading earlier context keeps the cited version and rejects a mismatched r
 });
 
 test('failed correction preserves edited text and retries the same unchanged operation', async () => {
-  const h = fixture(); vm.runInContext(section('function renderSource()', 'function renderImportSource()'), h.context);
+  const h = fixture(); vm.runInContext(section('function renderSource()', 'function matchingSpaceItems()'), h.context);
   h.state.source = detail('first'); h.state.sourceTotal = 1; h.state.editing = true;
   h.context.document.querySelectorAll = () => [{ dataset: { segment: 's-first' }, value: 'edited text' }];
   const first = h.context.saveCorrection(); h.calls[0].reject(Error('response lost')); await first;
@@ -349,7 +258,7 @@ test('failed correction preserves edited text and retries the same unchanged ope
   assert.equal(h.calls[0].input.operationId, h.calls[1].input.operationId);
 });
 test('correction completion cannot replace a newer source', async () => {
-  const h = fixture(); vm.runInContext(section('async function saveCorrection()', 'function renderImportSource()'), h.context);
+  const h = fixture(); vm.runInContext(section('async function saveCorrection()', 'function matchingSpaceItems()'), h.context);
   h.context.renderSource = () => {}; h.state.source = detail('first'); h.state.editing = true;
   const saving = h.context.saveCorrection(); h.state.source = detail('second'); h.calls[0].resolve({ saved: true });
   await new Promise(resolve => setImmediate(resolve));
@@ -357,7 +266,7 @@ test('correction completion cannot replace a newer source', async () => {
   assert.equal(h.state.source.document.id, 'second');
 });
 test('a successful correction replaces its source and releases the saving state', async () => {
-  const h = fixture(); vm.runInContext(section('async function saveCorrection()', 'function renderImportSource()'), h.context);
+  const h = fixture(); vm.runInContext(section('async function saveCorrection()', 'function matchingSpaceItems()'), h.context);
   h.context.renderSource = () => {}; h.state.source = detail('first'); h.state.editing = true;
   const saving = h.context.saveCorrection(); h.calls[0].resolve({ saved: true });
   await new Promise(resolve => setImmediate(resolve));

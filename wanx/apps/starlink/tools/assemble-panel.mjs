@@ -3,11 +3,12 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { npmCommand } from '../../../tools/npm-command.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 export async function assembleStarlinkPanel(client, { buildFrontend = true } = {}) {
-  if (buildFrontend) execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build'], {
-    cwd: path.join(root, 'frontend'), stdio: 'inherit', shell: process.platform === 'win32',
+  if (buildFrontend) execFileSync(...npmCommand(['run', 'build']), {
+    cwd: path.join(root, 'frontend'), stdio: 'inherit',
   });
   const target = path.join(client, 'local-ui/starlink');
   await mkdir(target, { recursive: true });

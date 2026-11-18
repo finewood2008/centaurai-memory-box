@@ -80,7 +80,7 @@ export function memoboxTemplate(source) {
 export const memoboxBuildPlugin = () => ({
  name:'memobox-product-copy',
  setup(build) {
- build.onLoad({filter:/[\\/]templates[\\/](?:knowledge-qa|zhike)[\\/]wanx\.editable\.json$/},async ({path:filename})=>({contents:JSON.stringify(memoboxTemplate(JSON.parse(await readFile(filename,'utf8')))),loader:'json'}));
+ build.onLoad({filter:/[\\/]dist[\\/](?:knowledge|zhike)-template[\\/]wanx\.editable\.json$/},async ({path:filename})=>({contents:JSON.stringify(memoboxTemplate(JSON.parse(await readFile(filename,'utf8')))),loader:'json'}));
  build.onLoad({filter:/\.[cm]?[jt]sx?$/},async ({path:filename})=>{
   if(/[\\/]node_modules[\\/]/.test(filename))return;
   const source=await readFile(filename,'utf8'),contents=memoboxSource(source,filename);

@@ -76,7 +76,7 @@ export default function PointLineGraph({nodes,links,selectedNode,selectedRelatio
         })}
         {nodes.map(node=>{const p=positions.get(node.id)!;return <g key={node.id} className={`network-node${node.id===selectedNode?' selected':''}`} role="button" tabIndex={0} aria-label={`实体：${node.label}（${node.type}）`}
           onClick={()=>{setPair(undefined);onNode(node.id);}} onKeyDown={event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();setPair(undefined);onNode(node.id);}}}>
-          <title>{node.label}（{node.type}）</title><circle cx={p.x} cy={p.y} r="18" fill={colors[types.indexOf(node.type)%colors.length]}/><text x={p.x} y={p.y+36} textAnchor="middle">{short(node.label)}</text>
+          <title>{node.label}（{node.type}）</title><circle cx={p.x} cy={p.y} r={labelMode === 'interaction' ? 9 : 18} fill={colors[types.indexOf(node.type)%colors.length]}/><text x={p.x} y={p.y+(labelMode === 'interaction' ? 28 : 36)} textAnchor="middle">{short(node.label)}</text>
         </g>;})}
       </g>
     </svg>}

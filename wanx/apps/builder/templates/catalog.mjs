@@ -1,6 +1,6 @@
 // Bundled with the personal workshop; renderer receives metadata, never a source path.
-import source from './knowledge-qa/wanx.editable.json' with {type:'json'};
-import zhike from './zhike/wanx.editable.json' with {type:'json'};
+import source from '../dist/knowledge-template/wanx.editable.json' with {type:'json'};
+import zhike from '../dist/zhike-template/wanx.editable.json' with {type:'json'};
 const templates = new Map([['template:knowledge-qa',source],['template:zhike',zhike]]);
 export function workshopTemplates(){
   return [{id:'template:knowledge-qa',name:'好问',version:source.version,origin:'工坊模板',editable:true,

@@ -61,6 +61,12 @@ ipc('starlink', async (_event, { action, input = {} }) => {
     if (failQuick) {failQuick=false;return fail('SEMANTICA_CONNECTION_FAILED');}
     return ok(warehouse);
   }
+  if (action === 'onboarding-context') return ok({
+    purpose_revision:1, base_ontology_id:fixture.db.current, warehouse_scope:{
+      industry:'制造业', occupation:'研究员', service_objects:['项目组'], purposes:['汇总项目访谈'],
+      material_sources:['项目访谈记录'], questions_to_answer:['本次访谈关注什么'], excluded_scope:[], uncertain_items:[],
+    },
+  });
   if (action === 'conversation-list') return ok({ ...empty(), items: fixture.db.sessions.filter(session => conversationWarehouses.get(session.id) === input.warehouseId) });
   if (action === 'workbench-request' && input.url.includes('ontologies')) {
     return ok(await fixture.call('conversation-ontologies'));
@@ -69,7 +75,9 @@ ipc('starlink', async (_event, { action, input = {} }) => {
       action === 'conversation-create' && input.scenario === 'onboarding') {
     try {
       const value = await fixture.call(action, input);
-      if (action === 'conversation-create') conversationWarehouses.set(value.resource_id, input.warehouseId);
+      if (action === 'conversation-create') {
+        conversationWarehouses.set(value.resource_id, input.warehouseId);
+      }
       if (action === 'onboarding-create') Object.assign(fixture.db.warehouses.find(item=>item.id===value.warehouse.id),{created_at:'2026-11-18T00:00:00Z',document_count:0,entity_count:0,relation_count:0});
       return ok(value);
     } catch(error) { return fail(error.code || 'SEMANTICA_INVALID_RESPONSE', error.status); }
@@ -169,9 +177,6 @@ app.whenReady().then(async () => {
     assert.deepEqual(creates[0].input, creates[1].input);
     assert.equal(fixture.db.warehouses.length,1);
     await fill('#od-input','用于查阅访谈与设计决策');
-    await close();
-    await click('[data-warehouse-view=onboarding]');
-    await until(()=>star('document.querySelector("#od-input:enabled")?.value==="用于查阅访谈与设计决策"'),'Return to saved chat');
     fixture.db.failTurn=true;
     await click('#od-answer-form button[type=submit]');
     await until(()=>star('Boolean(document.querySelector("[data-od-retry]:enabled"))'),'Retry failed turn');
@@ -238,18 +243,35 @@ app.whenReady().then(async () => {
     assert.equal(quickReceipts.size,1);
     await capture('06-资料库.png');
 
+    assert.deepEqual(await star('[...document.querySelectorAll("[aria-labelledby=starlink-browse] button")].map(button => button.dataset.view)'), ['graph']);
+    assert.equal(await star('Boolean(document.querySelector("#view-search"))'),false);
+    assert.equal(await star('Boolean(document.querySelector("#graph-query"))'),true);
     await click('.starlink-rail [data-view=ontology]');
-    await click('#ontology-actions summary');
-    await click('[data-action=update-warehouse-rules]');
-    await until(()=>star('Boolean(document.querySelector("#od-input:enabled"))'),'Existing warehouse rules chat');
-    await fill('#od-input','按当前规则增加访谈主题');
-    await click('#od-answer-form button[type=submit]');
-    await waitDraft();
-    await review();
-    await until(()=>star('!document.querySelector("#view-workbench").hidden && document.querySelector("#onboarding-shell").hidden'),'Existing warehouse returns to rules');
-    await until(()=>star('document.querySelector("#page-title").textContent === "本体与关系"'),'Published rules selected');
-    assert.equal(fixture.db.publishes,2);
-    assert.equal(fixture.db.warehouses.length,2);
+    assert.equal(await star('Boolean(document.querySelector("#ontology-actions"))'),false);
+    await until(()=>star('Boolean(document.querySelector(".starlink-rail #rules-guide-entry:not([hidden])"))'),'Rules guide entry in sidebar');
+    const beforeScope = calls.length;
+    await click('#rules-guide-entry');
+    await until(()=>star('Boolean(document.querySelector("#scope-purposes:enabled"))'),'Existing warehouse scope form');
+    assert.equal(await star('document.querySelector(".starlink-rail [aria-current=page]").id'),'rules-guide-entry');
+    assert.equal(await star('document.querySelectorAll(".od-scope-card").length'),6);
+    assert.equal(await star('document.querySelector("#scope-purposes").value'),'汇总项目访谈');
+    assert.equal(await star('Boolean(document.querySelector("#od-answer-form"))'),false);
+    assert.equal(await star('document.querySelector("[data-scope-action=review]").disabled'),true);
+    await capture('07-范围卡片.png');
+    await fill('#scope-purposes','汇总项目访谈\n追溯访谈结论');
+    await click('[data-scope-action=close]');
+    await click('#rules-guide-entry');
+    await until(()=>star('document.querySelector("#scope-purposes")?.value.includes("追溯访谈结论")'),'Direct scope draft survived reopening');
+    await click('[data-scope-action=review]');
+    await until(()=>match('#od-title','发布核对'),'Direct scope review is visible');
+    assert.equal(await match('[aria-label="范围变化"]','追溯访谈结论'),true);
+    assert.equal(await match('[aria-label="规则差异"]','0 项改动'),true);
+    assert.equal(await star('document.querySelector("#od-confirm").checked'),false);
+    assert.equal(await star('document.querySelector("[data-scope-action=publish]").disabled'),true);
+    assert.deepEqual([...new Set(calls.slice(beforeScope).map(c=>c.action).filter(a=>a.startsWith('conversation-') || a==='onboarding-scope-publish'))],['conversation-ontologies']);
+    assert.equal(fixture.db.publishes,1);
+    await capture('08-发布核对.png');
+    await click('[data-scope-action=close]');
     legacyBox=true;
     await open();
     await until(()=>star('Boolean(document.querySelector("[data-od=quick]:enabled"))'),'Quick creation works on a box without conversation endpoints');

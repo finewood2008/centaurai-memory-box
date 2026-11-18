@@ -111,6 +111,12 @@ ROUTES: tuple[tuple[str, str, frozenset[str], str], ...] = (
         frozenset({"offset", "scope"}),
         "read_ontology_impact",
     ),
+    (
+        "POST",
+        rf"/workbench/ontology-updates/(?P<ontology_id>{ID})/start",
+        frozenset(),
+        "start_ontology_update",
+    ),
 ) + MATERIAL_ROUTES + tuple(
     ("POST", DRAFT + "/" + path, frozenset(), operation)
     for path, operation in CORRECTION_ACTIONS
@@ -198,7 +204,7 @@ def validate_query(method: str, path: str, query: Mapping[str, str]) -> None:
             or not minimum <= int(value) <= maximum
         ):
             raise ValueError("workbench page is not allowed")
-    if path.startswith("/workbench/ontology-updates/") and query.get("scope") != "selectable":
+    if method == "GET" and path.startswith("/workbench/ontology-updates/") and query.get("scope") != "selectable":
         raise ValueError("workbench impact is read-only selectable scope")
     if any(not isinstance(value, str) for value in query.values()):
         raise ValueError("workbench query values must be strings")
@@ -225,11 +231,28 @@ def validate_body(method: str, path: str, body: dict[str, Any] | None) -> str | 
     expected = {"_native_operation_id"}
     if path == "/workbench/ontologies":
         expected |= {"name", "schema"}
+    if operation_name_value == "start_ontology_update":
+        expected |= {"operation_id", "confirmed", "selections"}
     if not isinstance(body, dict) or set(body) != expected or selectable_scope(body):
         raise ValueError("workbench body is not allowed")
     operation = body["_native_operation_id"]
     if not isinstance(operation, str) or re.fullmatch(r"[A-Za-z0-9_-]{1,120}", operation) is None:
         raise ValueError("workbench operation id is required")
+    if operation_name_value == "start_ontology_update":
+        selections = body["selections"]
+        if (body["operation_id"] != operation or body["confirmed"] is not True
+                or not isinstance(selections, list) or not 1 <= len(selections) <= 20):
+            raise ValueError("workbench ontology update requires confirmed selections")
+        document_ids = set()
+        for selection in selections:
+            if (not isinstance(selection, dict) or set(selection) != {"document_id", "preview_token"}
+                    or not isinstance(selection["document_id"], str)
+                    or re.fullmatch(ID, selection["document_id"]) is None
+                    or not isinstance(selection["preview_token"], str)
+                    or re.fullmatch(r"[0-9a-f]{64}", selection["preview_token"]) is None
+                    or selection["document_id"] in document_ids):
+                raise ValueError("workbench ontology update selection is invalid")
+            document_ids.add(selection["document_id"])
     if path == "/workbench/ontologies" and (
         not isinstance(body["name"], str)
         or not 1 <= len(body["name"]) <= 120

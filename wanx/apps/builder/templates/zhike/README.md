@@ -10,6 +10,8 @@
 
 源码只含 miniapp.manifest.json 和 src/app.js、src/config.json、src/styles.css。packTemplate / compileArtifact 负责校验、摘要和编译，构建客户端时自动生成内置包。四个文件与已安装知客 0.12.1 的可编辑源码一致；模板应用身份独立。
 
+企业版随开物工作台交付模板，个人版工坊也可用它创建和修改项目。运行 `node apps/builder/tools/build-zhike-template.mjs` 可在 `apps/builder/dist/zhike-template/` 生成可编辑包和预览文件。
+
 ## 更新与权限
 
 按项目实际来源应用身份匹配模板更新；知客只能收到知客模板，问答应用继续收到问答模板。模板更新先生成试用版本，采用、安装仍走原流程。复制源码不扩大权限，不导入旧业务数据和凭据。
