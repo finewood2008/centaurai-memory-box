@@ -17,13 +17,19 @@ async function tempDirectory(t) {
   return directory;
 }
 
-test('uses the runnable desktop CLI if Windows PATH has no executable', async t => {
+test('finds the Windows desktop CLI and prefers an executable on PATH', async t => {
   const directory = await tempDirectory(t);
   const binaryDirectory = path.join(directory, 'OpenAI', 'Codex', 'bin', 'abcdef01');
   await mkdir(binaryDirectory, {recursive: true});
   const executable = path.join(binaryDirectory, 'codex.exe');
   await writeFile(executable, 'fixture');
-  assert.equal(await findCodexCli({platform: 'win32', env: {LOCALAPPDATA: directory}}), executable);
+  const options = {platform: 'win32'};
+  const env = {LOCALAPPDATA: directory};
+  assert.equal(await findCodexCli({...options, env}), executable);
+  const external = path.join(directory, 'bin', 'codex.exe');
+  await mkdir(path.dirname(external), {recursive: true});
+  await writeFile(external, 'fixture');
+  assert.equal(await findCodexCli({...options, env: {...env, PATH: path.dirname(external)}}), external);
 });
 
 test('discovers the Mac desktop CLI without a shell PATH and preserves explicit PATH precedence', async t => {
@@ -37,7 +43,10 @@ test('discovers the Mac desktop CLI without a shell PATH and preserves explicit 
   }
   const options = {platform: 'darwin', home, macApplicationDirectories: [applications]};
   assert.equal(await findCodexCli({...options, env: {PATH: '/usr/bin:/bin'}}), bundled);
-  assert.equal(await findCodexCli({...options, env: {PATH: path.dirname(external)}}), external);
+  // A Windows temp path has a drive colon and cannot represent a macOS PATH entry.
+  if (process.platform !== 'win32') {
+    assert.equal(await findCodexCli({...options, env: {PATH: path.dirname(external)}}), external);
+  }
 });
 
 test('discovers a Mac user CLI outside the desktop PATH', async t => {
