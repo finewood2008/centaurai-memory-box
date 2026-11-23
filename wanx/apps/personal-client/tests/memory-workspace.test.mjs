@@ -352,7 +352,7 @@ test("My AI uses an official download and only launches and manages verified des
   codexInstalled = false;
   assert.equal((await act("launch", "codex")).status, 400);
   assert.equal((await act("uninstall", "codex")).status, 200);
-  assert.deepEqual(opened, ["https://geminicli.com/docs/get-started/installation/", "codex://threads/new", "ms-settings:appsfeatures", "https://chatgpt.com/download/"]);
+  assert.deepEqual(opened, ["https://antigravity.google/docs/cli/tutorial/", "codex://threads/new", "ms-settings:appsfeatures", "https://chatgpt.com/download/"]);
 });
 
 test("memory only opens for the current WanX identity and retires stale sessions", async t => {
