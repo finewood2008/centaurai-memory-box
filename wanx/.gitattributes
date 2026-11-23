@@ -3,5 +3,8 @@
 apps/team-client/applications/starlink/** text=auto eol=lf
 apps/builder/integration/starlink-source.json text eol=lf
 
+# The Starxiaotu generator checks the catalog byte for byte.
+apps/starlink/shared/starxiaotu-catalog.mjs text eol=lf
+
 # Historical STARLINK patches retain exact unified-diff context lines.
 docs/clients/starlink-embedded-design-20261108/*.patch whitespace=-blank-at-eol
