@@ -276,12 +276,22 @@ def test_registered_errors_preserve_code_without_private_diagnostics(code):
     assert caught.value.code == "SEMANTICA_VERSION_CONFLICT"  # Existing operations are unchanged.
 
 
-async def test_openapi_preserves_the_eight_onboarding_operations(desktop):
-    client, _, _, _, _, app = desktop
+async def test_openapi_registers_onboarding_and_warehouse_scope_publish(desktop):
+    _, _, _, _, _, app = desktop
     schema = app.openapi()
     paths = {BASE + route for _, route, _, _ in modeling_contract.API_ROUTES}
     selected = {path: operations for path, operations in schema["paths"].items() if path in paths}
-    assert sum(len(operations) for operations in selected.values()) == 8
+    assert sum(len(operations) for operations in selected.values()) == 10
+    scope = selected[BASE + "/warehouses/{warehouse_id}/modeling/warehouse-scope/publish"]["post"]
+    scope_body = scope["requestBody"]["content"]["application/json"]["schema"]
+    assert set(scope_body["required"]) == {
+        "operation_id",
+        "expected_revision",
+        "base_ontology_id",
+        "changes",
+        "confirmed",
+    }
+    assert scope_body["properties"]["confirmed"]["const"] is True
     save = selected[BASE + "/modeling/onboarding"]["post"]
     assert (
         save["requestBody"]["content"]["application/json"]["schema"]["properties"]["answers"][

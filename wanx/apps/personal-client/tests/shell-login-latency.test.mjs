@@ -34,9 +34,9 @@ test("cloud login and device refresh reach the renderer while installed-app enum
     refreshDevices: async () => { directory = [{ deviceId: "box-1", accessState: "unavailable" }]; return client.snapshot(); },
   };
   let appReads = 0;
-  const controlURL = "file:///client/local-ui/renderer/index.html", frame = { url: controlURL };
-  const contents = { mainFrame: frame, isDestroyed: () => false,
-    send: (_channel, state) => received.push(state) };
+  const controlURL = "file:///client/local-ui/renderer/index.html";
+  const frame = { url: controlURL, isDestroyed: () => false, send: (_channel, state) => received.push(state) };
+  const contents = { mainFrame: frame, isDestroyed: () => false, isCrashed: () => false };
   const control = { webContents: contents, isDestroyed: () => false };
   const broadcast = createUIBroadcast({ client,
     applications: { listInstalled: async () => { appReads++; return apps.promise; } },

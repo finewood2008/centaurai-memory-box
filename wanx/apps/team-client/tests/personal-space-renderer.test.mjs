@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import vm from "node:vm";
 import { readFile } from "node:fs/promises";
 
-const source = await readFile(new URL("../local-ui/renderer/personal-space.js", import.meta.url), "utf8");
+const source = await readFile(new URL("../build/app/local-ui/renderer/personal-space.js", import.meta.url), "utf8");
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const connected = box => ({ route: "applications", canLaunchApplications: true, account: { accountId: "owner" }, activeDeviceId: box, devices: [{ deviceId: box, name: box }] });
 function harness(action, uploadDroppedFiles, tilePositions = [], dom = {}, surface = {}) {
@@ -127,7 +127,7 @@ test("disk browser displays selectable icons, selects without preview, and opens
   const h = harness(async (action, input) => { calls.push([action, input]); return ok(action === "space.refresh" ? { phase: "ready", tasks: [] } : { items: input.parent ? [file] : [file, folder], breadcrumbs: input.parent ? [{ id: folder.id, name: folder.name }] : [] }); });
   h.space.hostState(connected("box")); h.space.activate(true); await tick();
   assert.doesNotMatch(h.space.view(), /page-heading|space-drop-hint|>操作</);
-  assert.match(h.space.view(), /搜索当前文件夹/);
+  assert.match(h.space.view(), /id="space-search"[^>]*aria-label="筛选当前列表"/);
   assert.match(h.space.view(), /role="listbox" aria-multiselectable="true" aria-label="当前文件夹图标"/);
   assert.match(h.space.view(), /role="option"/);
   assert.doesNotMatch(h.space.view(), /role="table"|columnheader|space-file-columns/);

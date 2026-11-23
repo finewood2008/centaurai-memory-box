@@ -1,6 +1,6 @@
 {
   "name": "wanx-app-studio",
-  "version": "1.0.3",
+  "version": "1.0.12",
   "private": true,
   "type": "module",
   "license": "UNLICENSED",
@@ -39,5 +39,10 @@
     "sharp": "0.35.5",
     "typescript": "5.9.3",
     "vite": "8.3.4"
+  },
+  "overrides": {
+    "@agentclientprotocol/codex-acp": {
+      "@openai/codex": "$@openai/codex"
+    }
   }
 }

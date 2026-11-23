@@ -69,7 +69,8 @@ async def test_live_interview_serializes_followups_and_associates_right_turn(env
  # The frozen current round must not consume the pending text early.
  current=await pm.tool('alice',pid,started[0],'read_project',{})
  assert not any(m['text']==second['text'] for m in current['conversation'])
- gates[0].set();await until(lambda:len(started)==2)
+ # read_project now yields while the generator runs off the event loop.
+ gates[0].set();await until(lambda:len(readbacks)==2)
  p=svc.snapshot('alice',pid)
  assert [t['state'] for t in p['preparation']['interview']['turns']]==['completed','running']
  assert next(m for m in p['messages'] if m['role']=='assistant')['operationId']==first['operationId']
@@ -109,7 +110,7 @@ async def test_queued_input_pauses_after_revocation_or_disconnect_and_survives_r
 async def test_new_iteration_row_ids_remain_stable_between_read_and_patch(env,monkeypatch):
  from test_discovery import solution
  svc,pid,_=env;await ready(svc,pid);pm=svc.preparation.pm
- p=svc.store.get('alice',pid);p['solution']=solution();p['preparation'].pop('entryIds',None);svc.store.save(p)
+ p=svc.store.get('alice',pid);p['solution']=solution();p['solution']['capabilities']=[];p['preparation'].pop('entryIds',None);svc.store.save(p)
  monkeypatch.setattr('wanx_studio.product_manager.runtime_config',lambda *a:{'WANX_CODEX_CONFIG':'{}'})
  gate=asyncio.Event()
  async def wait(*args):await gate.wait()

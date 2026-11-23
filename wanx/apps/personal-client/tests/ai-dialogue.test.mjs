@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
-import { createAIDialogue } from '../shell/ai-dialogue.mjs';
-import { createAIDialogue as createScopedDialogue } from '../shell/assistant-service.mjs';
+import { createAIDialogue } from '../build/app/shell/ai-dialogue.mjs';
+import { createAIDialogue as createScopedDialogue } from '../build/app/shell/assistant-service.mjs';
 
 function fixture(options = {}) {
   let state = { phase: 'ready', account: { phase: 'authenticated', accountId: 'synthetic-owner', clientId: 'synthetic-client' }, connection: { deviceId: 'synthetic-box', gatewayURL: 'http://127.0.0.1' } };
@@ -122,6 +122,40 @@ test('changing models keeps the same thread; a turn is sent once and cancellatio
   socket.terminate();
   await f.service.action('open', { scope, threadId: 'thread-1' }); await f.service.action('watch', { scope, threadId: 'thread-1' });
   assert.equal(f.sockets.at(-1).sent.filter(frame => frame.type === 'user_turn').length, 0);
+  f.service.close();
+});
+
+test('only the configured Zhijun surface sends a separate persona marker, including edited turns', async () => {
+  const prompt = '今天有点累';
+  const content = [{ type: 'text', text: prompt }];
+  const generic = fixture();
+  const {scope: genericScope} = await generic.service.action('load');
+  await generic.service.action('send', {
+    scope: genericScope, model: 'fixture/one', prompt, assistantPersona: 'zhijun',
+  });
+  assert.equal(generic.sockets[0].sent.at(-1).assistant_persona, undefined);
+  generic.service.close();
+
+  const f = fixture({ assistantPersona: 'zhijun' });
+  const {scope} = await f.service.action('load');
+  await f.service.action('send', { scope, model: 'fixture/one', prompt });
+  f.respond('/api/assistant/conversations/thread-1/versions', async () => ({
+    status: 200, body: Buffer.from(JSON.stringify({
+      id: 'thread-1', active_thread_id: 'thread-2', context: {}, revision: 2,
+      versions: [{thread_id: 'thread-1'}, {thread_id: 'thread-2'}], prepared_content: content,
+    })),
+  }));
+  await f.service.action('version', {
+    scope, kind: 'edit', conversationId: 'thread-1', threadId: 'thread-1',
+    revision: 1, messageId: 'original', model: 'fixture/one', text: prompt,
+  });
+  for (const socket of f.sockets) {
+    const turn = socket.sent.at(-1);
+    assert.equal(turn.assistant_persona, 'zhijun');
+    assert.deepEqual(turn.messages, [{ role: 'user', content }]);
+    assert.equal(turn.conversation_mode, 'ask');
+  }
+  assert.equal(f.sockets.length, 2);
   f.service.close();
 });
 

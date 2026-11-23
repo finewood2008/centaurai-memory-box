@@ -9,6 +9,7 @@
 | 万象 Octop | `host.request`、`host.openStream`、`host.requestExpert` | [Octop API](octop-api.md) |
 | 空间 Drive | `host.drive` | [Drive API](drive-api.md) |
 | 星图 | `host.request` 与 `X-Xingtu-Key` | [星图 API](starlink-api.md) |
+| 已部署专家应用 | `host.request`，合同 `wanx.expert-app.v1@1.0.0` | [专家应用 API](expert-app-api.md) |
 
 ## 合同文件
 

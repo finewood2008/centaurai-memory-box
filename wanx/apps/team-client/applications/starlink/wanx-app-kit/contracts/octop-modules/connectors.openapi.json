@@ -1,0 +1,2723 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "WANX Octop · connectors",
+    "description": "**CentaurAI-WANX** is a smarter, self-hosted AI assistant for multiple users and agents. All routes are served under `/api`.\n\n## Authentication\n\nMost endpoints require a JWT bearer token:\n\n1. Complete initial setup via `/api/setup/*` (first install only).\n2. `GET /api/auth/captcha` then `POST /api/auth/login` with `username` and `password`\n   (and `captcha_token` when a strong provider is active), or complete SSO with\n   `/api/auth/oidc/*` or `/api/auth/oauth/*` when a provider is enabled.\n3. Send `Authorization: Bearer <access_token>` on subsequent requests.\n\nAccess tokens use sliding renewal: when less than one-third of\n`access_token_ttl_seconds` remains, authenticated responses may include a fresh\ntoken in the `X-Octop-Access-Token` header. Clients should replace the stored\ntoken when present.\n\nPublic endpoints (no login token): `/api/docs`, `/api/openapi.json`, `/api/health`,\n`/api/setup/*` (wizard authorization applies), `/api/auth/login`, `/api/auth/register`,\n`/api/auth/captcha`, `/api/auth/oidc/status`, `/api/auth/oidc/start`,\n`/api/auth/oidc/callback`, `/api/auth/oidc/exchange`, `/api/auth/oauth/status`,\n`/api/auth/oauth/start`, `/api/auth/oauth/callback`, `/api/auth/oauth/exchange`,\n`/api/auth/invite/validate`,\n`/api/auth/invite/redeem`, `/api/connectors/oauth/callback`,\nand `/api/internal/mcp/*`.\n\n## Agent scope\n\nMany agent-scoped routes use the agent ID in the URL path (`/api/agents/{agent_id}/…`).\nRoutes first check the signed token's application scope; legacy tokens default to WANX.\nResources in another application are treated as not found, including for administrators.\nWithin the same application, each route applies its ownership or shared-resource access\nrules. WANX administrators may bypass ownership where supported; Zhijun personal profiles,\nmemories and uploaded sources require the owner.\n\n## Streaming chat\n\nDashboard live turns use **WebSocket** at `/api/agents/{agent_id}/chat/ws` (pass JWT as\n`?token=` query param). Send `{\"type\":\"user_turn\", ...}` frames; the server replies with JSON\nchunks matching the harness stream format, ending with `{\"type\":\"done\"}` or\n`{\"type\":\"error\",\"message\":\"...\"}`.\n\nText-type dashboard pushes (cron reminders, proactive care) also emit\n`{\"type\":\"dashboard_push\", ...}` on `/api/notifications/ws` (same `?token=` auth) so the\nSPA can show a toast even when the chat socket is not subscribed.\n\nHITL resume still uses `POST /api/agents/{agent_id}/chat/hitl/resume` (SSE).\n\n## Knowledge libraries\n\n`/api/knowledge-bases` uses the signed application scope for creation, visibility,\ndocument access, and citations. Existing libraries remain in WANX. Zhijun libraries\nare private to their owner and use local document parsers, downloaded native ONNX\nembeddings and RapidOCR. Remote WANX embedding/OCR settings do not affect Zhijun;\nmissing local components are reported as unavailable without remote fallback.\n",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/connectors/catalog": {
+      "get": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "Connector catalog",
+        "description": "List supported connector kinds and whether OAuth is configured for each.",
+        "operationId": "get_catalog_api_connectors_catalog_get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "title": "Response Get Catalog Api Connectors Catalog Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/connectors/weknora/detect-local": {
+      "get": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "Detect local WeKnora",
+        "description": "Check WeKnora's fixed default loopback health endpoint (no persistence).",
+        "operationId": "detect_weknora_on_octop_host_api_connectors_weknora_detect_local_get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Detect Weknora On Octop Host Api Connectors Weknora Detect Local Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/connector-instances": {
+      "get": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "List connector instances",
+        "description": "List the current user's connected accounts (custom MCP expanded per server).",
+        "operationId": "list_instances_api_connector_instances_get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "title": "Response List Instances Api Connector Instances Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "Create connector instance",
+        "description": "Connect a third-party account as a new named instance.",
+        "operationId": "create_instance_api_connector_instances_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInstanceBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Create Instance Api Connector Instances Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/connectors/custom-mcp": {
+      "get": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "Get custom MCP servers",
+        "description": "Return the user's custom MCP server map (langchain-mcp-adapters shape).",
+        "operationId": "get_custom_mcp_api_connectors_custom_mcp_get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Custom Mcp Api Connectors Custom Mcp Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "Save custom MCP servers",
+        "description": "Replace the user's custom MCP servers document and reload agents.",
+        "operationId": "put_custom_mcp_api_connectors_custom_mcp_put",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CustomMcpPutBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Put Custom Mcp Api Connectors Custom Mcp Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/connectors/custom-mcp/servers/{server_name}": {
+      "patch": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "Patch one custom MCP server",
+        "description": "Update ``enabled`` and/or ``default_open`` for one custom MCP server.",
+        "operationId": "patch_custom_mcp_server_api_connectors_custom_mcp_servers__server_name__patch",
+        "parameters": [
+          {
+            "name": "server_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Server Name"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CustomMcpServerPatchBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Patch Custom Mcp Server Api Connectors Custom Mcp Servers  Server Name  Patch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/connectors/custom-mcp/test": {
+      "post": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "Probe a custom MCP server",
+        "description": "Probe connectivity for one custom MCP server (saved name or inline spec).",
+        "operationId": "test_custom_mcp_api_connectors_custom_mcp_test_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CustomMcpTestBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Test Custom Mcp Api Connectors Custom Mcp Test Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/connector-instances/{instance_id}": {
+      "get": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "Get connector instance",
+        "description": "Return one connector instance with config and a redacted credentials preview.",
+        "operationId": "get_instance_api_connector_instances__instance_id__get",
+        "parameters": [
+          {
+            "name": "instance_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Instance Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Instance Api Connector Instances  Instance Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "Update connector instance",
+        "description": "Edit a connector instance without replacing its identity.",
+        "operationId": "patch_instance_api_connector_instances__instance_id__patch",
+        "parameters": [
+          {
+            "name": "instance_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Instance Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchInstanceBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Patch Instance Api Connector Instances  Instance Id  Patch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "Delete connector",
+        "description": "Disconnect and delete stored credentials for a connector instance.",
+        "operationId": "delete_instance_api_connector_instances__instance_id__delete",
+        "parameters": [
+          {
+            "name": "instance_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Instance Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/connector-instances/{instance_id}/test": {
+      "post": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "Test connector",
+        "description": "Probe the connector with stored credentials and return success or error details.",
+        "operationId": "test_instance_api_connector_instances__instance_id__test_post",
+        "parameters": [
+          {
+            "name": "instance_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Instance Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Test Instance Api Connector Instances  Instance Id  Test Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/connectors/test-credentials": {
+      "post": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "Test credentials",
+        "description": "Validate credentials before creating an instance (no persistence).",
+        "operationId": "test_credentials_api_connectors_test_credentials_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestCredentialsBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Test Credentials Api Connectors Test Credentials Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/connectors/{kind}/cli-status": {
+      "get": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "Host CLI install status for Feishu/WeCom connectors",
+        "description": "Report whether the host binary is on PATH (no side effects).",
+        "operationId": "connector_cli_status_api_connectors__kind__cli_status_get",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Connector Cli Status Api Connectors  Kind  Cli Status Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/connectors/{kind}/install-cli": {
+      "post": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "Install host CLI for Feishu/WeCom connectors (admin)",
+        "description": "Run ``npm install -g`` for the connector CLI on the Octop host (admin only).\n\nAlways returns a structured body (even on failure) including ``install_command``\nand documentation URLs so the UI can guide manual install.",
+        "operationId": "connector_install_cli_api_connectors__kind__install_cli_post",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Connector Install Cli Api Connectors  Kind  Install Cli Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/connectors/feishu-cli/user-auth/start": {
+      "post": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "Start Feishu CLI user device-code login",
+        "description": "Begin OAuth device-code login (no local HTTPS callback required).",
+        "operationId": "feishu_cli_user_auth_start_api_connectors_feishu_cli_user_auth_start_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeishuUserAuthStartBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Feishu Cli User Auth Start Api Connectors Feishu Cli User Auth Start Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/connectors/feishu-cli/user-auth/complete": {
+      "post": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "Complete Feishu CLI user device-code login",
+        "description": "Finish device-code login and switch default identity to user.",
+        "operationId": "feishu_cli_user_auth_complete_api_connectors_feishu_cli_user_auth_complete_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeishuUserAuthCompleteBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Feishu Cli User Auth Complete Api Connectors Feishu Cli User Auth Complete Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/connector-instances/{instance_id}/feishu-user-auth/start": {
+      "post": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "Start Feishu user login for an existing connector instance",
+        "description": "Same as start, but App Secret is read from the stored instance.",
+        "operationId": "feishu_cli_user_auth_start_instance_api_connector_instances__instance_id__feishu_user_auth_start_post",
+        "parameters": [
+          {
+            "name": "instance_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Instance Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Feishu Cli User Auth Start Instance Api Connector Instances  Instance Id  Feishu User Auth Start Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/connector-instances/{instance_id}/feishu-user-auth/complete": {
+      "post": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "Complete Feishu user login for an existing connector instance",
+        "operationId": "feishu_cli_user_auth_complete_instance_api_connector_instances__instance_id__feishu_user_auth_complete_post",
+        "parameters": [
+          {
+            "name": "instance_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Instance Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeishuUserAuthInstanceCompleteBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Feishu Cli User Auth Complete Instance Api Connector Instances  Instance Id  Feishu User Auth Complete Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/connector-instances/{instance_id}/refresh": {
+      "post": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "Refresh OAuth tokens",
+        "description": "Refresh expiring OAuth tokens for a connector instance.",
+        "operationId": "refresh_instance_api_connector_instances__instance_id__refresh_post",
+        "parameters": [
+          {
+            "name": "instance_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Instance Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Refresh Instance Api Connector Instances  Instance Id  Refresh Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/connectors/auth/{kind}/info": {
+      "get": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "Connector auth info",
+        "description": "Return auth flow metadata (OAuth URLs, required fields) for a connector kind.",
+        "operationId": "auth_info_api_connectors_auth__kind__info_get",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "title": "Response Auth Info Api Connectors Auth  Kind  Info Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/connectors/auth/{kind}/authorize-url": {
+      "get": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "OAuth authorize URL",
+        "description": "Build the provider authorization URL for manual or embedded OAuth.",
+        "operationId": "auth_authorize_url_api_connectors_auth__kind__authorize_url_get",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "title": "Response Auth Authorize Url Api Connectors Auth  Kind  Authorize Url Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/connectors/auth/{kind}/exchange-code": {
+      "post": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "Exchange auth code",
+        "description": "Exchange a pasted authorization code for connector credentials (device/OOB flow).",
+        "operationId": "auth_exchange_code_api_connectors_auth__kind__exchange_code_post",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExchangeAuthCodeBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Auth Exchange Code Api Connectors Auth  Kind  Exchange Code Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/connectors/oauth/start": {
+      "post": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "Start OAuth flow (unified)",
+        "description": "Begin browser OAuth for a catalog connector or custom MCP server.",
+        "operationId": "oauth_start_unified_api_connectors_oauth_start_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OAuthStartBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Oauth Start Unified Api Connectors Oauth Start Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/connectors/oauth/{kind}/start": {
+      "post": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "Start OAuth flow (legacy)",
+        "description": "Legacy catalog-only alias for :func:`oauth_start_unified`.",
+        "operationId": "oauth_start_legacy_api_connectors_oauth__kind__start_post",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OAuthStartLegacyBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Oauth Start Legacy Api Connectors Oauth  Kind  Start Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/connectors/oauth/callback": {
+      "get": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "OAuth callback",
+        "description": "OAuth redirect target. Exchanges the code and stores credentials. No JWT required.",
+        "operationId": "oauth_callback_api_connectors_oauth_callback_get",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Code"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          },
+          {
+            "name": "error",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Error"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/connectors/oauth/pending/{state_id}": {
+      "get": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "Poll OAuth result",
+        "description": "Poll after OAuth redirect until credentials are ready for instance creation.",
+        "operationId": "oauth_pending_api_connectors_oauth_pending__state_id__get",
+        "parameters": [
+          {
+            "name": "state_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "State Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Oauth Pending Api Connectors Oauth Pending  State Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CreateInstanceBody": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "credentials": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Credentials"
+          },
+          "shared": {
+            "type": "boolean",
+            "title": "Shared",
+            "default": false
+          },
+          "default_open": {
+            "type": "boolean",
+            "title": "Default Open",
+            "description": "Per-account default: when true, inject this connector's tools for the owner on IM and on Cron jobs with no explicit connector picks. Dashboard and Cron with explicit picks follow the selection.",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "display_name"
+        ],
+        "title": "CreateInstanceBody"
+      },
+      "CustomMcpPutBody": {
+        "properties": {
+          "servers": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Servers"
+          }
+        },
+        "type": "object",
+        "title": "CustomMcpPutBody"
+      },
+      "CustomMcpServerPatchBody": {
+        "properties": {
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "default_open": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Open"
+          },
+          "shared": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shared"
+          }
+        },
+        "type": "object",
+        "title": "CustomMcpServerPatchBody"
+      },
+      "CustomMcpTestBody": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "server": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Server"
+          }
+        },
+        "type": "object",
+        "title": "CustomMcpTestBody",
+        "description": "Probe one server by name (saved) or by inline spec."
+      },
+      "ExchangeAuthCodeBody": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "bkn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bkn"
+          },
+          "knowledge_base_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Knowledge Base Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "title": "ExchangeAuthCodeBody"
+      },
+      "FeishuUserAuthCompleteBody": {
+        "properties": {
+          "app_id": {
+            "type": "string",
+            "title": "App Id"
+          },
+          "app_secret": {
+            "type": "string",
+            "title": "App Secret"
+          },
+          "device_code": {
+            "type": "string",
+            "title": "Device Code"
+          },
+          "cli_config_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cli Config Key"
+          }
+        },
+        "type": "object",
+        "required": [
+          "app_id",
+          "app_secret",
+          "device_code"
+        ],
+        "title": "FeishuUserAuthCompleteBody"
+      },
+      "FeishuUserAuthInstanceCompleteBody": {
+        "properties": {
+          "device_code": {
+            "type": "string",
+            "title": "Device Code"
+          },
+          "cli_config_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cli Config Key"
+          }
+        },
+        "type": "object",
+        "required": [
+          "device_code"
+        ],
+        "title": "FeishuUserAuthInstanceCompleteBody"
+      },
+      "FeishuUserAuthStartBody": {
+        "properties": {
+          "app_id": {
+            "type": "string",
+            "title": "App Id"
+          },
+          "app_secret": {
+            "type": "string",
+            "title": "App Secret"
+          },
+          "cli_config_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cli Config Key"
+          },
+          "domains": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Domains"
+          }
+        },
+        "type": "object",
+        "required": [
+          "app_id",
+          "app_secret"
+        ],
+        "title": "FeishuUserAuthStartBody"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "OAuthStartBody": {
+        "properties": {
+          "redirect_after": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Redirect After"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target",
+            "description": "OAuth target, e.g. {\"type\":\"catalog\",\"kind\":\"notion\"} or {\"type\":\"custom_mcp\",\"server_name\":\"my-server\"}"
+          }
+        },
+        "type": "object",
+        "title": "OAuthStartBody"
+      },
+      "OAuthStartLegacyBody": {
+        "properties": {
+          "redirect_after": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Redirect After"
+          }
+        },
+        "type": "object",
+        "title": "OAuthStartLegacyBody"
+      },
+      "PatchInstanceBody": {
+        "properties": {
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "credentials": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credentials"
+          },
+          "shared": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shared"
+          },
+          "default_open": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Open",
+            "description": "When set, update per-account default-open. IM / empty Cron follow it for this user; Dashboard and Cron with explicit picks use the selection."
+          }
+        },
+        "type": "object",
+        "title": "PatchInstanceBody"
+      },
+      "TestCredentialsBody": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "credentials": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Credentials"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "title": "TestCredentialsBody"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    },
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "JWT from `POST /api/auth/login` (`access_token` field)."
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "connectors",
+      "description": "Third-party integrations (Notion, Figma, …) exposed as MCP servers."
+    }
+  ],
+  "x-wanx-supplemental-routes": []
+}

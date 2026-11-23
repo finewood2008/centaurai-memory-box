@@ -13,13 +13,13 @@ import { installElectronBluetoothPicker } from "@nexusaos/device-discovery-elect
 import { registerControlActions } from "../shell/control.mjs";
 import { BOX_SESSION_ERROR_CODES } from "../octop/platform.mjs";
 
-const indexURL = new URL("../local-ui/renderer/index.html", import.meta.url);
+const indexURL = new URL("../build/app/local-ui/renderer/index.html", import.meta.url);
 const html = await readFile(indexURL, "utf8");
 const rendererScripts = [...html.matchAll(/<script src="([^"]+)"><\/script>/g)]
   .map(match => match[1]).filter(src => src !== "./device-setup.bundle.js");
 const source = (await Promise.all(rendererScripts.map(src => readFile(new URL(src, indexURL), "utf8")))).join("\n");
 const preload = await readFile(new URL("../local-ui/remote-preload.cjs", import.meta.url), "utf8");
-const transportBundle = await readFile(new URL("../local-ui/renderer/device-setup.bundle.js", import.meta.url), "utf8");
+const transportBundle = await readFile(new URL("../build/app/local-ui/renderer/device-setup.bundle.js", import.meta.url), "utf8");
 const application = { applicationId: "centaurai.wanx.zhijun", name: "知君", version: "0.4.3", description: "你的私人空间" };
 const devices = ["102", "103"].map((id) => ({
   deviceId: `box-${id}`, displayName: `CentuarAI-AMD-${id}`, accessState: "ready", canOpen: true,
@@ -143,7 +143,8 @@ async function harness(initial = state(), installed = [application], options = {
   };
   const applications = {
       listInstalled: async () => records,
-      uninstall: async () => { records = []; },
+      uninstall: async () => { calls.push(["ordinary-uninstall"]); records = []; },
+      uninstallLocal: async () => { calls.push(["local-uninstall-manager"]); if (options.localUninstallError) throw new Error(options.localUninstallError); records = []; },
       rollback: async () => { records = records.map(item => ({ ...item, version: "0.4.2" })); },
       selectCurrent: async (id, version) => {
         calls.push(["selected-current", id, version]);
@@ -168,7 +169,7 @@ async function harness(initial = state(), installed = [application], options = {
         release: { version: application.version },
       },
       install: async () => { const result = options.install ? await options.install() : application; records = [...records.filter((item) => item.applicationId !== result.applicationId), result]; return result; },
-      uninstall: async () => { records = []; },
+      uninstall: async () => { calls.push(["market-uninstall-manager"]); records = []; },
       rollback: async () => { records = [{ ...application, version: "0.4.2" }]; },
     },
     credits: options.credits,
@@ -3134,6 +3135,16 @@ test("cloud apps exclude local packages while Local apps retains their managemen
  assert.doesNotMatch(h.app.innerHTML, /火花测试本地应用/);
 });
 
+test("confirming a local ZIP uninstall removes it without market operations", async () => {
+ const local = { ...application, applicationId: "wanx-app-4c30d936", name: "Local ZIP fixture", installationSource: "local" };
+ const h = await harness(state(), [local], { list: async () => ({ items: [] }) });
+ await h.click("applications-tab", { tab: "local" });
+ await h.click("local-uninstall", { applicationId: local.applicationId });
+ await h.click("market-confirm");
+ assert.ok(h.calls.some(([name]) => name === "wanx-client:applications-local-uninstall"));
+ assert.doesNotMatch(h.app.innerHTML, /Local ZIP fixture|暂时无法完成应用市场操作/);
+});
+
 test("local package provenance remains local even when the same app is cloud-listed", async () => {
  const local = { ...application, name: "本地包的名称", installationSource: "local" };
  const h=await harness(state(),[local],{list:async()=>({items:[{...application,name:"云端名称"}]})});
@@ -3373,3 +3384,50 @@ test('wallet login takes one snapshot and page navigation controls subsequent id
   t.mock.timers.tick(60000); await settle();
   assert.equal(balances, 4, 'click navigation also pauses the idle wallet');
 });
+
+test("box overview hides cached storage capacity until connected", async () => {
+  const h = await harness(state("ready", "ready", "box-102"));
+  h.window.wanxSpace.overview = () => ({ volume: { free: 601 * 1024 ** 3, total: 936 * 1024 ** 3 } });
+  await h.click("show-boxes");
+  assert.match(h.app.innerHTML, /可用存储<\/span><strong>601.0 GB<\/strong><small>总容量 936.0 GB/);
+  for (const next of [state(), { ...state(), phase: "connecting" }]) {
+    h.update(next);
+    assert.match(h.app.innerHTML, /可用存储<\/span><strong>—<\/strong><small>连接后显示实际状态/);
+    assert.doesNotMatch(h.app.innerHTML, /601.0 GB|936.0 GB/);
+  }
+  h.update(state("ready", "ready", "box-102"));
+  assert.match(h.app.innerHTML, /可用存储<\/span><strong>601.0 GB/);
+});
+
+
+test("deployed local apps use local removal and keep version management in 开物", async () => {
+ const deployed = { ...application, applicationId: "ai.wanx.selfmade." + "a".repeat(32), name: "Deployed local fixture", installationSource: "selfmade", previous: "0.4.2", presentation: { environment: "prod", label: "正式" } };
+ const h = await harness(state(), [deployed], { list: async () => ({ items: [] }) });
+ h.update(state());
+ await h.click("applications-tab", { tab: "local" });
+ assert.match(h.app.innerHTML, /Deployed local fixture/);
+ assert.match(h.app.innerHTML, /由开物管理版本/);
+ assert.doesNotMatch(h.app.innerHTML, /data-action="(?:local|market)-rollback"/);
+ assert.match(h.app.innerHTML, /data-action="local-uninstall"/);
+ await h.click("local-rollback", { applicationId: deployed.applicationId });
+ assert.doesNotMatch(h.app.innerHTML, /data-action="market-confirm"/);
+ await h.click("local-uninstall", { applicationId: deployed.applicationId });
+ assert.match(h.app.innerHTML, /仅移除此电脑/);
+ assert.match(h.app.innerHTML, /盒端服务/);
+ await h.click("market-confirm");
+ assert.ok(h.calls.some(([name]) => name === "local-uninstall-manager"));
+ assert.ok(!h.calls.some(([name]) => name === "ordinary-uninstall" || name === "market-uninstall-manager"));
+ assert.doesNotMatch(h.app.innerHTML, /Deployed local fixture|暂时无法完成应用市场操作/);
+});
+
+for (const code of ["APPLICATION_MANAGED_DEPLOYMENT_REQUIRED", "APPLICATION_DEPLOYMENT_USER_REMOVED"]) {
+ test(`local deployment errors explain removal and version management: ${code}`, async () => {
+  const local = { ...application, name: "Local removal failure fixture", installationSource: "local" };
+  const h = await harness(state(), [local], { list: async () => ({ items: [] }), localUninstallError: code });
+  await h.click("applications-tab", { tab: "local" });
+  await h.click("local-uninstall", { applicationId: local.applicationId });
+  await h.click("market-confirm");
+  assert.match(h.app.innerHTML, /开物/);
+  assert.doesNotMatch(h.app.innerHTML, /暂时无法完成应用市场操作/);
+ });
+}

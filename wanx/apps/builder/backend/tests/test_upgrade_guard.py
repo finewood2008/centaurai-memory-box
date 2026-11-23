@@ -154,8 +154,8 @@ async def test_refused_build_does_not_leave_queued_task_and_can_be_retried(tmp_p
     svc.runner = Runner(svc)
     svc.model = object()
     try:
-        project = svc.store.create("alice", "Upgrade test", "Preserve working build", uuid4().hex)
-        project = await svc.runner.example("alice", project["id"], uuid4().hex)
+        from test_discovery import confirmed_standard
+        project = confirmed_standard(svc, "Upgrade test")
         with acquire(tmp_path, exclusive=True):
             with pytest.raises(StudioError, match="BUILDER_UPGRADE_BUSY"):
                 await svc.runner.start("alice", project["id"], {

@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wanx-thread-list/1",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "additionalProperties": true,
+    "required": [
+      "thread_id",
+      "title",
+      "channel_type",
+      "session_key",
+      "last_active",
+      "created_at",
+      "is_active",
+      "has_messages",
+      "pinned",
+      "model_ref",
+      "reasoning_mode",
+      "reasoning_effort",
+      "conversation_mode",
+      "pending_plan_path",
+      "hitl_policy"
+    ],
+    "properties": {
+      "thread_id": {
+        "type": "string"
+      },
+      "title": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "channel_type": {
+        "type": "string"
+      },
+      "session_key": {
+        "type": "string"
+      },
+      "last_active": {
+        "type": [
+          "number",
+          "integer",
+          "null"
+        ]
+      },
+      "created_at": {
+        "type": [
+          "number",
+          "integer",
+          "null"
+        ]
+      },
+      "is_active": {
+        "type": "boolean"
+      },
+      "has_messages": {
+        "type": "boolean"
+      },
+      "pinned": {
+        "type": "boolean"
+      },
+      "model_ref": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "reasoning_mode": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "reasoning_effort": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "conversation_mode": {
+        "enum": [
+          "ask",
+          "plan",
+          "craft"
+        ]
+      },
+      "pending_plan_path": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "hitl_policy": {
+        "type": [
+          "object",
+          "null"
+        ]
+      }
+    }
+  }
+}

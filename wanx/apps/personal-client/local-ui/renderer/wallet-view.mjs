@@ -15,6 +15,7 @@ export function createWalletView({ request, changed, storage = globalThis.localS
   let checkingOrder = false, orderReadFailed = false, customAmount = '', customText = '', customQuote = null;
   let backgroundLoading = false, recoveryTask = null, confirmingPurchase = false;
   let cancellationAccepted = false, cancellationClosed = false;
+  let quoteTimer = null, quoteRevision = 0, quoting = false, catalogRevision = 0;
   let selectedChannel = 'alipay', remote = null, usage = [], nextUsage = null, usageLoading = false;
   let recordsTab = 'usage', summaryExpanded = false;
   let history = [], nextHistory = null, historyLoaded = false, historyLoading = false, historyError = '';
@@ -41,7 +42,7 @@ export function createWalletView({ request, changed, storage = globalThis.localS
       QEETOKEN_SYNC_PENDING: '消费流水正在同步，请稍候。',
       CREDITS_SERVICE_UNAVAILABLE: '积分接口暂不可用，请联系管理员检查服务部署。',
       REVISION_CONFLICT: '商品已调整，请刷新后重新选择。',
-      UNSUPPORTED_SCHEMA: '积分购买规则已更新，请重新选择商品或获取报价。',
+      UNSUPPORTED_SCHEMA: '积分购买规则已更新，请重新选择充值金额。',
       VALIDATION_ERROR: '购买金额或商品无效，请重新选择。',
       ORDER_IN_PROGRESS: '账号已有购买流程，正在恢复原订单。', ORDER_ALREADY_PAID: '订单已支付，请等待到账。',
       ACCOUNT_SESSION_CHANGED: '账号已切换，请刷新。', UNAUTHORIZED: '登录已失效，请重新登录。',
@@ -61,7 +62,7 @@ export function createWalletView({ request, changed, storage = globalThis.localS
       if (value && typeof value.purchase_intent_id === 'string' && (
         (typeof value.order_id === 'string' && typeof value.close_intent_id === 'string') ||
         (typeof value.product_id === 'string' && typeof value.product_version === 'string') ||
-        (value.currency_rule_id === 'usd-credit-100-v2' && Number.isSafeInteger(value.amount_fen) && value.amount_fen >= 1000 && value.amount_fen <= 100000 && value.amount_fen % 100 === 0) ||
+        (value.currency_rule_id === 'usd-credit-100-v2' && Number.isSafeInteger(value.amount_fen) && value.amount_fen >= 100 && value.amount_fen <= 10000000000 && value.amount_fen % 100 === 0) ||
         (Number.isSafeInteger(value.custom_amount_fen) && value.custom_amount_fen > 0 && typeof value.custom_recharge_version === 'string') ||
         [5000, 10000, 20000].includes(value.amount_fen)
       )) return value;
@@ -206,8 +207,9 @@ export function createWalletView({ request, changed, storage = globalThis.localS
       if (g !== generation) return;
       recoveryTask = null;
       if (order?.payment_state === 'creating') poll();
-      const catalogTask = !background || !catalog ? read('catalog').then(c => {
-        if (g !== generation) return;
+      const requestRevision = !background || !catalog ? ++catalogRevision : null;
+      const catalogTask = requestRevision !== null ? read('catalog').then(c => {
+        if (g !== generation || requestRevision !== catalogRevision) return;
         catalog = c;
         if (!pendingOrder(order) && !intent && !channels().includes(selectedChannel)) selectedChannel = channels()[0];
         notify();
@@ -369,9 +371,9 @@ export function createWalletView({ request, changed, storage = globalThis.localS
   const locked = () => writing || confirmingPurchase || Boolean(pendingOrder(order) || intent);
   const customRule = () => {
     const v2 = catalog?.custom_amount;
-    if (v2 === true) return { enabled: true, version: 'usd-credit-100-v2', min_amount_fen: 1000, max_amount_fen: 100000, points_per_yuan: '100' };
+    if (v2 === true) return { enabled: true, version: 'usd-credit-100-v2', min_amount_fen: 100, max_amount_fen: 10000000000, step_fen: 100, points_per_yuan: '100' };
     if (v2 && typeof v2 === 'object' && Number.isSafeInteger(v2.min_fen) && Number.isSafeInteger(v2.max_fen) &&
-        Number.isSafeInteger(v2.step_fen) && v2.min_fen >= 1000 && v2.max_fen >= v2.min_fen && v2.step_fen > 0) {
+        Number.isSafeInteger(v2.step_fen) && v2.min_fen >= 100 && v2.max_fen >= v2.min_fen && v2.step_fen > 0) {
       return { enabled: true, version: 'usd-credit-100-v2', min_amount_fen: v2.min_fen, max_amount_fen: v2.max_fen, step_fen: v2.step_fen, points_per_yuan: '100' };
     }
     const rule = catalog?.custom_recharge;
@@ -382,26 +384,60 @@ export function createWalletView({ request, changed, storage = globalThis.localS
   const customFen = () => {
     const rule = customRule(), match = /^(\d{1,9})(?:\.(\d{1,2}))?$/.exec(customAmount.trim());
     if (!rule || !match) return null;
+    if (catalog?.custom_amount && !/^[1-9][0-9]*$/.test(customAmount.trim())) return null;
     const fen = Number(BigInt(match[1]) * 100n + BigInt((match[2] || '').padEnd(2, '0')));
-    return fen >= rule.min_amount_fen && fen <= rule.max_amount_fen ? fen : null;
+    return fen >= rule.min_amount_fen && fen <= rule.max_amount_fen &&
+      (!catalog?.custom_amount || fen % rule.step_fen === 0) ? fen : null;
   };
+  function invalidateQuote() {
+    if (quoteTimer !== null) cancel(quoteTimer);
+    quoteTimer = null; quoteRevision++; quoting = false; customQuote = null;
+  }
+  function customAmountError() {
+    const rule = customRule();
+    if (!customText.trim() || !rule) return '';
+    if (!/^[1-9][0-9]*$/.test(customText.trim())) return '请输入大于 0 的整数金额，例如 1、50 或 100 元。';
+    if (customFen() === null) {
+      const fen = Number(customText.trim()) * 100;
+      if (fen >= 100 && fen <= 10000000000 && (rule.min_amount_fen > 100 || rule.max_amount_fen < 10000000000)) {
+        return '服务器仍使用旧充值规则，尚不支持此金额，请更新服务端后重试。';
+      }
+      return `当前充值金额需在 ${rule.min_amount_fen / 100}～${rule.max_amount_fen / 100} 元之间，步长 ${rule.step_fen / 100} 元。`;
+    }
+    return '';
+  }
+  function changeCustomAmount(value) {
+    invalidateQuote();
+    customText = String(value); customAmount = customText; selectedAmount = 'custom'; error = '';
+    if (customFen() !== null && catalog?.recharge_enabled) {
+      const revision = quoteRevision, g = generation;
+      quoting = true;
+      quoteTimer = schedule(() => {
+        if (revision === quoteRevision && g === generation) { quoteTimer = null; void quoteCustom(customText); }
+      }, 300);
+    }
+    notify();
+  }
   async function quoteCustom(value) {
     const rule = customRule();
-    if (!identity || locked() || visibleLoading() || !catalog?.recharge_enabled || !rule || catalog?.currency_rule_id !== 'usd-credit-100-v2') return;
-    customText = String(value); customAmount = customText; customQuote = null; selectedAmount = 'custom'; error = '';
-    const amountFen = Number(customText) * 100;
-    if (!/^[1-9][0-9]{1,3}$/.test(customText) || amountFen < rule.min_amount_fen || amountFen > rule.max_amount_fen || amountFen % rule.step_fen !== 0) {
-      error = message({ code: 'VALIDATION_ERROR' }); notify(); return;
-    }
-    const g = generation, requested = amountFen;
-    writing = true; notify();
+    if (!identity || locked() || !catalog?.recharge_enabled || !rule || catalog?.currency_rule_id !== 'usd-credit-100-v2') return;
+    // A quote is a read, not a purchase: keep the amount editable while waiting.
+    invalidateQuote();
+    customText = String(value); customAmount = customText; selectedAmount = 'custom'; error = '';
+    const requested = customFen();
+    if (requested === null) { notify(); return; }
+    const g = generation, revision = quoteRevision;
+    const current = () => g === generation && revision === quoteRevision &&
+      selectedAmount === 'custom' && customFen() === requested;
+    quoting = true; notify();
     try {
       const value = await read('quote', { amount_fen: requested });
-      if (g !== generation || value.view_version !== '2' || value.currency_rule_id !== 'usd-credit-100-v2' || typeof value.rule_id !== 'string' || value.credit_scale !== 6 ||
+      if (!current()) return;
+      if (value.view_version !== '2' || value.currency_rule_id !== 'usd-credit-100-v2' || typeof value.rule_id !== 'string' || value.credit_scale !== 6 ||
           value.amount_fen !== requested || creditAtoms(value.grant_credit_atoms) <= 0n) throw new Error('CREDITS_INVALID_RESPONSE');
       customQuote = value;
-    } catch (cause) { if (g === generation) error = message(cause); }
-    finally { if (g === generation) { writing = false; notify(); } }
+    } catch (cause) { if (current()) error = message(cause); }
+    finally { if (current()) { quoting = false; notify(); } }
   }
   const draft = () => {
     if (selectedAmount === 'custom') {
@@ -418,6 +454,7 @@ export function createWalletView({ request, changed, storage = globalThis.localS
   };
   function select(value) {
     if (locked()) return;
+    if (value !== 'custom') invalidateQuote();
     selectedAmount = value; order = null; cancellationAccepted = cancellationClosed = false; error = ''; dialogOpen = true; notify();
   }
   async function purchase(selection = draft(), channel = selectedChannel) {
@@ -435,7 +472,7 @@ export function createWalletView({ request, changed, storage = globalThis.localS
       error = message(cause);
       if (!order && ['REVISION_CONFLICT', 'CONTRACT_NOT_CONFIGURED', 'VALIDATION_ERROR', 'UNSUPPORTED_SCHEMA'].includes(cause?.code || cause?.message)) {
         discardRejectedIntent(cause);
-        try { const value = await read('catalog'); if (g === generation) catalog = value; } catch { /* Keep the rejection visible; refresh can retry. */ }
+        try { const revision = ++catalogRevision; const value = await read('catalog'); if (g === generation && revision === catalogRevision) catalog = value; } catch { /* Keep the rejection visible; refresh can retry. */ }
       }
       const original = cause?.details?.blocking_order_ids?.[0];
       if (original) {
@@ -527,7 +564,7 @@ export function createWalletView({ request, changed, storage = globalThis.localS
         <p class="wallet-scan-hint">请使用手机${selectedChannel === 'wechat' ? '微信' : '支付宝'}扫码完成支付</p>
         <div class="wallet-payment-clock"><span>剩余支付时间</span><strong data-wallet-deadline="${deadline}" role="timer" aria-live="off">${countdown}</strong><span>等待支付，付款后自动更新</span></div>` : ''}
       ${error ? `<p class="notice" role="alert">${esc(error)}</p>` : ''}
-      ${step === 'selection' ? `<div class="wallet-checkout-total"><span>应付金额<strong>${selection ? `¥${selection.amount_fen / 100}` : '—'}</strong></span><span>${selection ? `到账 ${esc(amount(selection.grant_credit_atoms))} 积分` : '请选择商品或获取自定义报价'}</span></div>` : ''}
+      ${step === 'selection' ? `<div class="wallet-checkout-total"><span>应付金额<strong>${selection ? `¥${selection.amount_fen / 100}` : '—'}</strong></span><span>${selection ? `到账 ${esc(amount(selection.grant_credit_atoms))} 积分` : selectedAmount === 'custom' && quoting ? '正在确认充值金额…' : '请选择商品或输入充值金额'}</span></div>` : ''}
       <div class="wallet-payment-actions">
         ${step === 'selection' ? `<button class="button primary wallet-pay" data-action="credits-pay" ${!selection || locked() || !catalog?.recharge_enabled || !recoveryReady || visibleRecovery() || checkingOrder || !channels().includes(selectedChannel) ? 'disabled' : ''}>确认购买</button>` : ''}
         ${(step === 'payment' && (order || intent || error)) || error ? `<button class="text-button" data-action="credits-refresh" ${visibleLoading() || writing || checkingOrder ? 'disabled' : ''}>${visibleLoading() ? '正在确认…' : '刷新支付状态'}</button>` : ''}
@@ -549,10 +586,9 @@ export function createWalletView({ request, changed, storage = globalThis.localS
       <div class="wallet-products" aria-label="积分商品">${products().map(tier => `<button class="wallet-product" data-action="credits-buy" data-amount="${esc(productKey(tier))}" aria-pressed="${selected === productKey(tier)}" ${!catalog?.recharge_enabled || tier.enabled === false || locked() ? 'disabled' : ''}>
         ${tier.name ? `<span>${esc(tier.name)}</span>` : ''}<span class="wallet-product-points">${esc(amount(tier.grant_credit_atoms))}<small>点积分</small></span><strong>¥${tier.amount_fen / 100}</strong><span class="wallet-product-selection">${selected === productKey(tier) ? '已选择' : '选择商品'}</span></button>`).join('')}</div>
       ${catalog?.custom_amount ? `<div class="wallet-custom" data-selected="${selected === 'custom'}">
-        <label for="wallet-custom-amount">自定义金额（10～1000 整数元）</label>
-        <input id="wallet-custom-amount" data-wallet-input="custom-amount" inputmode="numeric" autocomplete="off" maxlength="4" value="${esc(customText)}" ${locked() ? 'disabled' : ''}>
-        <button class="button" data-action="credits-quote" ${!catalog.recharge_enabled || locked() ? 'disabled' : ''}>获取报价</button>
-        ${customQuote ? `<p>支付 ¥${customQuote.amount_fen / 100} · 到账 ${esc(amount(customQuote.grant_credit_atoms))} 积分</p><button class="button" data-action="credits-custom-buy" aria-pressed="${selected === 'custom'}" ${locked() ? 'disabled' : ''}>${selected === 'custom' ? '已选择自定义金额' : '选择此金额'}</button>` : ''}
+        <label for="wallet-custom-amount">自定义金额（元）</label>
+        <input id="wallet-custom-amount" data-wallet-input="custom-amount" inputmode="numeric" autocomplete="off" maxlength="9" aria-describedby="wallet-custom-hint" aria-invalid="${invalidAmount}" placeholder="请输入充值金额" value="${esc(customText)}" ${!catalog.recharge_enabled || !rule || locked() ? 'disabled' : ''}>
+        <p id="wallet-custom-hint" role="status">${selected === 'custom' && customAmountError() ? esc(customAmountError()) : selected === 'custom' && quoting ? '正在确认充值金额…' : customQuote && selected === 'custom' ? `支付 ¥${customQuote.amount_fen / 100} · 到账 ${esc(amount(customQuote.grant_credit_atoms))} 积分` : '输入金额后自动计算到账积分'}</p>
       </div>` : `<div class="wallet-custom" data-selected="${selected === 'custom'}">
         <button class="text-button" data-action="credits-custom" aria-pressed="${selected === 'custom'}" ${!catalog?.recharge_enabled || !rule || locked() ? 'disabled' : ''}>自定义金额</button>
         <label for="wallet-custom-amount">¥ <input id="wallet-custom-amount" type="text" inputmode="decimal" autocomplete="off" maxlength="12" placeholder="输入金额（元）" aria-label="自定义充值金额（元）" aria-describedby="wallet-custom-hint" aria-invalid="${invalidAmount}" value="${esc(customAmount)}" ${!catalog?.recharge_enabled || !rule || locked() ? 'disabled' : ''}></label>
@@ -568,6 +604,7 @@ export function createWalletView({ request, changed, storage = globalThis.localS
       if (timer !== null) cancel(timer);
       if (qrTimer !== null) cancel(qrTimer);
       qrTimer = null;
+      catalogRevision++; invalidateQuote();
       identity = value; generation++; account = value ? JSON.parse(value)[0] : null;
       catalog = balance = order = qrImage = selectedAmount = remote = null;
       usage = []; nextUsage = null; usageLoading = false;
@@ -593,8 +630,23 @@ export function createWalletView({ request, changed, storage = globalThis.localS
     isOpen: () => dialogOpen,
     label: () => displayedBalance() != null ? `${amount(displayedBalance())} 点` : visibleLoading() ? '读取中…' : '暂不可用',
     async action(action, dataset = {}) {
-      if (action === 'credits-open') { dialogOpen = true; notify(); return; }
-      if (action === 'credits-dismiss') { dialogOpen = false; if (checkoutStep() === 'result' && !pendingOrder(order)) { order = null; cancellationAccepted = cancellationClosed = false; } notify(); return; }
+      if (action === 'credits-open') {
+        dialogOpen = true; notify();
+        if (!catalog?.custom_amount || locked() || checkoutStep() !== 'selection') return;
+        const g = generation, revision = ++catalogRevision;
+        try {
+          const value = await read('catalog');
+          if (g !== generation || revision !== catalogRevision || !dialogOpen || locked() || checkoutStep() !== 'selection') return;
+          catalog = value;
+          if (!channels().includes(selectedChannel)) selectedChannel = channels()[0];
+          if (selectedAmount === 'custom' && customText) changeCustomAmount(customText);
+          else notify();
+        } catch (cause) {
+          if (g === generation && revision === catalogRevision && dialogOpen && !locked()) { error = message(cause); notify(); }
+        }
+        return;
+      }
+      if (action === 'credits-dismiss') { catalogRevision++; invalidateQuote(); dialogOpen = false; if (checkoutStep() === 'result' && !pendingOrder(order)) { order = null; cancellationAccepted = cancellationClosed = false; } notify(); return; }
       if (action === 'credits-result-confirm' && checkoutStep() === 'result' && !pendingOrder(order)) { order = null; cancellationAccepted = cancellationClosed = false; error = ''; notify(); return; }
       if (action === 'credits-refresh') return refresh();
       if (action === 'credits-usage-more') return loadUsage();
@@ -613,8 +665,13 @@ export function createWalletView({ request, changed, storage = globalThis.localS
         return;
       }
       if (action === 'credits-buy' && products().some(item => productKey(item) === String(dataset.amount) && item.enabled !== false)) return select(String(dataset.amount));
-      if (action === 'credits-custom' && customRule()) return select('custom');
-      if (action === 'credits-custom-change') { if (!locked()) { customText = String(dataset.amount ?? dataset.value); customAmount = customText; customQuote = null; notify(); } return; }
+      if (action === 'credits-custom' && customRule()) {
+        // Restoring input focus after rendering must not restart an active quote.
+        if (locked() || selectedAmount === 'custom') return;
+        if (catalog?.custom_amount) return changeCustomAmount(customText);
+        return select('custom');
+      }
+      if (action === 'credits-custom-change') { if (!locked()) { if (catalog?.custom_amount) changeCustomAmount(dataset.amount ?? dataset.value); else { customText = String(dataset.amount ?? dataset.value); customAmount = customText; customQuote = null; notify(); } } return; }
       if (action === 'credits-quote') return quoteCustom(dataset.amount ?? customText);
       if (action === 'credits-custom-buy' && customQuote) return select('custom');
       if (action === 'credits-amount' && customRule() && !locked()) { customAmount = String(dataset.value).slice(0, 12); return select('custom'); }

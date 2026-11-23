@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createDriveRouting} from '../shell/space-drive-routing.mjs';
+import {createDriveRouting} from '../build/app/shell/space-drive-routing.mjs';
 const sid='a'.repeat(32),root='b'.repeat(32),aid='c'.repeat(32),fid='d'.repeat(32),up='e'.repeat(32);
 test('company disk routes listing, learned file, binary and resumed upload to private authority',async()=>{
   const calls=[];

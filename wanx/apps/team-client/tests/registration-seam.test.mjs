@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 
-const index = new URL("../local-ui/renderer/index.html", import.meta.url);
+const index = new URL("../build/app/local-ui/renderer/index.html", import.meta.url);
 const html = await readFile(index, "utf8");
 const source = (await Promise.all([...html.matchAll(/<script src="([^"]+)"><\/script>/g)]
   .map(match => match[1]).filter(src => src !== "./device-setup.bundle.js")

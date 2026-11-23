@@ -41,6 +41,8 @@ RULES = [
     ("POST", r"/_correction_read", frozenset()),
     ("POST", CORRECTION + r"/sessions", frozenset()),
     ("GET", CORRECTION + r"/leases", frozenset()),
+    ("GET", CORRECTION + r"/current-extraction", frozenset()),
+    ("POST", CORRECTION + r"/current-extraction/draft", frozenset()),
     ("POST", CORRECTION + rf"/{ID}/(?:claim|release|heartbeat)", frozenset()),
     ("GET", CORRECTION + r"/events/[0-9]+", PAGE),
     ("GET", CORRECTION + rf"/{ID}", frozenset()),

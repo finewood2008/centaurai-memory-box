@@ -1,3 +1,4 @@
+import {projectApplicationsForUI} from './ui-broadcast.mjs';
 import { displayCreditAtoms, validateCreditWallet } from "../account/credit-wallet.mjs";
 
 import {PANEL_NOTE_METHODS,panelNoteState} from './panel-note.mjs';
@@ -270,7 +271,7 @@ export function registerControlActions({
   register("get-state", async () => {
     if (getState) return getState();
     const installed = applications ? await applications.listInstalled() : [];
-    return { ...client.snapshot(), applications: installed };
+    return { ...client.snapshot(), applications: await projectApplicationsForUI(installed) };
   });
   register("login-password", (input) => {
     const number = phone(input);
@@ -388,7 +389,7 @@ export function registerControlActions({
   }
   for(const [action,method]of Object.entries({"preview-open":"previewOpen","preview-invoke":"previewInvoke","preview-close":"previewClose","runtime-model":"runtimeModel","runtime-model-save":"runtimeModelSave","launch-suggest":"launchSuggest","launch-sources":"launchSources","launch-configure":"launchConfigure","launch-start":"launchStart","engines-list":"enginesList","engines-check":"enginesCheck","engines-default":"enginesDefault","intake-open":"intakeOpen","intake-send":"intakeSend","intake-state":"intakeState","intake-events":"intakeEvents","intake-handoff":"intakeHandoff","context-sources":"contextSources","context-select":"contextSelect","capabilities-list":"capabilitiesList","capabilities-decide":"capabilitiesDecide","capabilities-check":"capabilitiesCheck","capabilities-state":"capabilitiesState"}))register("studio-"+action,input=>{requireConnectedBox(client.snapshot());return applications.studio[method](input)});
   for(const [action,route]of Object.entries({"builder-models":"models","builder-acp":"acp","builder-connectors":"connectors","builder-skills":"skills"}))register(action,()=>openConnectedDashboard(client,dashboards,route,client.snapshot().connection?.deviceId));
-  register("applications-list", () => applications?.listInstalled() || []);
+  register("applications-list", async () => projectApplicationsForUI(await applications?.listInstalled() || []));
   register("applications-install", (input) => {
     if (!allowDevelopmentInstall) throw new Error("MARKET_SIGNED_PACKAGE_REQUIRED");
     if (!applications) throw new Error("APPLICATIONS_UNAVAILABLE");
@@ -412,7 +413,7 @@ export function registerControlActions({
   register("applications-local-uninstall", input => {
     if (!applications) throw new Error("APPLICATIONS_UNAVAILABLE");
     const id = text(input?.applicationId, 64, "invalid_application_id");
-    const operation = () => applications.uninstall(id);
+    const operation = () => applications.uninstallLocal(id);
     return uiState ? uiState.runApplicationOperation(id, "uninstalling", operation) : operation();
   });
   register("applications-local-rollback", input => {

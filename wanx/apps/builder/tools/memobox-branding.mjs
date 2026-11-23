@@ -1,6 +1,5 @@
 // Product copy only: shared WanX sources stay unchanged. Used by personal builds.
 import ts from 'typescript';
-import {createHash} from 'node:crypto';
 import {readFile,writeFile,readdir} from 'node:fs/promises';
 import path from 'node:path';
 
@@ -70,17 +69,9 @@ export async function brandMemoboxTree(directory) {
   }
  }
 }
-// Template source hashes cover exact file bytes. Recompute after adapting the
-// two bundled templates; never rewrite arbitrary imported packages or user files.
-export function memoboxTemplate(source) {
- const files=Object.fromEntries(Object.entries(source.files).map(([name,text])=>[name,memoboxSource(text,name)]));
- const canonical=JSON.stringify(files,(_key,value)=>value&&typeof value==='object'&&!Array.isArray(value)?Object.fromEntries(Object.keys(value).sort().map(key=>[key,value[key]])):value);
- return {...source,files,sourceHash:createHash('sha256').update(canonical).digest('hex')};
-}
 export const memoboxBuildPlugin = () => ({
  name:'memobox-product-copy',
  setup(build) {
- build.onLoad({filter:/[\\/]templates[\\/](?:knowledge-qa|zhike)[\\/]wanx\.editable\.json$/},async ({path:filename})=>({contents:JSON.stringify(memoboxTemplate(JSON.parse(await readFile(filename,'utf8')))),loader:'json'}));
  build.onLoad({filter:/\.[cm]?[jt]sx?$/},async ({path:filename})=>{
   if(/[\\/]node_modules[\\/]/.test(filename))return;
   const source=await readFile(filename,'utf8'),contents=memoboxSource(source,filename);

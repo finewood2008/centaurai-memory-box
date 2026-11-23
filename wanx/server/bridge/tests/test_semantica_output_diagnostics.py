@@ -14,6 +14,17 @@ SCHEMA = {"type": "object", "required": ["entities"], "additionalProperties": Fa
               "properties": {"confidence": {"type": "number", "maximum": 1}}}}}}
 
 
+async def test_ontology_diagnostics_include_fixed_fields_only(relay):
+    schema = {"type": "object", "properties": {"observations": {"type": "array", "items": {
+        "type": "object", "required": ["source_id"], "properties": {
+            "source_id": {"type": "string"}}}}}}
+    relay.output['choices'][0]['message']['content'] = json.dumps({'observations': [{'PRIVATE': 'PRIVATE'}]})
+    response = await call(relay, schema=schema)
+    assert response.status_code == 502
+    assert response.json()['output_diagnostic']['field_path'] == '/observations/0/source_id'
+    assert 'PRIVATE' not in response.text
+
+
 @pytest.mark.parametrize('value,validator,path', [
     ({'entities': [{'confidence': 'PRIVATE_VALUE'}]}, 'type', '/entities/0/confidence'),
     ({'entities': [{}]}, 'required', '/entities/0/confidence'),

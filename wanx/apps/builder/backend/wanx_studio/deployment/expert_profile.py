@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from copy import deepcopy
 from contextvars import Context
 import re
@@ -11,6 +12,7 @@ from ..contracts import StudioError, compatible
 from .adapters import Blocked, Observation, Plan
 from .miniapp_profile import MiniappProfile, identifier, sha
 from .contracts import canonicalize_json
+from .standard_client import is_standard,metadata,runtime_manifest
 
 PROFILE = 'wanx-expert-app-v1'
 RELEASE_ID = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')
@@ -82,12 +84,16 @@ class ExpertProfile(MiniappProfile):
         release=self.intake.get(owner,release_id)
         if release['directoryDigest']!=body['directoryDigest']:
             raise StudioError('DEPLOYMENT_VERSION_CHANGED',409)
-        base=release['base'];target=self.target_for(owner,base['applicationId'],body['environment'])
+        base=deepcopy(release['base'])
+        if is_standard(base):
+            descriptor=next(a for a in release['bundle']['artifactDescriptors'] if a['artifactId']==release['manifest']['client']['packageArtifactId'])
+            base['packageBase64']=base64.b64encode(self.intake.resolve_artifact(owner,descriptor['sourceRef'])).decode()
+        target=self.target_for(owner,base['applicationId'],body['environment'])
         self.claim_target(owner,target)
         if self.other_profile and self.other_profile.get('binding',self.slot_key(owner,target)):
             raise StudioError('RUNTIME_INCOMPATIBLE',409)
         previous=self.get('binding',self.slot_key(owner,target))
-        if previous and not compatible(previous['manifest'],base['manifest']):
+        if previous and (is_standard(previous['base'])!=is_standard(base) or not compatible(runtime_manifest(previous['base']),runtime_manifest(base))):
             raise StudioError('BREAKING_SCHEMA_CHANGE',409)
         if self.experts.busy(owner,self.slot_id(owner,target)):
             raise StudioError('EXPERT_RUN_ACTIVE',409)
@@ -134,7 +140,7 @@ class ExpertProfile(MiniappProfile):
         frozen=self.intake.get(op['owner'],record['releaseId'])
         if frozen['directoryDigest']!=record['directoryDigest'] or frozen['bundle']!=bundle:
             raise Blocked('PROVENANCE_INVALID')
-        if shutil.disk_usage(self.svc.store.root).free<len(canonicalize_json(record['base']).encode())*4:
+        if shutil.disk_usage(self.svc.store.root).free<(len(canonicalize_json(metadata(record['base'])).encode())+len(record['base'].get('packageBase64','')))*4:
             raise Blocked('INSUFFICIENT_RESOURCES')
         if phase=='commit' and self.experts.busy(op['owner'],self.slot_id(op['owner'],op['target'])):
             raise Blocked('DEPENDENCY_UNAVAILABLE')
@@ -223,7 +229,10 @@ class ExpertProfile(MiniappProfile):
 
     def mark_client_ready(self, owner, token):
         with self.transaction():
-            session=self.svc.runtime(owner,token)
+            if self.svc.runtime_sessions.get(token,{}).get('standardExpertContract'):
+                from .standard_runtime import assert_session
+                session=assert_session(self.svc,owner,token)
+            else:session=self.svc.runtime(owner,token)
             binding=self.find_binding(owner,session['deploymentSlot'])
             if not binding or not binding.get('expertBinding'):raise StudioError('EXPERT_BINDING_REQUIRED',403)
             binding['expertClientReady']={'operationId':binding['operationId'],'artifactHash':binding['artifactHash'],'generation':binding['generation']}

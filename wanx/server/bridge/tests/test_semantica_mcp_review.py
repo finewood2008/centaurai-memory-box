@@ -5,11 +5,30 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from fastapi import FastAPI
 from starlette.requests import Request
 
 from wanx_bridge.semantica import mcp
 from wanx_bridge.semantica.client import SemanticaError
 from wanx_bridge.semantica.mcp_connection import connection_info
+
+
+async def test_starlink_mcp_marks_only_the_warehouse_query_tools_as_read_only():
+    server = mcp.mount_starlink_mcp(
+        FastAPI(),
+        SimpleNamespace(),
+        origin_guard=lambda transport, _server: transport,
+        mount_transport=lambda _app, _name, _transport: None,
+    )
+    tools = await server.list_tools()
+    assert {tool.name for tool in tools if tool.annotations and tool.annotations.readOnlyHint} == {
+        "xingtu_warehouse",
+        "xingtu_documents",
+        "xingtu_graph",
+        "xingtu_search",
+        "xingtu_evidence",
+    }
+    assert any(tool.name == "xingtu_reasoning_prepare" for tool in tools)
 
 
 @pytest.mark.parametrize("fields,accepted", [(2, True), (4, False)])

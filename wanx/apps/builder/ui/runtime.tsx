@@ -1,28 +1,24 @@
-import{haowenPicker}from'../core/haowen-picker.mjs';
 import{useEffect,useRef,useState}from'react';
-import{frameDocument}from'../core/frame.mjs';
+import{previewDocument}from'../core/standard-frame.mjs';
 import{api,errorText}from'./api';
-import{Icon}from'./icons';
-import{createAnnotationChannel,previewMethodAllowed}from'./annotation-channel.mjs';
+import{createAnnotationChannel}from'./annotation-channel.mjs';
 export type AnnotationMode='off'|'point'|'box';
 export type AnnotationController={mode:(value:AnnotationMode)=>void;sync:(marks:{id:string;number:number}[])=>void;remove:(id:string)=>void;locate:(id:string)=>Promise<any>;capture:(id:string)=>Promise<{image:string;width:number;height:number;viewport:{width:number;height:number};region:{x:number;y:number;width:number;height:number}}>};
 export type AnnotationSurface={onConnect:(controller:AnnotationController|null)=>void;onEvent:(event:any)=>void};
-type FileEntry={id:string;name:string;kind:string;size:number};
 export function Runtime({projectId,artifactHash,environment='preview',readOnly=false,onDirtyChange,annotation}:{projectId:string;artifactHash:string;environment?:string;readOnly?:boolean;onDirtyChange?:(dirty:boolean)=>void;annotation?:AnnotationSurface}){
   const annotationRef=useRef(annotation),marking=useRef(false),readonlyRef=useRef(readOnly),annotationChannel=useRef<ReturnType<typeof createAnnotationChannel>|null>(null);annotationRef.current=annotation;readonlyRef.current=readOnly;
   const dirtyCallback=useRef(onDirtyChange);dirtyCallback.current=onDirtyChange;
-  const[doc,setDoc]=useState(''),[error,setError]=useState(''),[session,setSession]=useState(''),[picker,setPicker]=useState<{resolve:(v:unknown)=>void;reject:(e:Error)=>void}|null>(null),[entries,setEntries]=useState<FileEntry[]>([]),[chosen,setChosen]=useState<string[]>([]),[folder,setFolder]=useState(''),[pickerKind,setPickerKind]=useState('files');
+  const[doc,setDoc]=useState('');
   const[loadError,setLoadError]=useState(''),[attempt,setAttempt]=useState(0);
-  const[frameReady,setFrameReady]=useState(false);
-  const frame=useRef<HTMLIFrameElement>(null),port=useRef<MessagePort|null>(null),pickerRef=useRef(picker);pickerRef.current=picker;
-  useEffect(()=>{let active=true,token='';setDoc('');setError('');setLoadError('');setSession('');setFrameReady(false);
+  const[frameReady,setFrameReady]=useState(false),[layoutOnly,setLayoutOnly]=useState(false);
+  const frame=useRef<HTMLIFrameElement>(null),port=useRef<MessagePort|null>(null);
+  useEffect(()=>{let active=true,token='';setDoc('');setLoadError('');setFrameReady(false);setLayoutOnly(false);
     dirtyCallback.current?.(false);
-    api<{session:string;bundle:string;css:string}>(`/projects/${projectId}/runtime`,'POST',{artifactHash,environment}).then(r=>{token=r.session;if(active){setSession(token);setDoc(frameDocument(r.bundle,r.css))}else void api(`/runtime/${token}`,'DELETE').catch(()=>{})}).catch(e=>{if(active)setLoadError(errorText(e))});
-    return()=>{active=false;annotationChannel.current?.dispose();annotationRef.current?.onConnect(null);port.current?.close();pickerRef.current?.reject(new Error('RUNTIME_SESSION_EXPIRED'));if(token)void api(`/runtime/${token}`,'DELETE').catch(()=>{})}
+    api<{session:string;bundle?:string;css?:string;manifest?:{protocolVersion?:number};packageBase64?:string;packageSha256?:string;standardLayout?:unknown}>(`/projects/${projectId}/runtime`,'POST',{artifactHash,environment}).then(r=>{token=r.session;if(active){const rendered=previewDocument(r,artifactHash);setLayoutOnly(rendered.layoutOnly);setDoc(rendered.document)}else void api(`/runtime/${token}`,'DELETE').catch(()=>{})}).catch(e=>{if(active)setLoadError(errorText(e))});
+    return()=>{active=false;annotationChannel.current?.dispose();annotationRef.current?.onConnect(null);port.current?.close();if(token)void api(`/runtime/${token}`,'DELETE').catch(()=>{})}
   },[projectId,artifactHash,environment,attempt]);
-  async function listFiles(parent=''){const result=await api<{items:FileEntry[]}>(`/files?parent=${encodeURIComponent(parent)}`);setEntries(result.items);setFolder(parent)}
   function connect(){
-    annotationChannel.current?.dispose();port.current?.close();const channel=new MessageChannel();port.current=channel.port1;let pending=0;
+    annotationChannel.current?.dispose();port.current?.close();const channel=new MessageChannel();port.current=channel.port1;
     const annotations=createAnnotationChannel(channel.port1,(event:any)=>{if(event.event==='mode')marking.current=event.mode!=='off';annotationRef.current?.onEvent(event)});annotationChannel.current=annotations;
     const controller:AnnotationController={mode:value=>{marking.current=value!=='off';annotations.command('mode',{mode:value})},sync:marks=>annotations.command('sync',{marks}),remove:id=>annotations.command('remove',{id}),locate:id=>annotations.request('locate',{id}),capture:async id=>{
       try{const prepared=await annotations.request('prepare',{id}) as {rect:{x:number;y:number;width:number;height:number};viewport:{width:number;height:number}};
@@ -34,16 +30,13 @@ export function Runtime({projectId,artifactHash,environment='preview',readOnly=f
        return{...image,region:{x:Math.min(1-rw,left),y:Math.min(1-rh,top),width:rw,height:rh}};
       }finally{annotations.command('restore',{id})}
     }};
-    channel.port1.onmessage=async({data:m})=>{if(annotations.receive(m))return;if(m?.type==='wanx:dirty'&&m.dirty===true){dirtyCallback.current?.(true);return}if(!m||!Number.isSafeInteger(m.id)||typeof m.method!=='string'||pending>=4)return;pending++;try{let result;
-      if(!previewMethodAllowed(m.method,readonlyRef.current,marking.current,m.params))throw new Error(marking.current?'ANNOTATION_ACTIVE':'COMPARISON_READ_ONLY');
-      if(m.method==='haowen.select'||m.method==='haowen.channels'){result=await haowenPicker((body:unknown)=>api(`/runtime/${session}/haowen-native`,'POST',body),m.method==='haowen.channels'?'channels':m.params?.kind)}
-      else if(m.method==='files.select'||m.method==='knowledge.select'){const kind=m.method==='knowledge.select'?'knowledge':'files';setPickerKind(kind);if(kind==='knowledge'){const value=await api<{items:FileEntry[]}>(`/runtime/${session}/knowledge`);setEntries(value.items);setFolder('')}else await listFiles();setChosen([]);result=await new Promise((resolve,reject)=>setPicker({resolve,reject}))}
-      else{if(!['dialogue.invoke','foundation.invoke','data.list','data.get','data.put','data.delete','model.generate','model.list','model.select','files.read','knowledge.search','knowledge.documents','knowledge.graph','knowledge.evidence','reports.context','reports.list','reports.get','reports.save','reports.delete'].includes(m.method))throw new Error('METHOD_NOT_ALLOWED');result=await api(`/runtime/${session}/invoke`,'POST',{method:m.method,params:m.params||{}})}
-      channel.port1.postMessage({id:m.id,result});
-    }catch(e){channel.port1.postMessage({id:m.id,error:e instanceof Error?e.message:'RUNTIME_FAILED'})}finally{pending--}};
+    channel.port1.onmessage=({data:message})=>{
+      if(annotations.receive(message))return;
+      if(message?.type==='wanx:dirty'&&message.dirty===true){dirtyCallback.current?.(true);return}
+      if(Number.isSafeInteger(message?.id)&&typeof message.method==='string')channel.port1.postMessage({id:message.id,error:'EXPERT_DEPLOYMENT_REQUIRED'});
+    };
     frame.current?.contentWindow?.postMessage({type:'wanx:init'},'*',[channel.port2]);
     annotationRef.current?.onConnect(controller);setFrameReady(true);
   }
-  async function select(){if(!picker)return;try{const files=await api(`/runtime/${session}/${pickerKind}`,'POST',{ids:chosen});picker.resolve(files);setPicker(null)}catch(e){setError(errorText(e))}}
-  return <div className="runtime">{error&&<div className="inline-error">{error}<button onClick={()=>setError('')} aria-label="关闭错误"><Icon name="close" size={14}/></button></div>}{doc?<iframe title="小应用预览" data-ready={frameReady} ref={frame} srcDoc={doc} sandbox="allow-scripts allow-forms" onLoad={connect}/>:<div className="preview-empty" role={loadError?'alert':'status'}>{loadError?<><h3>此版本暂时无法打开</h3><p>{loadError}</p><button className="primary" onClick={()=>setAttempt(n=>n+1)}>重新打开此版本</button><small>方案和版本记录仍然保留。</small></>:<>正在准备这个版本…<small>首次打开时正在建立独立试用环境。</small></>}</div>}{picker&&<div className="modal-shade"><div className="modal"><h2>{pickerKind==='knowledge'?'选择星图知识库':'选择参考资料'}</h2><p>仅允许当前应用读取你选择的来源；复制应用不会复制授权。</p>{folder&&<button className="text-button" onClick={()=>void listFiles('')}>返回根目录</button>}<div className="file-picker">{entries.map(f=><label key={f.id}>{f.kind==='folder'?<button className="folder-row" onClick={()=>void listFiles(f.id)}><Icon name="folder"/>{f.name}</button>:<><input type="checkbox" checked={chosen.includes(f.id)} disabled={pickerKind==='files'&&!/\.(txt|md|csv|json)$/i.test(f.name)} onChange={e=>setChosen(e.target.checked?[...chosen,f.id]:chosen.filter(id=>id!==f.id))}/><Icon name="file"/>{f.name}</>}</label>)}</div><div className="modal-actions"><button onClick={()=>{picker.resolve([]);setPicker(null)}}>取消</button><button className="primary" onClick={()=>void select()}>选择 {chosen.length} 份资料</button></div></div></div>}</div>
+  return <div className="runtime">{layoutOnly&&<div className="preview-test-notes" role="status"><strong>布局预览 · 不调用专家</strong><p>这里只展示当前版本的页面布局。页面内的 EXPERT_DEPLOYMENT_REQUIRED 或“初始化失败”提示可能来自预览限制，不代表盒子部署失败。</p><p>已部署：到“应用”打开对应的联调版或正式版验证。未部署：在“部署”中先部署到盒子。</p></div>}{doc?<iframe title="小应用预览" data-ready={frameReady} ref={frame} srcDoc={doc} sandbox="allow-scripts allow-forms" onLoad={connect}/>:<div className="preview-empty" role={loadError?'alert':'status'}>{loadError?<><h3>此版本暂时无法打开</h3><p>{loadError}</p><button className="primary" onClick={()=>setAttempt(n=>n+1)}>重新打开此版本</button><small>方案和版本记录仍然保留。</small></>:<>正在准备这个版本…<small>首次打开时正在建立独立试用环境。</small></>}</div>}</div>
 }

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wanx-dialogue-operation/1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "request_id"
+  ],
+  "properties": {
+    "request_id": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9_-]{16,80}$"
+    }
+  }
+}

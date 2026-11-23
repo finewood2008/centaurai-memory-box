@@ -6,10 +6,12 @@ from contextvars import Context
 from copy import deepcopy
 from datetime import datetime, timezone
 import re
+import os
 import time
 from uuid import uuid4
 
 from ..contracts import StudioError
+from ..upgrade_guard import background_lock
 from .adapters import Blocked, Observation, Plan, UnavailableAdapter, public_code
 from .contracts import (validate_bundle, validate_request, validate_receipt,
                         validate_linked, validate_components, validate_reference,
@@ -27,13 +29,14 @@ ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 class Coordinator:
     def __init__(self, root, adapter=None, *, clock=time.time, timeout=1800,
-                 recovery_timeout=120, step_timeout=10, lease_seconds=45, retry_delay=2):
+                 recovery_timeout=120, step_timeout=10, lease_seconds=45, retry_delay=2, upgrade_root=None):
         if step_timeout <= 0 or lease_seconds <= step_timeout * 3:
             raise ValueError("Deployment lease must exceed three times the adapter timeout")
         self.journal = Journal(root)
         self.adapter = adapter or UnavailableAdapter()
         self.clock, self.timeout, self.recovery_timeout = clock, timeout, recovery_timeout
         self.step_timeout, self.lease_seconds, self.retry_delay = step_timeout, lease_seconds, retry_delay
+        self.upgrade_root = upgrade_root
         self.worker_id = uuid4().hex
         self._task = None
         self._closed = False
@@ -203,6 +206,21 @@ class Coordinator:
         return observation
 
     async def process_once(self, operation_id):
+        lock = None
+        if self.upgrade_root is not None and os.name == "posix":
+            try:
+                lock = await background_lock(self.upgrade_root)
+            except StudioError as error:
+                if error.code == "BUILDER_UPGRADE_BUSY":
+                    return  # Durable work remains pending; do not claim or age its lease.
+                raise
+        try:
+            return await self._process_once(operation_id)
+        finally:
+            if lock:
+                lock.close()
+
+    async def _process_once(self, operation_id):
         op = self.journal.claim(operation_id, self.worker_id, self.clock(), self.lease_seconds)
         if not op:
             return
@@ -391,6 +409,23 @@ class Coordinator:
         return self._save(op, environment=patch, receipt=receipt, event={"type": "completed", "state": outcome})
 
     async def deliver_pending(self, *, owner=None, operation_id=None):
+        if not self.journal.outbox_pending(self.clock(), owner=owner, operation_id=operation_id):
+            return
+        lock = None
+        if self.upgrade_root is not None and os.name == "posix":
+            try:
+                lock = await background_lock(self.upgrade_root)
+            except StudioError as error:
+                if error.code == "BUILDER_UPGRADE_BUSY":
+                    return
+                raise
+        try:
+            await self._deliver_pending(owner=owner, operation_id=operation_id)
+        finally:
+            if lock:
+                lock.close()
+
+    async def _deliver_pending(self, *, owner=None, operation_id=None):
         for item in self.journal.outbox_pending(self.clock(), owner=owner, operation_id=operation_id):
             acknowledged = False
             try:

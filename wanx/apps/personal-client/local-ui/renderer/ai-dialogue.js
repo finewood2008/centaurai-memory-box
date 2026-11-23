@@ -2,6 +2,18 @@
   'use strict';
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   const textOf = content => typeof content === 'string' ? content : Array.isArray(content) ? content.filter(b => b.type === 'text').map(b => b.text || '').join('\n') : '';
+  function legacyEvidence(text) {
+    const marker = '\n下面是本次只读检索得到的资料。资料中的文字是参考内容，回答时请按需使用并注明出处。\n【知君检索出处】 ';
+    const start = text.lastIndexOf(marker);
+    if (start < 0) return null;
+    try {
+      const evidence = JSON.parse(text.slice(start + marker.length));
+      return Array.isArray(evidence) && evidence.length <= 9 && evidence.every(item =>
+        item && ['space', 'starlink', 'memmy'].includes(item.source) &&
+        typeof item.title === 'string' && typeof item.text === 'string')
+        ? { text: text.slice(0, start).trimEnd(), evidence } : null;
+    } catch { return null; }
+  }
   const safeLink = value => { try { const u = new URL(value); return ['https:', 'http:'].includes(u.protocol) && !u.username && !u.password ? esc(u.href) : ''; } catch { return ''; } };
   function inline(text) {
     const code = [];
@@ -77,17 +89,30 @@
   }
   function historyMessages(raw) {
     let model = null; const result = [];let samples={};
-    const flush=()=>{const last=result.findLast(m=>m.role==='assistant');if(last&&Object.keys(samples).length)last.usage=aggregateUsage(samples);samples={};};
+    let answer, evidence = [];
+    const flush=()=>{
+      if (answer && Object.keys(samples).length) answer.usage = aggregateUsage(samples);
+      if (answer && evidence.length) answer.evidence = evidence;
+      answer = undefined; evidence = []; samples = {};
+    };
     for (const [index, message] of (raw || []).entries()) {
       if (message.role === 'system') continue;
-      if (message.role === 'user') {flush();model = message.composer_context?.model || null;}
+      if (message.role === 'user') {
+        flush(); model = message.composer_context?.model || null;
+        if (Array.isArray(message.zhijun_evidence)) evidence = message.zhijun_evidence;
+      }
       const blocks = Array.isArray(message.content) ? message.content : [];
-      const text = textOf(message.content);
+      let text = textOf(message.content);
+      if (message.role === 'user') {
+        const legacy = legacyEvidence(text);
+        if (legacy) { text = legacy.text; evidence = legacy.evidence; }
+      }
       const id = message.id || `history-${index}`;
       if(message.role==='assistant'&&message.usage)samples[id]=message.usage;
       if (text || message.role === 'user') result.push({ id, role: message.role, text, model: message.model_ref || message.usage?.model || model,
         files: message.inbound_attachments || [], callUsage:message.role==='assistant'?message.usage:null,status: message.status || 'completed' });
       else if(message.role==='assistant'&&message.usage)result.push({id,role:'usage',callUsage:message.usage});
+      if (message.role === 'assistant' && text) answer = result.at(-1);
       for (const [n, b] of blocks.entries()) {
         if (['tool_use', 'tool_call', 'tool_result'].includes(b.type)) result.push({ id: `${id}-tool-${n}`, role: 'tool', callId: b.id,
           name: b.display_name || b.name || '工具', text: typeof b.output === 'string' ? b.output : b.output == null ? JSON.stringify(b.input || b.args || {}, null, 2) : JSON.stringify(b.output, null, 2),
@@ -156,6 +181,8 @@
     AGENT_FAILED: '通用专家启动失败，请检查后台配置后恢复连接。',
     BOX_CONNECTION_REQUIRED: "连接盒子后，即可使用AI 对话。", ASSISTANT_API_NOT_INSTALLED: "当前盒子需要更新AI 对话接口。已有对话数据会保留。",
     DIALOGUE_CONTEXT_CHANGED: '账号或盒子已改变，请重新连接。', DIALOGUE_ACCESS_DENIED: '当前账号暂时无法使用助理，请检查盒子授权。',
+    ZHIJUN_MODE_UNCONFIRMED: '盒端尚未确认对话模式。请打开这段对话后重试。',
+    ZHIJUN_ADVANCED_REQUIRED: '切到高级模式后可以保存长期记忆。',
     ASSISTANT_MODEL_NEEDS_IMAGE: '当前模型不支持图片，请在顶部选择支持图片的模型，或移除图片后再发送。',
     APPLICATION_MODEL_UNAVAILABLE: '等待管理员配置可用的对话默认模型。',
     MODEL_UNAVAILABLE: '所选模型已不可用，请在顶部重新选择；草稿和附件已保留。', ASSISTANT_TURN_ACTIVE: '这段对话仍在工作，完成或停止后即可继续。',
@@ -186,18 +213,26 @@
   window.wanxAssistantState = { esc, markdown, historyMessages, applyFrame, legacyReference, legacyTrail, historyItems, aggregateUsage, rollupUsage, transcriptMarkup };
   window.wanxDialogueState = { trail: legacyTrail, richText: markdown, isLocalModel: m => Boolean(m.is_local) };
 
-  window.createAIDialogueView = ({ request, onBoxes, compact = false, drawer = false, onSummary, resolvePageHelp, title = 'AI 对话', english = '', subtitle = '' }) => {
+  const dialogueModes = {
+    ask: { label: '普通模式', hint: '问答、查资料和回忆', path: 'M21 11.5a8.5 8.5 0 0 1-8.5 8.5 9 9 0 0 1-3.5-.7L3 21l1.7-6A8.5 8.5 0 1 1 21 11.5Z' },
+    craft: { label: '高级模式', hint: '问答和回忆，也可以保存长期记忆', path: 'm4 16-1 5 5-1L21 7l-4-4L4 16m10-10 4 4' },
+  };
+  const modeIcon = mode => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${dialogueModes[mode].path}"/></svg>`;
+
+  window.createAIDialogueView = ({ memory = false, request, onBoxes, compact = false, drawer = false, onSummary, resolvePageHelp, title = 'AI 对话', english = '', subtitle = '', introduction }) => {
     let channelsPanel, spaceAvailable = false, channelsAvailable = false, attachmentsAvailable = false;
     let root, context = null, generation = 0, epoch = 0, visible = false, connected = false, loaded = false, loading = false;
     let scope = null, models = [], selected = null, sessions = [], legacySessions = [], legacy = null, legacyId = null, legacyAnswer = null;
     let pendingHandoff=null,handoffBusy=false;
     let drawerWatchNeedsSync = false;
-    let modelMode = 'auto', managedDefaults = false, modelChoice = 0;
+    let modelMode = 'auto', defaultModel = null, managedDefaults = false, modelChoice = 0;
+    let conversationMode = 'ask', modeSupported = false, modePickerOpen = false, modeSaving = false;
     let recentRequested=compact;
     let conversationId=null, conversationRevision=0, versions=[], contextUsage=null, editingId=null;
     const drafts=new Map();
     let threadId = null, messages = [], draft = '', attachments = [], reference = '', historyOpen = !compact && !drawer, query = '', pickerOpen = false, modelQuery = '';
     let busy = false, uploading = false, opening = false, active = false, uncertain = false, pending = null, runModel = null, sequence = 0;
+    let submittingTurn = false, stoppingTurn = false;
     let error = '', notice = '', hasMore = false, historyCount = 0, boxName = '', pendingPaint = '', submitted = null, refreshTimer = null, historyTimer = null, historyRequest = 0;
     let streamRecovery = null, refreshing = null;
     const streamRetryDelays = [300, 1000, 2500];
@@ -206,6 +241,22 @@
     let knowledgeAvailable = false, knowledgeEnabled = false, knowledgeWarehouses = [], knowledgeCatalog = [], knowledgeBusy = false;
     let knowledgeQuery = '', knowledgeChoices = new Set(), artifactPath = null; const sourceLinks = new Map();
     const historySelection = new Set();
+    const channelReadMarkers = new Map();
+    let zhijunMemory;
+    const sourceOptions = [
+      ["space", "空间", "参考当前账号可读取的空间文件"],
+      ["starlink", "星图", "参考当前账号可读取的个人星图资料"],
+      ["memory", "智能体记忆", "参考已记内容和本机 AI 历史的相关片段"],
+    ];
+    const defaultSources = () => ({ space: true, starlink: true, memory: true });
+    let selectedSources = defaultSources();
+    const sourceFields = { space: 'folderId', starlink: 'warehouseId', memory: 'memoryAgent' };
+    const scopeHeadings = { space: '选择空间文件夹', starlink: '选择星图仓库', memory: '选择记忆来源' };
+    const scopeDefaults = { space: '全部个人空间', starlink: '全部可用仓库', memory: '全部记忆来源' };
+    let sourceNames = {};
+    let sourcePicker = null;
+    let sourceSupport = false;
+    const evidenceLabels = { space: '空间', starlink: '星图', memmy: '本机 AI 历史', memory: '已记内容' };
     const $ = s => root?.querySelector(s);
     const modelFor = id => models.find(m => m.id === id) || { name: id?.split('/').at(-1) || '通用专家', id };
     const state = () => ({ messages, active, pending, runModel, sequence, error });
@@ -233,11 +284,20 @@
     function release(files = attachments) { if (scope && files.length) void call('release', { handles: files.map(f => f.handle) }).catch(() => {}); }
     function reset() {
       channelsPanel?.reset();
+      zhijunMemory?.reset();
+      selectedSources = defaultSources();
+      sourceNames = {};
+      sourcePicker = null;
+      if ($('[data-zhijun-picker]')?.open) $('[data-zhijun-picker]').close();
+      sourceSupport = false;
+      conversationMode = 'ask'; modeSupported = false; modePickerOpen = false; modeSaving = false;
       historyOpen = !compact && !drawer;
+      channelReadMarkers.clear();
       drawerWatchNeedsSync = false;
       clearTimeout(historyTimer); historyRequest++; clearTimeout(refreshTimer); epoch++; stopWatch(); scope = null; loaded = false; loading = false; models = []; sessions = []; legacySessions = [];
-      modelMode = 'auto'; managedDefaults = false; selected = null; legacy = null; legacyId = null; threadId = null; conversationId=null;conversationRevision=0;versions=[];contextUsage=null;editingId=null;drafts.clear(); messages = []; draft = ''; attachments = []; reference = ''; submitted = null;
+      modelMode = 'auto'; defaultModel = null; managedDefaults = false; selected = null; legacy = null; legacyId = null; threadId = null; conversationId=null;conversationRevision=0;versions=[];contextUsage=null;editingId=null;drafts.clear(); messages = []; draft = ''; attachments = []; reference = ''; submitted = null;
       busy = false; active = false; uncertain = false; uploading = false; opening = false; pending = null; pendingPaint = ''; error = ''; notice = ''; pickerOpen = false;
+      submittingTurn = false; stoppingTurn = false;
       if ($('[data-chat-artifact-dialog]')?.open) $('[data-chat-artifact-dialog]').close();
       if ($('[data-chat-history-dialog]')?.open) $('[data-chat-history-dialog]').close();
       spaceAvailable = false; channelsAvailable = false; attachmentsAvailable = false;
@@ -247,9 +307,14 @@
       spaceEnabled = false; spaceSelection = null; spaceLabel = ''; spaceBusy = false; scopeSpaces = []; organization = {}; historyAvailable = false; historyStatus = 'active'; historyKind = 'all'; historySort = 'newest'; historyPage = 1; historyBatch = false; historyBusy = false; managedKey = null; historySelection.clear();
       $('[data-artifact-content]')?.replaceChildren();
       if ($('[data-chat-artifacts]')) $('[data-chat-artifacts]').innerHTML = '';
+      if (memory && introduction?.placeholder && $('[data-chat-input]')) $('[data-chat-input]').placeholder = introduction.placeholder;
       if ($('[data-chat-input]')) $('[data-chat-input]').value = '';
       if ($('[data-chat-search]')) $('[data-chat-search]').value = '';
       query = ''; recentRequested=compact; paint();
+    }
+    function acceptSessions(rows) {
+      sessions = rows.map(row => row.unread && Number(row.last_active || row.updated_at || row.created_at) <=
+        (channelReadMarkers.get(row.thread_id) ?? 0) ? { ...row, unread: false } : row);
     }
     function scheduleHistoryRefresh(){
       clearTimeout(historyTimer);historyTimer=null;
@@ -257,13 +322,15 @@
     }
     async function refreshHistoryList(){
       if(!root||compact||!visible||!connected||!loaded)return;
+      clearTimeout(historyTimer);
       const gen=generation,token=++historyRequest,expected=scope,previous=organization;
       try{
         const result=await call('history-list');
         if(gen!==generation||token!==historyRequest||scope!==expected||!visible)return;
-        sessions=result.sessions;
+        acceptSessions(result.sessions);
         if(organization===previous)organization=result.organization||{};
         paintHistory();
+        if (memory && !messages.length && !active && !legacy) paintMessages();
         if (modelMode === 'auto' && !active && !busy) await refreshModelSelection();
       }catch{/* A background list refresh never replaces the draft or interrupts a turn. */}
       finally{if(gen===generation&&token===historyRequest)scheduleHistoryRefresh();}
@@ -274,7 +341,8 @@
       try {
         const result = await call('load');
         if (gen !== generation) return;
-        scope = result.scope; models = result.models; sessions = result.sessions; legacySessions = result.legacySessions; loaded = true;
+        scope = result.scope; sourceSupport = result.sidebarSources === true; models = result.models; acceptSessions(result.sessions); legacySessions = result.legacySessions; loaded = true;
+        modeSupported = result.sidebarConversationModes === true;
         knowledgeAvailable = result.capabilities?.knowledge !== false;
         spaceAvailable = result.capabilities?.space !== false;
         channelsAvailable = result.capabilities?.channels !== false;
@@ -302,6 +370,7 @@
       if (value.models) models = value.models;
       if (Object.hasOwn(value, 'defaultModel')) selected = value.defaultModel;
       modelMode = value.modelMode || (value.settings?.model ? 'manual' : 'auto');
+      if (modelMode === 'auto' && Object.hasOwn(value, 'defaultModel')) defaultModel = selected;
       managedDefaults = value.managedDefaults === true;
     }
     async function refreshModelSelection() {
@@ -362,6 +431,40 @@
       conversationId=value.id;conversationRevision=value.revision;versions=value.versions||[];
       acceptSources(value.context||{},value.validation_errors);
     }
+    const canWriteMemory = () => modeSupported && conversationMode === 'craft';
+    const memoryWriteHint = () => conversationMode !== 'craft'
+      ? '切到高级模式后可以保存长期记忆。'
+      : '当前盒端尚未支持高级模式的长期记忆写入。';
+    function acceptConversationMode(value) {
+      if (memory && Object.hasOwn(dialogueModes, value.conversationMode)) conversationMode = value.conversationMode;
+    }
+    async function chooseConversationMode(mode) {
+      if (!Object.hasOwn(dialogueModes, mode) || $('[data-chat-action="modes"]').disabled) return;
+      modePickerOpen = false;
+      notice = '';
+      if (!conversationId) {
+        conversationMode = mode;
+        paintStatus();
+        $('[data-chat-action="modes"]').focus();
+        return;
+      }
+      const gen = generation, turn = epoch;
+      modeSaving = true; error = ''; paintStatus();
+      try {
+        const result = await call('sidebar-mode', { conversationId, mode });
+        if (gen !== generation || turn !== epoch) return;
+        acceptConversation(result.conversation);
+        acceptConversationMode(result);
+      } catch (e) {
+        if (gen === generation && turn === epoch) error = errorText(e);
+      } finally {
+        if (gen === generation && turn === epoch) {
+          modeSaving = false;
+          paintStatus();
+          $('[data-chat-action="modes"]').focus();
+        }
+      }
+    }
     function acceptSources(ctx,validationErrors) {
       spaceEnabled=spaceAvailable&&ctx.space?.enabled===true;spaceSelection=spaceEnabled ? ctx.space?.selection||null : null;spaceLabel=spaceEnabled ? ctx.space?.label||'' : '';
       knowledgeEnabled=knowledgeAvailable&&ctx.knowledge?.enabled===true;knowledgeWarehouses=knowledgeEnabled ? ctx.knowledge?.warehouses||[] : [];
@@ -369,7 +472,7 @@
     }
     function stashDraft() {if(conversationId)drafts.set(conversationId,{draft,attachments:attachments.slice(),reference});}
     async function refreshUsage() {
-      if(compact)return;
+      if(compact||memory)return;
       if(!threadId||legacy){contextUsage=null;paintUsage();return;}
       const gen=generation,turn=epoch,id=threadId;
       try{const value=await call('usage',{threadId:id,model:selected});if(gen===generation&&turn===epoch&&id===threadId){contextUsage=value;paintUsage();}}catch{if(gen===generation&&turn===epoch){contextUsage=null;paintUsage();}}
@@ -391,29 +494,33 @@
     async function changeVersion(direction) {
       const index=versions.findIndex(v=>v.thread_id===threadId),target=versions[index+direction];if(!target||active||busy||pending)return;
       const gen=generation,turn=epoch,choice=modelChoice;busy=true;paintStatus();
-      try{const result=await call('version-select',{conversationId,revision:conversationRevision,threadId:target.thread_id});if(gen!==generation||turn!==epoch)return;stopWatch();threadId=result.history.thread_id;acceptConversation(result.conversation);acceptHistory(result.history);if(choice===modelChoice){if(result.modelSelection)acceptModelSelection(result.modelSelection);else if(result.history.model_ref){selected=result.history.model_ref;modelMode='manual';}}await call('watch',{threadId});contextUsage=null;paint();void refreshUsage();}
+      try{const result=await call('version-select',{conversationId,revision:conversationRevision,threadId:target.thread_id});if(gen!==generation||turn!==epoch)return;stopWatch();threadId=result.history.thread_id;acceptConversation(result.conversation);acceptConversationMode(result);acceptHistory(result.history);if(choice===modelChoice){if(result.modelSelection)acceptModelSelection(result.modelSelection);else if(result.history.model_ref){selected=result.history.model_ref;modelMode='manual';}}await call('watch',{threadId});contextUsage=null;paint();void refreshUsage();}
       catch(e){if(gen===generation&&turn===epoch)error=errorText(e);}finally{if(gen===generation&&turn===epoch){busy=false;paint();}}
     }
     async function revise(kind,id,text) {
       if(active||busy||pending||!conversationId)return;
       const gen=generation,turn=epoch;busy=true;error='';paintStatus();
-      try{const result=await call('version',{conversationId,revision:conversationRevision,threadId,messageId:id,kind,text,model:selected,modelMode});if(gen!==generation||turn!==epoch)return;threadId=result.history.thread_id;acceptConversation(result.conversation);messages=[];acceptHistory(result.history);runModel=result.model||selected;if(modelMode==='auto')selected=runModel;active=true;contextUsage=null;$('[data-chat-edit-dialog]').close();editingId=null;await call('watch',{threadId});scheduleRefresh(500);}
-      catch(e){if(gen===generation&&turn===epoch){error=errorText(e);try{const restored=await call('open',{threadId:conversationId});if(gen===generation&&turn===epoch){acceptConversation(restored.conversation);threadId=restored.history.thread_id;acceptHistory(restored.history);await call('watch',{threadId});}}catch{}if($('[data-chat-edit-dialog]').open)$('[data-edit-error]').textContent=error;}}
+      try{const result=await call('version',{conversationId,revision:conversationRevision,threadId,messageId:id,kind,text,model:selected,modelMode,...(memory && {sources:selectedSources})});if(gen!==generation||turn!==epoch)return;threadId=result.history.thread_id;acceptConversation(result.conversation);acceptConversationMode(result);messages=[];acceptHistory(result.history);runModel=result.model||selected;if(modelMode==='auto')selected=runModel;active=true;contextUsage=null;$('[data-chat-edit-dialog]').close();editingId=null;await call('watch',{threadId});scheduleRefresh(500);}
+      catch(e){if(gen===generation&&turn===epoch){error=errorText(e);try{const restored=await call('open',{threadId:conversationId});if(gen===generation&&turn===epoch){acceptConversation(restored.conversation);acceptConversationMode(restored);threadId=restored.history.thread_id;acceptHistory(restored.history);await call('watch',{threadId});}}catch{}if($('[data-chat-edit-dialog]').open)$('[data-edit-error]').textContent=error;}}
       finally{if(gen===generation&&turn===epoch){busy=false;paint();}}
     }
     async function openThread(id, choose = true) {
-      if (!scope || busy || uploading) return;
+      if (!scope || busy || uploading || modeSaving) return;
       if (conversationId !== id) {stashDraft();}
       if (threadId !== id && (spaceEnabled || knowledgeEnabled)) await call('release-context');
-      const turn = ++epoch, gen = generation, choice = modelChoice; opening = true; error = ''; stopWatch(); paintStatus();
+      const turn = ++epoch, gen = generation, choice = modelChoice; opening = true; stoppingTurn = false; modePickerOpen = false; error = ''; stopWatch(); paintStatus();
       try {
         const result = await call('open', { threadId: id, trackOpened:choose });
         if (turn !== epoch || gen !== generation) return;
         const changedConversation=conversationId!==result.conversation.id;
-        const changedThread = threadId !== result.history.thread_id; threadId = result.history.thread_id;acceptConversation(result.conversation);contextUsage=null;
+        const changedThread = threadId !== result.history.thread_id; threadId = result.history.thread_id;acceptConversation(result.conversation);acceptConversationMode(result);contextUsage=null;
         if(changedConversation){const cached=drafts.get(conversationId);draft=cached?.draft||'';attachments=attachmentsAvailable ? cached?.attachments||[] : [];reference=cached?.reference||'';$('[data-chat-input]').value=draft;} legacy = null; legacyId = null; submitted = null;
         if (changedThread) { messages = []; sourceLinks.clear(); }
         acceptHistory(result.history);
+        if (result.channelReadThrough) {
+          channelReadMarkers.set(conversationId, result.channelReadThrough);
+          acceptSessions(sessions);
+        }
         if (choose && choice === modelChoice && result.modelSelection) acceptModelSelection(result.modelSelection);
         else if (choose && choice === modelChoice && result.history.model_ref) { selected = result.history.model_ref; modelMode = 'manual'; }
         if (selected && !models.some(m => m.id === selected)) error = errors.MODEL_UNAVAILABLE;
@@ -424,15 +531,18 @@
       finally { if (turn === epoch && gen === generation) { opening = false; paint(); } }
     }
     async function newChat() {
-      if (busy || uploading) return;
+      if (busy || uploading || modeSaving) return;
       recentRequested=false;
       const gen=generation,turn=epoch;
       const defaults=await call('release-context');
       if(gen!==generation||turn!==epoch)return;
       stashDraft();epoch++; stopWatch(); threadId = null;conversationId=null;conversationRevision=0;versions=[];contextUsage=null;spaceEnabled=false;spaceSelection=null;spaceLabel='';knowledgeEnabled=false;knowledgeWarehouses=[]; legacy = null; legacyId = null; legacyAnswer = null;
+      conversationMode = 'ask'; modePickerOpen = false;
       messages = []; sourceLinks.clear(); active = false; uncertain = false; pending = null; pendingPaint = ''; draft = ''; attachments = []; reference = ''; submitted = null; hasMore = false;
+      submittingTurn = false; stoppingTurn = false;
       error = ''; notice = ''; acceptModelSelection(defaults); acceptSources(defaults.context||{},defaults.validation_errors); if ($('[data-chat-input]')) { $('[data-chat-input]').value = ''; $('[data-chat-input]').style.height = ''; }
       if ($('[data-chat-artifacts]')) $('[data-chat-artifacts]').innerHTML = '';
+      if (memory && introduction?.placeholder) $('[data-chat-input]').placeholder = introduction.placeholder;
       paint(); $('[data-chat-input]')?.focus();
     }
     function scheduleRefresh(delay) {
@@ -484,8 +594,18 @@
       }
     }
     async function send() {
-      if (busy || uploading || opening || active || uncertain || streamRecovery || spaceBusy || knowledgeBusy || pending || legacy || !scope || !models.some(m => m.id === selected)) return;
+      if (busy || uploading || opening || modeSaving || active || uncertain || streamRecovery || spaceBusy || knowledgeBusy || pending || legacy || !scope) return;
       const text = draft.trim(); if (!text && !attachments.length && !reference.trim()) return;
+      if (!attachments.length && !reference.trim() && zhijunMemory?.requiresWrite(text) && !canWriteMemory()) {
+        notice = memoryWriteHint(); paintStatus(); return;
+      }
+      if (!attachments.length && !reference.trim() && zhijunMemory?.command(text)) {
+        draft = '';
+        $('[data-chat-input]').value = '';
+        paintStatus();
+        return;
+      }
+      if (!models.some(m => m.id === selected)) return;
       const gen = generation, turn = epoch, sentFiles = attachmentsAvailable ? attachments.slice() : [], sentDraft = draft, sentReference = reference;
       let messageText = text;
       const helpRequest = text && resolvePageHelp?.();
@@ -508,12 +628,12 @@
       if (prompt.length > 32000) { error = '历史参考与消息合计最多 32000 字符，请删减参考内容后发送。'; paintStatus(); return; }
 
       submitted = { draft: sentDraft, reference: sentReference, attachments: sentFiles, prompt, model: selected, ended: false, failed: false };
-      busy = true; error = ''; notice = ''; active = true; runModel = selected;
+      busy = true; submittingTurn = true; error = ''; notice = ''; active = true; runModel = selected;
       messages.push({ id: `optimistic-${++sequence}`, role: 'user', text: messageText, reference: sentReference, files: sentFiles }); paint();
       try {
-        const result = await call('send', { threadId, revision:conversationRevision,model: selected, modelMode, prompt, attachments: sentFiles.map(f => f.handle), spaceEnabled, knowledgeEnabled });
+        const result = await call('send', { threadId, revision:conversationRevision,model: selected, modelMode, prompt, attachments: sentFiles.map(f => f.handle), spaceEnabled, knowledgeEnabled, ...(memory && { sources: selectedSources, conversationMode }) });
         if (gen !== generation || turn !== epoch) return;
-        threadId = result.threadId;acceptConversation(result.conversation);
+        threadId = result.threadId;acceptConversation(result.conversation);acceptConversationMode(result);
         if (result.model) { runModel = result.model; submitted.model = result.model; if (modelMode === 'auto') selected = result.model; }
         if (!submitted.failed && draft === sentDraft) { draft = ''; $('[data-chat-input]').value = ''; $('[data-chat-input]').style.height = ''; }
         if (!submitted.failed && reference === sentReference) reference = '';
@@ -525,28 +645,73 @@
         if (gen !== generation || turn !== epoch) return;
         active = false; error = errorText(e); uncertain = Boolean(threadId) && !['APPLICATION_MODEL_UNAVAILABLE', 'MODEL_UNAVAILABLE', 'ASSISTANT_ATTACHMENT_EXPIRED', 'ASSISTANT_TURN_ACTIVE', 'ASSISTANT_MODEL_NEEDS_IMAGE', 'ASSISTANT_KNOWLEDGE_DENIED', 'ASSISTANT_KNOWLEDGE_EXPIRED', 'ASSISTANT_KNOWLEDGE_UNAVAILABLE', 'SPACE_ACCESS_DENIED'].includes(e.code);
         if (!uncertain) messages = messages.filter(m => !m.id.startsWith('optimistic-'));
-      } finally { if (gen === generation && turn === epoch) { busy = false; paint(); } }
+      } finally { if (gen === generation && turn === epoch) { busy = false; submittingTurn = false; paint(); } }
     }
     function paintModels() {
       const node = $('[data-chat-models]'); if (!node) return;
       const chosen=modelFor(selected);
-      node.innerHTML='<button type="button" class="ai-footer-model" data-chat-action="models" aria-haspopup="dialog" aria-expanded="'+pickerOpen+'"><span class="ai-model-icon">'+icon(chosen)+'</span><span>'+esc(modelMode==='auto' ? '跟随默认 · '+(selected?chosen.name:managedDefaults?'等待管理员配置':'暂无可用模型') : selected?chosen.name:'选择模型')+'</span><span>⌄</span></button>';
+      const description = modelMode === 'auto'
+        ? '跟随默认 · ' + (selected ? chosen.name : managedDefaults ? '等待管理员配置' : '暂无可用模型')
+        : selected ? chosen.name : '选择模型';
+      const modelGlyph = icon(chosen);
+      const triggerContent = memory
+        ? (modelGlyph.startsWith('<img') ? modelGlyph : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4m6-4v4M9 18v4m6-4v4M2 9h4m-4 6h4m12-6h4m-4 6h4"/><rect x="10" y="10" width="4" height="4" rx="1"/></svg>')
+        : modelGlyph;
+      const labelAttributes = memory ? ` title="${esc(description)}" aria-label="选择模型 · ${esc(description)}" aria-controls="zhijun-model-options"` : '';
+      const restoreFocus = node.contains(document.activeElement);
+      node.innerHTML = `<button type="button" class="ai-footer-model" data-chat-action="models" aria-haspopup="dialog" aria-expanded="${pickerOpen}"${labelAttributes}><span class="ai-model-icon">${triggerContent}</span>${memory ? '' : `<span>${esc(description)}</span><span aria-hidden="true">⌄</span>`}</button>`;
+      if (restoreFocus) node.firstElementChild.focus();
       $('[data-chat-model-picker]').hidden=!pickerOpen;
-      const needle=modelQuery.trim().toLowerCase();
-      $('[data-chat-model-options]').innerHTML='<button type="button" data-chat-action="model-auto" class="ai-model-option" aria-pressed="'+(modelMode==='auto')+'"><span>跟随默认模型</span>'+(modelMode==='auto'?'✓':'')+'</button>'+ (models.filter(m=>(m.name+' '+m.provider).toLowerCase().includes(needle)).map(m=>'<button type="button" data-chat-action="model" data-id="'+esc(m.id)+'" class="ai-model-option" aria-pressed="'+(modelMode==='manual'&&m.id===selected)+'"><span class="ai-model-icon">'+icon(m)+'</span><span><strong>'+esc(m.name)+'</strong><small>'+esc(m.provider)+'</small></span>'+(modelMode==='manual'&&m.id===selected?'✓':'')+'</button>').join('')||'<p class="ai-empty-label">没有找到可用模型</p>');
+      const needle = modelQuery.trim().toLowerCase();
+      const matches = models.filter(m => (m.name + ' ' + m.provider).toLowerCase().includes(needle));
+      if (memory) {
+        const mark = '<span class="ai-choice-check" aria-hidden="true">✓</span>';
+        $('[data-chat-model-default]').innerHTML = `<button type="button" data-chat-action="model-auto" class="ai-model-option" aria-pressed="${modelMode === 'auto'}">
+          <span class="ai-model-icon" aria-hidden="true">↻</span><span><strong>跟随默认</strong><small>${esc(defaultModel ? modelFor(defaultModel).name : selected && modelMode === 'auto' ? chosen.name : '使用当前默认模型')}</small></span>${mark}
+        </button>`;
+        $('[data-chat-model-options]').innerHTML = matches.map(m => `<button type="button" data-chat-action="model" data-id="${esc(m.id)}" class="ai-model-option" aria-pressed="${modelMode === 'manual' && m.id === selected}">
+          <span class="ai-model-icon">${icon(m)}</span><span><strong>${esc(m.name)}</strong><small>${esc(m.provider)}</small></span>${mark}
+        </button>`).join('') || '<p class="ai-empty-label">没有找到可用模型</p>';
+      } else $('[data-chat-model-options]').innerHTML='<button type="button" data-chat-action="model-auto" class="ai-model-option" aria-pressed="'+(modelMode==='auto')+'"><span>跟随默认模型</span>'+(modelMode==='auto'?'✓':'')+'</button>'+ (matches.map(m=>'<button type="button" data-chat-action="model" data-id="'+esc(m.id)+'" class="ai-model-option" aria-pressed="'+(modelMode==='manual'&&m.id===selected)+'"><span class="ai-model-icon">'+icon(m)+'</span><span><strong>'+esc(m.name)+'</strong><small>'+esc(m.provider)+'</small></span>'+(modelMode==='manual'&&m.id===selected?'✓':'')+'</button>').join('')||'<p class="ai-empty-label">没有找到可用模型</p>');
       $('[data-chat-next-model]').textContent=active&&selected!==runModel?'下一轮使用 '+chosen.name+'，当前回答继续完成。':modelMode==='auto'&&managedDefaults&&!selected?errors.APPLICATION_MODEL_UNAVAILABLE:'';
+    }
+    function paintConversationMode() {
+      const trigger = $('[data-chat-action="modes"]');
+      if (!trigger) return;
+      trigger.disabled = !scope || !loaded || !connected || opening || busy || active || uncertain || Boolean(pending || legacy) || modeSaving;
+      if (trigger.disabled) modePickerOpen = false;
+      const selected = dialogueModes[conversationMode].label;
+      const pendingBoxUpdate = loaded && !modeSupported;
+      if (trigger.dataset.mode !== conversationMode) trigger.innerHTML = modeIcon(conversationMode);
+      trigger.title = '对话模式 · ' + selected + (pendingBoxUpdate ? '（待盒端支持）' : '');
+      trigger.dataset.mode = conversationMode;
+      trigger.setAttribute('aria-label', trigger.title);
+      trigger.setAttribute('aria-expanded', String(modePickerOpen));
+      $('[data-mode-panel]').hidden = !modePickerOpen;
+      $('[data-mode-compatibility]').hidden = !pendingBoxUpdate;
+      const input = $('[data-chat-input]');
+      input.placeholder = conversationMode === 'craft' ? (introduction?.placeholder || '你想记住或想起什么？') : '你想问什么，或想起什么？';
+      for (const button of root.querySelectorAll('[data-chat-action="select-mode"]')) {
+        button.setAttribute('aria-pressed', String(button.dataset.id === conversationMode));
+      }
     }
     function messageMarkup(message) {
       if (message.role === 'tool') return `<details class="ai-tool"><summary><span class="ai-tool-dot ${message.status}"></span>${esc(/wanx_knowledge_.*_xingtu_|Xingtu |星图知识库/i.test(message.name || '') ? '读取星图知识库' : /wanx_space_.*_space_|万象空间/i.test(message.name || '') ? '读取空间文件' : message.name || '工具')}<span>${message.status === 'running' ? '正在执行' : message.status === 'error' ? '未完成' : message.status === 'interrupted' ? '已中断' : message.status === 'called' ? '已调用' : '已完成'}</span></summary><pre>${esc(message.text || '正在处理…')}</pre></details>` + sourceButtons(message.text || '');
       const files = (message.files || []).map(f => `<span class="ai-sent-file">▤ ${esc(f.name || f.filename || '附件')}</span>`).join('');
-      if (message.role === 'user') return `<article class="ai-user-message"><div>${message.reference ? '<small>含旧版对话参考</small>' : ''}<p>${esc(message.text)}</p>${files}${!message.id.startsWith('optimistic-')?`<button class="ai-message-edit" data-chat-action="edit" data-id="${esc(message.id)}" ${active||busy||pending?'disabled':''}>编辑重发</button>`:''}</div></article>`;
+      if (message.role === 'user') return `<article class="ai-user-message"><div>${message.reference ? '<small>含旧版对话参考</small>' : ''}<p>${esc(message.text)}</p>${files}${!message.id.startsWith('optimistic-')?`<button class="ai-message-edit" data-chat-action="edit" data-id="${esc(message.id)}" ${active||busy||pending?'disabled':''}>编辑重发</button>`:''}${zhijunMemory && threadId && message.text && !message.id.startsWith('optimistic-') ? `<button type="button" class="ai-message-edit" data-chat-action="remember-message" data-id="${esc(message.id)}">记住</button>` : ''}</div></article>`;
       const model = modelFor(message.model);
-      return `<article class="ai-answer"><header><span class="ai-answer-icon">${icon(model)}</span><strong>${esc(message.model ? model.name : '通用专家')}</strong>${message.status === 'running' ? '<span class="ai-answer-status">正在回答</span>' : ''}</header><div class="ai-answer-text">${markdown(message.text)}</div>${message.text ? `<footer>${answerAction('copy', message.id)}${message.status !== 'running' ? answerAction('regenerate', message.id, active || busy || pending) : ''}</footer>` : ''}</article>`;
+      const evidence = memory && message.evidence?.length ? `<section class="ai-zhijun-evidence" aria-label="本次参考出处">${message.evidence.map((item, index) =>
+        `<details data-evidence-key="${esc(message.id)}:${index}"><summary>${esc(evidenceLabels[item.source] || '资料')} · ${esc(item.title)}</summary>
+        <p>${esc(item.text)}</p>${item.threadId ? `<button type="button" data-chat-action="evidence-thread" data-id="${esc(item.threadId)}" data-message-id="${esc(item.messageId)}">查看原对话</button>` : ''}
+        ${item.file_id || item.evidence_id ? `<button type="button" data-chat-action="evidence-source" data-id="${esc(message.id)}" data-evidence-index="${index}">打开资料</button>` : ''}</details>`
+      ).join('')}</section>` : '';
+      return `<article class="ai-answer"><header><span class="ai-answer-icon">${icon(model)}</span><strong>${esc(zhijunMemory ? '知君' : message.model ? model.name : '通用专家')}</strong>${message.status === 'running' ? '<span class="ai-answer-status">正在回答</span>' : ''}</header><div class="ai-answer-text">${markdown(message.text)}</div>${evidence}${message.text ? `<footer>${answerAction('copy', message.id)}${message.status !== 'running' ? answerAction('regenerate', message.id, active || busy || pending) : ''}</footer>` : ''}</article>`;
     }
     function paintScroll(){const area=$('[data-chat-messages]'),button=$('[data-scroll-bottom]');if(area&&button)button.hidden=area.scrollHeight-area.scrollTop-area.clientHeight<100;}
     function paintMessages() {
       const area = $('[data-chat-messages]'); if (!area) return;
       const expanded=new Set([...area.querySelectorAll('details[open][data-process-key]')].map(n=>n.dataset.processKey));
+      const expandedEvidence = new Set([...area.querySelectorAll('details[open][data-evidence-key]')].map(node => node.dataset.evidenceKey));
       const follow = area.scrollHeight - area.scrollTop - area.clientHeight < 100;
       if (legacy) {
         const leaves = legacy.groups?.flatMap(g => g.answers) || [];
@@ -555,16 +720,24 @@
         return;
       }
       if (!messages.length && !active) {
-        area.innerHTML = `<div class="ai-welcome">${compact
+        const recent = memory && historyItems(sessions, [], organization, { status: 'active' }).find(item => item.time > 0);
+        const shortcuts = memory && scope ? `<div class="ai-zhijun-start">
+          ${recent ? `<button type="button" data-chat-action="continue-recent" data-id="${esc(recent.id)}" class="ai-zhijun-recent">
+          <small>接着聊 · ${esc(sourceLabels[recent.source])}</small><strong>${esc(recent.title)}</strong><span aria-hidden="true">↗</span></button>` : ''}
+          <div><button type="button" data-chat-action="quick-remember">记一件事</button></div></div>` : '';
+        area.innerHTML = `<div class="ai-welcome${memory ? ' ai-zhijun-welcome' : ''}">${introduction
+          ? `<h3>${esc(introduction.heading)}</h3><p>${esc(introduction.text)}</p>`
+          : compact
           ? '<p class="ai-welcome-eyebrow">从一个想法，到下一步行动</p><h3>今天，想完成什么？</h3><p>把问题、材料或想法交给我，一起推进手头的工作。</p>'
           : "<h3>想找什么记忆或文件？</h3><p>直接提问，AI 会在你勾选的来源中查找星图资料和空间文件。</p>"
-        }${!connected ? "<button class=\"ai-connect\" data-chat-action=\"boxes\">连接盒子</button>" : ''}</div>`;
+        }${shortcuts}${!connected ? "<button class=\"ai-connect\" data-chat-action=\"boxes\">连接盒子</button>" : ''}</div>`;
       } else {
         area.innerHTML = `<div class="ai-transcript">${hasMore ? '<button class="ai-load-older" data-chat-action="older">查看更早的消息</button>' : ''}${transcriptMarkup(messages,messageMarkup)}${active && messages.at(-1)?.role !== 'assistant' ? `<div class="ai-working"><span></span>正在处理…</div>` : ''}</div>`;
       }
       if (!legacy && sourceLinks.size && !area.querySelector('.ai-knowledge-sources')) area.querySelector('.ai-transcript')?.insertAdjacentHTML('beforeend', sourceButtons(JSON.stringify({ assistant_knowledge_sources: [...sourceLinks.values()] })));
+      for (const node of area.querySelectorAll('details[data-evidence-key]')) node.open = expandedEvidence.has(node.dataset.evidenceKey);
       for(const node of area.querySelectorAll('[data-process-key]'))if(expanded.has(node.dataset.processKey))node.open=true;
-      if (follow) area.scrollTop = area.scrollHeight;
+      if (follow && (!memory || messages.length || active)) area.scrollTop = area.scrollHeight;
       paintScroll();
     }
     const allHistory = () => historyItems(sessions, legacySessions, organization);
@@ -580,6 +753,13 @@
       const historyEntry = $('.ai-history-leading');
       historyEntry.hidden = !compact && historyOpen;
       historyEntry.setAttribute('aria-expanded', String(historyOpen));
+      const unreadBadge = $('[data-history-unread]');
+      if (unreadBadge) {
+        const count = allHistory().filter(item => item.kind === 'thread' && item.status === 'active' && item.unread).length;
+        unreadBadge.hidden = count === 0;
+        unreadBadge.textContent = count > 99 ? '99+' : String(count);
+        historyEntry.setAttribute('aria-label', count ? `展开历史对话，${count} 段未读` : '展开历史对话');
+      }
       for (const button of root.querySelectorAll('.ai-history-views [data-history-status]')) button.setAttribute('aria-pressed', String(button.dataset.historyStatus === historyStatus));
       $('[data-history-heading]').textContent = historyStatus === 'trash' ? '回收站' : historyStatus === 'archived' ? '已归档' : '历史';
       $('[data-history-back]').hidden = historyStatus === 'active';
@@ -596,12 +776,17 @@
         const group = s.pinned && historyStatus === 'active' ? '置顶' : '';
         const caption = group && group !== lastGroup ? '<p class="ai-history-caption">置顶</p>' : !group && lastGroup === '置顶' ? '<p class="ai-history-caption">最近</p>' : ''; lastGroup = group;
         const current = s.kind === 'thread' ? conversationId === s.id && !legacy : legacyId === s.id;
-        return caption + `<div class="ai-history-row ${current ? 'current' : ''}">${historyBatch ? `<input type="checkbox" data-history-select="${esc(s.key)}" aria-label="选择 ${esc(s.title)}" ${historySelection.has(s.key) ? 'checked' : ''} ${historyBusy ? 'disabled' : ''}/>` : ''}<button class="ai-history-item" data-chat-action="${historyStatus === 'trash' ? 'history-menu' : s.kind === 'legacy' ? 'legacy' : 'open'}" data-id="${esc(s.id)}" data-key="${esc(s.key)}" title="${esc(s.title + (s.time ? ' · ' + historyDate(s.time) : ''))}" ${current ? 'aria-current="page"' : ''}><span>${esc(s.title)}</span><small class="ai-history-source" data-source="${esc(s.source)}">${esc(sourceLabels[s.source])}</small></button><button class="ai-history-more" data-chat-action="history-menu" data-key="${esc(s.key)}" aria-label="管理 ${esc(s.title)}">⋯</button></div>`;
+        return caption + `<div class="ai-history-row ${current ? 'current' : ''}">${historyBatch ? `<input type="checkbox" data-history-select="${esc(s.key)}" aria-label="选择 ${esc(s.title)}" ${historySelection.has(s.key) ? 'checked' : ''} ${historyBusy ? 'disabled' : ''}/>` : ''}<button class="ai-history-item" data-chat-action="${historyStatus === 'trash' ? 'history-menu' : s.kind === 'legacy' ? 'legacy' : 'open'}" data-id="${esc(s.id)}" data-key="${esc(s.key)}" title="${esc(s.title + (s.time ? ' · ' + historyDate(s.time) : ''))}" ${current ? 'aria-current="page"' : ''}><span>${memory && s.unread && s.status === 'active' ? '<i class="ai-history-unread-dot" aria-label="未读"></i>' : ''}${esc(s.title)}</span><small class="ai-history-source" data-source="${esc(s.source)}">${esc(sourceLabels[s.source])}</small></button><button class="ai-history-more" data-chat-action="history-menu" data-key="${esc(s.key)}" aria-label="管理 ${esc(s.title)}">⋯</button></div>`;
       }).join('') || `<p class="ai-history-empty">${query ? '没有找到匹配的对话。' : historyStatus === 'trash' ? '回收站是空的。删除的对话可在这里恢复。' : historyStatus === 'archived' ? '还没有归档的对话。' : '从第一句开始，聊过的内容会留在这里。'}</p>`;
       $('[data-history-pagination]').hidden = pages <= 1;
       $('[data-history-pagination]').innerHTML = `<span>${list.length} 段对话</span><button data-chat-action="history-prev" aria-label="上一页历史" ${historyPage === 1 ? 'disabled' : ''}>‹</button><span>${historyPage} / ${pages}</span><button data-chat-action="history-next" aria-label="下一页历史" ${historyPage === pages ? 'disabled' : ''}>›</button>`;
       $('[data-history-batch]').hidden = !historyBatch;
       $('[data-history-batch]').innerHTML = `<div><span>已选 ${historySelection.size} 项</span><button data-chat-action="history-manage">完成</button></div><div><button data-chat-action="history-select-page">${page.length && page.every(s => historySelection.has(s.key)) ? '取消本页' : '选择本页'}</button></div><div>${(historyStatus === 'trash' ? [['restore', '恢复']] : [['pin', '置顶'], [historyStatus === 'archived' ? 'unarchive' : 'archive', historyStatus === 'archived' ? '取消归档' : '归档'], ['trash', '删除']]).map(([op, label]) => `<button data-chat-action="history-bulk" data-operation="${op}" ${!historySelection.size || historyBusy ? 'disabled' : ''}>${label}</button>`).join('')}</div>`;
+    }
+    function toggleHistory() {
+      historyOpen = !historyOpen;
+      paintHistory();
+      if (historyOpen) void refreshHistoryList();
     }
     function openHistoryMenu(key) {
       const row = allHistory().find(s => s.key === key); if (!row) return;
@@ -763,19 +948,56 @@
     }
     function paintStatus() {
       if (!root) return;
-      onSummary?.({sources:[spaceEnabled ? (spaceLabel || "文件空间") : '',knowledgeEnabled ? '星图知识库' : ''].filter(Boolean)});
+      onSummary?.({ sources: memory
+        ? sourceOptions.filter(([key]) => selectedSources[key]).map(([, label]) => label)
+        : [spaceEnabled ? (spaceLabel || "文件空间") : '', knowledgeEnabled ? '星图知识库' : ''].filter(Boolean) });
+      if (memory) {
+        const labels = sourceOptions.filter(([key]) => selectedSources[key]).map(([, label]) => label);
+        $('[data-zhijun-source-summary]').textContent = labels.join(' · ') || '已关闭';
+        for (const button of root.querySelectorAll('[data-chat-action="source-settings"]')) {
+          const key = button.dataset.sourceKey;
+          button.textContent = sourceNames[key] || scopeDefaults[key];
+          button.disabled = !scope || !selectedSources[key] || busy || active || Boolean(legacy);
+        }
+      }
+      for (const [key, , description] of sourceOptions) {
+        const control = root.querySelector(`[data-source-key="${key}"]`);
+        if (!control) continue;
+        control.setAttribute('aria-pressed', String(selectedSources[key]));
+        control.disabled = !scope || busy || Boolean(legacy);
+        control.title = loaded && !sourceSupport ? description + '。当前盒端版本可能不支持自动检索。' : description;
+      }
       const streamError = streamRecovery?.failed ? '对话连接暂未恢复。恢复连接后会读取已有结果。' : '';
       const line = error || streamError || notice || (loading ? '正在连接助理…' : !connected ? "连接盒子后开始工作。" : !models.length && loaded ? '后台暂无可用的对话模型。配置后可恢复连接。' : '');
       const node = $('[data-chat-notice]'); node.hidden = !line;
       node.innerHTML = `<span>${esc(line)}</span>${connected && (error || streamError || uncertain || !models.length && loaded) ? '<button data-chat-action="reconnect">恢复连接</button>' : ''}`;
       const input = $('[data-chat-input]'); input.disabled = !connected || !scope || Boolean(legacy);
-      const send = $('[data-chat-send]'); send.disabled = !scope || busy || uploading || opening || active || uncertain || Boolean(streamRecovery) || spaceBusy || knowledgeBusy || draft.length > 32000 || Boolean(pending) || Boolean(legacy) || !models.some(m => m.id === selected) || !draft.trim() && !attachments.length && !reference.trim();
-      send.textContent = busy ? '发送中' : '发送 ↑';
-      $('[data-chat-stop]').hidden = !active || Boolean(legacy); $('[data-chat-stop]').disabled = busy;
+      const send = $('[data-chat-send]'); send.disabled = !scope || busy || uploading || opening || modeSaving || active || uncertain || Boolean(streamRecovery) || spaceBusy || knowledgeBusy || draft.length > 32000 || Boolean(pending) || Boolean(legacy) || (!models.some(m => m.id === selected) && !(zhijunMemory?.recognizes(draft.trim()) && !attachments.length && !reference.trim())) || !draft.trim() && !attachments.length && !reference.trim();
+      const stop = $('[data-chat-stop]');
+      const generating = active && !legacy;
+      if (memory) {
+        const canStop = generating && !submittingTurn && Boolean(threadId);
+        const action = $('[data-zhijun-primary]');
+        action.setAttribute('aria-busy', String(submittingTurn || (canStop && stoppingTurn)));
+        send.hidden = canStop;
+        const sendLabel = submittingTurn ? '发送中' : '发送';
+        send.querySelector('.ai-zhijun-action-label').textContent = sendLabel;
+        send.setAttribute('aria-label', sendLabel);
+        stop.hidden = !canStop;
+        stop.disabled = busy || stoppingTurn;
+        const stopLabel = stoppingTurn ? '停止中' : '停止';
+        stop.querySelector('.ai-zhijun-action-label').textContent = stopLabel;
+        stop.setAttribute('aria-label', stopLabel);
+      } else {
+        send.textContent = busy ? '发送中' : '发送 ↑';
+        stop.hidden = !generating;
+        stop.disabled = busy;
+      }
       if ($('[data-assistant-channels]')) { $('[data-assistant-channels]').hidden = !channelsAvailable; $('[data-assistant-channels]').disabled = !channelsAvailable; }
       $('[data-chat-attach]').hidden = !attachmentsAvailable;
       $('[data-chat-attach]').disabled = !attachmentsAvailable || !scope || busy || uploading || Boolean(legacy) || attachments.length >= 8;
       $('[data-chat-attach]').querySelector('span').textContent = uploading ? '正在添加…' : '添加附件';
+      if (memory) $('[data-chat-attach]').title = uploading ? '正在添加…' : '添加附件';
       $('[data-top-space]').hidden = !spaceAvailable;
       $('[data-chat-space-toggle]').checked = spaceEnabled;
       $('[data-chat-space-toggle]').disabled = !spaceAvailable || !scope || spaceBusy || Boolean(legacy) || (!spaceEnabled && (active || busy || Boolean(pending)));
@@ -796,17 +1018,98 @@
       $('[data-chat-reference]').hidden = !reference;
       if ($('[data-chat-reference-text]').value !== reference) $('[data-chat-reference-text]').value = reference;
       $('[data-chat-reference-count]').textContent = `${reference.length} / 32000 字符，可编辑删减`;
-      for (const button of root.querySelectorAll('[data-chat-action="new"]')) button.disabled = !scope || busy || uploading || opening;
+      paintConversationMode();
+      for (const button of root.querySelectorAll('[data-chat-action="new"]')) button.disabled = !scope || busy || uploading || opening || modeSaving;
       for (const button of root.querySelectorAll('[data-chat-action="model"]')) button.disabled = !scope || opening;
     }
     function paint() { if (!root) return; paintModels(); paintMessages(); paintHistory(); paintPending(); paintStatus();if(pendingHandoff)void importHandoff();syncDrawerWatch(); }
+    async function browseZhijunSources(kind, parent = '') {
+      const dialog = $('[data-zhijun-picker]');
+      const ticket = { kind, generation };
+      sourcePicker = ticket;
+      dialog.querySelector('h3').textContent = scopeHeadings[kind];
+      const content = dialog.querySelector('[data-zhijun-picker-content]');
+      content.textContent = '正在读取…';
+      if (!dialog.open) dialog.showModal();
+      try {
+        const result = await call('sidebar-source-list', { kind, parent });
+        if (sourcePicker !== ticket || generation !== ticket.generation || !dialog.open) return;
+        const option = (entry, action = 'source-select', label = entry.name) =>
+          `<button type="button" data-chat-action="${action}" data-id="${esc(entry.id)}" data-source-name="${esc(entry.name)}">${esc(label)}</button>`;
+        const all = option({ id: '', name: scopeDefaults[kind] });
+        if (kind === 'space') {
+          content.innerHTML = all + (parent
+            ? `<p>${esc(result.folder.name)}</p>${option({ id: result.parent, name: '返回上一级' }, 'source-browse')}${option(result.folder, 'source-select', '使用此文件夹（含子文件夹）')}`
+            : '') + (result.folders || []).map(folder => option(folder, 'source-browse')).join('');
+        } else if (kind === 'starlink') {
+          content.innerHTML = all + (result.warehouses || []).map(row => option(row)).join('') +
+            (result.warehouses?.length ? '' : '<p>没有可选的星图仓库。</p>');
+        } else {
+          content.innerHTML = all + (result.savedMemoryAvailable !== false ? option({ id: 'zhijun', name: '仅已记内容' }) : '') +
+            (result.agentCatalogUnavailable ? '<p>本机 Agent 记忆服务暂不可用。</p>' : result.agents?.length
+              ? result.agents.map(row => option(row)).join('') : '<p>暂无可选的 Agent 记忆。</p>');
+        }
+      } catch (error) {
+        if (sourcePicker === ticket) content.textContent = error.code === 'ZHIJUN_SCOPE_UNSUPPORTED'
+          ? '盒子连接变更，请重新打开知君后再试。'
+          : {space: '暂时无法读取空间文件夹。', starlink: '暂时无法读取星图仓库。', memory: '暂时无法读取本机 Agent 记忆来源。'}[kind];
+      }
+    }
     function mountConversationSettings() {
       $('[data-chat-attach]').innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 13 6-6a3 3 0 0 1 4 4l-8 8a5 5 0 0 1-7-7l8-8"/></svg><span>添加附件</span>';
       $('[data-chat-attach]').setAttribute('aria-label', '添加附件');
       $('.ai-composer-bottom>span:not([data-chat-context-summary])')?.classList.add('ai-keyboard-hint');
       $('.ai-chat-workspace').insertAdjacentHTML('afterbegin','<div class="ai-source-bar" data-chat-source-bar><div data-top-space></div><div class="ai-composer-context" data-chat-knowledge-entry hidden><label class="ai-space-toggle"><input type="checkbox" data-chat-knowledge-toggle/>' + (compact ? '星图知识库' : '星图记忆') + '</label><button type="button" class="ai-space-scope" data-chat-action="knowledge-settings" data-chat-knowledge-settings hidden>选择数据仓</button></div><details class="ai-context-details"><summary data-context-summary>上下文 · 暂无统计</summary><section data-context-breakdown></section></details></div><div class="ai-version-controls" data-chat-versions hidden></div>');
       $('[data-top-space]').append($('[data-chat-space-toggle]').closest('.ai-composer-context'));
+      if (memory) {
+        const bar = $('[data-chat-source-bar]');
+        bar.classList.add('ai-zhijun-source-bar');
+        $('[data-chat-composer]').insertAdjacentHTML('afterbegin',
+          `<details class="ai-zhijun-scope"><summary>参考资料 <span data-zhijun-source-summary></span></summary>
+          <div class="ai-zhijun-sources" role="group" aria-label="回答参考资料">${sourceOptions.map(([key, label]) =>
+            `<div class="ai-zhijun-source-row"><button type="button" class="ai-zhijun-source" data-chat-action="toggle-source" data-source-key="${key}" aria-pressed="true"><span aria-hidden="true"></span>${label}</button>
+            <button type="button" class="ai-zhijun-settings" data-chat-action="source-settings" data-source-key="${key}" title="${scopeHeadings[key]}"></button></div>`
+          ).join('')}</div></details>`);
+        $('.ai-context-details').remove();
+        $('.ai-dialogue').insertAdjacentHTML('beforeend', '<dialog class="ai-space-dialog ai-zhijun-picker" data-zhijun-picker aria-labelledby="zhijun-source-heading"><header><h3 id="zhijun-source-heading"></h3><button type="button" data-chat-action="source-close" aria-label="关闭参考范围">×</button></header><div data-zhijun-picker-content></div></dialog>');
+      }
       $('.ai-composer-bottom').insertBefore($('.ai-model-section'),$('.ai-keyboard-hint'));
+      if (memory) {
+        const modelPicker = $('[data-chat-model-picker]');
+        const search = $('[data-chat-model-search]');
+        modelPicker.id = 'zhijun-model-options';
+        modelPicker.setAttribute('aria-label', '选择模型');
+        modelPicker.querySelector('strong').textContent = '选择模型';
+        modelPicker.querySelector('button').type = 'button';
+        search.placeholder = '搜索模型或供应商';
+        search.setAttribute('aria-label', search.placeholder);
+        search.insertAdjacentHTML('beforebegin', '<label class="ai-model-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><circle cx="10.5" cy="10.5" r="5.5"/><path d="m15 15 5 5"/></svg></label>');
+        search.previousElementSibling.append(search);
+        search.parentElement.insertAdjacentHTML('afterend', '<div class="ai-model-default" data-chat-model-default></div>');
+        $('.ai-model-section').insertAdjacentHTML('afterend', `<div class="ai-mode-setting">
+          <button type="button" class="ai-footer-mode" data-chat-action="modes" aria-controls="zhijun-mode-options" aria-haspopup="dialog" aria-expanded="false"></button>
+          <div class="ai-mode-menu" id="zhijun-mode-options" data-mode-panel role="dialog" aria-label="对话模式" hidden>
+            <div class="ai-mode-heading">对话模式</div>
+            ${Object.entries(dialogueModes).map(([mode, option]) => `<button type="button" class="ai-mode-option" data-chat-action="select-mode" data-id="${mode}" aria-pressed="false">
+              <span class="ai-mode-symbol">${modeIcon(mode)}</span><span class="ai-mode-copy"><strong>${option.label}</strong><small>${option.hint}</small></span><span class="ai-choice-check" aria-hidden="true">✓</span>
+            </button>`).join('')}
+            <p data-mode-compatibility hidden>当前盒端尚未支持切换。选择保存在本机。</p>
+          </div>
+        </div>`);
+        const footer = $('.ai-composer-bottom');
+        const tools = document.createElement('div');
+        tools.className = 'ai-zhijun-tools';
+        tools.append($('[data-chat-attach]'), $('.ai-model-section'), $('.ai-mode-setting'));
+        const primary = document.createElement('div');
+        primary.className = 'ai-zhijun-primary';
+        primary.setAttribute('data-zhijun-primary', '');
+        const send = $('[data-chat-send]'), stop = $('[data-chat-stop]');
+        send.innerHTML = '<span class="ai-zhijun-action-label">发送</span><span class="ai-zhijun-action-symbol" aria-hidden="true">↑</span>';
+        stop.innerHTML = '<span class="ai-zhijun-action-symbol" aria-hidden="true">■</span><span class="ai-zhijun-action-label">停止</span>';
+        primary.append(send, stop);
+        $('.ai-keyboard-hint')?.remove();
+        footer.append(tools, primary);
+      }
       $('.ai-dialogue').insertAdjacentHTML('beforeend', '<dialog class="ai-space-dialog ai-knowledge-dialog" data-chat-knowledge-dialog aria-labelledby="knowledge-dialog-title"><header><div><h3 id="knowledge-dialog-title">选择星图知识库</h3><p>可同时使用多个已授权数据仓。</p></div><button data-chat-action="knowledge-close" aria-label="关闭知识库选择">×</button></header><input type="search" data-knowledge-search placeholder="搜索数据仓" aria-label="搜索数据仓"/><div class="ai-knowledge-options" data-knowledge-options></div><p class="ai-space-note" data-knowledge-note role="status"></p><footer><button data-chat-action="knowledge-close">取消</button><button data-chat-action="knowledge-confirm" data-knowledge-confirm>使用所选数据仓</button></footer></dialog>');
       $('.ai-dialogue').insertAdjacentHTML('beforeend','<dialog class="ai-history-dialog ai-edit-dialog" data-chat-edit-dialog><header><h3>编辑重发</h3><button type="button" data-chat-action="edit-close" aria-label="关闭编辑">×</button></header><p>保留原消息与回答，修改后生成新版本。</p><textarea data-edit-text rows="7" maxlength="32000" aria-label="修改消息内容"></textarea><div data-edit-files></div><p data-edit-error role="status"></p><footer><button type="button" data-chat-action="edit-close">取消</button><button type="button" data-chat-action="edit-send">保存并发送</button></footer></dialog>');
       $('.ai-chat-workspace').insertAdjacentHTML('beforeend','<button class="ai-scroll-bottom" data-chat-action="scroll-bottom" data-scroll-bottom hidden aria-label="回到底部">↓ 回到底部</button>');
@@ -818,14 +1121,37 @@
     }
     function setup(element) {
       root = element;
-      root.innerHTML = `<section class="ai-dialogue${compact ? ' history-collapsed' : ''}"><header class="ai-dialogue-heading${english ? ' wanx-section-banner' : ''}" ${english ? 'data-section="chat"' : ''}>
-        <div class="ai-heading-left"><button type="button" data-chat-action="history" class="ai-history-toggle ai-history-leading" aria-label="${compact ? '展开或收起历史对话' : '展开历史对话'}" title="${compact ? '展开或收起历史对话' : '展开历史对话'}" aria-controls="ai-chat-history"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg><span>历史</span></button><div class="ai-page-title"><span class="ai-page-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M8 5.5h16a4 4 0 0 1 4 4v11a4 4 0 0 1-4 4H15l-7 4v-4a4 4 0 0 1-4-4v-11a4 4 0 0 1 4-4Z"/><path class="ai-mark-spark" d="m17 9 1.8 4.2L23 15l-4.2 1.8L17 21l-1.8-4.2L11 15l4.2-1.8Z"/><path d="M23 7.5v4m-2-2h4"/></svg></span><div><h2>${esc(title)}${english ? ` <span class="wanx-section-english">${esc(english)}</span>` : ''}</h2><p>${esc(subtitle || '多种 AI，随时为你所用。')}</p></div></div></div>
+      root.innerHTML = `<section class="ai-dialogue${compact ? ' history-collapsed' : ''}${memory ? ' ai-zhijun-dialogue' : ''}"><header class="ai-dialogue-heading${english ? ' wanx-section-banner' : ''}" ${english ? 'data-section="chat"' : ''}>
+        <div class="ai-heading-left"><button type="button" data-chat-action="history" class="ai-history-toggle ai-history-leading" aria-label="${compact ? '展开或收起历史对话' : '展开历史对话'}" title="${compact ? '展开或收起历史对话' : '展开历史对话'}" aria-controls="ai-chat-history"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg><span>历史</span>${memory ? '<span class="ai-history-unread" data-history-unread hidden aria-hidden="true"></span>' : ''}</button><div class="ai-page-title"><span class="ai-page-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M8 5.5h16a4 4 0 0 1 4 4v11a4 4 0 0 1-4 4H15l-7 4v-4a4 4 0 0 1-4-4v-11a4 4 0 0 1 4-4Z"/><path class="ai-mark-spark" d="m17 9 1.8 4.2L23 15l-4.2 1.8L17 21l-1.8-4.2L11 15l4.2-1.8Z"/><path d="M23 7.5v4m-2-2h4"/></svg></span><div><h2>${esc(title)}${english ? ` <span class="wanx-section-english">${esc(english)}</span>` : ''}</h2><p>${esc(subtitle || '多种 AI，随时为你所用。')}</p></div></div></div>
         <div class="ai-page-actions"><button type="button" class="ai-history-toggle ai-channels-trigger" data-assistant-channels aria-label="通道设置" title="管理微信、企业微信、飞书与钉钉通道"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/><path d="M14 6h1a3 3 0 0 1 3 3v2M10 18H9a3 3 0 0 1-3-3v-2"/></svg><span>通道设置</span></button>${compact ? '<button type="button" class="ai-sidebar-new ai-collapsed-new" data-chat-action="new">＋ 新对话</button>' : ''}</div>
-      </header><div class="ai-assistant-workbench"><aside id="ai-chat-history" class="ai-history" data-chat-history aria-label="历史对话" hidden><div class="ai-sidebar-heading"><div class="ai-sidebar-brand"><strong data-history-heading>历史</strong></div><div class="ai-sidebar-actions"><details class="ai-history-options" data-history-options><summary aria-label="历史选项" title="历史选项">⋯</summary><div class="ai-history-menu-panel"><div class="ai-history-views" role="group" aria-label="历史分类"><button type="button" data-chat-action="history-filter" data-history-status="active" aria-pressed="true">全部对话</button><button type="button" data-chat-action="history-filter" data-history-status="archived" aria-pressed="false">已归档</button><button type="button" data-chat-action="history-filter" data-history-status="trash" aria-pressed="false">回收站</button></div><div class="ai-history-filters"><label><span>类型</span><select data-history-kind aria-label="对话类型"><option value="all">全部类型</option><option value="thread">助理会话</option><option value="legacy">旧版对话</option></select></label><label><span>排序</span><select data-history-sort aria-label="历史排序"><option value="newest">最近使用</option><option value="oldest">最早使用</option><option value="title">按名称</option></select></label></div><div class="ai-history-tools"><button type="button" data-chat-action="history-manage" data-history-manage>批量管理</button><button type="button" data-chat-action="history-refresh" data-history-refresh>刷新列表</button></div></div></details><button type="button" data-chat-action="history" aria-label="收起历史对话" title="收起历史对话">‹</button></div></div>${compact ? '' : '<button type="button" class="ai-sidebar-new" data-chat-action="new">＋ 新对话</button>'}<label class="ai-history-search"><span class="sr-only">搜索对话</span><input type="search" data-chat-search placeholder="搜索对话"/></label><button type="button" class="ai-history-back" data-history-back data-chat-action="history-filter" data-history-status="active" hidden>← 返回对话</button><button type="button" class="ai-history-reset" data-history-reset data-chat-action="history-reset-filters" hidden>清除筛选</button><div class="ai-history-batch" data-history-batch hidden></div><div data-chat-history-list></div><footer class="ai-history-pagination" data-history-pagination></footer></aside><div class="ai-chat-workspace"><div class="ai-model-section"><div class="ai-model-strip" data-chat-models></div><div class="ai-model-picker" data-chat-model-picker hidden role="dialog" aria-label="选择 AI 模型"><div><strong>选择 AI 模型</strong><button data-chat-action="close-models" aria-label="关闭模型选择">×</button></div><input type="search" data-chat-model-search placeholder="搜索模型或提供商" aria-label="搜索模型或提供商"/><div data-chat-model-options></div></div><p class="ai-model-hint" data-chat-next-model></p></div><div class="ai-chat-notice" data-chat-notice role="status" hidden></div><div class="ai-messages" data-chat-messages role="log" aria-label="助理对话记录"></div><div class="ai-bottom-dock"><div class="ai-artifacts" data-chat-artifacts></div><div class="ai-pending" data-chat-pending></div><form class="ai-composer" data-chat-composer><details class="ai-reference" data-chat-reference hidden open><summary>旧版对话参考 <span data-chat-reference-count></span><button type="button" data-chat-action="remove-reference">移除</button></summary><textarea data-chat-reference-text rows="4" aria-label="编辑旧版对话参考"></textarea></details><div class="ai-composer-context"><label class="ai-space-toggle"><input type="checkbox" data-chat-space-toggle/>文件空间</label><button type="button" class="ai-space-scope" data-chat-action="space-settings" data-chat-space-settings hidden>选择访问范围</button><span class="ai-space-readonly">按所选范围只读</span></div><div class="ai-attachments" data-chat-attachments></div><textarea data-chat-input rows="2" maxlength="32000" placeholder="${compact ? '把问题、材料或想法交给我…' : '搜索记忆或空间文件，例如：找一下上次会议的纪要…'}" aria-label="给AI 对话发消息"></textarea><div class="ai-composer-bottom"><button type="button" data-chat-action="upload" data-chat-attach>＋ 添加附件</button><span>Enter 发送 · Shift + Enter 换行</span><button type="button" class="ai-stop" data-chat-action="stop" data-chat-stop hidden>■ 停止生成</button><button type="submit" class="ai-send" data-chat-send>发送 ↑</button></div></form></div></div></div><dialog class="ai-space-dialog" data-chat-space-dialog aria-labelledby="space-dialog-heading"><header><div><h3 id="space-dialog-heading">空间访问范围</h3><p>只读使用，访问范围只绑定当前对话。</p></div><button data-chat-action="space-close" aria-label="关闭空间范围设置">×</button></header><fieldset class="ai-space-modes"><legend class="sr-only">选择访问范围</legend><label><input type="radio" name="assistant-space-mode" value="all" data-space-mode/>全部空间</label><label><input type="radio" name="assistant-space-mode" value="space" data-space-mode/>指定空间</label><label><input type="radio" name="assistant-space-mode" value="folder" data-space-mode/>指定文件夹</label></fieldset><label class="ai-space-choice" data-space-choice>选择空间<select data-space-select aria-label="选择空间"></select></label><div class="ai-space-directory" data-space-directory hidden><nav data-space-crumbs aria-label="文件夹路径"></nav><div data-space-folders></div></div><p class="ai-space-selection" data-space-selection></p><p class="ai-space-note" data-space-note role="status"></p><footer><button data-chat-action="space-close">取消</button><button data-chat-action="space-confirm" data-space-confirm>使用所选范围</button></footer></dialog><dialog class="ai-history-dialog" data-chat-history-dialog aria-labelledby="history-dialog-heading"><header><h3 id="history-dialog-heading">管理对话</h3><button data-chat-action="history-close" aria-label="关闭历史管理">×</button></header><p class="ai-history-dialog-title" data-history-dialog-title></p><form data-history-rename-form><label>对话名称<input data-history-rename-input maxlength="100" required aria-label="对话名称"/></label><button type="submit">保存名称</button></form><div class="ai-history-dialog-actions" data-history-dialog-actions></div><p data-history-dialog-note role="status"></p></dialog><dialog class="ai-artifact-dialog" data-chat-artifact-dialog><div class="ai-artifact-title"><strong data-artifact-name></strong><button data-chat-action="close-artifact" aria-label="关闭产物预览">×</button></div><div data-artifact-content></div><div class="ai-artifact-footer"><span data-artifact-note></span><button data-chat-action="save-artifact">保存文件</button></div></dialog></section>`;
+      </header><div class="ai-assistant-workbench"><aside id="ai-chat-history" class="ai-history" data-chat-history aria-label="历史对话" hidden><div class="ai-sidebar-heading"><div class="ai-sidebar-brand"><strong data-history-heading>历史</strong></div><div class="ai-sidebar-actions"><details class="ai-history-options" data-history-options><summary aria-label="历史选项" title="历史选项">⋯</summary><div class="ai-history-menu-panel"><div class="ai-history-views" role="group" aria-label="历史分类"><button type="button" data-chat-action="history-filter" data-history-status="active" aria-pressed="true">全部对话</button><button type="button" data-chat-action="history-filter" data-history-status="archived" aria-pressed="false">已归档</button><button type="button" data-chat-action="history-filter" data-history-status="trash" aria-pressed="false">回收站</button></div><div class="ai-history-filters"><label><span>类型</span><select data-history-kind aria-label="对话类型"><option value="all">全部类型</option><option value="thread">助理会话</option><option value="legacy">旧版对话</option></select></label><label><span>排序</span><select data-history-sort aria-label="历史排序"><option value="newest">最近使用</option><option value="oldest">最早使用</option><option value="title">按名称</option></select></label></div><div class="ai-history-tools"><button type="button" data-chat-action="history-manage" data-history-manage>批量管理</button><button type="button" data-chat-action="history-refresh" data-history-refresh>刷新列表</button></div></div></details><button type="button" data-chat-action="history" aria-label="收起历史对话" title="收起历史对话">‹</button></div></div>${compact ? '' : '<button type="button" class="ai-sidebar-new" data-chat-action="new">＋ 新对话</button>'}<label class="ai-history-search"><span class="sr-only">搜索对话</span><input type="search" data-chat-search placeholder="搜索对话"/></label><button type="button" class="ai-history-back" data-history-back data-chat-action="history-filter" data-history-status="active" hidden>← 返回对话</button><button type="button" class="ai-history-reset" data-history-reset data-chat-action="history-reset-filters" hidden>清除筛选</button><div class="ai-history-batch" data-history-batch hidden></div><div data-chat-history-list></div><footer class="ai-history-pagination" data-history-pagination></footer></aside><div class="ai-chat-workspace"><div class="ai-model-section"><div class="ai-model-strip" data-chat-models></div><div class="ai-model-picker" data-chat-model-picker hidden role="dialog" aria-label="选择 AI 模型"><div><strong>选择 AI 模型</strong><button data-chat-action="close-models" aria-label="关闭模型选择">×</button></div><input type="search" data-chat-model-search placeholder="搜索模型或提供商" aria-label="搜索模型或提供商"/><div data-chat-model-options></div></div><p class="ai-model-hint" data-chat-next-model></p></div><div class="ai-chat-notice" data-chat-notice role="status" hidden></div><div class="ai-messages" data-chat-messages role="log" aria-label="助理对话记录"></div><div class="ai-bottom-dock"><div class="ai-artifacts" data-chat-artifacts></div><div class="ai-pending" data-chat-pending></div><form class="ai-composer" data-chat-composer><details class="ai-reference" data-chat-reference hidden open><summary>旧版对话参考 <span data-chat-reference-count></span><button type="button" data-chat-action="remove-reference">移除</button></summary><textarea data-chat-reference-text rows="4" aria-label="编辑旧版对话参考"></textarea></details><div class="ai-composer-context"><label class="ai-space-toggle"><input type="checkbox" data-chat-space-toggle/>文件空间</label><button type="button" class="ai-space-scope" data-chat-action="space-settings" data-chat-space-settings hidden>选择访问范围</button><span class="ai-space-readonly">按所选范围只读</span></div><div class="ai-attachments" data-chat-attachments></div><textarea data-chat-input rows="2" maxlength="32000" placeholder="${esc(introduction?.placeholder ?? (compact ? '把问题、材料或想法交给我…' : '搜索记忆或空间文件，例如：找一下上次会议的纪要…'))}" aria-label="给${esc(title)}发消息"></textarea><div class="ai-composer-bottom"><button type="button" data-chat-action="upload" data-chat-attach>＋ 添加附件</button><span>Enter 发送 · Shift + Enter 换行</span><button type="button" class="ai-stop" data-chat-action="stop" data-chat-stop hidden>■ 停止生成</button><button type="submit" class="ai-send" data-chat-send>发送 ↑</button></div></form></div></div></div><dialog class="ai-space-dialog" data-chat-space-dialog aria-labelledby="space-dialog-heading"><header><div><h3 id="space-dialog-heading">空间访问范围</h3><p>只读使用，访问范围只绑定当前对话。</p></div><button data-chat-action="space-close" aria-label="关闭空间范围设置">×</button></header><fieldset class="ai-space-modes"><legend class="sr-only">选择访问范围</legend><label><input type="radio" name="assistant-space-mode" value="all" data-space-mode/>全部空间</label><label><input type="radio" name="assistant-space-mode" value="space" data-space-mode/>指定空间</label><label><input type="radio" name="assistant-space-mode" value="folder" data-space-mode/>指定文件夹</label></fieldset><label class="ai-space-choice" data-space-choice>选择空间<select data-space-select aria-label="选择空间"></select></label><div class="ai-space-directory" data-space-directory hidden><nav data-space-crumbs aria-label="文件夹路径"></nav><div data-space-folders></div></div><p class="ai-space-selection" data-space-selection></p><p class="ai-space-note" data-space-note role="status"></p><footer><button data-chat-action="space-close">取消</button><button data-chat-action="space-confirm" data-space-confirm>使用所选范围</button></footer></dialog><dialog class="ai-history-dialog" data-chat-history-dialog aria-labelledby="history-dialog-heading"><header><h3 id="history-dialog-heading">管理对话</h3><button data-chat-action="history-close" aria-label="关闭历史管理">×</button></header><p class="ai-history-dialog-title" data-history-dialog-title></p><form data-history-rename-form><label>对话名称<input data-history-rename-input maxlength="100" required aria-label="对话名称"/></label><button type="submit">保存名称</button></form><div class="ai-history-dialog-actions" data-history-dialog-actions></div><p data-history-dialog-note role="status"></p></dialog><dialog class="ai-artifact-dialog" data-chat-artifact-dialog><div class="ai-artifact-title"><strong data-artifact-name></strong><button data-chat-action="close-artifact" aria-label="关闭产物预览">×</button></div><div data-artifact-content></div><div class="ai-artifact-footer"><span data-artifact-note></span><button data-chat-action="save-artifact">保存文件</button></div></dialog></section>`;
       $('[data-chat-input]').value = draft;
       mountConversationSettings();
+      if (memory && window.createZhijunMemory) {
+        zhijunMemory = window.createZhijunMemory({
+          root: $('.ai-dialogue'),
+          call: (method, input) => call(method, method === 'sidebar-memory' && input.action !== 'search'
+            ? { ...input, conversationId, conversationMode } : input),
+          ready: () => Boolean(scope && loaded && connected),
+          canWrite: canWriteMemory,
+          onWriteBlocked: () => { notice = memoryWriteHint(); paintStatus(); },
+          origin: () => threadId && !legacy ? { threadId } : {},
+          async openThread(id, messageId) {
+            const gen = generation;
+            await openThread(id);
+            if (gen === generation && messageId)
+              root.querySelectorAll('[data-chat-action="remember-message"]').forEach(button => {
+                if (button.dataset.id === messageId) button.closest('article')?.scrollIntoView({ block: 'center' });
+              });
+          },
+        });
+        $('.ai-page-actions').insertAdjacentHTML('beforeend', '<button type="button" class="ai-history-toggle" data-chat-action="new">新对话</button>');
+        const channelButton = $('[data-assistant-channels]');
+        channelButton.querySelector('span').textContent = '手机通道';
+        channelButton.setAttribute('aria-label', '手机通道');
+      }
       if(compact) $('[data-assistant-channels]').remove();
-      else channelsPanel = window.createAssistantChannelsPanel({root,call,getScope:()=>scope,getBoxName:()=>boxName,ready:()=>loaded&&connected&&channelsAvailable});
+      else channelsPanel = window.createAssistantChannelsPanel({root,call,getScope:()=>scope,getBoxName:()=>boxName,ready:()=>loaded&&connected&&channelsAvailable, zhijun: memory});
       $('[data-chat-input]').addEventListener('input', event => { draft = event.target.value; event.target.style.height = 'auto'; event.target.style.height = `${Math.min(160, event.target.scrollHeight)}px`; paintStatus(); });
       $('[data-chat-input]').addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) { event.preventDefault(); void send(); } });
       $('[data-chat-composer]').addEventListener('submit', event => { event.preventDefault(); event.stopPropagation(); void send(); });
@@ -841,7 +1167,20 @@
       $('[data-chat-space-dialog]').addEventListener('cancel', () => { paintStatus(); });
       $('[data-space-select]').addEventListener('change', async event => { scopeSpaceId = event.target.value; scopeFolderId = ''; scopeFolders = []; scopeCrumbs = []; if (scopeMode === 'folder') await browseSpace(); else paintSpaceDialog(); });
       $('[data-chat-model-search]').addEventListener('input', event => { modelQuery = event.target.value; paintModels(); });
-      root.addEventListener('keydown', event => { if (event.key === 'Escape' && $('[data-history-options]').open) { $('[data-history-options]').open = false; event.stopPropagation(); return; } if (event.key === 'Escape' && !root.querySelector('dialog[open]')) { pickerOpen = false; historyOpen = false; paintModels(); paintHistory(); } });
+      root.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && modePickerOpen) {
+          modePickerOpen = false; paintConversationMode();
+          $('[data-chat-action="modes"]').focus();
+          event.stopPropagation();
+          return;
+        }
+        if (event.key === 'Escape' && memory && pickerOpen) {
+          pickerOpen = false; paintModels();
+          $('[data-chat-action="models"]').focus();
+          event.stopPropagation();
+          return;
+        }
+        if (event.key === 'Escape' && $('[data-history-options]').open) { $('[data-history-options]').open = false; event.stopPropagation(); return; } if (event.key === 'Escape' && !root.querySelector('dialog[open]')) { pickerOpen = false; historyOpen = false; paintModels(); paintHistory(); } });
       root.addEventListener('submit', async event => {
         const form = event.target.closest('[data-chat-approval]'); if (!form) return;
         event.preventDefault(); event.stopPropagation(); if (busy || !pending) return;
@@ -885,11 +1224,65 @@
       root.addEventListener('change', async event => { if (event.target.matches('[data-space-mode]')) { scopeMode = event.target.value; if (scopeMode === 'folder') await browseSpace(scopeFolderId); else paintSpaceDialog(); } if (event.target.dataset.historySelect) { const key = event.target.dataset.historySelect; event.target.checked ? historySelection.add(key) : historySelection.delete(key); paintHistory(); } if (event.target.dataset.legacyAnswer) legacyAnswer = event.target.dataset.legacyAnswer; });
       root.addEventListener('click', async event => {
         const options = $('[data-history-options]'); if (options.open && !options.contains(event.target)) options.open = false;
+        if (modePickerOpen && !$('.ai-mode-setting')?.contains(event.target)) { modePickerOpen = false; paintConversationMode(); }
+        if (memory && pickerOpen && !$('.ai-model-section').contains(event.target)) { pickerOpen = false; paintModels(); }
         const button = event.target.closest('[data-chat-action]'); if (!button || button.disabled) return;
         const action = button.dataset.chatAction, id = button.dataset.id, gen = generation, turn = epoch;
+        if (modeSaving) return;
         try {
+          if (action === 'modes') {
+            modePickerOpen = !modePickerOpen;
+            pickerOpen = false;
+            paintModels(); paintConversationMode();
+            if (modePickerOpen) $('[data-mode-panel] button[aria-pressed=true]')?.focus();
+          }
+          if (action === 'select-mode') await chooseConversationMode(id);
+          if (action === 'toggle-source') {
+            const key = button.dataset.sourceKey;
+            if (Object.hasOwn(selectedSources, key)) selectedSources = { ...selectedSources, [key]: !selectedSources[key] };
+            paintStatus();
+            return;
+          }
+          if (action === 'source-settings') await browseZhijunSources(button.dataset.sourceKey);
+          if (action === 'source-browse' && sourcePicker) await browseZhijunSources(sourcePicker.kind, id);
+          if (action === 'source-close') $('[data-zhijun-picker]').close();
+          if (action === 'source-select' && sourcePicker) {
+            const kind = sourcePicker.kind;
+            selectedSources = { ...selectedSources, [sourceFields[kind]]: id || undefined };
+            sourceNames[kind] = id ? button.dataset.sourceName : '';
+            $('[data-zhijun-picker]').close();
+            paintStatus();
+          }
+          if (action === 'quick-remember') zhijunMemory?.remember('');
+          if (action === 'continue-recent' && !busy && !opening && !active) await openThread(id);
+          if (action === 'evidence-thread' && !busy && !opening && !active) {
+            await openThread(id);
+            if (gen === generation && button.dataset.messageId)
+              for (const link of root.querySelectorAll('[data-chat-action="remember-message"]'))
+                if (link.dataset.id === button.dataset.messageId) link.closest('article')?.scrollIntoView({ block: 'center' });
+          }
+          if (action === 'evidence-source') {
+            const item = messages.find(message => message.id === id)?.evidence?.[Number(button.dataset.evidenceIndex)];
+            if (!item) return;
+            const value = await call('sidebar-source', {
+              source: item.source, file_id: item.file_id, warehouse_id: item.warehouse_id, evidence_id: item.evidence_id,
+            });
+            if (gen !== generation || turn !== epoch || !visible) return;
+            const preview = document.createElement('pre');
+            preview.textContent = value.text;
+            artifactPath = null;
+            $('[data-artifact-name]').textContent = value.title || item.title;
+            $('[data-artifact-content]').replaceChildren(preview);
+            $('[data-artifact-note]').textContent = value.truncated ? '正文节选' : '资料出处';
+            $('[data-chat-action="save-artifact"]').hidden = true;
+            if (!$('[data-chat-artifact-dialog]').open) $('[data-chat-artifact-dialog]').showModal();
+          }
+          if (action === 'remember-message') {
+            const message = messages.find(item => item.role === 'user' && item.id === id);
+            if (message) zhijunMemory?.remember(message.text, id);
+          }
           if (action === 'history') {
-            historyOpen = !historyOpen; paintHistory();
+            toggleHistory();
             if (!compact) (historyOpen ? $('[data-chat-history] [data-chat-action="new"]') : $('.ai-history-leading'))?.focus();
           }
           if (action === 'history-menu') openHistoryMenu(button.dataset.key);
@@ -923,13 +1316,22 @@
           if (action === 'knowledge-source') await previewKnowledge(id);
           if (action === 'space-close') { $('[data-chat-space-dialog]').close(); paintStatus(); }
           if (action === 'space-confirm') await confirmSpace();
-          if (action === 'models') { pickerOpen = !pickerOpen; paintModels(); if (pickerOpen) { $('[data-chat-model-search]').focus(); await refreshModelSelection(); } }
-          if (action === 'close-models') { pickerOpen = false; paintModels(); }
+          if (action === 'models') {
+            pickerOpen = !pickerOpen;
+            if (memory && pickerOpen) { modelQuery = ''; $('[data-chat-model-search]').value = ''; }
+            paintModels();
+            if (pickerOpen) { $('[data-chat-model-search]').focus(); await refreshModelSelection(); }
+          }
+          if (action === 'close-models') {
+            pickerOpen = false; paintModels();
+            if (memory) $('[data-chat-action="models"]').focus();
+          }
           if (action === 'model-auto' || action === 'model' && models.some(m => m.id === id)) {
             const previous = selected, previousMode = modelMode, choice = ++modelChoice;
             modelMode = action === 'model-auto' ? 'auto' : 'manual';
             if (modelMode === 'manual') selected = id;
             pickerOpen = false; paintModels(); paintStatus();
+            if (memory) $('[data-chat-action="models"]').focus();
             try {
               const result = await call('model', { threadId: legacy ? null : threadId, model: selected, modelMode });
               if (gen === generation && turn === epoch && choice === modelChoice) { if (result.modelMode) acceptModelSelection(result); error=''; paintModels(); paintStatus(); void refreshUsage(); }
@@ -975,7 +1377,15 @@
             } finally { if (gen === generation && turn === epoch) { uploading = false; paintStatus(); } }
           }
           if (action === 'remove-file') { release(attachments.filter(f => f.handle === id)); attachments = attachments.filter(f => f.handle !== id); paintStatus(); }
-          if (action === 'stop') { await call('stop', { threadId }); if (gen === generation && turn === epoch) { notice = '正在停止，已生成的内容会保留。'; paintStatus(); } }
+          if (action === 'stop') {
+            if (memory) { stoppingTurn = true; paintStatus(); }
+            try {
+              await call('stop', { threadId });
+              if (!memory && gen === generation && turn === epoch) notice = '正在停止，已生成的内容会保留。';
+            } finally {
+              if (gen === generation && turn === epoch) { stoppingTurn = false; paintStatus(); }
+            }
+          }
           if (['copy', 'copy-code', 'copy-legacy'].includes(action)) {
             const value = action === 'copy-code' ? button.dataset.code : action === 'copy-legacy' ? legacy.groups.flatMap(g => g.answers).find(a => a.id === id)?.text : messages.find(m => m.id === id)?.text;
             if (value) {
@@ -1025,6 +1435,7 @@
         if (drawer) drawerWatchNeedsSync = true;
         if (!visible) {
           clearTimeout(historyTimer); historyRequest++; channelsPanel?.reset();
+          modePickerOpen = false; if (root) paintConversationMode();
           if (drawer) for (const dialog of root?.querySelectorAll('dialog[open]') || []) dialog.close();
           else stopWatch();
         } else if (connected && !loaded) void load();
@@ -1041,7 +1452,7 @@
         if(draft.trim()||attachments.length||active||pending||busy||opening)return;
         recentRequested=true;loaded=false;if(visible&&connected&&!loading)void load();
       },
-      showHistory(){historyOpen=!historyOpen;paintHistory();},
+      showHistory: toggleHistory,
       event(value) {
         if(value.type==='handoff'){pendingHandoff=value;void importHandoff();return;}
         if (value.type === 'invalidated') { generation++; context = null; if (drawer) pendingHandoff = null; reset(); if (visible && connected) void load(); return; }
@@ -1076,7 +1487,7 @@
 })();
 
 // Channel management is intentionally available only in the full assistant.
-window.createAssistantChannelsPanel = ({root,call,getScope,getBoxName=()=>'当前盒子',ready}) => {
+window.createAssistantChannelsPanel = ({root,call,getScope,getBoxName=()=>'当前盒子',ready,zhijun=false}) => {
   const labels={weixin:'微信',wecom:'企业微信',feishu:'飞书',dingtalk:'钉钉'};
   const hints={weixin:'连接个人微信，随时接着聊',wecom:'企业智能机器人，协作更顺手',feishu:'把对话带入日常工作',dingtalk:'在熟悉的工作台找到对话'};
   const schemas={wecom:[['bot_id','Bot ID'],['secret','Secret',true]],feishu:[['app_id','App ID'],['app_secret','App Secret',true],['encrypt_key','Encrypt Key（选填）',true],['verification_token','Verification Token（选填）',true]],dingtalk:[['client_id','Client ID'],['client_secret','Client Secret',true]]};
@@ -1086,7 +1497,7 @@ window.createAssistantChannelsPanel = ({root,call,getScope,getBoxName=()=>'当�
   const button=root.querySelector('[data-assistant-channels]');
   const arrow='<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m6 4 4 4-4 4"/></svg>';
   const channelMark='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/><path d="M14 6h1a3 3 0 0 1 3 3v2M10 18H9a3 3 0 0 1-3-3v-2"/></svg>';
-  root.querySelector('.ai-dialogue').insertAdjacentHTML('beforeend',`<dialog class="ai-channels-dialog" aria-labelledby="ai-channels-title"><header><span class="ai-channels-mark">${channelMark}</span><div><h3 id="ai-channels-title" tabindex="-1" autofocus>通道设置</h3><p>让对话出现在你熟悉的地方。</p></div><button type="button" data-channel-action="close" aria-label="关闭通道设置"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg></button></header><div class="ai-channels-body"></div><p class="ai-channels-note" role="status" aria-live="polite"></p></dialog>`);
+  root.querySelector('.ai-dialogue').insertAdjacentHTML('beforeend',`<dialog class="ai-channels-dialog" aria-labelledby="ai-channels-title"><header><span class="ai-channels-mark">${channelMark}</span><div><h3 id="ai-channels-title" tabindex="-1" autofocus>${zhijun ? "在手机上用知君" : "通道设置"}</h3><p>${zhijun ? "选择常用的 IM，完成本人验证后，就能和知君私聊。" : "让对话出现在你熟悉的地方。"}</p></div><button type="button" data-channel-action="close" aria-label="关闭通道设置"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg></button></header><div class="ai-channels-body"></div><p class="ai-channels-note" role="status" aria-live="polite"></p></dialog>`);
   const dialog=root.querySelector('.ai-channels-dialog'), body=dialog.querySelector('.ai-channels-body'), note=dialog.querySelector('.ai-channels-note');
   let rows=[],kind=null,editing=null,busy=false,ticket=null,timer=null,epoch=0,sessionScope=null,interval=2000;
   const request=(method,input={})=>call(method,{...input,scope:sessionScope});

@@ -307,7 +307,7 @@ test("My AI puts the chosen retrieval instructions into the optimized prompt and
   assert.match(spaceOnly, /空间案例.*space_search.*space_read/u);
   assert.doesNotMatch(spaceOnly, /starlink_|task_id/u);
   const { text: both } = await (await optimize(selection)).json();
-  assert.match(both, /支持仓库.*starlink_search.*starlink_evidence/u);
+  assert.match(both, /支持仓库.*xingtu_search.*xingtu_evidence/u);
   assert.deepEqual(models.at(-1).taskSources, { spaceFolder: "空间案例", starlinkWarehouse: "支持仓库" });
   assert.equal(grants.length, 0);
 
@@ -316,7 +316,7 @@ test("My AI puts the chosen retrieval instructions into the optimized prompt and
   assert.match(delivered[0], /MemoBox MCP task_id: a{36}/);
   const edit = { agent: "codex", text: "保留我编辑的任务。", codexContext: { warehouseId: selection.warehouseId } };
   assert.deepEqual(await (await post("copy", edit)).json(), { copied: true });
-  assert.match(copied[0], /^保留我编辑的任务。.*starlink_evidence.*task_id/su);
+  assert.match(copied[0], /^保留我编辑的任务。.*xingtu_evidence.*task_id/su);
   assert.doesNotMatch(copied[0], /space_search/u);
   assert.deepEqual(await (await post("handoff", { ...edit, text: "长".repeat(900) })).json(), { opened: true, copied: true, delivery: "copy-open", reason: "too-long" });
   assert.equal(grants.at(-1).revoked, false);
@@ -352,7 +352,7 @@ test("My AI uses an official download and only launches and manages verified des
   codexInstalled = false;
   assert.equal((await act("launch", "codex")).status, 400);
   assert.equal((await act("uninstall", "codex")).status, 200);
-  assert.deepEqual(opened, ["https://geminicli.com/docs/get-started/installation/", "codex://threads/new", "ms-settings:appsfeatures", "https://chatgpt.com/download/"]);
+  assert.deepEqual(opened, ["https://antigravity.google/docs/cli/tutorial/", "codex://threads/new", "ms-settings:appsfeatures", "https://chatgpt.com/download/"]);
 });
 
 test("memory only opens for the current WanX identity and retires stale sessions", async t => {
@@ -407,6 +407,7 @@ test("memory uses the selected WANX box by default and supports a persisted cust
   ];
   let supportsRouting = false;
   let hasTextModel = true;
+  let hasDefault = true;
   const calls = [];
   const client = {
     snapshot: () => state,
@@ -420,7 +421,7 @@ test("memory uses the selected WANX box by default and supports a persisted cust
           return { status: 404 };
         const capabilities = supportsRouting && hasTextModel ? Object.fromEntries(
           ["memory_summary", "memory_evolution"].map(role => [role, {
-            defaultRef: "test/summary", models: catalog.slice(0, 2),
+            defaultRef: hasDefault ? "test/summary" : null, models: catalog.slice(0, 2),
           }])) : {};
         if (supportsRouting) {
           capabilities.asr = { defaultRef: "voice/speech", models: [{ provider_name: "voice", model: "speech", input: ["audio"] }] };
@@ -430,7 +431,8 @@ test("memory uses the selected WANX box by default and supports a persisted cust
           status: input.method === "GET" && !hasTextModel ? 409 : 200,
           body: JSON.stringify(input.method === "GET"
             ? {
-              ...(hasTextModel ? { model: defaultModel, name: defaultModel, provider: "test" }
+              ...(hasTextModel ? hasDefault ? { model: defaultModel, name: defaultModel, provider: "test" }
+                : { error: "MEMORY_MODEL_NOT_CONFIGURED" }
                 : { detail: "MEMORY_MODEL_NOT_CONFIGURED" }),
               capabilities,
             } : { text: "result" }),
@@ -500,6 +502,13 @@ test("memory uses the selected WANX box by default and supports a persisted cust
   assert.deepEqual(JSON.parse(calls.at(-1).body), {
     messages, max_tokens: 256, json_mode: true, role: "memory_evolution", model_ref: "test/evolution",
   });
+
+  hasDefault = false;
+  assert.equal((await settings()).roles.memory_summary.ready, false);
+  const separatelyAssigned = await settings({ role: "memory_summary", modelRef: "test/summary" });
+  assert.equal(separatelyAssigned.roles.memory_summary.ready, true);
+  assert.equal(separatelyAssigned.roles.memory_evolution.ready, true);
+  assert.equal(separatelyAssigned.error, null);
 
   hasTextModel = false;
   const countBeforeMediaOnly = calls.length;

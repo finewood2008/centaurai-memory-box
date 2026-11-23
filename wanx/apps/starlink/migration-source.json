@@ -1,0 +1,14 @@
+{
+  "sourceRepository": "centuarai-wanx-startlink",
+  "sourceCommit": "47a29c80ab81b62bbfc563b356bdd87d62011154",
+  "sourceDesktopVersion": "0.3.6-rc.20261115.local.1",
+  "sourceDirty": false,
+  "migratedDirectories": ["frontend", "desktop/ui", "desktop/shared"],
+  "migratedServices": ["desktop/shell/service.mjs", "desktop/shell/workbench-errors.mjs"],
+  "adaptations": [
+    "Use current WANX Host connection instead of launching a standalone desktop",
+    "Expose warehouse, material, graph, search and ontology workflows with processing dependencies",
+    "Resolve shared frontend imports inside apps/starlink",
+    "Assemble packaged UI and service into the personal client build directory"
+  ]
+}

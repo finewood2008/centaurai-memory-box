@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wanx-memory-create-atom/1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "assertion"
+  ],
+  "properties": {
+    "assertion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "entity_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "entity_name": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "entity_type": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "kind": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "importance": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "confidence": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

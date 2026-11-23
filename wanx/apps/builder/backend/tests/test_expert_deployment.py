@@ -1,6 +1,6 @@
 import asyncio
-from copy import deepcopy
-import json
+import base64
+import hashlib
 from pathlib import Path
 from uuid import uuid4
 
@@ -10,13 +10,15 @@ from fastapi import FastAPI
 
 from wanx_studio.api import create_router
 from wanx_studio.contracts import StudioError
-from wanx_studio.deployment.expert_profile import ExpertProfile, PROFILE
+from wanx_studio.deployment.expert_profile import ExpertProfile
 from wanx_studio.deployment.expert_runtime import validate_backend
 from wanx_studio.deployment.intake import ReleaseIntake
-from wanx_studio.deployment.miniapp_profile import MiniappProfile
+from wanx_studio.deployment.miniapp_profile import MiniappProfile, sha
 from wanx_studio.deployment.profiles import DeploymentProfiles
-from wanx_studio.workshop import PersonalWorkshop
-from test_directory_intake import write_source, replace_artifact
+from wanx_studio.deployment.standard_client import delivery_digest
+from wanx_studio.service import StudioService
+from wanx_studio.deployment.standard_runtime import StandardRuntime, assert_session
+from test_standard_expert_deployment import write_standard_source
 
 ROOT=Path(__file__).resolve().parents[2]
 OWNER='wanx:7'
@@ -49,31 +51,44 @@ class Experts:
         return {'id':operation_id,'state':'succeeded','result':text}
 
     async def invoke(self, owner, token, operation, body):
-        self.svc.runtime(owner,token)
-        if operation!='expert.tasks':raise StudioError('EXPERT_OPERATION_DENIED',403)
-        return {'items':[],'context':{'scopeId':'a'*64}}
+        session = assert_session(self.svc, owner, token)
+        if operation != 'expert.tasks' or body:
+            raise StudioError('EXPERT_OPERATION_DENIED', 403)
+        slot = session['deploymentSlot']
+        binding = self.svc.deployment_profile.find_binding(owner, slot)
+        return {'items': [], 'context': {'scopeId': sha([owner, binding['target'], slot, 'run'])[7:]}}
+
+    async def close(self):
+        pass
+
+
+def open_directory(tmp_path):
+    svc = StudioService(tmp_path / 'store', ROOT)
+    def authority(owner):
+        if owner != OWNER:
+            raise PermissionError()
+    mini = MiniappProfile(svc)
+    intake = ReleaseIntake(svc.store, tmp_path / 'inbox', tmp_path / 'snapshots',
+                           backend_validator=validate_backend, runtime_namespace='studio')
+    experts = Experts(svc)
+    expert = ExpertProfile(svc, {'boxId': 'synthetic-box'}, authority, runtime=experts,
+                           intake=intake, source='studio')
+    profiles = DeploymentProfiles(mini, expert)
+    svc.deployment_profile = svc.deployments.adapter = profiles
+    svc.directory_profile = expert
+    svc.expert_runtime = experts
+    svc.deployments.start = lambda: None
+    svc.deployments.retry_delay = 0
+    return svc, profiles, expert, experts
 
 
 @pytest.fixture
 async def setup(tmp_path):
-    svc=PersonalWorkshop(tmp_path/'store',ROOT)
-    mini=MiniappProfile(svc,{'boxId':'synthetic-box'},lambda owner:None)
-    intake=ReleaseIntake(svc.store,tmp_path/'inbox',tmp_path/'snapshots',backend_validator=validate_backend)
-    path=intake.inbox/intake.owner_scope(OWNER)/RELEASE
-    manifest,base=write_source(path,release_id=RELEASE)
-    template={**manifest['backend']['template'],'version':'0.0.0+sha.'+'a'*12}
-    manifest['backend']['template']=template
-    backend={'schemaVersion':1,'format':'wanx-expert-backend-v1','template':template,'mode':'ask'}
-    replace_artifact(path,manifest,'backend/expert.json',backend)
-    replace_artifact(path,manifest,'support/dependencies.lock.json',{'schemaVersion':1,'dependencies':[{'kind':'expert-template',**template}]})
-    experts=Experts(svc)
-    expert=ExpertProfile(svc,{'boxId':'synthetic-box'},lambda owner:None,runtime=experts,intake=intake)
-    profiles=DeploymentProfiles(mini,expert)
-    svc.deployment_profile=profiles;svc.directory_profile=expert;svc.expert_runtime=experts
-    svc.deployments.adapter=profiles;svc.deployments.start=lambda:None;svc.deployments.retry_delay=0
-    item=expert.ingest(OWNER,RELEASE)
+    svc, profiles, expert, experts = open_directory(tmp_path)
+    path = expert.intake.inbox / expert.intake.owner_scope(OWNER) / RELEASE
+    write_standard_source(path, RELEASE)
+    item = expert.ingest(OWNER, RELEASE)
     yield svc,profiles,expert,experts,item
-    del svc.expert_runtime # This synthetic dependency owns no callback lifecycle.
     await svc.close()
 
 
@@ -83,17 +98,36 @@ async def deploy(svc, expert, item, environment, key):
     return prep,op
 
 
+def launch(svc, profiles, slot):
+    binding = profiles.find_binding(OWNER, slot)
+    opened = profiles.open_runtime(OWNER, slot, {
+        'artifactHash': binding['artifactHash'], 'environment': binding['target']['environment'],
+        'generation': binding['generation'],
+    })
+    runtime = StandardRuntime(svc)
+    principal = runtime.sso_principal(OWNER, opened['launchToken'])
+    runtime.context(principal)
+    return principal
+
+
 async def progress(svc, profiles, expert, operation, *, handshake=True):
     for _ in range(65):
         await svc.deployments.process_once(operation['id'])
         await asyncio.sleep(0)
         for ticket in profiles.delivery_list(OWNER)['items']:
             ticket=profiles.delivery_claim(OWNER,ticket['id'],{'nonce':ticket['nonce'],'clientId':'synthetic-client'})
+            payload = profiles.delivery_payload(OWNER, ticket['id'])
+            assert delivery_digest(payload) == ticket['payloadDigest']
+            archive = base64.b64decode(payload['packageBase64'], validate=True)
+            frozen = expert.record(svc.deployments.journal.get_operation(OWNER, operation['id']))['base']
+            assert payload['manifest'] == frozen['manifest']
+            assert hashlib.sha256(archive).hexdigest() == frozen['packageSha256']
             fields={'nonce','clientId','artifactHash','slotApplicationId','operationId','step','fence','generation','payloadDigest'}
             profiles.delivery_ack(OWNER,ticket['id'],{**{k:ticket[k] for k in fields},'state':'prepared' if ticket['step']=='prepare_client' else 'active'})
             if ticket['step']=='activate':
-                token=profiles.open_runtime(OWNER,ticket['slotApplicationId'],{'artifactHash':ticket['artifactHash'],'environment':ticket['environment'],'generation':ticket['generation']})['session']
-                if handshake:await svc.invoke(OWNER,token,'foundation.invoke',{'operation':'expert.tasks','input':{}})
+                principal = launch(svc, profiles, ticket['slotApplicationId'])
+                if handshake:
+                    await StandardRuntime(svc).invoke(principal, {'operation': 'expert.tasks', 'input': {}})
         current=svc.deployments.operation(OWNER,operation['id'])
         if current['state'] in {'succeeded','rejected','failed_recovered','failed_degraded','recovery_required'}:return current
     return current
@@ -107,14 +141,15 @@ async def test_directory_deploy_uses_real_contracts_without_editable_project_and
     assert current['state']=='waiting_client' and current['phase']=='verify_active'
     assert svc.deployments.journal.receipt(OWNER,op['id']) is None
     slot=profiles.slot_id(OWNER,prep['target'])
-    binding=profiles.find_binding(OWNER,slot)
-    token=profiles.open_runtime(OWNER,slot,{'artifactHash':binding['artifactHash'],'environment':'dev','generation':1})['session']
-    assert await svc.invoke(OWNER,token,'foundation.invoke',{'operation':'expert.tasks','input':{}})=={'items':[],'context':{'scopeId':'a'*64}}
+    runtime = StandardRuntime(svc)
+    principal = launch(svc, profiles, slot)
+    result = await runtime.invoke(principal, {'operation': 'expert.tasks', 'input': {}})
+    assert result == {'items': [], 'context': {'scopeId': runtime.context(principal)['scopeId']}}
     assert (await progress(svc,profiles,expert,op))['state']=='succeeded'
     receipt=svc.deployments.journal.receipt(OWNER,op['id'])['receipt']
     assert [r['role'] for r in receipt['componentResults']]==['backend','client']
-    assert all(r['status']=='ready' for r in receipt['componentResults'])
-    assert profiles.find_binding(OWNER,slot)['target']['applicationId']=='demo.expert.application'
+    assert all(r['status']=='ready' and r['actualReleaseRef']==prep['releaseRef'] for r in receipt['componentResults'])
+    assert profiles.find_binding(OWNER,slot)['target']['applicationId']==item['applicationId']
     assert experts.prepared[0]['target']['environment']=='dev' and experts.probes
     assert svc.store.db.execute('SELECT count(*) FROM projects').fetchone()[0]==0
 
@@ -125,16 +160,20 @@ async def test_prod_requires_verified_dev_preserves_client_data_and_private_inst
         await deploy(svc,expert,item,'prod','too-early')
     prep,op=await deploy(svc,expert,item,'dev','dev')
     assert (await progress(svc,profiles,expert,op))['state']=='succeeded'
-    devslot=profiles.slot_id(OWNER,prep['target']);binding=profiles.find_binding(OWNER,devslot)
-    token=profiles.open_runtime(OWNER,devslot,{'artifactHash':binding['artifactHash'],'environment':'dev','generation':1})['session']
-    await svc.invoke(OWNER,token,'data.put',{'collection':'results','id':'proof','value':{'text':'copied'}})
-    prodprep,prod=await deploy(svc,expert,item,'prod','prod')
-    assert (await progress(svc,profiles,expert,prod))['state']=='succeeded'
-    prodslot=profiles.slot_id(OWNER,prodprep['target']);assert prodslot!=devslot
-    prodtoken=profiles.open_runtime(OWNER,prodslot,{'artifactHash':binding['artifactHash'],'environment':'prod','generation':1})['session']
-    assert (await svc.invoke(OWNER,prodtoken,'data.get',{'collection':'results','id':'proof'}))['text']=='copied'
-    await svc.invoke(OWNER,prodtoken,'data.put',{'collection':'results','id':'prod-only','value':{'text':'isolated'}})
-    assert await svc.invoke(OWNER,token,'data.get',{'collection':'results','id':'prod-only'}) is None
+    devslot = profiles.slot_id(OWNER, prep['target'])
+    runtime = StandardRuntime(svc)
+    dev = launch(svc, profiles, devslot)
+    row = {'collection': 'state', 'id': 'proof'}
+    await runtime.invoke(dev, {'operation': 'data.put', 'input': {**row, 'value': {'json': 'copied'}}})
+    prodprep, prodop = await deploy(svc, expert, item, 'prod', 'prod')
+    assert (await progress(svc, profiles, expert, prodop))['state'] == 'succeeded'
+    prodslot = profiles.slot_id(OWNER, prodprep['target'])
+    assert prodslot != devslot
+    prod = launch(svc, profiles, prodslot)
+    assert (await runtime.invoke(prod, {'operation': 'data.get', 'input': row}))['json'] == 'copied'
+    row['id'] = 'private'
+    await runtime.invoke(prod, {'operation': 'data.put', 'input': {**row, 'value': {'json': 'prod'}}})
+    assert await runtime.invoke(dev, {'operation': 'data.get', 'input': row}) is None
     assert profiles.find_binding(OWNER,devslot)['expertBinding']['agentId']!=profiles.find_binding(OWNER,prodslot)['expertBinding']['agentId']
 
 
@@ -147,12 +186,12 @@ async def test_directory_conflict_and_active_runs_cannot_be_bypassed_with_stale_
     experts.active=False
     prep,op=await deploy(svc,expert,item,'dev','good')
     assert (await progress(svc,profiles,expert,op))['state']=='succeeded'
-    slot=profiles.slot_id(OWNER,prep['target']);binding=profiles.find_binding(OWNER,slot)
-    token=profiles.open_runtime(OWNER,slot,{'artifactHash':binding['artifactHash'],'environment':'dev','generation':1})['session']
+    slot = profiles.slot_id(OWNER, prep['target'])
+    principal = launch(svc, profiles, slot)
     nextprep,nextop=await deploy(svc,expert,item,'dev','upgrade')
     assert (await progress(svc,profiles,expert,nextop))['state']=='succeeded'
     with pytest.raises(StudioError,match='UPDATE_REQUIRED'):
-        await svc.invoke(OWNER,token,'foundation.invoke',{'operation':'expert.tasks','input':{}})
+        await StandardRuntime(svc).invoke(principal, {'operation': 'expert.tasks', 'input': {}})
 
 
 async def test_directory_routes_are_project_independent_and_require_strict_body_and_query(setup):

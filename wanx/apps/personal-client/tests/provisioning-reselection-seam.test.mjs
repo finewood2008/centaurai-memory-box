@@ -8,7 +8,7 @@ import { stableJson } from '@nexusaos/local-provisioning-core';
 import { DEVICE_INFO_UUID } from '@nexusaos/local-provisioning-contracts';
 import { createProvisioningHost } from '../shell/provisioning-host.cjs';
 
-const bundle = await readFile(new URL('../local-ui/renderer/device-setup.bundle.js', import.meta.url), 'utf8');
+const bundle = await readFile(new URL('../build/app/local-ui/renderer/device-setup.bundle.js', import.meta.url), 'utf8');
 const payload = new TextEncoder().encode(stableJson({ schema_version: 3,
   device_id: 'box-reselection', display_name: 'CentaurAI Box', model: 'C100', serial_suffix: '0000',
   provisioning_protocol_version: 2, security_profile: 'NEXUSAOS_LOCAL_AEAD_V2',

@@ -5,7 +5,7 @@ import { setImmediate } from "node:timers/promises";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createApplicationManager } from "../applications/manager.mjs";
+import { createApplicationManager } from "../build/app/applications/manager.mjs";
 import { createApplicationLauncher } from "../applications/launcher.mjs";
 
 const required = () => { throw Object.assign(new Error("CLIENT_UPDATE_REQUIRED"), { code: "CLIENT_UPDATE_REQUIRED" }); };

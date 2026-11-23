@@ -3,6 +3,7 @@ import {createNativeFoundationPool,connectionHost} from '../core/foundation-nati
 import{randomUUID,createHash}from'node:crypto';
 import{studioRoute,scopeKey,validatePlacement}from'./workspace-policy.mjs';
 import capture from'./preview-capture.cjs';
+import navigation from'./preview-navigation.cjs';
 import editScope from'./edit-scope.mjs';
 import requestPolicy from'../shell/request-policy.cjs';
 import{requestErrorCode}from'../core/request-errors.mjs';
@@ -51,7 +52,7 @@ export function createEmbeddedWorkspace({BrowserWindow,WebContentsView,ipcMain,c
    view=new WebContentsView({webPreferences:{preload:path.join(assets,'embedded-preload.cjs'),sandbox:true,nodeIntegration:false,contextIsolation:true,webSecurity:true,backgroundThrottling:false,partition:personal?'persist:wanx-workshop-'+createHash('sha256').update(identity).digest('hex'):'wanx-studio-'+randomUUID(),additionalArguments:personal?['--wanx-workshop']:[]}});
    view.webContents.session?.setPermissionRequestHandler((_wc,_permission,reply)=>reply(false));
    view.webContents.session?.setPermissionCheckHandler(()=>false);
-   view.webContents.setWindowOpenHandler(()=>({action:'deny'}));view.webContents.on('will-navigate',e=>e.preventDefault());view.webContents.on('will-attach-webview',e=>e.preventDefault());
+   navigation.installPreviewNavigationGuard(view.webContents);
    view.webContents.on('page-title-updated',e=>{e.preventDefault();detached?.setTitle(title)});
    await view.webContents.loadFile(path.join(assets,'workbench/ui/index.html'));
   }

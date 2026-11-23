@@ -3,28 +3,34 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 
-// Personal payloads are assembled from the tracked team source before packaging.
-const usePersonal = process.env.STARLINK_GRAPH_TEST_EDITION === "personal";
+// The personal panel is now built from apps/starlink; team keeps its own payload.
+const useTeam = process.env.STARLINK_GRAPH_TEST_EDITION === "team";
 const source = await readFile(
-  new URL(usePersonal ? "../applications/starlink/ui/app.js" : "../../team-client/applications/starlink/ui/app.js", import.meta.url),
+  new URL(useTeam ? "../../team-client/applications/starlink/ui/app.js" : "../../starlink/ui/app.js", import.meta.url),
   "utf8",
 );
 const renderSource = source.slice(source.indexOf("function renderGraph() {"), source.indexOf("function renderDetails(g) {"));
 const warehouseSource = source.slice(source.indexOf("function currentWarehouse() {"), source.indexOf("function warehouseStatus(w) {"));
 
-function render({ warehouses = [], warehouseId = "selected", graphError = null, nodes = [] } = {}) {
+function render({ warehouses = [], warehouseId = "selected", graphError = null, nodes = [], showIsolated = false } = {}) {
   const elements = new Map();
   const $ = selector => {
-    if (!elements.has(selector)) elements.set(selector, { value: "", classList: { toggle() {} } });
+    if (!elements.has(selector)) elements.set(selector, { value: "", dataset: {}, classList: { toggle() {} } });
     return elements.get(selector);
   };
-  const state = { warehouses, warehouseId, graphError, ready: true, graph: { nodes, edges: [] } };
+  const state = { warehouses, warehouseId, graphError, showIsolated, ready: true, graph: { nodes, edges: [] } };
   vm.runInNewContext(`${renderSource}\n${warehouseSource}\nrenderGraph();`, {
     state, $, visibleGraph: () => ({ nodes: [], edges: [] }),
     errorText: error => error.message, document: { querySelectorAll: () => [] },
-    transformScene() {}, renderDetails() {},
+    explorer: { enabled: () => false }, transformScene() {}, renderDetails() {}, canCreateWarehouse: () => true,
   });
-  return $("#graph-empty");
+  const empty = $("#graph-empty");
+  if (useTeam) return { ...empty, title: empty.textContent, message: empty.textContent };
+  const title = $("#graph-empty-title").textContent;
+  const message = $("#graph-empty-message").textContent;
+  const action = $("#graph-empty-action");
+  assert.equal(action.hidden, !action.dataset.action);
+  return { ...empty, title, message, textContent: [title, message, action.textContent].filter(Boolean).join(" ") };
 }
 
 test("native graph with imported materials explains missing knowledge and directs to processing tasks", () => {
@@ -67,10 +73,11 @@ test("unknown selected warehouse statistics never claim no materials", () => {
 
 test("native graph errors remain more specific than the material processing message", () => {
   const empty = render({ warehouses: [{ id: "selected", document_count: 21 }], graphError: { message: "知识图谱加载失败，请重试" } });
-  assert.equal(empty.textContent, "知识图谱加载失败，请重试");
+  assert.equal(empty.message, "知识图谱加载失败，请重试");
 });
 
 test("an unmatched graph filter stays distinct from knowledge not yet generated", () => {
-  const empty = render({ warehouses: [{ id: "selected", document_count: 21 }], nodes: [{ id: "existing" }] });
-  assert.equal(empty.textContent, "没有找到匹配的实体");
+  const graph = { warehouses: [{ id: "selected", document_count: 21 }], nodes: [{ id: "existing" }] };
+  assert.match(render(graph).textContent, /显示孤立节点/);
+  assert.equal(render({ ...graph, showIsolated: true }).title, "没有找到匹配的实体");
 });

@@ -6,10 +6,10 @@ import { readFile } from "node:fs/promises";
 const source = await readFile(new URL("../local-ui/renderer/personal-space.js", import.meta.url), "utf8");
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const connected = box => ({ route: "applications", canLaunchApplications: true, account: { accountId: "owner" }, activeDeviceId: box, devices: [{ deviceId: box, name: box }] });
-function harness(action, uploadDroppedFiles, tilePositions = [], dom = {}, surface = {}) {
+function harness(action, uploadDroppedFiles, tilePositions = [], dom = {}, surface = {}, globals = {}) {
   const events = new Map(), documentEvents = new Map(); let onState;
   const root = { focus() {}, addEventListener: (type, handler) => events.set(type, handler), ...surface };
-  const window = { wanxClient: { action, uploadDroppedFiles, onSpaceState: handler => { onState = handler; } } };
+  const window = { wanxClient: { action, uploadDroppedFiles, onSpaceState: handler => { onState = handler; } }, ...globals };
   vm.runInNewContext(source, { window, document: { querySelector: selector => dom.nodes?.get(selector) || root, querySelectorAll: selector => selector === ".space-file-row" ? tilePositions.map(offsetTop => ({ offsetTop })) : [], addEventListener: (type, handler) => documentEvents.set(type, handler) , ...dom }, setInterval() {}, setTimeout, requestAnimationFrame: () => 1, cancelAnimationFrame() {}, queueMicrotask, URL, Blob, atob, TextDecoder });
   const space = window.wanxSpace;
   space.bind({ render() {} });
@@ -18,6 +18,16 @@ function harness(action, uploadDroppedFiles, tilePositions = [], dom = {}, surfa
 }
 const listed = name => ({ items: [{ id: "a".repeat(32), name, kind: "file", size: 10, modified: 0 }], breadcrumbs: [] });
 const ok = value => ({ ok: true, value });
+
+function workspaceFixture(disks = [{ id: 'personal', name: '我的空间', root: '', writable: true }]) {
+  let current = disks[0];
+  return {
+    current: () => current, root: () => current.root, spaces: () => disks, blocked: () => false,
+    storageScope() {}, refresh: async () => {}, reconcile: async value => { current = disks.find(disk => disk.id === value.space); return value; },
+    observe: async () => {}, reset() {}, bind() {}, invalidated() {}, dismissMenu() {},
+    sidebar: () => '', footerNavigation: () => '', navigation: () => '', menuView: () => '', dialogView: () => '', recycled: () => '',
+  };
+}
 
 test("an early box event clears private content and late results cannot refill the new account", async () => {
   let resolveList, block = false;
@@ -161,6 +171,92 @@ test("file and blank-space right clicks offer scoped actions and deletion retain
   assert.match(h.space.view(), /role="menu" aria-label="文件夹操作"/);
   assert.match(h.space.view(), />上传文件…</); assert.match(h.space.view(), />新建文件夹…</);
   assert.equal(prevented, 2);
+});
+function openFileContextMenu(harness, file) {
+  harness.event("contextmenu", { target: fileTarget(file), clientX: 60, clientY: 100, preventDefault() {} });
+}
+test("redaction is available only in the context menu for a single writable file", async () => {
+  const file = entry("a", "report.txt"), folder = entry("b", "资料", "folder"), copy = entry("c", "report-脱敏.txt");
+  const status = { phase: "ready", tasks: [], scope: "active-scope", dataContextId: "active-context", redactionAvailable: true };
+  const requests = [];
+  let items = [file, folder], finish;
+  const h = harness(async (action, input) => {
+    if (action === "space.refresh") return ok(status);
+    if (action === "space.redact") { requests.push({ ...input }); return new Promise(resolve => { finish = resolve; }); }
+    return ok({ items, breadcrumbs: [] });
+  });
+  h.space.hostState(connected("box")); h.space.activate(true); await tick();
+  assert.doesNotMatch(h.space.view(), /data-action="space-redact"/);
+  openFileContextMenu(h, folder);
+  assert.doesNotMatch(h.space.view(), /data-action="space-redact"/);
+  await h.click("redact", folder.id);
+  assert.equal(requests.length, 0);
+
+  await h.click("select", file.id);
+  assert.doesNotMatch(h.space.view(), /data-action="space-redact"/);
+  h.space.bind({ render() {}, compactActions: true });
+  assert.doesNotMatch(h.space.view(), /data-action="space-redact"/);
+  await h.click("more", file.id);
+  assert.doesNotMatch(h.space.view(), /data-action="space-redact"/);
+  await h.click("redact", file.id);
+  assert.equal(requests.length, 0);
+  await h.click("select", folder.id, {}, { ctrlKey: true });
+  openFileContextMenu(h, file);
+  assert.doesNotMatch(h.space.view(), /data-action="space-redact"/);
+  await h.click("redact", file.id);
+  assert.equal(requests.length, 0);
+
+  await h.click("select", file.id);
+  openFileContextMenu(h, file);
+  assert.match(h.space.view(), /role="menuitem"[^>]*data-action="space-redact"/);
+  const redacting = h.click("redact", file.id);
+  assert.deepEqual(requests, [{ id: file.id, space_id: "personal", scope: "active-scope", dataContextId: "active-context" }]);
+  assert.match(h.space.view(), /正在按已保存的空间规则脱敏/);
+  items = [...items, copy];
+  finish(ok({ file: copy, matches: 1 }));
+  await redacting;
+  assert.match(h.space.view(), /<strong>report-脱敏\.txt<\/strong> 已保存到同一文件夹/);
+  await h.click("dialog-close");
+  assert.match(h.space.view(), /data-entry-id="cccc/);
+
+  openFileContextMenu(h, file);
+  const noHits = h.click("redact", file.id);
+  finish(ok({ file: null, matches: 0 }));
+  await noHits;
+  assert.match(h.space.view(), /当前规则未匹配到敏感信息/);
+});
+
+test("redaction stays unavailable in the recycle bin and read-only drives", async () => {
+  const file = entry("a", "report.txt");
+  const actions = [];
+  const action = async name => {
+    actions.push(name);
+    return ok(name === "space.refresh" ? { phase: "ready", tasks: [], redactionAvailable: true } : { items: [file], breadcrumbs: [] });
+  };
+  const readOnly = workspaceFixture([{ id: "personal", name: "只读空间", root: "", writable: false }]);
+  const drive = harness(action, undefined, [], {}, {}, { wanxWorkspaces: readOnly });
+  const trash = harness(action);
+  drive.space.hostState(connected("box")); drive.space.activate(true);
+  trash.space.hostState(connected("box")); trash.space.activate(true);
+  await tick(); await trash.click("recycle");
+  for (const h of [drive, trash]) {
+    openFileContextMenu(h, file);
+    assert.doesNotMatch(h.space.view(), /data-action="space-redact"/);
+    await h.click("redact", file.id);
+  }
+  assert.equal(actions.includes("space.redact"), false);
+});
+test("redaction is absent when the shell does not advertise that capability", async () => {
+  const file = entry("a", "report.txt");
+  const h = harness(async name => {
+    assert.notEqual(name, "space.redact");
+    return ok(name === "space.refresh" ? { phase: "ready", tasks: [] } : { items: [file], breadcrumbs: [] });
+  });
+  h.space.hostState(connected("box")); h.space.activate(true); await tick();
+  openFileContextMenu(h, file);
+  assert.doesNotMatch(h.space.view(), /data-action="space-redact"/);
+  await h.click("redact", file.id);
+  assert.doesNotMatch(h.space.view(), /role="dialog"/);
 });
 test("trash right clicks expose recovery and purge without file upload actions, and switching boxes clears menus", async () => {
   const file = entry("a", "deleted.txt");
@@ -512,11 +608,59 @@ test('closing a loading preview prevents late content reopening the dialog', asy
 
 test('unsupported preview offers download of the same original resource and mode toggles',async()=>{
  const downloads=[];
- const h=harness(async(action,input)=>{if(action==='space.preview')return{ok:false,code:'SPACE_PREVIEW_UNSUPPORTED'};if(action==='space.download'){downloads.push(input.id);return ok();}return ok(action==='space.refresh'?{phase:'ready',tasks:[]}:listed('原文件.docx'));});
+ const h=harness(async(action,input)=>{if(action==='space.preview')return{ok:false,code:'SPACE_PREVIEW_DOWNLOAD'};if(action==='space.download'){downloads.push(input.id);return ok();}return ok(action==='space.refresh'?{phase:'ready',tasks:[]}:listed('原文件.sqlite.gz'));});
  h.space.hostState(connected('box'));h.space.activate(true);await tick();
  await h.click('preview-mode');assert.match(h.space.view(),/aria-pressed="true"/);
  await h.click('preview','a'.repeat(32));assert.match(h.space.view(),/下载原文件/);
+ assert.match(h.space.view(),/此格式或大小暂不支持预览/);
+ assert.doesNotMatch(h.space.view(),/space-preview-(retry|fullscreen)/);
  await h.click('preview-download');assert.deepEqual(downloads,['a'.repeat(32)]);
+});
+
+test('a preview timeout offers retry without showing a fullscreen control', async () => {
+ const h = harness(async action => action === 'space.preview' ? { ok:false, code:'SPACE_PREVIEW_TIMEOUT' }
+   : ok(action === 'space.refresh' ? { phase:'ready', tasks:[] } : listed('项目记录.pptx')));
+ h.space.hostState(connected('box')); h.space.activate(true); await tick();
+ await h.click('preview', 'a'.repeat(32));
+ assert.match(h.space.view(), /data-action="space-preview-retry"/);
+ assert.doesNotMatch(h.space.view(), /data-action="space-preview-fullscreen"/);
+});
+
+test("text preview edits in place and retains the draft after a version conflict", async () => {
+  const file = { ...entry("a", "sample.json"), version: 3 };
+  const status = { phase: "ready", tasks: [], accountId: "owner", boxId: "box", scope: "scope", dataContextId: "context", textEditingAvailable: true };
+  const original = '{"value":1}', draft = '{"value":2}', submissions = [];
+  let conflict = true;
+  const h = harness(async (action, input) => {
+    if (action === "space.refresh") return ok(status);
+    if (action === "space.preview") return ok({ type: "text/plain", data: Buffer.from(original).toString("base64") });
+    if (action === "space.open-text-edit") {
+      assert.equal(input.id, file.id);
+      return ok({ file, text: original, eol: "\n", bom: false, editId: "1".repeat(32) });
+    }
+    if (action === "space.save-text-edit") {
+      submissions.push({ ...input });
+      return conflict ? { ok: false, code: "SPACE_VERSION_CONFLICT" } : ok({ ...file, version: 4 });
+    }
+    return ok({ items: [file], breadcrumbs: [] });
+  });
+  h.space.hostState(connected("box")); h.space.activate(true); await tick();
+  await h.click("preview", file.id);
+  assert.match(h.space.view(), /data-action="space-preview-edit">编辑/);
+  await h.click("preview-edit");
+  assert.match(h.space.view(), /<textarea id="space-text-editor"[^>]*>\n\{&quot;value&quot;:1\}/);
+  await h.click("text-edit-save");
+  assert.equal(submissions.length, 0);
+  h.event("input", { target: { id: "space-text-editor", value: draft } });
+  await h.click("text-edit-save");
+  assert.equal(submissions[0].text, draft);
+  assert.equal(submissions[0].expected, 3);
+  assert.match(h.space.view(), /当前草稿仍在/);
+  assert.match(h.space.view(), /&quot;value&quot;:2/);
+  conflict = false;
+  await h.click("text-edit-save");
+  assert.match(h.space.view(), /已保存到盒子/);
+  assert.doesNotMatch(h.space.view(), /id="space-text-editor"/);
 });
 
 test('document preview retains its viewer during background refresh and clears on account change',async()=>{
@@ -563,4 +707,128 @@ test('compact personal actions follow the current folder and omit write controls
  await h.click('recycle');assert.doesNotMatch(h.space.headerActions(),/space-upload|space-mkdir/);
  h.emit({accountId:'owner',boxId:'box',phase:'unsupported',tasks:[]});assert.doesNotMatch(h.space.headerActions(),/space-upload|space-mkdir/);
  h.space.hostState({...connected('box'),canLaunchApplications:false});assert.match(h.space.headerActions(),/连接盒子/);
+});
+
+test('permanent deletion waits for confirmation, supports cancellation and retains failures for retry', async () => {
+  const file = entry('a', 'important.txt');
+  let purges = 0, fail = true;
+  const h = harness(async action => {
+    if (action === 'space.purge') { purges++; return fail ? { ok: false, code: 'SPACE_REQUEST_FAILED' } : ok(); }
+    return ok(action === 'space.refresh' ? { phase: 'ready', tasks: [] } : { items: [file], breadcrumbs: [] });
+  });
+  h.space.hostState(connected('box')); h.space.activate(true); await tick();
+  await h.click('recycle'); await h.click('purge', file.id);
+  assert.equal(purges, 0);
+  assert.match(h.space.view(), /无法恢复/);
+  assert.match(h.space.view(), /data-action="space-dialog-confirm"[^>]*>彻底删除/);
+  await h.click('dialog-close'); assert.equal(purges, 0);
+  await h.click('purge', file.id); await h.click('dialog-confirm');
+  assert.equal(purges, 1); assert.match(h.space.view(), /1 项未完成/);
+  fail = false; await h.click('dialog-confirm');
+  assert.equal(purges, 2); assert.doesNotMatch(h.space.view(), /role="dialog"/);
+});
+
+test('move destination ignores late folder reads and cannot submit while loading or after a failed read', async () => {
+  const file = entry('a', 'file.txt'), first = entry('b', 'first', 'folder'), latest = entry('c', 'latest', 'folder');
+  const pending = new Map(), moved = [];
+  const h = harness(async (action, input) => {
+    if (action === 'space.refresh') return ok({ phase: 'ready', tasks: [] });
+    if (action === 'space.move') { moved.push(input); return ok(); }
+    if (input.parent) return new Promise(resolve => pending.set(input.parent, resolve));
+    return ok({ items: [file, first, latest], breadcrumbs: [] });
+  });
+  h.space.hostState(connected('box')); h.space.activate(true); await tick();
+  await h.click('move', file.id);
+  const old = h.click('move-folder', first.id); await tick();
+  const newest = h.click('move-folder', latest.id); await tick();
+  assert.match(h.space.view(), /data-action="space-dialog-confirm"[^>]*disabled/);
+  await h.click('dialog-confirm'); assert.equal(moved.length, 0);
+  pending.get(latest.id)(ok({ items: [], breadcrumbs: [{ id: latest.id, name: 'chosen-latest' }] })); await newest;
+  pending.get(first.id)(ok({ items: [], breadcrumbs: [{ id: first.id, name: 'stale-first' }] })); await old;
+  assert.match(h.space.view(), /chosen-latest/); assert.doesNotMatch(h.space.view(), /stale-first/);
+  const failed = h.click('move-folder', first.id); await tick();
+  pending.get(first.id)({ ok: false, code: 'SPACE_REQUEST_FAILED' }); await failed;
+  await h.click('dialog-confirm'); assert.equal(moved.length, 0);
+  assert.match(h.space.view(), /data-action="space-dialog-confirm"[^>]*disabled/);
+  const retry = h.click('move-folder', latest.id); await tick();
+  pending.get(latest.id)(ok({ items: [], breadcrumbs: [{ id: latest.id, name: latest.name }] })); await retry;
+  await h.click('dialog-confirm'); assert.equal(moved[0].parent, latest.id);
+});
+
+test('changing destination spaces does not combine a new space with an old folder response', async () => {
+  const file = entry('a', 'file.txt'), pending = new Map(), transfers = [];
+  const disks = [
+    { id: 'personal', name: '我的空间', root: '', writable: true },
+    { id: 'b'.repeat(32), name: 'Space B', root: 'c'.repeat(32), writable: true },
+    { id: 'd'.repeat(32), name: 'Space D', root: 'e'.repeat(32), writable: true },
+  ];
+  const h = harness(async (action, input) => {
+    if (action === 'space.refresh') return ok({ phase: 'ready', tasks: [] });
+    if (action === 'space.links-file-transfer') { transfers.push(input); return ok(); }
+    if (input.space_id !== 'personal') return new Promise(resolve => pending.set(input.space_id, resolve));
+    return ok({ items: [file], breadcrumbs: [] });
+  }, undefined, [], {}, {}, { wanxWorkspaces: workspaceFixture(disks) });
+  h.space.hostState(connected('box')); h.space.activate(true); await tick(); await h.click('copy', file.id);
+  const old = h.click('move-space', disks[1].id); await tick();
+  const newest = h.click('move-space', disks[2].id); await tick();
+  pending.get(disks[2].id)(ok({ items: [], breadcrumbs: [] })); await newest;
+  pending.get(disks[1].id)(ok({ items: [], breadcrumbs: [] })); await old;
+  await h.click('dialog-confirm');
+  assert.equal(transfers.length, 1); assert.equal(transfers[0].space_id, disks[2].id); assert.equal(transfers[0].parent, disks[2].root);
+});
+
+for (const key of ['F2', 'Delete']) test(`read-only space blocks ${key}, selected write buttons and file drops`, async () => {
+  const disk = { id: 'personal', name: 'Read only', root: '', writable: false }, file = entry('a', 'file.txt');
+  const uploaded = [];
+  const h = harness(async action => ok(action === 'space.refresh' ? { phase: 'ready', tasks: [] } : { items: [file], breadcrumbs: [] }),
+    async (...args) => { uploaded.push(args); return ok(); }, [], {}, {}, { wanxWorkspaces: workspaceFixture([disk]) });
+  h.space.hostState(connected('box')); h.space.activate(true); await tick(); await h.click('select', file.id);
+  await h.keydown({ key, target: fileTarget(file), preventDefault() {} });
+  assert.doesNotMatch(h.space.view(), /role="dialog"|data-action="space-batch-(move|trash)"/);
+  const event = { preventDefault() {}, dataTransfer: { types: ['Files'], files: [{ name: 'local.txt' }] } };
+  h.event('dragover', event); assert.equal(event.dataTransfer.dropEffect, 'none');
+  await h.event('drop', event); assert.equal(uploaded.length, 0);
+  h.space.bind({ render() {}, compactActions: true });
+  assert.doesNotMatch(h.space.view(), /所选文件更多操作|data-action="space-batch-(move|trash)"/);
+});
+
+test('rename rechecks write permission when the form is submitted', async () => {
+  const disk = { id: 'personal', name: '我的空间', root: '', writable: true }, file = entry('a', 'file.txt'), moved = [];
+  const h = harness(async (action, input) => {
+    if (action === 'space.move') { moved.push(input); return ok(); }
+    return ok(action === 'space.refresh' ? { phase: 'ready', tasks: [] } : { items: [file], breadcrumbs: [] });
+  }, undefined, [], {}, {}, { wanxWorkspaces: workspaceFixture([disk]) });
+  h.space.hostState(connected('box')); h.space.activate(true); await tick(); await h.click('rename', file.id);
+  disk.writable = false; await h.click('dialog-confirm');
+  assert.equal(moved.length, 0); assert.match(h.space.view(), /只读/);
+});
+
+test('read-only destinations reject sidebar drops and are omitted from the move picker', async () => {
+  const disks = [{ id: 'personal', name: '我的空间', root: '', writable: true }, { id: 'b'.repeat(32), name: 'Read only', root: 'c'.repeat(32), writable: false }];
+  const uploads = [], calls = [];
+  const h = harness(async (action, input) => { calls.push([action, input]); return ok(action === 'space.refresh' ? { phase: 'ready', tasks: [] } : listed('file.txt')); },
+    async (...args) => { uploads.push(args); return ok(); }, [], {}, {}, { wanxWorkspaces: workspaceFixture(disks) });
+  h.space.hostState(connected('box')); h.space.activate(true); await tick();
+  const event = { preventDefault() {}, target: { closest: () => ({ dataset: { space: disks[1].id, id: disks[1].root } }) }, dataTransfer: { types: ['Files'], files: [{ name: 'local.txt' }] } };
+  h.event('dragover', event); assert.equal(event.dataTransfer.dropEffect, 'none');
+  await h.event('drop', event); assert.equal(uploads.length, 0);
+  await h.click('move', 'a'.repeat(32));
+  assert.doesNotMatch(h.space.view(), new RegExp('data-action="space-move-space" data-id="' + disks[1].id + '"'));
+  const before = calls.length; await h.click('move-space', disks[1].id); assert.equal(calls.length, before);
+});
+
+test('sidebar rename checks the source space instead of the currently displayed space', async () => {
+  const disks = [{ id: 'personal', name: '我的空间', root: '', writable: false }, { id: 'b'.repeat(32), name: 'Writable', root: 'c'.repeat(32), writable: true }];
+  const folder = { ...entry('d', 'folder', 'folder'), space_id: disks[1].id }, moved = [];
+  const manager = workspaceFixture(disks); let fileAction;
+  manager.bind = options => { fileAction = options.fileAction; };
+  const h = harness(async (action, input) => {
+    if (action === 'space.stat') return ok(folder);
+    if (action === 'space.move') { moved.push(input); return ok(); }
+    return ok(action === 'space.refresh' ? { phase: 'ready', tasks: [] } : { items: [], breadcrumbs: [] });
+  }, undefined, [], {}, {}, { wanxWorkspaces: manager });
+  h.space.hostState(connected('box')); h.space.activate(true); await tick();
+  await fileAction('rename', folder); await h.click('dialog-confirm'); assert.equal(moved.length, 1);
+  disks[0].writable = true; disks[1].writable = false;
+  await assert.rejects(fileAction('rename', folder), /MCP_DRIVE_READ_ONLY/);
 });

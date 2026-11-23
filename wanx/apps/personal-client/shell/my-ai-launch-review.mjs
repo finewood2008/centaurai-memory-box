@@ -3,17 +3,22 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { myAiCliEnvironment } from "./codex-context-config.mjs";
+import { resolveWindowsCli } from "./my-ai-windows-cli.mjs";
+import { reconnectWindowsConsole } from "./my-ai-windows-console.mjs";
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const display = value => String(value).replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, "�");
+// Prompt text also appears in argv; allow the full 24,000-character Unicode draft.
+export const MAX_LAUNCH_PAYLOAD_BYTES = 512 * 1024;
 
 export async function readLaunchPayload(file) {
   const info = await lstat(file);
-  if (!info.isFile() || info.size > 128 * 1024) throw new Error("任务文件无效。");
+  if (!info.isFile() || info.size > MAX_LAUNCH_PAYLOAD_BYTES) throw new Error("任务文件无效。");
   const task = JSON.parse(await readFile(file, "utf8"));
   if (!/^[a-f0-9]{36}$/.test(task.id) || path.basename(file) !== task.id + ".json" ||
       !path.isAbsolute(task.executable) || !path.isAbsolute(task.cwd) ||
-      !Array.isArray(task.args) || !task.args.every(value => typeof value === "string") ||
+      !Array.isArray(task.args) || !task.args.every(value => typeof value === "string" && !value.includes("\0")) ||
       typeof task.prompt !== "string" || !Number.isFinite(task.expires)) throw new Error("任务文件无效。");
   return task;
 }
@@ -35,19 +40,44 @@ async function requestApproval(file, task) {
   throw new Error("盒子客户端未确认任务，请重新打开盒子后再试。");
 }
 
-export async function runLaunchReview(file, { question, output = process.stdout, spawnChild = spawn, approve = requestApproval, now = Date.now } = {}) {
+export async function runLaunchReview(file, { question, output = process.stdout, spawnChild = spawn, approve = requestApproval, now = Date.now,
+  platform = process.platform, resolveCli = resolveWindowsCli, env = process.env } = {}) {
   const task = await readLaunchPayload(file);
-  const readline = question ? null : createInterface({ input: process.stdin, output });
+  let readline, terminal;
   try {
     if (task.expires <= now()) throw new Error("任务已过期，请在盒子中重新发起。");
+    if (!question && platform === "win32") {
+      terminal = reconnectWindowsConsole();
+      if (terminal) output = terminal.output;
+    }
     output.write(`\n${display(task.agent)}\n工作目录：${display(task.cwd)}\n资料范围：${display(task.resources || "未选择空间或星图")}\n\n${display(task.prompt || "打开空白会话")}\n\n`);
-    const answer = await (question ?? (text => readline.question(text)))("核对后按 Enter 开始，输入其他内容取消：");
+    await writeFile(file + ".ready", task.id, { mode: 0o600 });
+    // Start reading only when the question can consume a line. Creating this
+    // before the asynchronous readiness write can consume Enter/EOF too early.
+    if (!question) readline = createInterface({ input: terminal?.input ?? process.stdin, output });
+    const answer = await (question ?? (async text => {
+      let onClose;
+      try {
+        return await Promise.race([
+          readline.question(text),
+          new Promise((_resolve, reject) => {
+            onClose = () => reject(new Error("终端输入已关闭，任务未启动。请从「我的 AI」重新打开核对窗口。"));
+            readline.once("close", onClose);
+          }),
+        ]);
+      } finally { if (onClose) readline.off("close", onClose); }
+    }))("核对后按 Enter 开始，输入其他内容取消：");
+    readline?.close();
+    await terminal?.releaseInput();
     if (answer.trim()) return { started: false, canceled: true };
     if (task.expires <= now()) throw new Error("任务已过期，请在盒子中重新发起。");
+    const command = platform === "win32" ? await resolveCli(task.executable, task.args) : { executable: task.executable, args: task.args };
+    if (task.expires <= now()) throw new Error("任务已过期，请在盒子中重新发起。");
     await approve(file, task);
-    const childEnv = { ...process.env };
+    const childEnv = { ...myAiCliEnvironment(env, platform) };
     delete childEnv.ELECTRON_RUN_AS_NODE;
-    const child = spawnChild(task.executable, task.args, { cwd: task.cwd, stdio: "inherit", shell: false, env: childEnv });
+    if (command.runAsNode) childEnv.ELECTRON_RUN_AS_NODE = "1";
+    const child = spawnChild(command.executable, command.args, { cwd: task.cwd, stdio: terminal?.stdio ?? "inherit", shell: false, env: childEnv });
     const code = await new Promise((resolve, reject) => {
       child.once("error", reject);
       child.once("exit", value => resolve(value));
@@ -55,7 +85,10 @@ export async function runLaunchReview(file, { question, output = process.stdout,
     return { started: true, exitCode: code };
   } finally {
     readline?.close();
-    await Promise.all([file, file + ".request", file + ".approved", file.replace(/\.json$/, ".command")].map(target => rm(target, { force: true }).catch(() => {})));
+    terminal?.close();
+    // Windows consumes readiness in the launcher. Keep that acknowledgment
+    // durable even when the user cancels before its next polling interval.
+    await Promise.all([file, ...(platform === "win32" ? [] : [file + ".ready"]), file + ".request", file + ".approved", file.replace(/\.json$/, ".command"), file.replace(/\.json$/, ".ps1")].map(target => rm(target, { force: true }).catch(() => {})));
   }
 }
 

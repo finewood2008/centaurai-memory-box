@@ -14,13 +14,23 @@ function syncWalletCountdown() {
   walletCountdownTimer = setInterval(tick, 1000);
 }
 let currentState;
-const dataView=window.createTeamDataView({edition:"personal",request:async(name,input)=>{const result=await window.wanxClient.action(name,input);if(!result.ok)throw Object.assign(Error(result.code),{code:result.code});return result.value;},changed:()=>{if(currentState)render(currentState);}});
+const dataView=window.createStarlinkPanelView({request:async(name,input)=>{const result=await window.wanxClient.action(name,input);if(!result.ok)throw Object.assign(Error(result.code),{code:result.code});return result.value;},changed:()=>{if(currentState)render(currentState);}});
+const spaceRedactionSettings = window.createSpaceRedactionSettings?.({
+  escapeHTML: value => escapeHTML(value),
+  request: async (action, input) => {
+    const result = await window.wanxClient.action(action, input);
+    if (!result.ok) throw Object.assign(new Error(result.code), { code: result.code });
+    return result.value;
+  },
+});
+let redactionRuleComposition = null;
 const homePage = "my-ai";
 let page = homePage;
 const clientBrand = "半人马AI记忆盒子";
 const clientBrandEnglish = "CentaurAI MemoBox";
 const clientBrandCopy = `<span class="brand-copy"><strong>${clientBrand}</strong><small>${clientBrandEnglish}</small></span>`;
-let memorySettingsSection = "models";
+let memoryAgent = "";
+let memoryPage = "";
 let cloudAuthOpen = false;
 let helpReturnPage = "memory";
 let helpReturnScroll = 0;
@@ -282,7 +292,10 @@ async function refreshAppLibrary(){
  if(!currentState?.canLaunchApplications||appLibrary.loading)return;const library=appLibrary;library.loading=true;
  try{const r=await window.wanxClient.action('workshop',{action:'library',input:{}});if(library!==appLibrary)return;if(!r.ok)throw Error(r.code);Object.assign(library,r.value,{loaded:true,error:r.value?.unavailable?'当前盒子尚不能读取工坊应用，请检查服务后重试。':''});}catch{if(library===appLibrary){library.loaded=true;library.error='工坊信息暂不可用，请重试。';}}finally{if(library===appLibrary){library.loading=false;render(currentState);}}
 }
-function isPrivateApplication(item){return Boolean(item.workshopProjectId)||item.installationSource==='local';}
+function isManagedLocalApplication(item) {
+  return currentState?.applications?.find(record => record.applicationId === item.applicationId)?.managedLocal === true;
+}
+function isPrivateApplication(item){return Boolean(item.workshopProjectId)||item.installationSource==='local'||isManagedLocalApplication(item);}
 function applicationCandidate(item){return isPrivateApplication(item)?null:marketCandidates.get(item.applicationId);}
 
 const workshop = window.createWanxWorkshop({request:async(action,input)=>{const r=await window.wanxClient.action('workshop',{action,input});if(!r.ok)throw Object.assign(Error(r.code),{code:r.code});return r.value;},changed:()=>{if(currentState&&page==='workshop')render(currentState);}});
@@ -293,7 +306,12 @@ let profileMenuOpen = false;
 let notificationFilter = "all";
 let expandedNotificationId = null;
 const aiDialogueView = window.createAIDialogueView?.({
-  title: "AI 助手", drawer: true,
+  title: "知君", drawer: true, memory: true,
+  introduction: {
+    heading: "你好，我是知君。",
+    text: "我是你的记忆智能体。想记住什么，就告诉我。想起一件事时，哪怕只有一点线索，我也会陪你找回来。",
+    placeholder: "跟我说说，你想记住或想起什么？",
+  },
   request: (action, input) => window.wanxClient.action(action, input),
   resolvePageHelp: resolveAcademyPageHelp,
   onBoxes: () => { page = "boxes"; render(currentState); },
@@ -431,6 +449,12 @@ const dialogueModelSettings = window.createDialogueModelSettingsView?.({
   request: (action, input) => window.wanxClient.action(action, input),
   onSaved: () => aiDialogueView?.modelsChanged(),
 });
+let restoringWalletFocus = false;
+function restoreWalletFocus(element) {
+  restoringWalletFocus = true;
+  try { element.focus({ preventScroll: true }); }
+  finally { restoringWalletFocus = false; }
+}
 const creditsView = window.createWalletView({
   getBoxName: deviceId => {
     const device = currentState?.devices?.find(item => item.deviceId === deviceId);
@@ -788,7 +812,7 @@ function profileAvatar(large = false) {
   return `<span class="user-avatar ${large ? "large" : ""}">${avatar ? `<img src="${avatar}" alt="用户头像" />` : `<span aria-hidden="true">${escapeHTML(Array.from(profile.displayName || "我")[0])}</span>`}</span>`;
 }
 function shellHeader(title) {
-  const activePage = page === "provisioning" ? "boxes" : ["application-detail", "workshop"].includes(page) ? "applications" : page;
+  const activePage = page === "provisioning" ? "boxes" : page;
   const name = currentState.account?.profile?.displayName || "用户";
   return `<header class="topbar">
     <button class="brand brand-button" data-action="desktop-about" aria-label="关于${clientBrand}"><img class="brand-mark" src="./assets/centaurai-mark.png" alt="" />${clientBrandCopy}</button>
@@ -824,7 +848,7 @@ function notificationView() {
       const expanded = expandedNotificationId === item.id;
       const date = new Date(item.createdAt);
       const time = Number.isFinite(date.getTime()) ? new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(date) : "";
-      return `<article class="notification-card ${item.readAt ? "" : "unread"}"><span class="notification-kind" aria-hidden="true">${item.category === "task" ? "↗" : item.category === "system" ? "◈" : "▦"}</span><div class="notification-main"><button class="notification-summary" data-action="notifications-select" data-id="${escapeHTML(item.id)}" aria-expanded="${expanded}"><span class="notification-title">${escapeHTML(item.title)}${!item.readAt ? '<i class="notification-unread-dot" aria-label="未读"></i>' : ""}</span><span class="notification-meta">${item.category === "task" ? "任务消息" : item.category === "system" ? "系统通知" : "应用动态"}${item.deviceName ? ` · ${escapeHTML(item.deviceName)}` : ""}<time>${escapeHTML(time)}</time></span><span class="notification-body ${expanded ? "expanded" : ""}">${escapeHTML(item.body)}</span></button>${expanded && item.applicationId ? `<button class="text-button" data-action="notifications-open" data-id="${escapeHTML(item.id)}">打开应用 ↗</button>` : ""}</div></article>`;
+      return `<article class="notification-card ${item.readAt ? "" : "unread"}"><span class="notification-kind" aria-hidden="true">${item.category === "task" ? "↗" : item.category === "system" ? "◈" : "▦"}</span><div class="notification-main"><button class="notification-summary" data-action="notifications-select" data-id="${escapeHTML(item.id)}" aria-expanded="${expanded}"><span class="notification-title">${escapeHTML(item.title)}${!item.readAt ? '<i class="notification-unread-dot" aria-label="未读"></i>' : ""}</span><span class="notification-meta">${item.category === "task" ? "任务消息" : item.category === "system" ? "系统通知" : "应用动态"}${item.deviceName ? ` · ${escapeHTML(item.deviceName)}` : ""}<time>${escapeHTML(time)}</time></span><span class="notification-body ${expanded ? "expanded" : ""}">${escapeHTML(item.body)}</span></button></div></article>`;
     }).join("") : `<div class="notification-empty"><span aria-hidden="true">✧</span><h3>${notificationFilter === "unread" ? "未读消息都看完了" : "暂时没有通知"}</h3><p class="muted">有新的应用动态或任务进展时，会在这里提醒你。</p></div>`}</section>
     <p class="muted notification-footnote">通知按当前账号保存在这台电脑。</p>
   </div></div>`;
@@ -1029,11 +1053,11 @@ function clientUpdateView() {
   const total = Number(progress?.total);
   const hasProgress = progress && Number.isFinite(transferred) && transferred >= 0;
   const hasTotal = hasProgress && Number.isFinite(total) && total > 0;
-  return `<article class="update-card"><div class="update-heading"><div><h3>记忆盒子 <span class="update-version">${current.productVersion ? `v${escapeHTML(current.productVersion)}` : "版本待核验"}</span></h3><p class="muted ${pending ? "activity-status" : ""}" role="status">${pending ? '<span class="activity-spinner" aria-hidden="true"></span>' : ""}${escapeHTML(checking ? labels.checking : downloading ? labels.downloading : labels[phase] || "更新状态待确认")}</p></div><div class="settings-actions">${!["downloaded", "installing"].includes(phase) ? `<button class="button small ${checking ? "activity-button" : ""}" data-action="updates-client-check" aria-busy="${checking}" ${disabled}>${checking ? activityLabel("检查中…") : "检查更新"}</button>` : ""}${phase === "available" && candidate ? `<button class="button primary small ${downloading ? "activity-button" : ""}" data-action="updates-client-download" aria-busy="${downloading}" ${disabled}>${downloading ? activityLabel("正在下载…") : "下载更新"}</button>` : ""}${phase === "downloaded" && candidate ? `<button class="button primary small" data-action="updates-client-install" ${disabled}>重启并更新</button>` : ""}</div></div>
+  return `<article class="update-card"><div class="update-heading"><div><h3>记忆盒子 <span class="update-version">${current.internalVersion ? escapeHTML(current.internalVersion) : current.productVersion ? `v${escapeHTML(current.productVersion)}` : "版本待核验"}</span></h3><p class="muted ${pending ? "activity-status" : ""}" role="status">${pending ? '<span class="activity-spinner" aria-hidden="true"></span>' : ""}${escapeHTML(checking ? labels.checking : downloading ? labels.downloading : labels[phase] || "更新状态待确认")}</p></div><div class="settings-actions">${!["downloaded", "installing"].includes(phase) ? `<button class="button small ${checking ? "activity-button" : ""}" data-action="updates-client-check" aria-busy="${checking}" ${disabled}>${checking ? activityLabel("检查中…") : "检查更新"}</button>` : ""}${phase === "available" && candidate ? `<button class="button primary small ${downloading ? "activity-button" : ""}" data-action="updates-client-download" aria-busy="${downloading}" ${disabled}>${downloading ? activityLabel("正在下载…") : "下载更新"}</button>` : ""}${phase === "downloaded" && candidate ? `<button class="button primary small" data-action="updates-client-install" ${disabled}>重启并更新</button>` : ""}</div></div>
     ${candidate ? `<p class="update-candidate">可用版本 v${escapeHTML(candidate.productVersion || "待核验")}${candidate.size != null ? ` · ${escapeHTML(updateBytes(candidate.size))}` : ""}${candidate.requiresRestart ? " · 需要重启记忆盒子" : ""}</p>${candidate.releaseNotes ? `<p class="update-notes">${escapeHTML(candidate.releaseNotes)}</p>` : ""}` : ""}
     ${hasProgress ? `<div class="update-progress" role="status"><progress aria-label="客户端下载进度" ${hasTotal ? `max="${total}" value="${Math.min(transferred, total)}"` : ""}></progress><span>${escapeHTML(updateBytes(transferred))}${hasTotal ? ` / ${escapeHTML(updateBytes(total))}` : " · 总大小待确认"}</span></div>` : ""}
     ${alreadyCurrent ? "" : updateIssueView(update)}
-    <details class="application-details" data-detail-id="updates-client" ${expandedDetails.has("updates-client") ? "open" : ""}><summary>版本详情</summary><dl class="update-facts"><dt>构建标识</dt><dd>${escapeHTML(current.buildId || "未知")}</dd><dt>渠道 / 类型</dt><dd>${escapeHTML(current.channel || "未知")} / ${escapeHTML(current.distributionClass || "未知")}</dd><dt>平台</dt><dd>${escapeHTML(current.platform || "未知")} / ${escapeHTML(current.arch || "未知")}</dd><dt>最近检查</dt><dd>${escapeHTML(update.checkedAt || "尚未检查")}</dd></dl></details>
+    <details class="application-details" data-detail-id="updates-client" ${expandedDetails.has("updates-client") ? "open" : ""}><summary>版本详情</summary><dl class="update-facts">${current.internalVersion && current.productVersion ? `<dt>构建版本</dt><dd>${escapeHTML(current.productVersion)}</dd>` : ""}<dt>构建标识</dt><dd>${escapeHTML(current.buildId || "未知")}</dd><dt>渠道 / 类型</dt><dd>${escapeHTML(current.channel || "未知")} / ${escapeHTML(current.distributionClass || "未知")}</dd><dt>平台</dt><dd>${escapeHTML(current.platform || "未知")} / ${escapeHTML(current.arch || "未知")}</dd><dt>最近检查</dt><dd>${escapeHTML(update.checkedAt || "尚未检查")}</dd></dl></details>
   </article>`;
 }
 
@@ -1200,41 +1224,50 @@ function scheduleBoxUpdatePolling() {
   }, 5000);
 }
 
-const memorySettingsSections = [["models", "记忆模型"], ["budget", "记忆预算"]];
-
 function activeMemorySection() {
   if (page === "memory") return "";
   if (page === "my-ai") return "my-ai";
-  return page === "memory-settings" ? memorySettingsSection : null;
+  return null;
 }
 
 function memoryView(section) {
-  const settings = page === "memory-settings";
-  const title = settings ? "记忆设置" : page === "my-ai" ? "我的 AI" : "记忆";
-  const navigation = settings ? `<nav class="memory-settings-bar" aria-label="记忆设置">
-    <button class="button small" data-action="show-settings">返回设置</button>
-    ${memorySettingsSections.map(([id, label]) => `<button class="button small" data-action="memory-settings" data-section="${id}" ${id === memorySettingsSection ? 'aria-current="page"' : ""}>${label}</button>`).join("")}</nav>` : "";
+  const title = section === "my-ai" ? "我的 AI" : "智能体记忆";
   const banner = section === "my-ai" ? `<header class="wanx-section-banner my-ai-banner" data-section="my-ai">
-    ${personalModuleHeading("my-ai", "我的 AI", "连接智能体，让它读取记忆、星图和个人空间。")}
-  </header>` : "";
-  return `<div class="app-layout memory-layout">${shellHeader(title)}${navigation}${banner}
-    <div class="memory-host" data-memory-section="${section}"></div></div>`;
+    ${personalModuleHeading("my-ai", "我的 AI", "管理智能体、采集会话记忆，把盒子里的资料带给 AI。")}
+  </header>` : `<header class="wanx-section-banner memory-banner" data-section="memory">
+    ${personalModuleHeading("memory", title, "查看 AI 从会话中整理的记忆，管理本机记忆库的备份和恢复。")}
+  </header>`;
+  return `<div class="app-layout memory-layout">${shellHeader(title)}${banner}
+    <div class="memory-host" data-memory-section="${section}" data-memory-agent="${page === "memory" ? escapeHTML(memoryAgent) : ""}" data-memory-page="${page === "memory" ? memoryPage : ""}"></div></div>`;
 }
 
-function openMemorySettings(section) {
-  if (!currentState || currentState.route === "auth" || page === "provisioning" ||
-    !memorySettingsSections.some(([id]) => id === section)) return;
-  memorySettingsSection = section;
+window.addEventListener?.("wanx:view-agent-memory", event => {
+  if (!currentState || page !== "my-ai") return;
+  memoryAgent = event.detail;
   profileMenuOpen = false;
-  page = "memory-settings";
+  page = "memory";
   render(currentState);
   document.scrollingElement?.scrollTo?.(0, 0);
-}
-window.addEventListener?.("wanx:memory-settings", event => openMemorySettings(event.detail));
+});
+window.addEventListener?.("wanx:my-ai-destination", event => {
+  if (!currentState || currentState.route === "auth" || page !== "my-ai") return;
+  if (event.detail === "backup") {
+    if (clientUpdateRequired()) return;
+    memoryPage = "backup";
+    page = "memory";
+  } else if (event.detail === "boxes") {
+    page = "boxes";
+    void refreshTransfers();
+  } else return;
+  profileMenuOpen = false;
+  notice = null;
+  render(currentState);
+  document.scrollingElement?.scrollTo?.(0, 0);
+});
 function spaceView() {
   return `<div class="app-layout space-app-layout">${shellHeader("空间")}
     <div class="page-content space-page-content space-files-page">
-      <header class="wanx-section-banner" data-section="space">${personalModuleHeading("space", "文件空间", "文件、记忆与成果，留在自己的空间。")}${window.wanxSpace?.headerActions?.() || ""}</header>
+      <header class="wanx-section-banner" data-section="space">${personalModuleHeading("space", "私有云空间", "在自己的盒子上存储和管理文件，按权限访问与共享。")}${window.wanxSpace?.headerActions?.() || ""}</header>
       <div class="personal-space-browser">${window.wanxSpace?.view() || ""}</div>
     </div>
   </div>`;
@@ -1246,9 +1279,8 @@ function settingsView() {
     <div class="page-heading"><h2>设置</h2><p class="muted">管理账号、模型、设备与客户端偏好。</p></div>
     ${notice && !passwordEditing ? `<div class="notice ${codeSent ? "success" : "error"}" role="status">${escapeHTML(notice)}</div>` : ""}
     ${versionUpdatesView()}
-    <section class="settings-panel" aria-label="记忆"><div><h3>记忆</h3><p class="muted">管理记忆模型和用量预算。</p></div><div class="settings-actions">
-    ${memorySettingsSections.map(([id, label]) => `<button class="button small" data-action="memory-settings" data-section="${id}">${label}</button>`).join("")}</div></section>
     <section class="settings-panel" aria-label="空间 MCP"><div><h3>空间 MCP</h3><p class="muted">通用 MCP 的资料授权、记忆归档与接入管理统一在空间中完成。</p></div><button class="button small" data-action="show-space" data-agent-hub-open>管理连接 →</button></section>
+    <div id="space-redaction-settings-host"></div>
     <section class="settings-panel"><div><h3>云账号</h3><p class="muted">${currentState.dataIdentity?.profileId ? "云账号用于市场与计费。本地数据访问由可信设备授权管理。" : "已登录云账号。退出后将断开盒子连接，客户端继续在后台运行。"}</p></div><div class="settings-actions">${currentState.account?.phase === "authenticated" ? `<button class="button small" data-action="password-open" ${busy ? "disabled" : ""}>修改密码</button><button class="button small ${busyFor("auth.logout") ? "activity-button" : ""}" data-action="logout" aria-busy="${busyFor("auth.logout")}" ${busy ? "disabled" : ""}>${busyFor("auth.logout") ? activityLabel("正在退出…") : currentState.dataIdentity?.profileId ? "退出云账号" : "退出当前账号"}</button>` : `<button class="button small" data-action="cloud-login">登录云账号</button>`}</div></section>
     ${passwordEditing ? `<section class="password-panel"><h3>修改密码</h3><p class="muted">验证码将发送至当前账号${currentState.account?.maskedPhone ? `（${escapeHTML(currentState.account.maskedPhone)}）` : "绑定的手机号"}。修改后所有设备上的旧登录将失效，请重新登录。</p><form data-form="password-change" novalidate><label for="change-password">新密码</label><input id="change-password" name="password" type="password" required autocomplete="new-password" placeholder="设置 8–72 字节的新密码" />${passwordFields("change", "send-change-code", changeResendAt)}<div data-password-notice class="notice ${codeSent ? "success" : "error"}" role="status" ${notice ? "" : "hidden"}>${escapeHTML(notice)}</div><div class="settings-actions"><button type="button" class="button" data-action="password-cancel" ${busy ? "disabled" : ""}>取消</button><button type="submit" class="button primary" ${busy ? "disabled" : ""}>${busy ? busyRequest?.action === "auth.change-password" ? "正在修改…" : "处理中…" : "确认修改"}</button></div></form></section>` : ""}
     <section class="settings-panel"><div><h3>登录电脑时启动</h3><p class="muted ${busyFor("desktop.startup.set") ? "activity-status" : ""}" role="status">${busyFor("desktop.startup.set") ? activityLabel("正在保存设置…") : escapeHTML(startup.reason || (startup.supported ? startup.status === "requires-approval" ? "请在系统设置中允许登录项。" : "在菜单栏静默启动，随时打开应用。" : "安装正式应用后可设置开机启动。"))}</p></div><button class="switch" role="switch" aria-checked="${Boolean(startup.enabled)}" aria-label="登录电脑时启动" aria-busy="${busyFor("desktop.startup.set")}" data-action="startup-toggle" ${busy || !startup.supported ? "disabled" : ""}><span></span></button></section>
@@ -1267,8 +1299,8 @@ function resourceSize(value) {
   return `${amount.toFixed(unit ? 1 : 0)} ${["B", "KB", "MB", "GB", "TB"][unit]}`;
 }
 function personalModuleHeading(kind, title, subtitle) {
-  const english = {applications:"Apps",space:"Files",boxes:"Devices","my-ai":"My AI"};
-  const paths = {applications:'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z',space:'M3 7h7l2 2h9v11H3zM3 7V4h7l2 3',boxes:'M4 4h16v16H4zM4 14h16M8 17h.01M11 17h.01',"my-ai":'M10 13a4 4 0 0 0 6 .5l4-4a4 4 0 0 0-6-5l-2 2m2 4a4 4 0 0 0-6-.5l-4 4a4 4 0 0 0 6 5l2-2'};
+  const english = {applications:"Apps",space:"Private Cloud",boxes:"Devices",starlink:"Starlink",memory:"agent memory","my-ai":"My AI"};
+  const paths = {starlink:'M7 7 17 6m-9 3 5 8m3-9-2 8M7 7a2 2 0 1 0-4 0 2 2 0 0 0 4 0zm14-1a2 2 0 1 0-4 0 2 2 0 0 0 4 0zm-5 13a2 2 0 1 0-4 0 2 2 0 0 0 4 0z',applications:'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z',space:'M3 7h7l2 2h9v11H3zM3 7V4h7l2 3',boxes:'M4 4h16v16H4zM4 14h16M8 17h.01M11 17h.01',memory:'M7 7V5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-2M5 7h11a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2zm2 5h7m-7 4h4',"my-ai":'M10 13a4 4 0 0 0 6 .5l4-4a4 4 0 0 0-6-5l-2 2m2 4a4 4 0 0 0-6-.5l-4 4a4 4 0 0 0 6 5l2-2'};
   return `<div class="personal-module-title"><span class="personal-module-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="${paths[kind]}"/></svg></span><div><h2>${title} <span class="wanx-section-english">${english[kind]}</span></h2><p>${subtitle}</p></div></div>`;
 }
 
@@ -1276,6 +1308,7 @@ function boxesView() {
   const devices = currentState.devices || [], ready = currentState.canLaunchApplications;
   const refreshing = busyRequest?.action === "devices.refresh";
   const metrics = window.wanxSpace?.overview?.();
+  const volume = ready ? metrics?.volume : null;
   const storage = ready ? metrics?.wanxStorage : null;
   const cpu = ready ? metrics?.cpu : null, memory = ready ? metrics?.memory : null;
   const lanIPs = ready && Array.isArray(metrics?.network?.lanAddresses) ? metrics.network.lanAddresses : [];
@@ -1285,7 +1318,7 @@ function boxesView() {
     <div class="page-heading wanx-section-banner" data-section="boxes">${personalModuleHeading("boxes", "我的设备", "连接设备，查看状态，维护盒子上的服务。")}<div class="settings-actions"><button class="button small ${refreshing ? "activity-button" : ""}" data-action="refresh" aria-busy="${refreshing}" ${busy ? "disabled" : ""}>${refreshing ? '<span class="activity-spinner" aria-hidden="true"></span>正在刷新…' : "刷新设备"}</button><button class="button primary small" data-action="provisioning" ${busy ? "disabled" : ""}>＋ 添加盒子</button><button class="text-button box-faq-entry" data-action="show-help" data-scene="box_connection">常见问题 ›</button></div></div>
     ${pendingOpenView()}${notice ? `<div class="notice error" role="status">${escapeHTML(notice)}</div>` : ""}
     <section class="box-overview" aria-label="当前盒子"><div class="box-overview-heading"><div class="box-identity"><img src="./assets/centaurai-mark.png" alt=""/><div><span class="box-eyebrow">当前使用的盒子</span><h3 class="current-device">${currentState.activeDeviceId ? escapeHTML(activeDeviceName()) : "尚未连接盒子"}</h3><p>${ready ? currentState.connection?.mode === "local" ? "这台电脑 · 文件与服务在本机运行" : "盒子连接 · 已建立盒子连接" : network.detail}</p><div class="box-addresses" aria-label="盒子 IP" title="当前盒子的局域网地址"><span>盒子 IP</span>${lanIPs.length ? lanIPs.map(address => `<code>${escapeHTML(address)}</code>`).join("") : `<span>${ready ? "暂未获取盒子内网 IP" : "连接后显示"}</span>`}</div></div></div><span class="box-status ${ready ? "ready" : ""}"><i class="status-dot ${ready ? "ready" : ""}"></i>${status}</span></div>
-    <div class="box-resource-grid"><div><span>可用存储</span><strong>${resourceSize(metrics?.volume?.free)}</strong><small>总容量 ${resourceSize(metrics?.volume?.total)}</small></div><div><span>应用与服务占用</span><strong>${storage && !storage.complete ? "≥ " : ""}${resourceSize(storage?.bytes)}</strong><small title="记忆盒子数据、应用与运行组件，含日志、缓存、历史版本和回收站；重叠文件仅计一次。按文件大小汇总，每 30 秒更新。">${storage ? storage.complete ? "数据、应用与运行组件" : "部分目录暂时无法读取" : ready ? "等待盒子返回完整统计" : "连接后显示实际状态"}</small></div><div><span>CPU 使用率</span><strong>${cpu ? `${cpu.percent.toFixed(1)}%` : "—"}</strong><small>${cpu ? "盒子当前负载" : ready ? "暂未获取 CPU 指标" : "连接后显示实际状态"}</small></div><div><span>内存使用</span><strong>${memory ? `${memory.percent.toFixed(1)}%` : "—"}</strong><small>${memory ? `${resourceSize(memory.used)} / ${resourceSize(memory.total)}` : ready ? "暂未获取内存指标" : "连接后显示实际状态"}</small></div></div></section>
+    <div class="box-resource-grid"><div><span>可用存储</span><strong>${resourceSize(volume?.free)}</strong><small>${volume ? `总容量 ${resourceSize(volume.total)}` : ready ? "暂未获取存储指标" : "连接后显示实际状态"}</small></div><div><span>应用与服务占用</span><strong>${storage && !storage.complete ? "≥ " : ""}${resourceSize(storage?.bytes)}</strong><small title="记忆盒子数据、应用与运行组件，含日志、缓存、历史版本和回收站；重叠文件仅计一次。按文件大小汇总，每 30 秒更新。">${storage ? storage.complete ? "数据、应用与运行组件" : "部分目录暂时无法读取" : ready ? "等待盒子返回完整统计" : "连接后显示实际状态"}</small></div><div><span>CPU 使用率</span><strong>${cpu ? `${cpu.percent.toFixed(1)}%` : "—"}</strong><small>${cpu ? "盒子当前负载" : ready ? "暂未获取 CPU 指标" : "连接后显示实际状态"}</small></div><div><span>内存使用</span><strong>${memory ? `${memory.percent.toFixed(1)}%` : "—"}</strong><small>${memory ? `${resourceSize(memory.used)} / ${resourceSize(memory.total)}` : ready ? "暂未获取内存指标" : "连接后显示实际状态"}</small></div></div></section>
     <section class="content-section" aria-label="设备管理"><div class="box-section-heading"><div><h3>已关联的盒子 <span class="count">${devices.length}</span></h3><p class="muted ${refreshing ? "activity-status" : ""}" role="status">${refreshing ? '<span class="activity-spinner" aria-hidden="true"></span>正在读取最新设备状态…' : "连接或切换盒子后，文件空间和应用将使用所选盒子。"}</p></div></div>${devices.length ? `<div class="box-device-grid">${devices.map(deviceCard).join("")}</div>` : `<div class="empty-state"><h3>还没有盒子</h3><p>发现附近的盒子，完成配网和账号绑定。</p><button class="button small" data-action="provisioning">添加盒子</button></div>`}</section>
     ${ownershipView()}
     ${currentState.dataIdentity?.profileId ? "" : supportView.render()}
@@ -1469,6 +1502,8 @@ function marketErrorMessage(error) {
     APPLICATION_BUSY: "请先关闭应用，再进行此操作。",
     APPLICATION_RUNNING: "请先关闭应用，再进行此操作。",
     APPLICATION_ROLLBACK: "没有可恢复的上一个版本。",
+    APPLICATION_MANAGED_DEPLOYMENT_REQUIRED: "此应用由工坊部署管理，请在本机安装中卸载；版本恢复请前往工坊。",
+    APPLICATION_DEPLOYMENT_USER_REMOVED: "此电脑已卸载该部署版本，请在工坊重新部署后安装。",
   };
   return Object.entries(messages).find(([code]) => message.includes(code))?.[1]
     || "暂时无法完成应用市场操作，请刷新后重试；如仍失败，请联系管理员。";
@@ -1567,7 +1602,7 @@ function applicationActions(item, installed) {
 }
 function applicationManagement(item, installed) {
   const candidate = applicationCandidate(item);
-  const availability = availableFeaturedProductId(item) ? "本机应用" : isPrivateApplication(item) ? "本地应用 · 在应用工坊管理版本" : candidateLabel(candidate);
+  const availability = isManagedLocalApplication(item) ? "由工坊管理版本" : availableFeaturedProductId(item) ? "本机应用" : isPrivateApplication(item) ? "本地应用 · 在应用工坊管理版本" : candidateLabel(candidate);
   const id = escapeHTML(item.applicationId);
   const previous = typeof item.previous === "string" ? item.previous : item.previous?.version;
   const disabled = operationBusy(item.applicationId) ? "disabled" : "";
@@ -1575,7 +1610,7 @@ function applicationManagement(item, installed) {
   const operation = operationFor(item.applicationId);
   const restoring = ["rolling_back", "rollback", "rolling-back"].includes(operation?.phase);
   const uninstalling = operation?.phase === "uninstalling";
-  return `<div class="store-detail-body">${item.description ? `<p class="store-full-description">${escapeHTML(item.description)}</p>` : ""}${installed && item.version ? `<p class="muted">${active ? "当前版本" : "待安装版本"} v${escapeHTML(item.version)}</p>` : ""}<p class="market-status">${escapeHTML(availability)}</p>${candidateDetails(candidate)}${installed && !item.selectionRequired && !item.workshopRemote ? `<div class="market-actions">${active && previous ? `<button class="text-button ${restoring ? "activity-button" : ""}" data-action="${isPrivateApplication(item) ? "local-rollback" : "market-rollback"}" data-application-id="${id}" aria-busy="${restoring}" ${disabled}>${restoring ? activityLabel("正在恢复…") : "恢复上一版本"}</button>` : ""}<button class="text-button danger-text ${uninstalling ? "activity-button" : ""}" data-action="${isPrivateApplication(item) ? "local-uninstall" : "market-uninstall"}" data-application-id="${id}" aria-busy="${uninstalling}" ${disabled}>${uninstalling ? activityLabel("正在卸载…") : "卸载"}</button></div>` : ""}${!candidate?.artifact && !candidate?.release?.notes && !installed ? '<p class="muted">暂无更多版本信息。</p>' : ""}</div>`;
+  return `<div class="store-detail-body">${item.description ? `<p class="store-full-description">${escapeHTML(item.description)}</p>` : ""}${installed && item.version ? `<p class="muted">${active ? "当前版本" : "待安装版本"} v${escapeHTML(item.version)}</p>` : ""}<p class="market-status">${escapeHTML(availability)}</p>${candidateDetails(candidate)}${installed && !item.selectionRequired && !item.workshopRemote ? `<div class="market-actions">${active && previous && !isManagedLocalApplication(item) ? `<button class="text-button ${restoring ? "activity-button" : ""}" data-action="${isPrivateApplication(item) ? "local-rollback" : "market-rollback"}" data-application-id="${id}" aria-busy="${restoring}" ${disabled}>${restoring ? activityLabel("正在恢复…") : "恢复上一版本"}</button>` : ""}<button class="text-button danger-text ${uninstalling ? "activity-button" : ""}" data-action="${isPrivateApplication(item) ? "local-uninstall" : "market-uninstall"}" data-application-id="${id}" aria-busy="${uninstalling}" ${disabled}>${uninstalling ? activityLabel("正在卸载…") : "卸载"}</button></div>` : ""}${!candidate?.artifact && !candidate?.release?.notes && !installed ? '<p class="muted">暂无更多版本信息。</p>' : ""}</div>`;
 }
 function applicationCard(item, installed = true) {
   item = withMarketName(item);
@@ -2034,10 +2069,11 @@ function updateCreditsDOM(current, incoming) {
 }
 
 function render(state) {
+  if (["applications", "application-detail", "workshop"].includes(page)) page = homePage;
   const updateRequired = clientUpdateRequired(state);
   // Let an existing file editor finish saving before replacing its DOM.
   const retainingEditor = updateRequired && page === "space" && window.wanxSpace?.retainEditor?.();
-  if (updateRequired && !["client-update", "settings", "memory-settings", "boxes", "profile", "help"].includes(page) && !retainingEditor) page = "client-update";
+  if (updateRequired && !["client-update", "settings", "boxes", "profile", "help"].includes(page) && !retainingEditor) page = "client-update";
   else if (!updateRequired && page === "client-update") page = homePage;
   if (updateRequired && marketConfirmation && !marketConfirmation.updateReleaseId) marketConfirmation = null;
   if (state.account?.phase === "authenticated") cloudAuthOpen = false;
@@ -2055,12 +2091,7 @@ function render(state) {
   const expertScope = !auth ? JSON.stringify([state.dataOwnerId, state.dataContextId, state.account?.accountId,
     state.account?.clientId, state.selectedDeviceId, state.connection?.deviceId, state.dataIdentity?.selected?.principalId]) : "";
   if (expertApps.scope !== expertScope) expertApps = expertCatalog(expertScope);
-  const viewingMyApps = page === "applications" && applicationsTab === "local";
-  if (!auth && (viewingMyApps || (page === "application-detail" && state.applications?.some(featuredProductId)))
-    && !expertApps.loaded && !expertApps.loading) queueMicrotask(() => void refreshExpertApps());
-  if(libraryScope&&!appLibrary.loaded&&!appLibrary.loading&&page==='applications')queueMicrotask(()=>void refreshAppLibrary());
-  workshop.sync(!auth ? state.dataOwnerId || (state.account?.accountId && state.connection?.deviceId ? JSON.stringify([state.account.accountId,state.connection.deviceId]) : '') : '', !auth && state.canLaunchApplications, !auth && page === 'workshop');
-  dataView.sync(state,true);
+  dataView.sync(state,true,!auth&&page==='data');
   if(!auth&&page==="data"&&dataView.needsLoad())queueMicrotask(()=>void dataView.refresh());
   aiDialogueView?.hostState(state);
   syncAcademyContext(!auth && page !== "provisioning");
@@ -2072,23 +2103,33 @@ function render(state) {
   }
   dialogueModelSettings?.hostState(state);
   dialogueModelSettings?.visible(!auth && page === "dialogue-models");
+  const viewingRedactionSettings = !auth && page === "settings";
+  const redactionSettingsOwner = state.dataIdentity?.profileId ? state.dataOwnerId : state.account?.accountId;
+  spaceRedactionSettings?.sync(viewingRedactionSettings && redactionSettingsOwner
+    ? JSON.stringify([Boolean(state.dataIdentity?.profileId), redactionSettingsOwner]) : null);
+  if (!viewingRedactionSettings || !redactionRuleComposition?.isConnected) redactionRuleComposition = null;
   window.wanxSpace?.activate(!auth && (page === "boxes" || page === "space"), page === "space");
   supportView.sync(auth || state.account?.phase !== "authenticated" ? null : JSON.stringify([state.account?.accountId, state.account?.clientId]), state.devices || []);
   supportView.visible(!auth && page === "boxes");
   creditsView.visible(!auth && page === "credits");
   if (activeInteraction || window.wanxSpace?.isSelecting?.() || window.wanxSpace?.isDragging?.()) return;
   // Moving even the same input node interrupts the native IME candidate session.
+  if (viewingRedactionSettings && redactionRuleComposition?.isConnected) return;
   if (!auth && page === "data" && dataView.isComposing?.()) return;
   if (!auth && page === "space" && window.wanxSpace?.retainEditor?.()) return;
+  if (auth || page !== "memory") {
+    memoryAgent = "";
+    memoryPage = "";
+  }
   const desiredMemorySection = auth ? null : activeMemorySection();
   const markup = page === "help" ? `<div class="app-layout">${auth ? `<header class="topbar faq-public-header"><div class="brand"><img class="brand-mark" src="./assets/centaurai-mark.png" alt="" />${clientBrandCopy}</div></header>` : shellHeader("常见问题")}${helpView?.render({ backLabel: helpReturnLabel }) || ""}</div>` : auth ? authView() : page === "client-update" ? requiredClientUpdateView() : page === "provisioning" ? provisioningView()
     : desiredMemorySection !== null ? memoryView(desiredMemorySection)
     : page === "dialogue-models" ? `<div class="app-layout">${shellHeader("助理模型")}<div class="page-content dialogue-model-settings-page"><div id="dialogue-model-settings-host"></div></div></div>`
-    : page === "workshop" ? `<div class="app-layout store-layout">${shellHeader("应用工坊")}<div class="page-content store-page"><section id="applications-panel-workshop" class="workshop-page" aria-label="应用工坊">${workshop.render(applicationsBannerControls)}</section></div></div>`
-    : page === "data" ? `<div class="app-layout">${shellHeader("知识星图")}<div class="page-content data-page-content">${dataView.render()}</div></div>`
+    : page === "data" ? `<div class="app-layout starlink-layout">${shellHeader("星图")}<header class="wanx-section-banner starlink-banner" data-section="starlink">${personalModuleHeading("starlink", "本体星图", "在图谱中探索个人本体的实体与关系，沿着关联追溯原文。")}</header><div class="page-content data-page-content">${dataView.render()}</div></div>`
     : page === "space" ? spaceView()
-    : page === "notifications" ? notificationView() : page === "application-detail" ? applicationDetailView() : page === "profile" ? profileView() : page === "credits" ? `<div class="app-layout"><div ${creditsView.isOpen() ? "inert" : ""}>${shellHeader("积分")}</div>${creditsView.render()}</div>` : page === "boxes" ? boxesView() : page === "settings" ? settingsView() : applicationsView();
+    : page === "notifications" ? notificationView() : page === "profile" ? profileView() : page === "credits" ? `<div class="app-layout"><div ${creditsView.isOpen() ? "inert" : ""}>${shellHeader("积分")}</div>${creditsView.render()}</div>` : page === "boxes" ? boxesView() : page === "settings" ? settingsView() : memoryView("my-ai");
   if (markup === renderedMarkup) {
+    if (!auth && page === 'data') dataView.mount();
     if (page === "dialogue-models") dialogueModelSettings?.mount(app.querySelector?.("#dialogue-model-settings-host"));
     window.wanxMemory?.mount(app.querySelector?.(".memory-host"));
     syncFormState();
@@ -2130,8 +2171,12 @@ function render(state) {
   const searchSelection = spaceSearch ? [spaceSearch.selectionStart, spaceSearch.selectionEnd] : null;
   const modelSettingsHost = !auth && page === "dialogue-models" ? app.querySelector?.("#dialogue-model-settings-host") : null;
   const modelSettingsFocus = modelSettingsHost?.contains(document.activeElement) ? document.activeElement : null;
+  const redactionSettingsHost = viewingRedactionSettings ? app.querySelector?.("#space-redaction-settings-host") : null;
+  const redactionSettingsFocus = redactionSettingsHost?.contains(document.activeElement) ? document.activeElement : null;
   const memoryHost = app.querySelector?.(".memory-host");
-  if (memoryHost && desiredMemorySection !== null && memoryHost.dataset.memorySection === desiredMemorySection) {
+  if (memoryHost && desiredMemorySection !== null && memoryHost.dataset.memorySection === desiredMemorySection &&
+    (memoryHost.dataset.memoryAgent ?? "") === (page === "memory" ? memoryAgent : "") &&
+    (memoryHost.dataset.memoryPage ?? "") === (page === "memory" ? memoryPage : "")) {
     const template = document.createElement("template");
     template.innerHTML = markup;
     app.querySelector(".topbar").replaceWith(template.content.querySelector(".topbar"));
@@ -2154,6 +2199,11 @@ function render(state) {
   syncAcademyModal();
   if (modelSettingsHost) { app.querySelector?.("#dialogue-model-settings-host")?.replaceWith(modelSettingsHost); modelSettingsFocus?.focus({ preventScroll:true }); }
   if (!auth && page === "dialogue-models") dialogueModelSettings?.mount(app.querySelector?.("#dialogue-model-settings-host"));
+  if (redactionSettingsHost) {
+    app.querySelector?.("#space-redaction-settings-host")?.replaceWith(redactionSettingsHost);
+    redactionSettingsFocus?.focus({ preventScroll: true });
+  }
+  spaceRedactionSettings?.mount(viewingRedactionSettings ? app.querySelector?.("#space-redaction-settings-host") : null);
   if (spacePosition) {
     const replacement = app.querySelector?.(".space-file-list");
     if (replacement?.dataset.location === spacePosition.key) {
@@ -2218,7 +2268,7 @@ function render(state) {
     const previous = walletInput ? nextWalletDialog.querySelector('#wallet-custom-amount:not(:disabled)')
       : buttons.find(button => button.dataset.action === walletFocus?.action && button.dataset.amount === walletFocus?.amount && button.dataset.channel === walletFocus?.channel);
     if (!nextWalletDialog.contains(document.activeElement) || document.activeElement.disabled) {
-      (previous || buttons.find(button => button.getAttribute('aria-pressed') === 'true') || buttons.find(button => button.dataset.action === 'credits-buy') || nextWalletDialog).focus({ preventScroll: true });
+      restoreWalletFocus(previous || buttons.find(button => button.getAttribute('aria-pressed') === 'true') || buttons.find(button => button.dataset.action === 'credits-buy') || nextWalletDialog);
     }
     if (walletSelection && previous) previous.setSelectionRange(...walletSelection);
     if (walletScroll && walletScroll.step !== nextWalletDialog.dataset.step) {
@@ -2241,6 +2291,7 @@ function render(state) {
   }
   if (marketConfirmation) app.querySelector?.('[data-action="market-cancel"]')?.focus();
   if (page === "space") window.wanxSpace?.mounted?.();
+  if (!auth && page === 'data') dataView.mount();
   const pendingPanel = app.querySelector?.(".pending-open");
   const pendingId = pendingPanel ? currentState.ui?.pendingOpen?.id : null;
   // Reveal each new request once; background updates must not pull the user
@@ -2514,6 +2565,7 @@ app.addEventListener("click", async (event) => {
   if(dataTarget?.dataset.dataAction){event.preventDefault();return dataView.action(dataTarget.dataset.dataAction,dataTarget.dataset);}
   activeInteraction = false;
   finishInteraction();
+  if (event.target.id === "wallet-custom-amount") return creditsView.action("credits-custom");
   const target = event.target.closest("[data-action]");
   if (!target) { if (profileMenuOpen) { profileMenuOpen = false; render(currentState); } return; }
   if (target.disabled) return;
@@ -2523,7 +2575,6 @@ app.addEventListener("click", async (event) => {
       ["applications-launch", "pending-confirm", "notifications-open", "market-install", "market-rollback", "store-details"].includes(action))) {
     page = "client-update"; marketConfirmation = null; render(currentState); return;
   }
-  if (action === "memory-settings") { openMemorySettings(target.dataset.section); return; }
 
 
   if (action === "show-help") {
@@ -2551,13 +2602,6 @@ app.addEventListener("click", async (event) => {
   if (action === "notifications-select") { expandedNotificationId = expandedNotificationId === target.dataset.id ? null : target.dataset.id; await run("notifications.read", { id: target.dataset.id }); return; }
   if (action === "notifications-read-all") { expandedNotificationId = null; await run("notifications.read", { all: true }); return; }
   if (action === "notifications-refresh") { await run("notifications.refresh"); return; }
-  if (action === "notifications-open") {
-    const item = currentState.notifications?.items?.find(row => row.id === target.dataset.id);
-    const result = await run("notifications.open", { id: target.dataset.id });
-    if (result?.destination === "ai-dialogue") openAcademyDialogue();
-    else if (result && item?.applicationId) { page = "applications"; render(currentState); }
-    return;
-  }
   if (action === "profile-avatar" || action === "profile-avatar-remove") {
     if (busy || page !== "profile") return;
     await run(action === "profile-avatar" ? "profile.avatar" : "profile.avatar-remove"); return;
@@ -2599,10 +2643,10 @@ app.addEventListener("click", async (event) => {
     const id = target.dataset.applicationId, item = localInstalledApplications().find(row => row.applicationId === id);
     if (!item || operationBusy(id)) return;
     const rollback = action === "local-rollback", previous = typeof item.previous === "string" ? item.previous : item.previous?.version;
-    if (rollback && !previous) return;
+    if (rollback && (!previous || isManagedLocalApplication(item))) return;
     marketConfirmation = { applicationId: id, action: rollback ? "applications.rollback-local" : "applications.uninstall-local",
       title: `${rollback ? "恢复" : "卸载"}${item.name}`, verb: rollback ? "恢复" : "卸载",
-      detail: rollback ? `将程序恢复到 v${previous}，业务数据保持当前状态。` : "将移除此电脑上的应用程序，保留应用业务数据。" };
+      detail: rollback ? `将程序恢复到 v${previous}，业务数据保持当前状态。` : isManagedLocalApplication(item) ? "仅移除此电脑上的应用程序，保留应用业务数据和盒端服务；之后可在工坊重新部署。" : "将移除此电脑上的应用程序，保留应用业务数据。" };
     render(currentState); return;
   }
   if (action === "store-details") {
@@ -2714,9 +2758,13 @@ app.addEventListener("click", async (event) => {
   if (action === "local-return") { cloudAuthOpen = false; render(currentState); return; }
   if (action === "logout") { await run("auth.logout"); return; }
   if (action === "show-ai-dialogue") { openAcademyDialogue(); return; }
-  if (["show-workshop", "show-data", "show-memory", "show-my-ai", "show-space", "show-boxes", "show-maintenance", "show-settings", "show-credits", "show-profile", "show-notifications", "show-dialogue-models"].includes(action)) {
+  if (["show-data", "show-memory", "show-my-ai", "show-space", "show-boxes", "show-maintenance", "show-settings", "show-credits", "show-profile", "show-notifications", "show-dialogue-models"].includes(action)) {
     if (page === "provisioning") return;
     const previousPage = page;
+    if (action === "show-memory") {
+      memoryAgent = "";
+      memoryPage = "";
+    }
     page = action === "show-maintenance" ? "settings" : action.slice(5);
     if(page==='applications')applicationsTab='wanx';
     selectedApplicationId = null;
@@ -2724,6 +2772,7 @@ app.addEventListener("click", async (event) => {
     if (page === "boxes") void refreshTransfers();
     notice = null;
     render(currentState);
+    if (action === 'show-data') dataView.action('open-graph');
     if (page !== previousPage) document.scrollingElement?.scrollTo?.(0, 0);
     return;
   }
@@ -2933,14 +2982,23 @@ function selectWifi(key) {
   updateWifiPicker();
 }
 app.addEventListener("compositionstart", event => {
+  if (page === "settings" && event.target.dataset?.redactionField) redactionRuleComposition = event.target;
   if(page === "data") dataView.compositionStart?.(event.target);
 });
 app.addEventListener("compositionend", event => {
+  if (redactionRuleComposition === event.target) {
+    redactionRuleComposition = null;
+    setTimeout(() => { if (currentState && page === "settings") render(currentState); }, 0);
+    return;
+  }
   const result=dataView.compositionEnd?.(event.target);
   if(!result)return;
   dataView.input(result.name,result.value);
   // The final input event follows compositionend; let it finish before rendering.
   setTimeout(()=>{if(currentState && page === "data")render(currentState);},0);
+});
+app.addEventListener("focusin", event => {
+  if (!restoringWalletFocus && event.target.id === "wallet-custom-amount") void creditsView.action("credits-custom");
 });
 app.addEventListener("input", event => {
   if (event.target.closest?.('[data-form="help-feedback"]')) { helpView?.input(event.target.name, event.target.value); return; }
@@ -3240,14 +3298,13 @@ window.wanxClient.onAIDialogue?.(value => {
 window.wanxClient.onNavigate?.((destination) => {
   if (destination === "ai-dialogue") { openAcademyDialogue(); return; }
   if (!currentState || currentState.route === "auth" || page === "provisioning") return;
-  if (![homePage, "memory", "applications", "workshop", "data", "space", "boxes", "settings", "credits", "profile", "notifications"].includes(destination)) return;
+  if (![homePage, "memory", "data", "space", "boxes", "settings", "credits", "profile", "notifications"].includes(destination)) return;
   profileMenuOpen = false;
-  page = destination;
-  if (page === "applications") {
-    applicationsTab = "wanx";
-    selectedApplicationId = null;
-    void refreshMarket();
+  if (destination === "memory") {
+    memoryAgent = "";
+    memoryPage = "";
   }
+  page = destination;
   if (page === "credits") void creditsView.refresh();
   if (page === "boxes") void refreshTransfers();
   notice = null;
@@ -3273,7 +3330,7 @@ window.wanxSetup?.onReady?.(() => {
     if (page === "provisioning") render(currentState);
   }).catch(() => {});
 });
-window.wanxSpace?.bind({ compactActions: true, render: () => { if (currentState && ["space", "boxes"].includes(page)) render(currentState); } });
+window.wanxSpace?.bind({ compactActions: true, notesInAssistant: true, render: () => { if (currentState && ["space", "boxes"].includes(page)) render(currentState); } });
 noteSidebar?.bindSidebar?.(requestNoteSidebar, academyDrawer?.noteHost?.());
 window.wanxClient.getLocalState().then(acceptRemoteState);
 
@@ -3287,9 +3344,7 @@ app.addEventListener("error", event => {
 window.addEventListener?.("focus",()=>{if(page==="data")void dataView.refresh()});
 
 
-window.wanxClient.onWorkshopChanged?.(()=>{appLibrary.loaded=false;if(page==='applications')void refreshAppLibrary();workshop.invalidateList();if(currentState?.canLaunchApplications&&page==='workshop')void workshop.refresh();});
 
-window.wanxClient.onWorkshopSource?.(async applicationId=>{if(!currentState?.canLaunchApplications)return;selectApplicationsTab('workshop');await workshop.action('workshop-open-source',{sourceId:'installed:'+applicationId});});
 
 // This event reads main-process cache only; it never forces an HTTP request.
 window.wanxClient.onFaqUpdated?.(() => { void helpView?.refresh(); });

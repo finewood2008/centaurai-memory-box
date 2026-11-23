@@ -26,6 +26,72 @@ CONFIG = {
 }
 
 
+@pytest.mark.parametrize("code", ["INDEX_REQUIRED", "INDEX_STALE", "NO_PARSED_CONTENT", "EMBEDDING_NOT_CONFIGURED", "UNRELATED"])
+@pytest.mark.parametrize("public", [False, True])
+def test_private_index_recovery_is_preserved_by_both_bridge_adapters(code, public):
+    response = httpx.Response(409, json={"detail": {"error": {"code": code, "message": "private diagnostics"}}})
+    expected = "SEMANTICA_VERSION_CONFLICT" if public or code == "UNRELATED" else f"SEMANTICA_{code}"
+    with pytest.raises(mounted.SemanticaError) as mounted_error:
+        mounted.SemanticaClient.decode(response, public=public)
+    with pytest.raises(DesktopError) as desktop_error:
+        decode(response.status_code, response.content, public=public)
+    for error in (mounted_error.value, desktop_error.value):
+        assert error.code == expected
+        assert error.status == 409
+        assert "private diagnostics" not in str(error)
+
+
+@pytest.mark.parametrize("status, detail, code", [
+    (415, "文件内容不是有效的 DOCX", "SEMANTICA_FILE_CONTENT_MISMATCH"),
+    (415, "Office 文件损坏或不是有效的 ZIP", "SEMANTICA_FILE_CONTENT_MISMATCH"),
+    (422, "DOCX 已加密，无法解析", "SEMANTICA_FILE_ENCRYPTED"),
+    (415, "private diagnostic", None),
+])
+@pytest.mark.parametrize("public", [False, True])
+def test_import_failure_recognizes_only_known_private_refusals(status, detail, code, public):
+    response = httpx.Response(status, json={"detail": detail})
+    for decoder, exception in (
+        (lambda: mounted.SemanticaClient.decode(response, public=public), mounted.SemanticaError),
+        (lambda: decode(status, response.content, public=public), DesktopError),
+    ):
+        with pytest.raises(exception) as refused:
+            decoder()
+        if code and not public:
+            assert refused.value.code == code and refused.value.status == status
+        else:
+            assert refused.value.code not in {"SEMANTICA_FILE_CONTENT_MISMATCH", "SEMANTICA_FILE_ENCRYPTED"}
+        assert detail not in str(refused.value)
+
+
+async def test_onboarding_bootstrap_uses_the_signed_personal_root(monkeypatch):
+    calls = []
+
+    def response(request):
+        calls.append(request)
+        encoded = request.headers["x-semantica-scope"]
+        grant = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
+        assert grant["actor_id"] == "wanx:7"
+        assert set(grant["workspace_bindings"].values()) == {"personal:wanx:7"}
+        assert grant["operation_id"] == ("first-run" if request.method == "POST" else None)
+        assert request.url.path == "/api/integration/modeling/onboarding"
+        return httpx.Response(200, json={"ok": True})
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(mounted.httpx, "AsyncClient", lambda **kw: real(**kw, transport=httpx.MockTransport(response)))
+    client = mounted.SemanticaClient(CONFIG, 7)
+    path = "/modeling/onboarding"
+    body = {"operation_id": "first-run", "expected_revision": 0, "answers": {}, "status": "in_progress"}
+    assert (await client.request("GET", path))["ok"]
+    assert (await client.request("POST", path, payload=body))["ok"]
+    with pytest.raises(mounted.SemanticaError) as denied:
+        await mounted.SemanticaClient(CONFIG, 7, team=True).request("POST", path, payload=body)
+    assert denied.value.status == 403
+    with pytest.raises(mounted.SemanticaError) as invalid:
+        await client.request("POST", path, payload={**body, "answers": {"workspace_id": WAREHOUSE}})
+    assert invalid.value.code == "SEMANTICA_SCOPE_NOT_SELECTABLE"
+    assert len(calls) == 2
+
+
 @pytest.mark.parametrize(
     "path,method,body,budget",
     [
@@ -265,6 +331,30 @@ def test_rename_gateway_grants_only_personal_write_or_current_team_execute():
             route_policy(team,{**request,**change})
     with pytest.raises(DataProtocolError):
         route_policy(context("semantica",["read"]),observed(path,"PATCH"))
+
+
+@pytest.mark.parametrize(
+    "suffix,operation",
+    [("/delete/prepare", "prepare_delete_warehouse"), ("/delete", "delete_warehouse")],
+)
+def test_delete_routes_require_warehouse_scope_and_mutation_grant(suffix, operation):
+    relative = f"/warehouses/{WAREHOUSE}" + suffix
+    path = "/api/semantica" + relative
+    personal = route_policy(context("semantica", ["read", "write"]), observed(path, "POST"))
+    assert personal["action"] == "write"
+    assert personal["upstreamPath"] == "/api/integration" + relative
+    assert personal["serviceContext"]["operation"] == operation
+    assert personal["serviceContext"]["warehouseId"] == WAREHOUSE
+    team, request = team_request("", suffix=suffix, method="POST")
+    assert route_policy(team, request)["action"] == "execute"
+    other_path = path.replace(WAREHOUSE, "20000000-0000-4000-8000-000000000002")
+    with pytest.raises(DataProtocolError):
+        route_policy(team, {**request, "rawTarget": other_path})
+    for change in ({"method": "GET"}, {"rawTarget": path + "?limit=1"}):
+        with pytest.raises(DataProtocolError):
+            route_policy(context("semantica", ["read", "write"]), {**observed(path, "POST"), **change})
+    with pytest.raises(DataProtocolError):
+        route_policy(context("semantica", ["read"]), observed(path, "POST"))
 
 
 async def test_mounted_rename_on_older_owner_requires_upgrade(monkeypatch):

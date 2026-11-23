@@ -2,6 +2,7 @@ import {randomUUID} from 'node:crypto';
 const id=()=>randomUUID().replaceAll('-','');
 const error=code=>Object.assign(Error(code),{code});
 const clone=value=>structuredClone(value);
+export const emptyNote=()=>({blocks:[],revision:null,dirty:false,pending:null,has_backup:false});
 export function normalizeNote(blocks){
   if(!Array.isArray(blocks)||blocks.length>2000)throw error('CLIPBOARD_NOTE_LIMIT');
   const result=[];
@@ -16,19 +17,20 @@ export function normalizeNote(blocks){
 }
 
 // Drafts and stable, frozen save requests live in the caller's OS-encrypted store.
-export function createSharedNote({notes,scope,online,request,persist,changed,imagesReady,retryMs=1000}){
+export function createSharedNote({notes,scope,online,request,persist,changed,imagesReady,retryMs=1000,
+  route='/note',recordFor=bound=>notes[bound]??=emptyNote()}){
   let closed=false,timer=null,running=null,serial=Promise.resolve(),attempt=0;
-  const current=()=>scope()?notes[scope()]??=({blocks:[],revision:null,dirty:false,pending:null,has_backup:false}):null;
+  const current=()=>scope()?recordFor(scope()):null;
   const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
   const snapshot=()=>{const n=current();return n?clone({...n,phase:n.conflict?'conflict':n.dirty||n.pending?(online()?'syncing':'offline'):'saved'}):{blocks:[],revision:null,phase:'locked'};};
   const emit=()=>changed();
   const wake=(delay=0)=>{clearTimeout(timer);if(!closed){timer=setTimeout(()=>void flush(),delay);timer.unref?.();}};
   const enqueue=fn=>{const p=serial.catch(()=>{}).then(fn);serial=p;return p;};
   async function fetchNote(n,bound){
-    const result=await request('/note'+(n.revision!==null?`?since=${n.revision}`:''),{},bound);
+    const result=await request(route+(n.revision!==null?`?since=${n.revision}`:''),{},bound);
     if(!result.unchanged){
       if((n.dirty||n.pending)&&!same(n.blocks,result.blocks)&&!(n.revision===null&&result.revision===0))n.conflict=result;
-      else if(!n.dirty&&!n.pending){n.blocks=result.blocks;n.revision=result.revision;}
+      else if(!n.dirty&&!n.pending){n.blocks=result.blocks;n.revision=result.revision;if(result.deleted)n.deleted=true;}
       if(n.revision===null&&!n.conflict)n.revision=result.revision;
     }
     n.has_backup=result.has_backup;n.updated=result.updated;
@@ -50,7 +52,7 @@ export function createSharedNote({notes,scope,online,request,persist,changed,ima
         n.pending={expected:n.revision,operation:id(),blocks:clone(n.blocks),action:n.action||'save'};
         await persist();
       }
-      const pending=n.pending,result=await request('/note',{method:'PUT',body:pending},bound);
+      const pending=n.pending,result=await request(route,{method:'PUT',body:pending},bound);
       n.revision=result.accepted_revision;n.has_backup=result.has_backup;n.updated=result.updated;
       n.pending=null;n.error=null;attempt=0;
       if(same(n.blocks,pending.blocks)&&(n.action===undefined||n.action===pending.action)){
@@ -59,18 +61,21 @@ export function createSharedNote({notes,scope,online,request,persist,changed,ima
       if(result.revision!==result.accepted_revision){
         if(n.dirty)n.conflict=result;else{n.blocks=result.blocks;n.revision=result.revision;}
       }
+      if(result.deleted&&!n.dirty){n.deleted=true;delete n.recovery;}
       await persist();
     }catch(e){
       n.error=e.code||'CLIPBOARD_NOTE_SYNC_FAILED';
-      if(n.error==='CLIPBOARD_NOTE_CONFLICT'){
-        try{n.conflict=await request('/note',{},bound);}catch{}
+      if(['CLIPBOARD_NOTE_CONFLICT','CLIPBOARD_NOTE_DELETED'].includes(n.error)){
+        try{n.conflict=await request(route,{},bound);}catch{}
       }
       await persist().catch(()=>{});attempt++;
     }finally{running=null;emit();const latest=current();if(!closed&&latest===n&&(n.dirty||n.pending)&&!n.conflict)wake(Math.min(15000,retryMs*2**Math.min(attempt,4)));}})();
     await running;
   }
   async function save(blocks){return enqueue(async()=>{
-    const n=current();if(!n)throw error('ACCOUNT_LOGIN_REQUIRED');const value=normalizeNote(blocks);
+    const n=current();if(!n)throw error('ACCOUNT_LOGIN_REQUIRED');
+    if(n.deleted||n.action==='delete')throw error('CLIPBOARD_NOTE_DELETED');
+    const value=normalizeNote(blocks);
     if(same(n.blocks,value)&&!n.action){await persist();emit();wake(700);return snapshot();}n.blocks=value;n.dirty=true;n.error=null;delete n.action;
     await persist();emit();wake(700);return snapshot();
   });}
@@ -80,15 +85,18 @@ export function createSharedNote({notes,scope,online,request,persist,changed,ima
       if(!n.conflict)throw error('CLIPBOARD_INVALID');
       n.recovery=clone(action==='remote'?n.blocks:n.conflict.blocks);
       n.revision=n.conflict.revision;
-      if(action==='remote'){n.blocks=n.conflict.blocks;n.dirty=false;}else n.dirty=true;
+      if(n.conflict.deleted&&action==='local')throw error('CLIPBOARD_NOTE_DELETED');
+      if(action==='remote'){n.blocks=n.conflict.blocks;n.dirty=false;if(n.conflict.deleted)n.deleted=true;}else n.dirty=true;
       n.pending=null;delete n.conflict;delete n.action;
     }else if(action==='recover-local'){
       if(!n.recovery)throw error('CLIPBOARD_NOT_FOUND');const b=n.blocks;n.blocks=n.recovery;n.recovery=b;n.dirty=true;delete n.action;
-    }else if(['clear','restore'].includes(action)){
+    }else if(['clear','restore'].includes(action)||(action==='delete'&&route!=='/note')){
       if(n.dirty||n.pending||n.conflict)throw error('CLIPBOARD_NOTE_BUSY');
       if(action==='clear')n.recovery=clone(n.blocks);n.action=action;n.blocks=action==='clear'?[]:n.blocks;n.dirty=true;
     }else throw error('CLIPBOARD_INVALID');
     n.error=null;await persist();emit();wake();return snapshot();
   });}
-  return {snapshot,save,command,refresh,wake,async close(){closed=true;clearTimeout(timer);await serial.catch(()=>{});await running;await persist();}};
+  return {snapshot,save,command,refresh,wake,flush,async close({persistState=true}={}){
+    closed=true;clearTimeout(timer);await serial.catch(()=>{});await running;if(persistState)await persist();
+  }};
 }

@@ -2,6 +2,7 @@ import {createHash, randomBytes, randomUUID} from 'node:crypto';
 import {readFile, lstat, writeFile, unlink} from 'node:fs/promises';
 import path from 'node:path';
 import {createSharedNote} from './shared-note.mjs';
+import {createNoteCollection} from './note-collection.mjs';
 import {createClipboardCache, CACHE_LIMIT} from './clipboard-cache.mjs';
 import {dataOwnerKey, dataInteractionKey} from '../device-trust/data-context.mjs';
 
@@ -21,13 +22,14 @@ export async function createSuperClipboard({client,personalSpace,serviceURL,stor
   if(saved&&(!Array.isArray(saved.tasks)||!Array.isArray(saved.batches)||!Array.isArray(saved.cache)||!saved.bindings||Buffer.from(saved.key||'','base64').length!==32))throw fail('CLIPBOARD_CACHE_DAMAGED');
   const state=saved||{version:1,key:randomBytes(32).toString('base64'),tasks:[],batches:[],bindings:{},cache:[]};
   state.notes ||= {};
+  state.noteCollections ||= {};
   const cache=await createClipboardCache(path.join(directory,'encrypted'),Buffer.from(state.key,'base64'));
   await cache.clean(new Set([...state.tasks.map(t=>t.id),...state.cache.map(t=>t.id)]));
   for(const t of state.tasks)if(active(t)&&t.phase!=='paused')t.phase='waiting';
   let closed=false,job=null,timer=null,scope=null,loaded=null,listKey='',epoch=0,writes=Promise.resolve(),mutations=Promise.resolve(),interaction=null;
   let view={kind:'all',query:'',trash:false},cacheWrites=Promise.resolve(),reservedCache=0;
   const reserveCache = amount => {const p=cacheWrites.catch(()=>{}).then(async()=>{await evict(amount+reservedCache);reservedCache+=amount;return ()=>{reservedCache-=amount;};});cacheWrites=p;return p;};
-  let storageError=null,note=null,contextGeneration=0;const downloads=new Map(),requests=new Set();
+  let storageError=null,note=null,noteCollection=null,contextGeneration=0;const downloads=new Map(),requests=new Set();
   const ticket=()=>({scope,generation:contextGeneration});
   const assertTicket=value=>{if(closed||!value.scope||value.scope!==scope||value.generation!==contextGeneration)throw fail('SPACE_CONTEXT_CHANGED');};
   const persist=()=>{const copy=structuredClone(state);writes=writes.catch(()=>{}).then(async()=>{await store.save(copy);if(storageError){storageError=null;notify();wake();}});return writes.catch(()=>{storageError='SECURE_STORAGE_WRITE_FAILED';job?.controller.abort();throw fail(storageError);});};
@@ -40,10 +42,12 @@ export async function createSuperClipboard({client,personalSpace,serviceURL,stor
     const next=account&&box?JSON.stringify([account,box]):null;
     const nextInteraction=dataInteractionKey(s,serviceURL);
     if(next!==scope||nextInteraction!==interaction){scope=next;interaction=nextInteraction;epoch++;contextGeneration++;loaded=null;listKey='';job?.controller.abort();for(const controller of requests)controller.abort();downloads.clear();}
-    if(!online())job?.controller.abort();notify();wake();note?.wake();
+    if(!online())job?.controller.abort();notify();wake();note?.wake();noteCollection?.wake();
   }
-  function snapshot(){
-    return {scope,dataOwnerId:accountKey(),dataContextId:dataInteractionKey(client.snapshot(),serviceURL),online:online(),note:note?.snapshot(),boxId:scope?JSON.parse(scope)[1]:null,error:storageError,
+  const selectedNote=noteId=>noteId==null?note:noteCollection.note(noteId);
+  function snapshot(noteId){
+    const notes=noteCollection?.summaries();
+    return {scope,dataOwnerId:accountKey(),dataContextId:dataInteractionKey(client.snapshot(),serviceURL),online:online(),note:selectedNote(noteId)?.snapshot(),...(notes?{notes}:{}),...(noteId?{noteId}:{}),boxId:scope?JSON.parse(scope)[1]:null,error:storageError,
       tasks:state.tasks.filter(t=>t.scope===scope&&active(t)).map(({id,name,kind,size,offset,phase,error,batch})=>({id,name,kind,size,offset,phase,error,batch})),
       items:loaded?.items||[],usage:loaded?.usage||{used:0,reserved:0,limit:QUOTA},revision:loaded?.revision,next_offset:loaded?.next_offset};
   }
@@ -149,7 +153,7 @@ export async function createSuperClipboard({client,personalSpace,serviceURL,stor
       else if(transient(error)&&++task.attempt<=6){task.phase='waiting';task.error=error.code||'SPACE_NETWORK_WAIT';task.next=Date.now()+Math.min(15000,retryBaseMs*2**(task.attempt-1));}
       else{task.phase='failed';task.error=error.code||'CLIPBOARD_TRANSFER_FAILED';}
       await persist().catch(()=>{});
-    }finally{job=null;notify();note?.wake();wake(Math.max(0,(task.next||0)-Date.now()));}
+    }finally{job=null;notify();note?.wake();noteCollection?.wake();wake(Math.max(0,(task.next||0)-Date.now()));}
   }
   async function transfer(action,id){
     const task=state.tasks.find(t=>t.id===id&&t.scope===scope&&active(t));if(!task)throw fail('CLIPBOARD_NOT_FOUND');
@@ -186,11 +190,24 @@ export async function createSuperClipboard({client,personalSpace,serviceURL,stor
     return {copied:true};
   }
   async function operation(action,input={}){
-    const current=ticket();
+    const current=ticket(),noteId=input.noteId;
     if(action==='snapshot')return snapshot();if(action==='refresh')return refresh(input);
-    if(action==='note-save'){await note.save(input.blocks);return snapshot();}
-    if(action==='note-refresh'){await note.refresh();return snapshot();}
-    if(action==='note-command'){await note.command(input.action);return snapshot();}
+    if(action==='note-save'){await selectedNote(noteId).save(input.blocks);assertTicket(current);return snapshot(noteId);}
+    if(action==='note-refresh'){
+      await selectedNote(noteId).refresh();
+      await noteCollection.refresh();
+      if(current.scope)assertTicket(current);
+      return snapshot(noteId);
+    }
+    if(action==='note-command'){
+      if(input.action==='create'){
+        const created=await noteCollection.create();assertTicket(current);return snapshot(created);
+      }
+      if(input.action==='delete'){
+        await noteCollection.remove(noteId);assertTicket(current);return snapshot(noteId);
+      }
+      await selectedNote(noteId).command(input.action);assertTicket(current);return snapshot(noteId);
+    }
     if(action==='capture')return capture(input);
     if(action==='note-paste'){const data=await systemClipboard.read();assertTicket(current);return typeof data.text==='string'&&!data.paths&&!data.image?{...snapshot(),text:data.text}:capture(data);}
     if(action==='paste'){const data=await systemClipboard.read();assertTicket(current);return capture(data);}
@@ -200,7 +217,7 @@ export async function createSuperClipboard({client,personalSpace,serviceURL,stor
     if(action==='preview'){
       const task=state.tasks.find(t=>t.id===input.id&&t.scope===scope&&t.kind==='image'&&t.phase!=='canceled');
       const cached=state.cache.find(t=>t.id===input.id&&t.scope===scope&&t.item?.kind==='image');
-      const attached=note.snapshot().blocks?.some(b=>b.type==='image'&&b.item===input.id);
+      const attached=selectedNote(noteId).snapshot().blocks?.some(b=>b.type==='image'&&b.item===input.id);
       if(scope&&(task||attached&&cached)){try{const item=task||cached.item,bytes=await cache.read(input.id);assertTicket(current);if(hash(bytes)!==item.digest)throw fail('CLIPBOARD_CACHE_DAMAGED');return {item,data:bytes.toString('base64')};}catch(error){assertTicket(current);if(!online())throw error;}}
       const {item,bytes}=await content(input.id);assertTicket(current);return {item,data:bytes.toString('base64')};
     }
@@ -209,8 +226,11 @@ export async function createSuperClipboard({client,personalSpace,serviceURL,stor
     if(action==='export'){return request(`/${valid(input.id)}/export`,{method:'POST',body:{id:input.export_id||uuid(),expected:input.expected,parent:input.parent||'',space_id:input.space_id||'personal'}});}
     throw fail('CLIPBOARD_INVALID');
   }
-  note=createSharedNote({notes:state.notes,scope:()=>scope,online,request,persist,changed:notify,retryMs:retryBaseMs,
-    imagesReady:(blocks,bound)=>blocks.filter(b=>b.type==='image').every(b=>!state.tasks.some(t=>t.id===b.item&&t.scope===bound&&t.phase!=='complete'))});
+  const noteOptions={scope:()=>scope,online,request,persist,changed:notify,retryMs:retryBaseMs,
+    imagesReady:(blocks,bound)=>blocks.filter(b=>b.type==='image').every(b=>!state.tasks.some(t=>t.id===b.item&&t.scope===bound&&t.phase!=='complete'))};
+  note=createSharedNote({notes:state.notes,...noteOptions});
+  noteCollection=createNoteCollection({collections:state.noteCollections,...noteOptions,
+    changed:noteId=>{if(!closed)onChanged(snapshot(noteId));}});
   const unsubscribe=client.subscribe(sync);sync();await persist();
-  return {snapshot,operation,async close(){closed=true;contextGeneration++;clearTimeout(timer);unsubscribe();job?.controller.abort();for(const controller of requests)controller.abort();await mutations.catch(()=>{});await note.close();while(job)await new Promise(r=>setTimeout(r,10));await persist();}};
+  return {snapshot,operation,async close(){closed=true;contextGeneration++;clearTimeout(timer);unsubscribe();job?.controller.abort();for(const controller of requests)controller.abort();await mutations.catch(()=>{});await Promise.all([note.close(),noteCollection.close()]);while(job)await new Promise(r=>setTimeout(r,10));await persist();}};
 }

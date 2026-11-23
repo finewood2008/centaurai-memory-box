@@ -6,6 +6,7 @@ import shutil
 
 import pytest
 
+from test_standard_expert_deployment import write_standard_source
 from wanx_studio.contracts import StudioError
 from wanx_studio.deployment import intake as module
 from wanx_studio.deployment.contracts import canonicalize_json, validate_bundle
@@ -73,9 +74,10 @@ def replace_artifact(path, manifest, name, value):
 @pytest.fixture
 def setup(tmp_path):
     store = Store(tmp_path / "store")
-    intake = ReleaseIntake(store, tmp_path / "inbox", tmp_path / "snapshots", backend_validator=backend_validator)
+    intake = ReleaseIntake(store, tmp_path / "inbox", tmp_path / "snapshots", backend_validator=backend_validator, runtime_namespace="studio")
     source = intake.inbox / intake.owner_scope(OWNER) / RELEASE
-    manifest, base = write_source(source)
+    manifest, _ = write_standard_source(source, RELEASE)
+    base = json.loads((source / "client/payload.json").read_bytes())
     yield store, intake, source, manifest, base
     store.close()
 
@@ -87,7 +89,7 @@ def test_real_directory_freezes_original_identity_and_registers_resolvable_contr
     assert frozen["manifest"] == manifest
     assert frozen["base"] == base
     assert frozen["verification"] == json.loads((source / "support/verification.json").read_text())
-    assert frozen["bundle"]["applicationId"] == "demo.expert.application"
+    assert frozen["bundle"]["applicationId"] == base["applicationId"]
     assert frozen["bundle"]["releaseId"] == RELEASE
     assert validate_bundle(frozen["bundle"]) == frozen["bundle"]
     assert {a["role"] for a in frozen["bundle"]["artifactDescriptors"]} == {"backend", "client", "assets"}
@@ -115,7 +117,7 @@ def test_source_removal_and_store_reopen_use_verified_snapshot_not_development_f
     store.close()
     reopened = Store(root)
     try:
-        restored = ReleaseIntake(reopened, inbox, snapshots, backend_validator=backend_validator)
+        restored = ReleaseIntake(reopened, inbox, snapshots, backend_validator=backend_validator, runtime_namespace="studio")
         assert restored.get(OWNER, RELEASE) == frozen
         descriptor = frozen["bundle"]["artifactDescriptors"][0]
         assert json.loads(restored.resolve_artifact(OWNER, descriptor["sourceRef"])) == frozen["backend"]
@@ -206,32 +208,31 @@ def test_incomplete_or_unsupported_directory_fails_before_registration(setup, mu
 
 
 @pytest.mark.parametrize("mutation,code", [
-    ("identity", "DIRECTORY_CLIENT_IDENTITY_MISMATCH"), ("hash", "DIRECTORY_CLIENT_HASH_MISMATCH"),
-    ("namespace", "DIRECTORY_CLIENT_INVALID"), ("capability", "DIRECTORY_CLIENT_INVALID"),
-    ("locator", "DIRECTORY_CLIENT_PRIVATE_LOCATOR"), ("no-foundation", "DIRECTORY_CLIENT_INVALID"),
-    ("missing-collections", "DIRECTORY_CLIENT_INVALID"),
+    ("identity", "DIRECTORY_CLIENT_IDENTITY_MISMATCH"),
+    ("hash", "STANDARD_PACKAGE_INVALID"),
+    ("namespace", "STANDARD_EXPERT_CLIENT_INVALID"),
+    ("capability", "EXPERT_CLIENT_CAPABILITY_UNSUPPORTED"),
+    ("locator", "STANDARD_EXPERT_CLIENT_INVALID"),
+    ("contract", "STANDARD_EXPERT_CLIENT_INVALID"),
 ])
-def test_client_payload_is_exact_precompiled_scoped_data_not_arbitrary_bootstrap(setup, mutation, code):
+def test_standard_payload_validates_identity_package_and_host_contract(setup, mutation, code):
     _, intake, source, manifest, base = setup
     if mutation == "identity":
-        base["applicationId"] = "different.app"
+        manifest["applicationId"] = "different.app"
     elif mutation == "hash":
-        base["artifactHash"] = "0" * 64
+        base["packageSha256"] = "0" * 64
     elif mutation == "namespace":
-        base["runtimeNamespace"] = "app-studio"
+        base["runtimeNamespace"] = "workshop"
     elif mutation == "capability":
         base["manifest"]["capabilities"].append("files")
+    elif mutation == "contract":
+        base["runtimeContract"]["collections"] = {"results": {"text": "string"}}
     elif mutation == "locator":
-        base["bundle"] += "/* /Users/synthetic/private */"
-    elif mutation == "no-foundation":
-        base["manifest"]["capabilities"] = ["data"]
-    elif mutation == "missing-collections":
-        del base["manifest"]["collections"]
-    if mutation != "hash":
-        base["artifactHash"] = hashlib.sha256(encode({k: v for k, v in base.items() if k != "artifactHash"})).hexdigest()
+        base["sourceDir"] = "/private/synthetic"
     replace_artifact(source, manifest, "client/payload.json", base)
     with pytest.raises(StudioError, match=code):
         intake.ingest(OWNER, RELEASE)
+    assert intake.list(OWNER) == {"items": []}
 
 
 @pytest.mark.parametrize("mutation,code", [("template", "DIRECTORY_BACKEND_INVALID"), ("mode", "DIRECTORY_BACKEND_INVALID"), ("lock", "DIRECTORY_DEPENDENCY_INVALID"), ("config", "DIRECTORY_CONFIGURATION_UNSUPPORTED"), ("verification", "DIRECTORY_VERIFICATION_INVALID")])

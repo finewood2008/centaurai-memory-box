@@ -1010,6 +1010,9 @@ def _serialize_history_message(
         raw_ctx = additional_kwargs.get(COMPOSER_CTX_KEY)
         if isinstance(raw_ctx, dict) and raw_ctx:
             entry["composer_context"] = raw_ctx
+        evidence = additional_kwargs.get("zhijun_evidence")
+        if additional_kwargs.get("assistant_persona") == "zhijun" and isinstance(evidence, list):
+            entry["zhijun_evidence"] = evidence
         if has_user_attachments:
             entry["inbound_attachments"] = raw_att
     if additional_kwargs.get(STREAM_ERROR_FLAG):

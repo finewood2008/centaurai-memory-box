@@ -1,19 +1,34 @@
 import type { AppSettingsDto, MemoryTokenBudgetDto } from "@memmy/local-api-contracts";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useApiClients } from "../../app/providers.js";
 import { appActions } from "../../state/app-actions.js";
 import { useAppState } from "../../state/app-state.js";
 import { ModelWorkspaceSection } from "../model-workspace-section.js";
 import { MemoryTokenBudgetCard } from "../settings-page.js";
 
-export default function MemorySettings({ section, sessionToken }: {
-  section: "models" | "budget";
+type SettingsSection = "models" | "budget";
+const settingsTabs: ReadonlyArray<readonly [SettingsSection, string]> = [
+  ["models", "记忆模型"],
+  ["budget", "记忆预算"],
+];
+
+export default function MemorySettings({ section, onSectionChange, sessionToken, connectionStatus }: {
+  section: SettingsSection;
+  onSectionChange: (section: SettingsSection) => void;
   sessionToken: string;
+  connectionStatus?: ReactNode;
 }) {
-  return <main className="wanx-memory-settings">
-    {section === "budget" && <MemoryBudgetSettings />}
+  return <section className="wanx-memory-settings" aria-labelledby="wanx-memory-settings-title">
+    <h2 id="wanx-memory-settings-title" className="mb-3 text-lg font-semibold">记忆设置</h2>
+    <nav className="wanx-memory-settings-tabs" aria-label="记忆设置分类">
+      {settingsTabs.map(([id, label]) => <button key={id} type="button"
+        aria-current={id === section ? "page" : undefined} onClick={() => onSectionChange(id)}>
+        {label}
+      </button>)}
+    </nav>
+    {section === "budget" && (connectionStatus ?? <MemoryBudgetSettings />)}
     {section === "models" && <MemoryModelSettings sessionToken={sessionToken} />}
-  </main>;
+  </section>;
 }
 
 type MemoryModelSource = "wanx" | "custom";
@@ -47,7 +62,7 @@ interface MemoryModelSettingsView {
 const modelErrors: Record<string, string> = {
   MEMORY_MODEL_BOX_DISCONNECTED: "请连接盒子。",
   MEMORY_MODEL_BOX_UPDATE_REQUIRED: "当前盒子版本尚未提供记忆模型接口。",
-  MEMORY_MODEL_NOT_CONFIGURED: "请在盒子设置默认模型。",
+  MEMORY_MODEL_NOT_CONFIGURED: "盒子没有可用的默认记忆模型。可在下方选择已启用的模型，或到盒子配置默认模型。",
 };
 const wanxTextRoles: ReadonlyArray<readonly [WanxTextRole, string]> = [
   ["memory_summary", "记忆摘要"],

@@ -43,6 +43,7 @@ import {
 import { memoryNeedsImportSummary, summaryProcessingJobType } from "../import/import-job-processor.js";
 import {
   classifyProcessingError,
+  EpisodeIdleCloseDeferred,
   type EnqueueJobInput,
   processingJobMatchesMemory,
   processingStageForJob,
@@ -67,7 +68,7 @@ export const SUMMARY_WORKER_CONCURRENCY = 4;
 export const EMBEDDING_RETRY_LEASE_MS = 5 * 60_000;
 export const WORKER_LEASE_SECONDS = 60;
 export const WORKER_HEARTBEAT_MS = 20_000;
-const SUMMARY_JOBS_REQUIRING_MODEL: readonly string[] = ["episode_assignment", "trace_summary", "import_summary", "observation_extract", "episode_title"];
+export const SUMMARY_JOBS_REQUIRING_MODEL: readonly string[] = ["episode_assignment", "trace_summary", "import_summary", "observation_extract", "episode_title"];
 const WORKER_TURN_JOB_LIMIT = 32;
 
 const workerLogger = createMemoryLogger("worker");
@@ -1057,9 +1058,10 @@ export class WorkerRunner {
     if (error instanceof JobLeaseLostError || !this.deps.repos.runtime.isJobLeaseHeld(job, this.deps.nowIso())) {
       return this.lostLeaseResult(job);
     }
-    if (error instanceof ObservationDependenciesPendingError) {
+    if (error instanceof ObservationDependenciesPendingError || error instanceof EpisodeIdleCloseDeferred) {
       const at = this.deps.nowIso();
-      const deferred = this.deps.repos.runtime.deferProcessingJob(job.id, new Date(Date.parse(at) + 30_000).toISOString(), at, job);
+      const runAfter = error instanceof EpisodeIdleCloseDeferred ? error.runAfter : new Date(Date.parse(at) + 30_000).toISOString();
+      const deferred = this.deps.repos.runtime.deferProcessingJob(job.id, runAfter, at, job);
       if (!deferred) return this.lostLeaseResult(job);
       const memory = job.targetMemoryId ? this.deps.repos.memories.get(job.targetMemoryId) : undefined;
       if (memory && processingJobMatchesMemory(job, memory)) {

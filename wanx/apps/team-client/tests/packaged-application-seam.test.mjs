@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, realpath, readFile, writeFile, rm } from "node:fs/promi
 import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { createApplicationManager } from "../applications/manager.mjs";
+import { createApplicationManager } from "../build/app/applications/manager.mjs";
 
 // Real executable boundary: Node/fake spawn cannot catch packaged Electron
 // ignoring --app and re-entering the Host. This seam uses a temporary profile.

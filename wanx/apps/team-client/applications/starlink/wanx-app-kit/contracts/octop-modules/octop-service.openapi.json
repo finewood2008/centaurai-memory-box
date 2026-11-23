@@ -1,0 +1,34 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "WANX Octop · octop-service",
+    "description": "**CentaurAI-WANX** is a smarter, self-hosted AI assistant for multiple users and agents. All routes are served under `/api`.\n\n## Authentication\n\nMost endpoints require a JWT bearer token:\n\n1. Complete initial setup via `/api/setup/*` (first install only).\n2. `GET /api/auth/captcha` then `POST /api/auth/login` with `username` and `password`\n   (and `captcha_token` when a strong provider is active), or complete SSO with\n   `/api/auth/oidc/*` or `/api/auth/oauth/*` when a provider is enabled.\n3. Send `Authorization: Bearer <access_token>` on subsequent requests.\n\nAccess tokens use sliding renewal: when less than one-third of\n`access_token_ttl_seconds` remains, authenticated responses may include a fresh\ntoken in the `X-Octop-Access-Token` header. Clients should replace the stored\ntoken when present.\n\nPublic endpoints (no login token): `/api/docs`, `/api/openapi.json`, `/api/health`,\n`/api/setup/*` (wizard authorization applies), `/api/auth/login`, `/api/auth/register`,\n`/api/auth/captcha`, `/api/auth/oidc/status`, `/api/auth/oidc/start`,\n`/api/auth/oidc/callback`, `/api/auth/oidc/exchange`, `/api/auth/oauth/status`,\n`/api/auth/oauth/start`, `/api/auth/oauth/callback`, `/api/auth/oauth/exchange`,\n`/api/auth/invite/validate`,\n`/api/auth/invite/redeem`, `/api/connectors/oauth/callback`,\nand `/api/internal/mcp/*`.\n\n## Agent scope\n\nMany agent-scoped routes use the agent ID in the URL path (`/api/agents/{agent_id}/…`).\nRoutes first check the signed token's application scope; legacy tokens default to WANX.\nResources in another application are treated as not found, including for administrators.\nWithin the same application, each route applies its ownership or shared-resource access\nrules. WANX administrators may bypass ownership where supported; Zhijun personal profiles,\nmemories and uploaded sources require the owner.\n\n## Streaming chat\n\nDashboard live turns use **WebSocket** at `/api/agents/{agent_id}/chat/ws` (pass JWT as\n`?token=` query param). Send `{\"type\":\"user_turn\", ...}` frames; the server replies with JSON\nchunks matching the harness stream format, ending with `{\"type\":\"done\"}` or\n`{\"type\":\"error\",\"message\":\"...\"}`.\n\nText-type dashboard pushes (cron reminders, proactive care) also emit\n`{\"type\":\"dashboard_push\", ...}` on `/api/notifications/ws` (same `?token=` auth) so the\nSPA can show a toast even when the chat socket is not subscribed.\n\nHITL resume still uses `POST /api/agents/{agent_id}/chat/hitl/resume` (SSE).\n\n## Knowledge libraries\n\n`/api/knowledge-bases` uses the signed application scope for creation, visibility,\ndocument access, and citations. Existing libraries remain in WANX. Zhijun libraries\nare private to their owner and use local document parsers, downloaded native ONNX\nembeddings and RapidOCR. Remote WANX embedding/OCR settings do not affect Zhijun;\nmissing local components are reported as unavailable without remote fallback.\n",
+    "version": "0.1.0"
+  },
+  "paths": {},
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "JWT from `POST /api/auth/login` (`access_token` field)."
+      }
+    }
+  },
+  "tags": [],
+  "x-wanx-supplemental-routes": [
+    {
+      "method": "GET",
+      "path": "/.well-known/acme-challenge/{token}",
+      "group": "octop-service",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/docs",
+      "group": "octop-service",
+      "type": "未纳入 OpenAPI"
+    }
+  ]
+}

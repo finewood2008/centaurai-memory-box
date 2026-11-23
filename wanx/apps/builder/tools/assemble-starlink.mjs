@@ -7,6 +7,7 @@ import { cp, mkdir, readFile, writeFile, readdir, rm, lstat } from 'node:fs/prom
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { clientBuildDirectory, ensureBuildDirectory } from './client-build-directory.mjs';
 import { buildAppKit } from '../../../tools/build-app-kit.mjs';
 
 const repository = fileURLToPath(new URL('../../../', import.meta.url));
@@ -95,7 +96,7 @@ async function resolveAppKit(repoRoot, sdkPackage, requestedDirectory) {
   return { directory, manifest, sdkDirectory, contractsDirectory, sdkArtifact, contractArtifact };
 }
 
-export async function assembleStarlink(edition, { repoRoot = repository, appKitDirectory } = {}) {
+export async function assembleStarlink(edition, { repoRoot = repository, appKitDirectory, outputRoot } = {}) {
   const client = path.join(repoRoot, clientName(edition));
   const { source, receipt, names } = await validateStarlinkSource(repoRoot);
   const sdkPackage = JSON.parse(await readFile(path.join(repoRoot, 'apps/personal-client/host-sdk/package.json'), 'utf8'));
@@ -105,15 +106,20 @@ export async function assembleStarlink(edition, { repoRoot = repository, appKitD
   if (JSON.parse(await readFile(path.join(ws, 'package.json'), 'utf8')).version !== sdkPackage.dependencies.ws) {
     throw Error('STARLINK_WS_VERSION_MISMATCH');
   }
-  const target = path.join(client, 'applications/starlink');
-  if (edition === 'personal') {
+  const runtime = outputRoot || clientBuildDirectory(client);
+  await ensureBuildDirectory(client, runtime);
+  const applications = path.join(runtime, 'applications');
+  const parentInfo = await lstat(applications).catch(error => { if (error.code !== 'ENOENT') throw error; return null; });
+  if (parentInfo?.isSymbolicLink() || (parentInfo && !parentInfo.isDirectory())) throw Error('STARLINK_OUTPUT_SYMLINK');
+  const target = path.join(applications, 'starlink');
+  {
     const info = await lstat(target).catch(error => { if (error.code !== 'ENOENT') throw error; return null; });
     if (info?.isSymbolicLink()) throw Error('STARLINK_OUTPUT_SYMLINK');
     await rm(target, { recursive: true, force: true });
     await mkdir(target, { recursive: true });
     for (const name of names) {
       await mkdir(path.dirname(path.join(target, name)), { recursive: true });
-      await writeFile(path.join(target, name), productPayload(name, await readFile(path.join(source, name)), true));
+      await writeFile(path.join(target, name), productPayload(name, await readFile(path.join(source, name)), edition === 'personal'));
     }
   }
   await rm(path.join(target, 'node_modules'), { recursive: true, force: true });

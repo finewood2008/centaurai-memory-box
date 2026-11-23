@@ -5,6 +5,7 @@ import path from "node:path";
 import { nativeBinaryPaths } from "../shell/native-binaries.mjs";
 import { createSidecar } from "../network/sidecar.mjs";
 import { prepareMacUpdatePermissions } from "./package-client-permissions.mjs";
+import { verifyPackagedMemoryLayout } from "./package-client-memory.mjs";
 import { extractFile } from "@electron/asar";
 
 export function verifyPackagedMaintenance(resourcesPath) {
@@ -82,6 +83,7 @@ export default async function afterPack(context) {
     sourceDirectory: path.join(context.packager.projectDir, "native/bin") });
   verifyPackagedMaintenance(resourcesPath);
   await verifyPackagedStarlink(path.join(resourcesPath,"app.asar"), context.packager.projectDir);
+  await verifyPackagedMemoryLayout({resourcesPath, platform});
   if(platform==='darwin')await verifyClipboardNative({resourcesPath,arch,sourceDirectory:path.join(context.packager.projectDir,'native/bin')});
   const canRun = platform === process.platform && arch === process.arch;
   if (canRun)

@@ -26,6 +26,32 @@ import {
 } from "../memory-agent-filter.js";
 
 describe("MemoriesSubPage", () => {
+  it("摘要模型未配置时待处理记忆明确等待配置，不假称正在生成摘要", () => {
+    const item = { ...memoryListItemFixture, processing: processingRecord(memoryListItemFixture.id, "summary_pending", "summary") };
+    const html = renderMemories({ status: "ready", data: panelItemsOutput([item]), detail: null }, "zh-CN", { summaryModelConfigured: false });
+    expect(html).toContain("等待配置记忆模型");
+    expect(html).not.toContain("摘要总结中");
+    const english = renderMemories({ status: "ready", data: panelItemsOutput([item]), detail: null }, "en-US", { summaryModelConfigured: false });
+    expect(english).toContain("Waiting for a Memory model");
+    const detail = { ...memoryDetailFixture, item: { ...memoryDetailFixture.item, summary: "", processing: item.processing } };
+    const drawer = renderMemories({ status: "ready", data: panelItemsOutput([]), detail: { status: "ready", data: detail } }, "zh-CN", { summaryModelConfigured: false });
+    expect(drawer).toContain("等待配置记忆模型");
+    expect(drawer).not.toContain("摘要总结中");
+  });
+
+  it("模型未知或已配置时保留等待摘要状态，已领取的摘要不被缺模型状态覆盖", () => {
+    for (const configured of [undefined, true]) {
+      const html = renderMemories({ status: "ready", data: panelItemsOutput([{ ...memoryListItemFixture,
+        processing: processingRecord(memoryListItemFixture.id, "summary_pending", "summary") }]), detail: null }, "zh-CN", { summaryModelConfigured: configured });
+      expect(html).toContain("摘要总结中");
+      expect(html).not.toContain("等待配置记忆模型");
+    }
+    const running = renderMemories({ status: "ready", data: panelItemsOutput([{ ...memoryListItemFixture,
+      processing: processingRecord(memoryListItemFixture.id, "summarizing", "summary") }]), detail: null }, "zh-CN", { summaryModelConfigured: false });
+    expect(running).toContain("摘要总结中");
+    expect(running).not.toContain("等待配置记忆模型");
+  });
+
   it("uses the canonical detail summary when legacy trace metadata still has a placeholder", () => {
     const detail = { ...memoryDetailFixture, item: { ...memoryDetailFixture.item,
       summary: "有效存储摘要", processing: undefined,
@@ -96,7 +122,7 @@ describe("MemoriesSubPage", () => {
     expect(html).toContain('id="memory-l1-agent-filter"');
     expect(html).toContain("memory-source-filter__all-icon");
     expect(html.match(/memory-source-filter__all-avatar/g)).toHaveLength(3);
-    expect(html).toContain("memmy-rice.png");
+    expect(html).toContain("centaurai-mark.png");
     expect(html).not.toContain("lucide-bot");
     expect(html).toContain("全部 Agent");
     expect(html).toContain("按来源 Agent 筛选");
@@ -104,12 +130,24 @@ describe("MemoriesSubPage", () => {
     expect(MEMORY_SOURCE_AGENT_EXCLUSIONS).toContain("computer_history");
   });
 
+  it("配件记忆按来源筛选，并从带有项目编号的详情返回工作台", () => {
+    expect(buildPanelItemsInput({ sourceAgent: "accessories" })).toEqual({ layer: "L1", sourceAgent: "accessories", page: 1 });
+    const item = { ...memoryDetailFixture.item, metadata: { source: "accessories" }, tags: ["clip", "m-20261123-123456-abcdef"] };
+    const renderItem = (tags: string[]) => renderMemories({ status: "ready", data: panelItemsOutput([]),
+      detail: { status: "ready", data: { ...memoryDetailFixture, item: { ...item, tags } } } });
+    expect(renderItem(item.tags)).toContain("打开来源项目");
+    expect(renderItem(["clip"])).not.toContain("打开来源项目");
+  });
+
   it("筛选器和详情共用统一的 Agent 名称格式", () => {
     expect(MEMORY_AGENT_SOURCE_VALUES.map(agentSourceDisplayName)).toEqual([
-      "Memmy",
+      "半人马AI记忆盒子",
+      "配件",
       "Cursor",
       "Claude Code",
+      "Claude 客户端",
       "Codex",
+      "Gemini CLI",
       "OpenCode",
       "OpenClaw",
       "Hermes",
@@ -118,8 +156,8 @@ describe("MemoriesSubPage", () => {
       "Pi",
       "QwenWork"
     ]);
-    expect(agentSourceDisplayName("MEMMY_AGENT")).toBe("Memmy");
-    expect(agentSourceDisplayName("computer_history")).toBe("Memmy");
+    expect(agentSourceDisplayName("MEMMY_AGENT")).toBe("半人马AI记忆盒子");
+    expect(agentSourceDisplayName("computer_history")).toBe("半人马AI记忆盒子");
     expect(agentSourceDisplayName("claude-code")).toBe("Claude Code");
     expect(agentSourceDisplayName("OPENCLAW")).toBe("OpenClaw");
   });
@@ -159,7 +197,7 @@ describe("MemoriesSubPage", () => {
     expect(html).not.toContain("memory-pill--source");
   });
 
-  it("电脑历史记忆显示为 Memmy，同时保留真实来源供详情溯源", () => {
+  it("电脑历史记忆使用记忆盒子的名称，同时保留真实来源供详情溯源", () => {
     const item = {
       ...memoryListItemFixture,
       metadata: { source: "computer_history" }
@@ -167,7 +205,7 @@ describe("MemoriesSubPage", () => {
     const html = renderMemories({ status: "ready", data: panelItemsOutput([item]), detail: null });
 
     expect(memoryDisplaySource(item)).toBe("computer_history");
-    expect(html).toContain('aria-label="来源: Memmy"');
+    expect(html).toContain('aria-label="来源: 半人马AI记忆盒子"');
     expect(html).not.toContain('aria-label="来源: 电脑历史"');
   });
 
@@ -1107,6 +1145,7 @@ function renderMemories(
     onRetryProcessing?: (id: string) => void;
     onOpenSettings?: () => void;
     retryFeedback?: NonNullable<Parameters<typeof MemoriesSubPageView>[0]["retryFeedback"]>;
+    summaryModelConfigured?: boolean;
   } = {}
 ): string {
   return renderToString(
@@ -1125,6 +1164,7 @@ function renderMemories(
         onRetryProcessing={actions.onRetryProcessing}
         onOpenSettings={actions.onOpenSettings}
         retryFeedback={actions.retryFeedback}
+        summaryModelConfigured={actions.summaryModelConfigured}
         onCloseDetail={vi.fn()}
       />
     </I18nProvider>

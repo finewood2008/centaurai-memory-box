@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wanx-memory-mutation/1",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "status": {
+      "enum": [
+        "created",
+        "replaced",
+        "deprecated",
+        "promoted",
+        "rejected"
+      ]
+    },
+    "atom": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "entity_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "candidate_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "assertion": {
+          "type": "string"
+        },
+        "verbatim_quote": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "quote_event_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "candidate_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "confidence": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "importance": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_at": {
+          "type": [
+            "string",
+            "number",
+            "null"
+          ]
+        },
+        "occurred_at": {
+          "type": [
+            "string",
+            "number",
+            "null"
+          ]
+        }
+      }
+    },
+    "old_atom_id": {
+      "type": "string"
+    },
+    "created_entity": {
+      "type": "boolean"
+    }
+  }
+}

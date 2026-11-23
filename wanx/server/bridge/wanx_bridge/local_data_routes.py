@@ -25,6 +25,8 @@ RESOURCES = frozenset({"wanx", "space", "space:personal", "clipboard", "semantic
 CLIPBOARD_RULES = (
     ("GET", r"(?:/note)?", "read", 0),
     ("PUT", r"/note", "write", 2 * MIB),
+    ("GET", rf"/notes(?:/{FILE})?", "read", 0),
+    ("PUT", rf"/notes/{FILE}", "write", 2 * MIB),
     ("POST", r"/(?:batches|manage)", "write", 2 * MIB),
     ("GET", rf"/{FILE}(?:/content)?", "read", 0),
     ("PUT", rf"/{FILE}/content", "write", 4 * MIB),

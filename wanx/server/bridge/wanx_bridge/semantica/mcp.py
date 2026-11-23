@@ -16,7 +16,7 @@ from mcp.server.auth.middleware.bearer_auth import BearerAuthBackend, RequireAut
 from mcp.server.auth.provider import AccessToken
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
-from mcp.types import CallToolResult, TextContent
+from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from pydantic import Field, ValidationError
 from starlette.middleware.authentication import AuthenticationMiddleware
 
@@ -26,6 +26,7 @@ from wanx_bridge.semantica.maintenance import MaintenanceError, request_guard
 from .mcp_reasoning_contract import OPERATIONS, register_tools, validate_payload
 
 REASONING_PATHS = frozenset("/reasoning/" + op for op in OPERATIONS)
+READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False)
 SAFE_ERRORS = frozenset(
     [
         "ACCESS_KEY_INVALID",
@@ -267,17 +268,22 @@ def mount_starlink_mcp(app: FastAPI, server: Any, *, origin_guard, mount_transpo
             # Never serialize HTTP headers/configuration in a tool error.
             raise ValueError(safe_error(exc)) from None
 
-    @mcp.tool(description="读取当前仓库 Key 所绑定的星图仓库概况。不能指定其他仓库。")
+    @mcp.tool(
+        description="读取当前仓库 Key 所绑定的星图仓库概况。不能指定其他仓库。",
+        annotations=READ_ONLY,
+    )
     async def xingtu_warehouse() -> dict[str, Any]:
         return await read("/warehouse")
 
-    @mcp.tool(description="读取此仓库 Key 获准的材料列表。")
+    @mcp.tool(description="读取此仓库 Key 获准的材料列表。", annotations=READ_ONLY)
     async def xingtu_documents(
         limit: int = Field(default=100, ge=1, le=200), offset: int = Field(default=0, ge=0)
     ) -> dict[str, Any]:
         return await read("/documents", query={"limit": str(limit), "offset": str(offset)})
 
-    @mcp.tool(description="读取授权仓的真实知识图谱与来源，遵循仓库保护规则。")
+    @mcp.tool(
+        description="读取授权仓的真实知识图谱与来源，遵循仓库保护规则。", annotations=READ_ONLY
+    )
     async def xingtu_graph(
         limit: int = Field(default=200, ge=1, le=500),
         entity_id: str = Field(default="", max_length=128),
@@ -286,14 +292,14 @@ def mount_starlink_mcp(app: FastAPI, server: Any, *, origin_guard, mount_transpo
             "/graph", query={"limit": str(limit), **({"entity_id": entity_id} if entity_id else {})}
         )
 
-    @mcp.tool(description="在授权仓检索证据与引用。")
+    @mcp.tool(description="在授权仓检索证据与引用。", annotations=READ_ONLY)
     async def xingtu_search(
         query: str = Field(min_length=1, max_length=2000),
         limit: int = Field(default=10, ge=1, le=50),
     ) -> dict[str, Any]:
         return await read("/search", payload={"query": query, "limit": limit})
 
-    @mcp.tool(description="读取授权仓内的证据，不能跨仓。")
+    @mcp.tool(description="读取授权仓内的证据，不能跨仓。", annotations=READ_ONLY)
     async def xingtu_evidence(
         evidence_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,128}$"),
     ) -> dict[str, Any]:

@@ -33,3 +33,27 @@ test('account switch discards targets and rejects late results; unknown disk fai
   await assert.rejects(r.route(`/files?space_id=${sid}`),/MCP_DRIVE_NOT_READY/);
   assert.equal((await r.route(`/files/${fid}`)).handled,false);
 });
+test('a disk text edit keeps the file ID distinct from its upload ID', async () => {
+  const calls = [];
+  const routing = createDriveRouting({
+    scope: () => 'A:box',
+    catalog: async () => [{ id: sid, root, connection_id: aid }],
+    send: async (connection, action, params) => {
+      calls.push({ connection, action, params });
+      return { id: action === 'edit-create' ? up : fid };
+    },
+  });
+  const digest = 'f'.repeat(64);
+  await routing.route(`/files/${fid}/edit-uploads`, {
+    spaceId: sid, method: 'POST', body: { id: up, expected: 2, size: 3, digest },
+  });
+  assert.deepEqual(calls[0], {
+    connection: aid,
+    action: 'edit-create',
+    params: { id: fid, upload_id: up, expected: 2, size: 3, digest, trash: false },
+  });
+  await routing.route(`/uploads/${up}/complete`, { spaceId: sid, method: 'POST', body: { digest } });
+  assert.equal(calls[1].connection, aid);
+  assert.equal(calls[1].action, 'upload-complete');
+  assert.equal(calls[1].params.id, up);
+});

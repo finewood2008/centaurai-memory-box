@@ -7,7 +7,7 @@ import {createInterface} from 'node:readline';
 import {mkdtemp, mkdir, readFile, writeFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
-import {createApplicationManager} from '../applications/manager.mjs';
+import {createApplicationManager} from '../build/app/applications/manager.mjs';
 import {createDashboardGateway} from '../octop/gateway.mjs';
 
 const zhijun = process.env.WANX_ZHIJUN_ROOT;
@@ -38,7 +38,7 @@ test('installed ZhiJun child uses Host HTTP and clears its session on box switch
       process.once('SIGTERM',()=>{runtime.close();process.exit(0);});
     }).catch(()=>process.exit(1));
   `);
-  let live=true, child, lines;
+  let live=true, child, lines, inspectingRevocation=false;
   const listeners=new Set();
   const manager=await createApplicationManager({applicationRoot:path.join(root,'installed'),applicationId:'wanx-host',
     createConnection:async()=>{
@@ -50,6 +50,10 @@ test('installed ZhiJun child uses Host HTTP and clears its session on box switch
     spawn:(_executable,args,options)=>{
       const installPath=args[0].slice('--wanx-application='.length);
       child=spawn(process.execPath,[path.join(installPath,manifest.entrypoint)],{...options,stdio:['ignore','pipe','pipe','ipc']});
+      const kill=child.kill.bind(child);
+      // Keep the fixture HTTP server available while checking its revoked-session
+      // responses. The launcher's forced termination still bounds this check.
+      child.kill=signal=>inspectingRevocation && !signal ? true : kill(signal);
       lines=createInterface({input:child.stdout})[Symbol.asyncIterator]();return child;
     },
   });
@@ -60,8 +64,11 @@ test('installed ZhiJun child uses Host HTTP and clears its session on box switch
   const state=await(await fetch(origin+'/api/connection')).json();
   assert.equal(state.boxId,'102');assert.equal(state.scope,'wanx-host');
   const me=await fetch(origin+'/api/me');assert.equal(me.status,200);assert.equal((await me.json()).id,4);
+  inspectingRevocation=true;
   live=false;for(const fn of listeners)fn();
   assert.equal((await lines.next()).value,'expired');
   assert.equal((await fetch(origin+'/api/me')).status,401);
   assert.equal((await(await fetch(origin+'/api/status')).json()).sessionExpired,true);
+  inspectingRevocation=false;
+  const exited=once(child,'exit');child.kill();await exited;
 });

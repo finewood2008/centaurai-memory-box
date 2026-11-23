@@ -1,6 +1,5 @@
 import asyncio
-from copy import deepcopy
-import json
+from standard_build_fixture import workspace_files
 
 import pytest
 
@@ -46,13 +45,14 @@ async def test_new_build_does_not_require_legacy_full_prd_confirmation(svc,monke
 async def test_stale_impact_is_rejected_and_build_action_freezes_contract(svc,monkeypatch):
     p=await draft(svc)
     with pytest.raises(StudioError,match='SOLUTION_CHANGED'):await start(svc,p,monkeypatch,impactHash='a'*64)
-    # A newly proposed schema is separate from ordinary prose edits.
-    propose_contract(svc,'alice',p['id'],{'expectedHash':digest(p['solution']),'collections':{'notes':{'title':'string'}}})
+    with pytest.raises(StudioError, match='STANDARD_CONTRACT_FIXED'):
+        propose_contract(svc,'alice',p['id'],{'expectedHash':digest(p['solution']),'collections':{'notes':{'title':'string'}}})
     p=svc.store.get('alice',p['id'])
     assert not proposal(p)['needsContractConfirmation']
     result,_=await start(svc,p,monkeypatch,confirmedContract=False)
     task=svc.store.get('alice',p['id'])['tasks'][-1]
-    assert task['change']['contract']['collections']=={'notes':{'title':'string'}}
+    assert task['change']['contract']==proposal(p)['previousContract']
+    assert task['change']['contract']['hostCapabilities']==['identity.read']
     assert task['change']['confirmationMode']=='build-action'
     assert result['tasks'][-1]['state']=='queued'
 
@@ -68,10 +68,13 @@ async def test_compiler_enforces_frozen_schema_and_records_checkpoint(svc,monkey
     p=await draft(svc);result,_=await start(svc,p,monkeypatch)
     task_id=result['tasks'][-1]['id']
     svc.store.mutate('alice',p['id'],op(),{},lambda q:q['tasks'][-1].update({'state':'running'}))
-    files=deepcopy(p['artifacts'][-1]['files']);m=json.loads(files['miniapp.manifest.json'])
-    m['collections']['items']['undeclared']='string';files['miniapp.manifest.json']=json.dumps(m)
-    with pytest.raises(StudioError,match='CONTRACT_SCHEMA_NOT_CONFIRMED'):await svc.add_artifact('alice',p['id'],task_id,files)
-    await svc.add_artifact('alice',p['id'],task_id,p['artifacts'][-1]['files'])
+    project = svc.store.get('alice', p['id'])
+    files = workspace_files(svc, 'alice', project, task_id)
+    with pytest.raises(StudioError, match='DEVKIT_SOURCE_PATH_DENIED'):
+        await svc.add_artifact('alice', p['id'], task_id, {**files, 'manifest.json': '{}'})
+    assert svc.store.get('alice', p['id'])['artifacts'] == p['artifacts']
+    files = workspace_files(svc, 'alice', project, task_id)
+    await svc.add_artifact('alice', p['id'], task_id, files)
     artifact=svc.store.get('alice',p['id'])['artifacts'][-1]
     verify(artifact)
     assert artifact['checkpoint']['parent']==p['artifacts'][-1]['hash']
@@ -79,9 +82,12 @@ async def test_compiler_enforces_frozen_schema_and_records_checkpoint(svc,monkey
     with pytest.raises(StudioError,match='ARTIFACT_INTEGRITY_FAILED'):verify(artifact)
 
 
-async def test_private_state_never_leaks_through_legacy_projection(svc):
-    p=await seeded(svc);p['_iterative']={'secret':'private'};p['futureInternal']='private'
-    p['tasks'][-1]['change']={'spec':'private'}
+def test_public_project_omits_private_build_and_iteration_state(svc):
+    project = svc.create_project('alice', '标准应用', '验证项目公开视图', op())
+    p = svc.store.get('alice', project['id'])
+    p['_iterative'] = {'secret': 'private'}
+    p['futureInternal'] = 'private'
+    p['tasks'].append({'id': op(), 'state': 'queued', 'change': {'spec': 'private'}})
     result=public(p)
     assert '_iterative' not in result and 'futureInternal' not in result
     assert 'change' not in result['tasks'][-1]

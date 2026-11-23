@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createSpaceLinkBridge} from '../shell/space-links.mjs';
+import {createSpaceLinkBridge} from '../build/app/shell/space-links.mjs';
 
 test('storage chooser uses native folders only for local mode, binds scope, and otherwise browses the box', async t=>{
  let saved,listener,box='local-box',mode='local',chooseResult='/Volumes/My Space',pending;

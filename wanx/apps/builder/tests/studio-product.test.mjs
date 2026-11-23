@@ -9,3 +9,34 @@ test('old account model response cannot appear in a new account',async()=>{let r
 test('preview load is released on project switch and never saves business data',async()=>{let resolve;const calls=[];const h=setup(async(name,input)=>{calls.push([name,input]);if(name==='studio.preview.open')return new Promise(r=>resolve=r);return{closed:true}});h.product.mounted({querySelector:()=>({querySelector:()=>null})});h.product.sync('account:box',{...project,id:'f'.repeat(32)},true);resolve({handle:'old-preview',document:'private-doc'});await flush();assert.ok(calls.some(v=>v[0]==='studio.preview.close'&&v[1].handle==='old-preview'));assert.doesNotMatch(h.product.render(),/private-doc/);assert.ok(calls.every(v=>!v[0].includes('invoke')))});
 
 test('leaving during model save preserves the draft and retry operation without stuck saving',async()=>{let finish;const calls=[];const settings={revision:1,modelId:null,defaultId:'one',available:true,usesModel:true,models:[{id:'two',name:'Two',provider:'WANX'}]};const h=setup(async(name,input)=>{calls.push([name,input]);if(name==='studio.runtime-model')return settings;if(!finish)return new Promise(r=>finish=r);return{...settings,revision:2,modelId:'two'}});await h.product.action('studio-product-tab',{tab:'model'});await flush();h.product.field('model','two');const pending=h.product.action('studio-product-save-model');h.product.pause();h.product.sync('account:box',project,true);assert.doesNotMatch(h.product.render(),/正在保存/);assert.match(h.product.render(),/value="two" selected/);await h.product.action('studio-product-save-model');finish({...settings,revision:2,modelId:'two'});await pending;const writes=calls.filter(v=>v[0]==='studio.runtime-model.save');assert.deepEqual(writes[0][1],writes[1][1]);assert.match(h.product.render(),/已保存/)});
+
+
+test('standard layout preview explains missing runtime before the application without asserting deployment status',async()=>{
+ const calls=[];const h=setup(async(name,input)=>{calls.push([name,input]);return {handle:'standard-layout',document:'<html>original</html>',layoutOnly:true}});
+ h.product.mounted({querySelector:()=>({querySelector:()=>null})});await flush();
+ const html=h.product.render();
+ assert.match(html,/布局预览 · 不调用专家/);
+ assert.match(html,/EXPERT_DEPLOYMENT_REQUIRED/);
+ assert.match(html,/不代表盒子部署失败/);
+ assert.match(html,/已部署.*应用.*打开/);
+ assert.ok(html.indexOf('不代表盒子部署失败')<html.indexOf('<iframe'));
+ assert.doesNotMatch(html,/只读 · 试用数据|尚未部署/);
+ assert.deepEqual(calls.map(([name])=>name),['studio.preview.open']);
+});
+
+test('ordinary preview retains its read-only guidance without standard deployment advice',async()=>{
+ const h=setup(async()=>({handle:'ordinary',document:'<html>original</html>',layoutOnly:false}));
+ h.product.mounted({querySelector:()=>({querySelector:()=>null})});await flush();
+ assert.match(h.product.render(),/只读 · 试用数据/);
+ assert.doesNotMatch(h.product.render(),/EXPERT_DEPLOYMENT_REQUIRED|不调用专家/);
+});
+
+
+test('switching away from a standard preview clears its guidance and releases its handle',async()=>{
+ const calls=[];const h=setup(async(name,input)=>{calls.push([name,input]);return {handle:'layout',document:'original',layoutOnly:true}});
+ h.product.mounted({querySelector:()=>({querySelector:()=>null})});await flush();
+ assert.match(h.product.render(),/不代表盒子部署失败/);
+ h.product.sync('account:box',{...project,id:'f'.repeat(32)},true);
+ assert.doesNotMatch(h.product.render(),/不代表盒子部署失败|只读 · 试用数据/);
+ assert.ok(calls.some(([name,input])=>name==='studio.preview.close'&&input.handle==='layout'));
+});

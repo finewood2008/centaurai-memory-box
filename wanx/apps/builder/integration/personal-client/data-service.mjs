@@ -160,6 +160,21 @@ export function createPersonalDataService({client, personalSpace, applications, 
   // These are Starlink's existing warehouse-bound keys, not Team session keys.
   const share = createDataShareAccess({identity, instance, getMcpDetails, writeClipboard, identitySecurityEnabled:false});
   return {
+    // Internal MCP credentials never cross the renderer action dispatcher.
+    async createMcpKey(warehouseId) {
+      const value = await entry(); live(value);
+      const warehouse = await value.service.call('warehouse', {id:warehouseId}); live(value);
+      if (warehouse?.id !== warehouseId) throw fail('SEMANTICA_RESOURCE_FORBIDDEN');
+      const grant = await value.service.call('create-key', {warehouseId, operationId:randomUUID(),
+        name:'MemoBox 本机工具临时连接', days:1, scopes:['documents','evidence','graph','search','reasoning']});
+      live(value);
+      if (!grant?.token || !grant.key?.id) throw fail('TEAM_DATA_KEY_NOT_REPLAYABLE');
+      return {token:grant.token, expiresAt:grant.key.expires_at * 1000,
+        async revoke() {
+          live(value);
+          await value.service.call('revoke-key', {warehouseId, id:grant.key.id, operationId:randomUUID()});
+        }};
+    },
     async action(action, input = {}) {
       if (action === 'release-share-key') return share.action(action, input);
       if (!materialActions.has(action) && !actions.has(action) && !governanceActions.has(action) && !share.supports(action) && action !== 'open-starlink') throw fail('TEAM_DATA_ACTION_DENIED');
@@ -198,6 +213,10 @@ export function createPersonalDataService({client, personalSpace, applications, 
       } else {
         if (['create-warehouse','retry-job','build-index'].includes(action)) input = {...input, operationId:operationId(input.operationId)};
         if (['select-files','select-space-files','upload'].includes(action) && !value.service.capabilities) value.service.capabilities = await value.service.api('/capabilities');
+        if (action === 'search' && !value.service.capabilities) {
+          try { value.service.capabilities = await value.service.api('/capabilities', {timeoutMs:5000}); }
+          catch { live(value); }
+        }
         live(value); result = await value.annotations.run(action, input, () => value.service.call(action, input));
       }
       live(value); return result;

@@ -4,7 +4,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createRequire} from 'node:module';
 const ts=createRequire(new URL('../../builder/package.json',import.meta.url))('typescript');
-const root=fileURLToPath(new URL('../',import.meta.url));
+const root=fileURLToPath(new URL('../build/app/',import.meta.url));
 const legacy={
  'shell/main.mjs':new Set(['万象记忆库']),
  'shell/space-local-memory.mjs':new Set(['万象记忆库']),
@@ -17,6 +17,8 @@ async function scan(relative) {
  for(const entry of await readdir(path.join(root,relative),{withFileTypes:true})) {
   if(['node_modules','vendor','wanx-app-kit'].includes(entry.name))continue;
   const file=path.posix.join(relative,entry.name);
+  // The embedded Starlink product ships its own UI and legacy document labels.
+  if(file==='local-ui/starlink'||file==='shell/starlink-panel-service.mjs')continue;
   if(file.startsWith('local-ui/renderer/assets/') && entry.name==='prompts.json')continue;
   if(entry.isDirectory())await scan(file);
   else if(entry.isFile()&&/\.(?:[cm]?js|html|json|nsh)$/.test(file)) {

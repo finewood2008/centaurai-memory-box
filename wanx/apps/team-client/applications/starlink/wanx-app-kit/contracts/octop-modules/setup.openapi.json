@@ -1,0 +1,897 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "WANX Octop · setup",
+    "description": "**CentaurAI-WANX** is a smarter, self-hosted AI assistant for multiple users and agents. All routes are served under `/api`.\n\n## Authentication\n\nMost endpoints require a JWT bearer token:\n\n1. Complete initial setup via `/api/setup/*` (first install only).\n2. `GET /api/auth/captcha` then `POST /api/auth/login` with `username` and `password`\n   (and `captcha_token` when a strong provider is active), or complete SSO with\n   `/api/auth/oidc/*` or `/api/auth/oauth/*` when a provider is enabled.\n3. Send `Authorization: Bearer <access_token>` on subsequent requests.\n\nAccess tokens use sliding renewal: when less than one-third of\n`access_token_ttl_seconds` remains, authenticated responses may include a fresh\ntoken in the `X-Octop-Access-Token` header. Clients should replace the stored\ntoken when present.\n\nPublic endpoints (no login token): `/api/docs`, `/api/openapi.json`, `/api/health`,\n`/api/setup/*` (wizard authorization applies), `/api/auth/login`, `/api/auth/register`,\n`/api/auth/captcha`, `/api/auth/oidc/status`, `/api/auth/oidc/start`,\n`/api/auth/oidc/callback`, `/api/auth/oidc/exchange`, `/api/auth/oauth/status`,\n`/api/auth/oauth/start`, `/api/auth/oauth/callback`, `/api/auth/oauth/exchange`,\n`/api/auth/invite/validate`,\n`/api/auth/invite/redeem`, `/api/connectors/oauth/callback`,\nand `/api/internal/mcp/*`.\n\n## Agent scope\n\nMany agent-scoped routes use the agent ID in the URL path (`/api/agents/{agent_id}/…`).\nRoutes first check the signed token's application scope; legacy tokens default to WANX.\nResources in another application are treated as not found, including for administrators.\nWithin the same application, each route applies its ownership or shared-resource access\nrules. WANX administrators may bypass ownership where supported; Zhijun personal profiles,\nmemories and uploaded sources require the owner.\n\n## Streaming chat\n\nDashboard live turns use **WebSocket** at `/api/agents/{agent_id}/chat/ws` (pass JWT as\n`?token=` query param). Send `{\"type\":\"user_turn\", ...}` frames; the server replies with JSON\nchunks matching the harness stream format, ending with `{\"type\":\"done\"}` or\n`{\"type\":\"error\",\"message\":\"...\"}`.\n\nText-type dashboard pushes (cron reminders, proactive care) also emit\n`{\"type\":\"dashboard_push\", ...}` on `/api/notifications/ws` (same `?token=` auth) so the\nSPA can show a toast even when the chat socket is not subscribed.\n\nHITL resume still uses `POST /api/agents/{agent_id}/chat/hitl/resume` (SSE).\n\n## Knowledge libraries\n\n`/api/knowledge-bases` uses the signed application scope for creation, visibility,\ndocument access, and citations. Existing libraries remain in WANX. Zhijun libraries\nare private to their owner and use local document parsers, downloaded native ONNX\nembeddings and RapidOCR. Remote WANX embedding/OCR settings do not affect Zhijun;\nmissing local components are reported as unavailable without remote fallback.\n",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/setup/presets": {
+      "get": {
+        "tags": [
+          "setup"
+        ],
+        "summary": "List provider presets",
+        "description": "Built-in LLM provider templates for the setup wizard (no auth required).",
+        "operationId": "setup_presets_api_setup_presets_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "type": "array",
+                  "title": "Response Setup Presets Api Setup Presets Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/setup/validate-token": {
+      "get": {
+        "tags": [
+          "setup"
+        ],
+        "summary": "Check wizard session token",
+        "description": "Return whether the Bearer wizard token is still valid (setup not yet completed).",
+        "operationId": "validate_wizard_token_api_setup_validate_token_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Validate Wizard Token Api Setup Validate Token Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/setup/status": {
+      "get": {
+        "tags": [
+          "setup"
+        ],
+        "summary": "Setup wizard status",
+        "description": "Whether initial admin creation is still required and wizard password file state.",
+        "operationId": "status_api_setup_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Status Api Setup Status Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/setup/test-database": {
+      "post": {
+        "tags": [
+          "setup"
+        ],
+        "summary": "Probe control-plane database connectivity",
+        "description": "Validate DSN/settings with a short-lived pool (does not replace the process pool).",
+        "operationId": "test_database_api_setup_test_database_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatabaseSetupBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Test Database Api Setup Test Database Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/setup/database": {
+      "post": {
+        "tags": [
+          "setup"
+        ],
+        "summary": "Persist control-plane database and bind",
+        "description": "Write ``config.json`` database section, open the pool, migrate, and boot runtime.\n\nFirst-run path binds once (no prior pool). If already bound with zero users\n(e.g. changing engine mid-wizard), swaps via rebind.",
+        "operationId": "apply_database_api_setup_database_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatabaseSetupBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Apply Database Api Setup Database Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/setup/begin": {
+      "post": {
+        "tags": [
+          "setup"
+        ],
+        "summary": "Begin setup without wizard password",
+        "description": "Issue a wizard token when ``require_setup_password`` is disabled.",
+        "operationId": "begin_setup_api_setup_begin_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Begin Setup Api Setup Begin Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/setup/verify-password": {
+      "post": {
+        "tags": [
+          "setup"
+        ],
+        "summary": "Verify wizard password",
+        "description": "Validate the CLI-generated wizard password and return a short-lived wizard token.",
+        "operationId": "verify_password_api_setup_verify_password_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Verify Password Api Setup Verify Password Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/setup/initial-admin": {
+      "post": {
+        "tags": [
+          "setup"
+        ],
+        "summary": "Create initial admin",
+        "description": "Create the first admin user. Default ``main`` agent is created at ``/setup/finish``.",
+        "operationId": "initial_admin_api_setup_initial_admin_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetupBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Initial Admin Api Setup Initial Admin Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/setup/resume-wizard": {
+      "post": {
+        "tags": [
+          "setup"
+        ],
+        "summary": "Issue a fresh wizard token mid-setup",
+        "description": "Resume with a valid wizard token or WANX admin JWT after admin creation.",
+        "operationId": "resume_wizard_api_setup_resume_wizard_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Resume Wizard Api Setup Resume Wizard Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/setup/test-provider": {
+      "post": {
+        "tags": [
+          "setup"
+        ],
+        "summary": "Test provider draft connectivity",
+        "description": "Probe LLM connectivity for an unsaved wizard provider draft.",
+        "operationId": "test_provider_draft_api_setup_test_provider_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/octop__api__routers__setup__ProviderTestBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Test Provider Draft Api Setup Test Provider Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/setup/finish": {
+      "post": {
+        "tags": [
+          "setup"
+        ],
+        "summary": "Finish setup wizard",
+        "description": "Apply optional provider draft, bootstrap default ``main`` agent, clear wizard token.",
+        "operationId": "finish_api_setup_finish_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FinishBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Finish Api Setup Finish Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "DatabaseSetupBody": {
+        "properties": {
+          "driver": {
+            "type": "string",
+            "title": "Driver",
+            "description": "sqlite | postgresql"
+          },
+          "sqlite_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sqlite Path"
+          },
+          "host": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Host"
+          },
+          "port": {
+            "type": "integer",
+            "title": "Port",
+            "default": 5432
+          },
+          "database": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Database"
+          },
+          "user": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User"
+          },
+          "password": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "driver"
+        ],
+        "title": "DatabaseSetupBody"
+      },
+      "FinishBody": {
+        "properties": {
+          "provider_draft": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProviderDraftBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "title": "FinishBody"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "ProviderDraftBody": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "type": {
+            "type": "string",
+            "title": "Type"
+          },
+          "api_key": {
+            "type": "string",
+            "title": "Api Key",
+            "default": ""
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/ProviderModelDraft"
+            },
+            "type": "array",
+            "title": "Models"
+          },
+          "extras": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extras"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "type"
+        ],
+        "title": "ProviderDraftBody"
+      },
+      "ProviderModelDraft": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": true
+          },
+          "input": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Input"
+          },
+          "thinking": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thinking"
+          },
+          "reasoning": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "ProviderModelDraft"
+      },
+      "SetupBody": {
+        "properties": {
+          "username": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Username"
+          },
+          "password": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Password"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 254
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "locale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Locale",
+            "description": "UI locale for the initial admin (zh|en). Defaults to Accept-Language."
+          }
+        },
+        "type": "object",
+        "required": [
+          "username",
+          "password"
+        ],
+        "title": "SetupBody"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "VerifyBody": {
+        "properties": {
+          "password": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Password"
+          }
+        },
+        "type": "object",
+        "required": [
+          "password"
+        ],
+        "title": "VerifyBody"
+      },
+      "octop__api__routers__setup__ProviderTestBody": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "type": {
+            "type": "string",
+            "title": "Type"
+          },
+          "api_key": {
+            "type": "string",
+            "title": "Api Key",
+            "default": ""
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
+          "model_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Model Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "type",
+          "model_id"
+        ],
+        "title": "ProviderTestBody"
+      }
+    },
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "JWT from `POST /api/auth/login` (`access_token` field)."
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "setup",
+      "description": "First-run wizard: create the admin user and optional LLM provider."
+    }
+  ],
+  "x-wanx-supplemental-routes": []
+}

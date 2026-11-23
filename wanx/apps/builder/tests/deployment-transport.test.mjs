@@ -59,21 +59,27 @@ function embeddedTransport(){
  return{requests,open:()=>workspace.open({protocolVersion:2}),close:()=>workspace.close(),respond(s,v){status=s;value=v},request(route,method,body){const sender=view.webContents;return handlers.get('studio-embedded:request')({sender,senderFrame:sender.mainFrame},route,method,body)}};
 }
 
-// Execute the standalone shell's actual request function with an inert Electron host.
+// Execute the actual registered IPC handler, including post-response project work.
 function standaloneTransport(){
- const requests=[];let status=200,value={state:'pending'};
- const host={async request(path,options){requests.push({path,...options});return{ok:status>=200&&status<300,status,json:async()=>value}}};
+ const requests=[],handlers=new Map(),events=new Map(),timers=new Set();let status=200,value={state:'pending'},win,resolveReady;
+ const ready=new Promise(resolve=>resolveReady=resolve);
+ const host={context:async()=>({accountId:'account',boxId:'box',user:{id:1}}),onSessionInvalidated(){},close(){},async request(path,options){requests.push({path,...options});return{ok:status>=200&&status<300,status,json:async()=>value}}};
  const noop=()=>{};
+ class Window extends EventEmitter{
+  constructor(){super();win=this;this.webContents=new EventEmitter();Object.assign(this.webContents,{mainFrame:{},setWindowOpenHandler:noop,session:{setPermissionRequestHandler:noop,setPermissionCheckHandler:noop},send:noop});}
+  async loadFile(){resolveReady()}
+ }
  const modules={
-  electron:{app:{setName:noop,on:noop,whenReady:()=>({then:()=>({catch:noop})})}},
+  electron:{app:{setName:noop,on:(key,fn)=>events.set(key,fn),whenReady:()=>Promise.resolve(),setAboutPanelOptions:noop,quit:noop},BrowserWindow:Window,ipcMain:{handle:(key,fn)=>handlers.set(key,fn)},nativeTheme:{},Menu:{setApplicationMenu:noop,buildFromTemplate:()=>[]}},
   '../integration/workspace-policy.mjs':{studioRoute},'../core/request-errors.mjs':{requestErrorCode},
   '../integration/edit-scope.mjs':{rememberRequest:noop,rememberEdits:noop,stopEdits:noop,heartbeatEdits:()=>noop},
   '@centaurai/wanx-host-sdk':{fromEnvironment:()=>host},'@centaurai/wanx-host-sdk/electron':{attachElectronHost:noop},
  };
  const main=new URL('../shell/main.cjs',import.meta.url),require=createRequire(main);
- const context={require:name=>Object.hasOwn(modules,name)?modules[name]:require(name),process:{env:{}},Buffer,Error};
- runInNewContext(readFileSync(main,'utf8')+'\nglobalThis.transportRequest=request;',context,{filename:main.pathname});
- return{requests,open:async()=>{},close:noop,respond(s,v){status=s;value=v},request:context.transportRequest};
+ const context={require:name=>Object.hasOwn(modules,name)?modules[name]:require(name),process:{env:{}},__dirname:new URL('../shell/',import.meta.url).pathname,Buffer,Error,
+  setInterval(fn){const timer={fn};timers.add(timer);return timer},clearInterval:timer=>timers.delete(timer)};
+ runInNewContext(readFileSync(main,'utf8'),context,{filename:main.pathname});
+ return{requests,timers,open:()=>ready,close:()=>events.get('before-quit')?.(),respond(s,v){status=s;value=v},request(route,method,body){const sender=win.webContents;return handlers.get('studio:request')({sender,senderFrame:sender.mainFrame},route,method,body)}};
 }
 
 test('deployment route policy accepts only the specified methods, targets and bounded cursors',()=>{
@@ -85,6 +91,14 @@ test('deployment route policy accepts only the specified methods, targets and bo
 });
 
 for(const[name,create]of [['embedded',embeddedTransport],['standalone',standaloneTransport]]){
+ test(name+' IPC preserves a pending null receipt and still handles valid project responses',async()=>{
+  const h=create();try{await h.open();h.respond(200,null);
+   assert.equal(await h.request(operation+'/receipt','GET'),null);
+   const project={id:'b'.repeat(32),tasks:[{state:'running'}]};h.respond(200,project);
+   assert.deepEqual(await h.request('/api/app-studio/projects/'+project.id,'GET'),project);
+   if(name==='standalone')assert.equal(h.timers.size,1,'valid project still starts its existing watcher');
+  }finally{h.close()}
+ });
  test(name+' transport enforces the shared deployment whitelist before host dispatch',async()=>{
   const h=create();try{await h.open();
    for(const[method,path]of allowed){await h.request(path,method);assert.equal(h.requests.at(-1).path,path);assert.equal(h.requests.at(-1).method,method)}

@@ -12,6 +12,23 @@ const hash = bytes => createHash("sha256").update(bytes).digest("hex");
 const rootId = "";
 const json = (value, status = 200) => ({ status, headers: {}, body: Buffer.from(JSON.stringify(value)) });
 
+test("defaults to hourly backups and preserves a saved interval", async () => {
+  const scope = "test-account";
+  const key = "settings:" + hash(scope);
+  for (const [preferences, expected] of [[{}, 60], [{ [key]: { intervalMinutes: 5 } }, 5]]) {
+    const backup = createMemoryBackup({
+      client: { subscribe: () => () => {} },
+      space: { snapshot: () => ({ scope, dataContextId: null }) },
+      store: { load: async () => preferences },
+    });
+    try {
+      assert.equal((await backup.action("status")).intervalMinutes, expected);
+    } finally {
+      await backup.close();
+    }
+  }
+});
+
 test("independent installations keep history, recover a selected version, and retain legacy snapshots", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "wanx-backup-flow-"));
   const uploads = new Map();
@@ -21,6 +38,7 @@ test("independent installations keep history, recover a selected version, and re
   const devices = [];
   let corrupted = false, lostChunkReply = false, resetDownload = false, stalledDownload = false, sequence = 0;
   let interrupted, activeUploads = 0, maximumUploads = 0;
+  let failCompletion = false, failPurge = false;
 
   function device(name, initial, saved, library) {
     let prefs = saved, local = initial, previous, restored, online = true, listener, clock = Date.now();
@@ -51,7 +69,8 @@ test("independent installations keep history, recover a selected version, and re
             if (input.method === "GET") return json({ offset: upload.bytes.length, state: "pending" });
             if (operation === "complete") {
               assert.equal(JSON.parse(input.body).digest, hash(upload.bytes));
-              const file = { ...upload, kind: "file", digest: hash(upload.bytes), modified: ++sequence };
+              if (failCompletion) return json({ detail: { code: "SPACE_UPLOAD_FAILED" } }, 409);
+              const file = { ...upload, kind: "file", digest: hash(upload.bytes), modified: ++sequence, version: 1 };
               files.set(id, file);
               uploads.delete(id);
               activeUploads--;
@@ -75,10 +94,22 @@ test("independent installations keep history, recover a selected version, and re
           }
           if (!id) {
             const parent = url.searchParams.get("parent") || rootId;
-            return json({ space_id: "personal", root: rootId, parent, breadcrumbs: parent ? [{ id: parent, name: folders.get(parent).name }] : [], items: [...folders.values(), ...files.values()].filter(item => item.parent === parent) });
+            const trash = url.searchParams.get("trash") === "true";
+            return json({ space_id: "personal", root: rootId, parent, breadcrumbs: parent ? [{ id: parent, name: folders.get(parent).name }] : [], items: [...folders.values(), ...files.values()].filter(item => trash ? item.trashed : !item.trashed && item.parent === parent) });
           }
-          assert.notEqual(input.method, "DELETE", "must never delete a completed backup");
           const file = files.get(id);
+          if (input.method === "DELETE") {
+            if (collection === "trash") {
+              assert.ok(file?.trashed, "only a recycled file may be purged");
+              if (failPurge) return json({ detail: { code: "SPACE_CONNECTION_TIMEOUT" } }, 503);
+              files.delete(id);
+            } else {
+              assert.equal(collection, "files");
+              assert.ok(file && !file.trashed, "only an active file may be recycled");
+              files.set(id, { ...file, trashed: ++sequence, version: file.version + 1 });
+            }
+            return json(null, 204);
+          }
           if (!operation) return json(file);
           assert.equal(Number(url.searchParams.get("length")), 1024 * 1024);
           assert.equal(input.idleTimeoutMs, 15_000);
@@ -128,6 +159,7 @@ test("independent installations keep history, recover a selected version, and re
     devices.push(backup);
     return {
       status: () => backup.action("status"),
+      close: () => backup.close(),
       async action(action, input) {
         return backup.action(action, { context: (await backup.action("status")).context, ...input });
       },
@@ -269,6 +301,44 @@ test("independent installations keep history, recover a selected version, and re
     const mixedHistory = (await upgraded.action("catalog")).sources;
     assert.ok(mixedHistory.some(source => source.id === cliSources[0].id));
     assert.ok(mixedHistory.some(source => source.id === desktopSources[0].id));
+
+    first.online(true);
+    const oldest = files.get(older.id);
+    const manualTrash = { ...oldest, id: "f".repeat(32), trashed: ++sequence, version: 2 };
+    files.set(manualTrash.id, manualTrash);
+    const inactiveSource = Array.from({ length: 5 }, (_, index) => {
+      const id = (65536 + index).toString(16).padStart(32, "0");
+      return { ...oldest, id, name: "半人马AI-记忆备份-v2-darwin-" + "e".repeat(32) + "-" + id + ".sqlite.gz",
+        modified: ++sequence };
+    });
+    for (const entry of inactiveSource) files.set(entry.id, entry);
+    first.change("A fourth");
+    failCompletion = true;
+    await assert.rejects(first.action("backup"), /SPACE_UPLOAD_FAILED/);
+    failCompletion = false;
+    assert.equal(files.get(oldest.id), oldest, "failed uploads keep old snapshots active");
+    assert.ok(inactiveSource.every(entry => files.get(entry.id) === entry));
+
+    failPurge = true;
+    await assert.rejects(first.action("backup"), /SPACE_CONNECTION_TIMEOUT/);
+    assert.ok(files.get(oldest.id)?.trashed, "a lost cleanup leaves the selected file recoverable");
+    const uploadsBeforeRetry = files.size;
+    failPurge = false;
+    const savedBeforeRestart = first.prefs();
+    await first.close();
+    const restarted = device("first", "A fourth", savedBeforeRestart);
+    await restarted.action("backup");
+    assert.equal(files.size, uploadsBeforeRetry - 3, "unchanged backup retries only the three retired files");
+    assert.equal(files.has(oldest.id), false);
+    assert.ok(files.has(manualTrash.id), "manually recycled backups remain recoverable");
+    assert.ok(files.has(customLegacy.id));
+    assert.deepEqual(inactiveSource.map(entry => files.has(entry.id)), [false, false, true, true, true]);
+    const retained = (await restarted.action("catalog")).sources;
+    assert.equal(retained.find(source => source.id === sourceA.id).snapshots.length, 3);
+    assert.equal(retained.find(source => source.id === sourceB.id).snapshots.length, 2);
+    const newerOldest = retained.find(source => source.id === sourceA.id).snapshots.at(-1);
+    await restarted.action("restore", restoreInput(sourceA, newerOldest));
+    assert.equal(restarted.local(), "A offline", "the oldest retained version can still be restored");
   } finally {
     await Promise.all(devices.map(backup => backup.close()));
     if (path.dirname(root) === tmpdir()) await rm(root, { recursive: true, force: true });

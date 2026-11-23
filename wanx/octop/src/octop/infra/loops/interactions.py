@@ -10,6 +10,7 @@ import re
 import secrets
 import time
 from contextvars import ContextVar
+from functools import partial
 from typing import TYPE_CHECKING, Any, Literal
 
 from octop_gateway.models import ChannelSubject, FileContent, InboundMessage
@@ -55,7 +56,9 @@ class LoopInteractions:
 
     async def boot(self) -> None:
         await self.service._db(self.service.repos.loop_repo.recover_notifications)
-        self.service.gateway.processor.loop_message_interceptor = self.handle_inbound
+        self.service.gateway.processor.loop_message_interceptor = partial(
+            self.handle_inbound, mark_verified=True
+        )
         self.worker = asyncio.create_task(self._worker())
 
     async def shutdown(self) -> None:
@@ -419,7 +422,9 @@ class LoopInteractions:
                 logging.getLogger(__name__).exception("Loop notification worker failed")
             await asyncio.sleep(5)
 
-    async def handle_inbound(self, msg: InboundMessage) -> str | FileContent | None:
+    async def handle_inbound(
+        self, msg: InboundMessage, *, mark_verified: bool = False
+    ) -> str | FileContent | Literal[True] | None:
         channel = await self.service._db(self.service.repos.channel_repo.get, msg.channel_id)
         locale = await self.service._db(
             resolve_user_locale,
@@ -432,11 +437,13 @@ class LoopInteractions:
             result = await self._handle_inbound(msg)
             if result is not None:
                 return result
-            return await self._personal_owner_guard(msg)
+            return await self._personal_owner_guard(msg, mark_verified=mark_verified)
         finally:
             _locale.reset(token)
 
-    async def _personal_owner_guard(self, msg: InboundMessage) -> str | FileContent | None:
+    async def _personal_owner_guard(
+        self, msg: InboundMessage, *, mark_verified: bool = False
+    ) -> str | FileContent | Literal[True] | None:
         """A first-party personal assistant must not share its owner's memory with bot visitors."""
         if msg.channel_type in {"dashboard", "cli"}:
             return None
@@ -479,7 +486,7 @@ class LoopInteractions:
         )
         if binding:
             try:
-                await self.require_binding(
+                current = await self.require_binding(
                     agent.user_id, binding["agent_id"], binding["binding_id"]
                 )
                 if not dedicated and msg.channel_type == "weixin":
@@ -504,6 +511,18 @@ class LoopInteractions:
                             ):
                                 return tr("assistant.owner_required", _locale.get())
                         return reply
+                if (
+                    mark_verified
+                    and not dedicated
+                    and msg.channel_type in {"weixin", "wecom", "feishu", "dingtalk"}
+                ):
+                    if current["subject_id"] != msg.channel_subject.subject_id:
+                        return tr("assistant.owner_required", _locale.get())
+                    if msg.channel_type == "weixin":
+                        account = json.loads(current["routing_json"] or "{}").get("account_id")
+                        if account and msg.channel_subject.metadata.get("account_id") != account:
+                            return tr("assistant.owner_required", _locale.get())
+                    return True
                 return None
             except OctopError:
                 pass

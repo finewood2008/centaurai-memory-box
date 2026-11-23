@@ -1,0 +1,1911 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "WANX Octop · dialogue",
+    "description": "**CentaurAI-WANX** is a smarter, self-hosted AI assistant for multiple users and agents. All routes are served under `/api`.\n\n## Authentication\n\nMost endpoints require a JWT bearer token:\n\n1. Complete initial setup via `/api/setup/*` (first install only).\n2. `GET /api/auth/captcha` then `POST /api/auth/login` with `username` and `password`\n   (and `captcha_token` when a strong provider is active), or complete SSO with\n   `/api/auth/oidc/*` or `/api/auth/oauth/*` when a provider is enabled.\n3. Send `Authorization: Bearer <access_token>` on subsequent requests.\n\nAccess tokens use sliding renewal: when less than one-third of\n`access_token_ttl_seconds` remains, authenticated responses may include a fresh\ntoken in the `X-Octop-Access-Token` header. Clients should replace the stored\ntoken when present.\n\nPublic endpoints (no login token): `/api/docs`, `/api/openapi.json`, `/api/health`,\n`/api/setup/*` (wizard authorization applies), `/api/auth/login`, `/api/auth/register`,\n`/api/auth/captcha`, `/api/auth/oidc/status`, `/api/auth/oidc/start`,\n`/api/auth/oidc/callback`, `/api/auth/oidc/exchange`, `/api/auth/oauth/status`,\n`/api/auth/oauth/start`, `/api/auth/oauth/callback`, `/api/auth/oauth/exchange`,\n`/api/auth/invite/validate`,\n`/api/auth/invite/redeem`, `/api/connectors/oauth/callback`,\nand `/api/internal/mcp/*`.\n\n## Agent scope\n\nMany agent-scoped routes use the agent ID in the URL path (`/api/agents/{agent_id}/…`).\nRoutes first check the signed token's application scope; legacy tokens default to WANX.\nResources in another application are treated as not found, including for administrators.\nWithin the same application, each route applies its ownership or shared-resource access\nrules. WANX administrators may bypass ownership where supported; Zhijun personal profiles,\nmemories and uploaded sources require the owner.\n\n## Streaming chat\n\nDashboard live turns use **WebSocket** at `/api/agents/{agent_id}/chat/ws` (pass JWT as\n`?token=` query param). Send `{\"type\":\"user_turn\", ...}` frames; the server replies with JSON\nchunks matching the harness stream format, ending with `{\"type\":\"done\"}` or\n`{\"type\":\"error\",\"message\":\"...\"}`.\n\nText-type dashboard pushes (cron reminders, proactive care) also emit\n`{\"type\":\"dashboard_push\", ...}` on `/api/notifications/ws` (same `?token=` auth) so the\nSPA can show a toast even when the chat socket is not subscribed.\n\nHITL resume still uses `POST /api/agents/{agent_id}/chat/hitl/resume` (SSE).\n\n## Knowledge libraries\n\n`/api/knowledge-bases` uses the signed application scope for creation, visibility,\ndocument access, and citations. Existing libraries remain in WANX. Zhijun libraries\nare private to their owner and use local document parsers, downloaded native ONNX\nembeddings and RapidOCR. Remote WANX embedding/OCR settings do not affect Zhijun;\nmissing local components are reported as unavailable without remote fallback.\n",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/dialogue/models": {
+      "get": {
+        "tags": [
+          "dialogue"
+        ],
+        "summary": "List public models available to this account",
+        "operationId": "models_api_dialogue_models_get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Models Api Dialogue Models Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-wanx-application-contract": {
+          "operationId": "listAccountModels",
+          "summary": "listAccountModels",
+          "tags": [
+            "models"
+          ],
+          "x-wanx-status": "ready-for-acceptance",
+          "x-wanx-permission": "models.read",
+          "responses": {
+            "200": {
+              "description": "Contract response",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/WanxApp_model-list.v1"
+                  }
+                }
+              }
+            },
+            "default": {
+              "$ref": "#/components/responses/WanxApp_Error"
+            }
+          },
+          "parameters": []
+        },
+        "x-wanx-status": "ready-for-acceptance",
+        "x-wanx-permission": "models.read"
+      }
+    },
+    "/api/dialogue/quota": {
+      "get": {
+        "tags": [
+          "dialogue"
+        ],
+        "summary": "Get platform-enforced budget and pending usage",
+        "operationId": "quota_api_dialogue_quota_get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Quota Api Dialogue Quota Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-wanx-application-contract": {
+          "operationId": "readDialogueQuota",
+          "summary": "readDialogueQuota",
+          "tags": [
+            "dialogue.session"
+          ],
+          "x-wanx-status": "ready-for-acceptance",
+          "x-wanx-permission": "dialogue.sessions.read",
+          "responses": {
+            "200": {
+              "description": "Contract response",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/WanxApp_dialogue-quota.v1"
+                  }
+                }
+              }
+            },
+            "default": {
+              "$ref": "#/components/responses/WanxApp_Error"
+            }
+          },
+          "parameters": []
+        },
+        "x-wanx-status": "ready-for-acceptance",
+        "x-wanx-permission": "dialogue.sessions.read"
+      }
+    },
+    "/api/dialogue/sessions": {
+      "get": {
+        "tags": [
+          "dialogue"
+        ],
+        "summary": "List this account's dialogue history",
+        "operationId": "sessions_api_dialogue_sessions_get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Sessions Api Dialogue Sessions Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-wanx-application-contract": {
+          "operationId": "listDialogueSessions",
+          "summary": "listDialogueSessions",
+          "tags": [
+            "dialogue.session"
+          ],
+          "x-wanx-status": "ready-for-acceptance",
+          "x-wanx-permission": "dialogue.sessions.read",
+          "responses": {
+            "200": {
+              "description": "Contract response",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/WanxApp_dialogue-session-list.v1"
+                  }
+                }
+              }
+            },
+            "default": {
+              "$ref": "#/components/responses/WanxApp_Error"
+            }
+          },
+          "parameters": []
+        },
+        "x-wanx-status": "ready-for-acceptance",
+        "x-wanx-permission": "dialogue.sessions.read"
+      },
+      "post": {
+        "tags": [
+          "dialogue"
+        ],
+        "summary": "Ask one question of one to three independent models",
+        "operationId": "create_api_dialogue_sessions_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Question"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Create Api Dialogue Sessions Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-wanx-application-contract": {
+          "operationId": "createDialogueSession",
+          "summary": "createDialogueSession",
+          "tags": [
+            "dialogue.session"
+          ],
+          "x-wanx-status": "ready-for-acceptance",
+          "x-wanx-permission": "dialogue.sessions.create",
+          "requestBody": {
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WanxApp_dialogue-question.v1"
+                }
+              }
+            }
+          },
+          "responses": {
+            "201": {
+              "description": "Contract response",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/WanxApp_dialogue-session.v1"
+                  }
+                }
+              }
+            },
+            "default": {
+              "$ref": "#/components/responses/WanxApp_Error"
+            }
+          },
+          "parameters": []
+        },
+        "x-wanx-status": "ready-for-acceptance",
+        "x-wanx-permission": "dialogue.sessions.create"
+      }
+    },
+    "/api/dialogue/sessions/{session_id}": {
+      "get": {
+        "tags": [
+          "dialogue"
+        ],
+        "summary": "Read a dialogue and its independent branches",
+        "operationId": "get_api_dialogue_sessions__session_id__get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Api Dialogue Sessions  Session Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-wanx-application-contract": {
+          "operationId": "readDialogueSession",
+          "summary": "readDialogueSession",
+          "tags": [
+            "dialogue.session"
+          ],
+          "x-wanx-status": "ready-for-acceptance",
+          "x-wanx-permission": "dialogue.sessions.read",
+          "responses": {
+            "200": {
+              "description": "Contract response",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/WanxApp_dialogue-session.v1"
+                  }
+                }
+              }
+            },
+            "default": {
+              "$ref": "#/components/responses/WanxApp_Error"
+            }
+          },
+          "parameters": [
+            {
+              "name": "session_id",
+              "in": "path",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "x-wanx-status": "ready-for-acceptance",
+        "x-wanx-permission": "dialogue.sessions.read"
+      },
+      "delete": {
+        "tags": [
+          "dialogue"
+        ],
+        "summary": "Stop active answers and delete local dialogue history",
+        "operationId": "delete_api_dialogue_sessions__session_id__delete",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Delete Api Dialogue Sessions  Session Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-wanx-application-contract": {
+          "operationId": "deleteDialogueSession",
+          "summary": "deleteDialogueSession",
+          "tags": [
+            "dialogue.session"
+          ],
+          "x-wanx-status": "ready-for-acceptance",
+          "x-wanx-permission": "dialogue.sessions.mutate",
+          "responses": {
+            "204": {
+              "description": "No content"
+            },
+            "default": {
+              "$ref": "#/components/responses/WanxApp_Error"
+            }
+          },
+          "parameters": [
+            {
+              "name": "session_id",
+              "in": "path",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "x-wanx-status": "ready-for-acceptance",
+        "x-wanx-permission": "dialogue.sessions.mutate"
+      }
+    },
+    "/api/dialogue/sessions/{session_id}/groups/{group_id}/answers": {
+      "post": {
+        "tags": [
+          "dialogue"
+        ],
+        "summary": "Add models using the original context snapshot",
+        "operationId": "add_api_dialogue_sessions__session_id__groups__group_id__answers_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Group Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddModels"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Add Api Dialogue Sessions  Session Id  Groups  Group Id  Answers Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-wanx-application-contract": {
+          "operationId": "addDialogueModels",
+          "summary": "addDialogueModels",
+          "tags": [
+            "dialogue.session"
+          ],
+          "x-wanx-status": "ready-for-acceptance",
+          "x-wanx-permission": "dialogue.sessions.mutate",
+          "requestBody": {
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WanxApp_dialogue-add-models.v1"
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "description": "Contract response",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/WanxApp_dialogue-session.v1"
+                  }
+                }
+              }
+            },
+            "default": {
+              "$ref": "#/components/responses/WanxApp_Error"
+            }
+          },
+          "parameters": [
+            {
+              "name": "session_id",
+              "in": "path",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "group_id",
+              "in": "path",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "x-wanx-status": "ready-for-acceptance",
+        "x-wanx-permission": "dialogue.sessions.mutate"
+      }
+    },
+    "/api/dialogue/sessions/{session_id}/answers/{answer_id}/continue": {
+      "post": {
+        "tags": [
+          "dialogue"
+        ],
+        "summary": "Continue only the selected answer's branch",
+        "operationId": "follow_up_api_dialogue_sessions__session_id__answers__answer_id__continue_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "answer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Answer Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FollowUp"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Follow Up Api Dialogue Sessions  Session Id  Answers  Answer Id  Continue Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-wanx-application-contract": {
+          "operationId": "continueDialogueAnswer",
+          "summary": "continueDialogueAnswer",
+          "tags": [
+            "dialogue.session"
+          ],
+          "x-wanx-status": "ready-for-acceptance",
+          "x-wanx-permission": "dialogue.sessions.mutate",
+          "requestBody": {
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WanxApp_dialogue-follow-up.v1"
+                }
+              }
+            }
+          },
+          "responses": {
+            "201": {
+              "description": "Contract response",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/WanxApp_dialogue-session.v1"
+                  }
+                }
+              }
+            },
+            "default": {
+              "$ref": "#/components/responses/WanxApp_Error"
+            }
+          },
+          "parameters": [
+            {
+              "name": "session_id",
+              "in": "path",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "answer_id",
+              "in": "path",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "x-wanx-status": "ready-for-acceptance",
+        "x-wanx-permission": "dialogue.sessions.mutate"
+      }
+    },
+    "/api/dialogue/sessions/{session_id}/answers/{answer_id}/retry": {
+      "post": {
+        "tags": [
+          "dialogue"
+        ],
+        "summary": "Explicitly generate a new answer; duplicate request ids do not dispatch twice",
+        "operationId": "retry_api_dialogue_sessions__session_id__answers__answer_id__retry_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "answer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Answer Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/octop__api__routers__dialogue__Operation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Retry Api Dialogue Sessions  Session Id  Answers  Answer Id  Retry Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-wanx-application-contract": {
+          "operationId": "retryDialogueAnswer",
+          "summary": "retryDialogueAnswer",
+          "tags": [
+            "dialogue.session"
+          ],
+          "x-wanx-status": "ready-for-acceptance",
+          "x-wanx-permission": "dialogue.sessions.mutate",
+          "requestBody": {
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WanxApp_dialogue-operation.v1"
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "description": "Contract response",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/WanxApp_dialogue-session.v1"
+                  }
+                }
+              }
+            },
+            "default": {
+              "$ref": "#/components/responses/WanxApp_Error"
+            }
+          },
+          "parameters": [
+            {
+              "name": "session_id",
+              "in": "path",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "answer_id",
+              "in": "path",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "x-wanx-status": "ready-for-acceptance",
+        "x-wanx-permission": "dialogue.sessions.mutate"
+      }
+    },
+    "/api/dialogue/sessions/{session_id}/answers/{answer_id}/stop": {
+      "post": {
+        "tags": [
+          "dialogue"
+        ],
+        "summary": "Stop this answer; usage already incurred may remain pending",
+        "operationId": "stop_api_dialogue_sessions__session_id__answers__answer_id__stop_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "answer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Answer Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Stop Api Dialogue Sessions  Session Id  Answers  Answer Id  Stop Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-wanx-application-contract": {
+          "operationId": "stopDialogueAnswer",
+          "summary": "stopDialogueAnswer",
+          "tags": [
+            "dialogue.session"
+          ],
+          "x-wanx-status": "ready-for-acceptance",
+          "x-wanx-permission": "dialogue.sessions.mutate",
+          "responses": {
+            "200": {
+              "description": "Contract response",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/WanxApp_dialogue-session.v1"
+                  }
+                }
+              }
+            },
+            "default": {
+              "$ref": "#/components/responses/WanxApp_Error"
+            }
+          },
+          "parameters": [
+            {
+              "name": "session_id",
+              "in": "path",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "answer_id",
+              "in": "path",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "x-wanx-status": "ready-for-acceptance",
+        "x-wanx-permission": "dialogue.sessions.mutate"
+      }
+    },
+    "/api/dialogue/sessions/{session_id}/events": {
+      "get": {
+        "tags": [
+          "dialogue"
+        ],
+        "summary": "Reconnectable snapshots; reading never generates or charges again",
+        "operationId": "events_api_dialogue_sessions__session_id__events_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-wanx-application-contract": {
+          "operationId": "streamDialogueSnapshots",
+          "summary": "streamDialogueSnapshots",
+          "tags": [
+            "dialogue.session"
+          ],
+          "x-wanx-status": "ready-for-acceptance",
+          "x-wanx-permission": "dialogue.sessions.stream",
+          "description": "重连规则：reconnect by GET; stream emits revisioned snapshots and terminates when no answer is active",
+          "responses": {
+            "200": {
+              "description": "Contract response",
+              "content": {
+                "text/event-stream": {
+                  "schema": {
+                    "$ref": "#/components/schemas/WanxApp_dialogue-event.v1"
+                  }
+                }
+              }
+            },
+            "default": {
+              "$ref": "#/components/responses/WanxApp_Error"
+            }
+          },
+          "parameters": [
+            {
+              "name": "session_id",
+              "in": "path",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "x-wanx-status": "ready-for-acceptance",
+        "x-wanx-permission": "dialogue.sessions.stream"
+      }
+    }
+  },
+  "components": {
+    "responses": {
+      "WanxApp_Error": {
+        "description": "按 errors.v1.json 返回稳定 code",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/WanxApp_ErrorEnvelope"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "AddModels": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_-]{16,80}$",
+            "title": "Request Id"
+          },
+          "models": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 1,
+            "title": "Models"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "request_id",
+          "models"
+        ],
+        "title": "AddModels"
+      },
+      "FollowUp": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_-]{16,80}$",
+            "title": "Request Id"
+          },
+          "prompt": {
+            "type": "string",
+            "maxLength": 16000,
+            "minLength": 1,
+            "title": "Prompt"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "request_id",
+          "prompt"
+        ],
+        "title": "FollowUp"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "Question": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_-]{16,80}$",
+            "title": "Request Id"
+          },
+          "prompt": {
+            "type": "string",
+            "maxLength": 16000,
+            "minLength": 1,
+            "title": "Prompt"
+          },
+          "models": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 1,
+            "title": "Models"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "request_id",
+          "prompt",
+          "models"
+        ],
+        "title": "Question"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "WanxApp_ErrorEnvelope": {
+        "type": "object",
+        "properties": {
+          "detail": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "code"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                }
+              }
+            ]
+          },
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "WanxApp_dialogue-add-models.v1": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "request_id",
+          "models"
+        ],
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_-]{16,80}$"
+          },
+          "models": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 3,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      },
+      "WanxApp_dialogue-event.v1": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "session"
+        ],
+        "properties": {
+          "type": {
+            "const": "snapshot"
+          },
+          "session": {
+            "$ref": "#/components/schemas/WanxApp_dialogue-session.v1"
+          }
+        }
+      },
+      "WanxApp_dialogue-follow-up.v1": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "request_id",
+          "prompt"
+        ],
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_-]{16,80}$"
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16000
+          }
+        }
+      },
+      "WanxApp_dialogue-operation.v1": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "request_id"
+        ],
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_-]{16,80}$"
+          }
+        }
+      },
+      "WanxApp_dialogue-question.v1": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "request_id",
+          "prompt",
+          "models"
+        ],
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_-]{16,80}$"
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16000
+          },
+          "models": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 3,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      },
+      "WanxApp_dialogue-quota.v1": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source",
+          "remaining",
+          "pending",
+          "billing"
+        ],
+        "properties": {
+          "source": {
+            "enum": [
+              "wanx_pool",
+              "platform_gateway"
+            ]
+          },
+          "remaining": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "pending": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "billing": {
+            "type": "string"
+          }
+        }
+      },
+      "WanxApp_dialogue-session-list.v1": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sessions"
+        ],
+        "properties": {
+          "sessions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "session_id",
+                "title",
+                "updated_at"
+              ],
+              "properties": {
+                "session_id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "updated_at": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        }
+      },
+      "WanxApp_dialogue-session.v1": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "title",
+          "revision",
+          "groups"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "groups": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "prompt",
+                "parent_answer",
+                "answers"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "prompt": {
+                  "type": "string"
+                },
+                "parent_answer": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "answers": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "id",
+                      "generation_id",
+                      "model",
+                      "name",
+                      "text",
+                      "status",
+                      "error",
+                      "usage",
+                      "elapsed_ms",
+                      "accounting"
+                    ],
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "generation_id": {
+                        "type": "string"
+                      },
+                      "model": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "text": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "enum": [
+                          "queued",
+                          "running",
+                          "completed",
+                          "stopped",
+                          "failed",
+                          "interrupted"
+                        ]
+                      },
+                      "error": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "usage": {
+                        "type": [
+                          "object",
+                          "null"
+                        ]
+                      },
+                      "elapsed_ms": {
+                        "type": [
+                          "integer",
+                          "null"
+                        ],
+                        "minimum": 0
+                      },
+                      "accounting": {
+                        "type": [
+                          "object",
+                          "null"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "WanxApp_model-list.v1": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "required": [
+          "models"
+        ],
+        "properties": {
+          "models": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "source": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "provider": {
+                  "type": "string"
+                },
+                "input_units": {
+                  "type": "string"
+                },
+                "output_units": {
+                  "type": "string"
+                },
+                "max_output_tokens": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "max_input_bytes": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "octop__api__routers__dialogue__Operation": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_-]{16,80}$",
+            "title": "Request Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "request_id"
+        ],
+        "title": "Operation"
+      }
+    },
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "JWT from `POST /api/auth/login` (`access_token` field)."
+      }
+    }
+  },
+  "tags": [],
+  "x-wanx-supplemental-routes": [],
+  "x-wanx-contract": "wanx-business-api/1",
+  "x-wanx-catalog": "../api-catalog.v1.json",
+  "x-wanx-permissions": "../permissions.v1.json"
+}

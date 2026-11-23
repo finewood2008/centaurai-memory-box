@@ -1,0 +1,442 @@
+/* Native pages share STARLINK's warm surfaces, ink, typography and controls. */
+:root:has(.embedded-workbench) {
+  --wb-bg: #faf7f2; --wb-surface: #fffdfa; --wb-subtle: #f5f0e8;
+  --wb-line: #e6dfd4; --wb-text: #223747; --wb-muted: #767168;
+  --wb-accent: #a35c43; --wb-tint: #f3e9e1;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  background: var(--wb-bg);
+}
+html:has(.embedded-workbench), body:has(.embedded-workbench), body:has(.embedded-workbench) #root {
+  height: 100%; min-height: 0; overflow: hidden; background: var(--wb-bg);
+}
+.workbench-app.embedded-workbench { height: 100%; min-height: 0; font-family: inherit; font-size: 14px; }
+.embedded-workbench .app-sidebar, .embedded-workbench .app-topbar,
+.embedded-workbench .app-content > .page-heading,
+.embedded-workbench .app-content > footer:not(.review-footer) { display: none; }
+.embedded-workbench .app-workspace { margin: 0; height: 100%; min-height: 0; }
+.workbench-app.embedded-workbench .app-content { height: 100%; padding: 0 6px 24px 0; overflow: auto; }
+.workbench-app.embedded-workbench button { min-height: 36px; border-radius: 8px; font-size: 13px; }
+.workbench-app.embedded-workbench button:hover:not(:disabled) { border-color: var(--wb-line); background: var(--wb-tint); }
+.workbench-app.embedded-workbench button.primary:hover:not(:disabled),
+.workbench-app.embedded-workbench button.ontology-apply:hover:not(:disabled) { color: var(--wb-surface); background: color-mix(in srgb, var(--wb-accent) 88%, var(--wb-text)); }
+.workbench-app.embedded-workbench button[aria-pressed="true"] { border-color: var(--wb-line); }
+.workbench-app.embedded-workbench input:not([type="checkbox"]):not([type="file"]),
+.workbench-app.embedded-workbench select, .workbench-app.embedded-workbench textarea { background: var(--wb-surface); border-radius: 8px; }
+.embedded-workbench .knowledge-card, .embedded-workbench .library,
+.embedded-workbench .material-source-panel, .embedded-workbench .material-review-side,
+.embedded-workbench .ontology-current, .embedded-workbench .catalog-list,
+.embedded-workbench .catalog-detail, .embedded-workbench .release-list,
+.embedded-workbench .release-detail { background: var(--wb-surface); border-color: var(--wb-line); border-radius: 10px; }
+.embedded-workbench .ontology-current h2, .embedded-workbench .catalog-detail h2,
+.embedded-workbench .release-detail h2 { font-family: "Songti SC", "Noto Serif SC", Georgia, serif; font-weight: 600; }
+.embedded-workbench .document-row, .embedded-workbench .notice { background: var(--wb-surface); }
+.embedded-workbench .document-row.selected { border-color: var(--wb-line); background: var(--wb-tint); }
+.embedded-workbench .review-footer { left: 0; background: var(--wb-surface); border-color: var(--wb-line); }
+.embedded-workbench .workbench-drawer, .embedded-workbench .workbench-modal { background: var(--wb-bg); }
+.embedded-workbench .review-tabs button[aria-selected="true"], .embedded-workbench .review-tabs .active { color: var(--wb-accent); border-color: var(--wb-accent); }
+.embedded-workbench .library, .embedded-workbench .material-source-panel,
+.embedded-workbench .material-review-side { min-height: 440px; height: calc(100dvh - 112px); }
+
+/* Ontology inside the desktop Starlink panel. */
+.workbench-app.embedded-workbench.view-ontology {
+  --wb-text: #302d29;
+  --wb-line: #e5d8c8;
+  --wb-surface: #fffdf8;
+  --wb-subtle: #f6f0e6;
+  --wb-accent: #8b5e3b;
+  --wb-tint: #f5ecde;
+}
+.workbench-app.embedded-workbench.view-ontology .ontology-current {
+  flex-wrap: wrap;
+  gap: 7px 10px;
+  padding: 9px 12px;
+  margin-bottom: 8px;
+}
+.embedded-workbench.view-ontology .ontology-current-icon { width: 29px; height: 29px; }
+.embedded-workbench.view-ontology .ontology-current h2,
+.embedded-workbench.view-ontology .catalog-detail h2 { font-family: inherit; font-size: 15px; }
+.embedded-workbench.view-ontology .ontology-current p { margin-top: 3px; }
+.embedded-workbench.view-ontology .ontology-page > .ontology-notice { margin: 7px 0 9px; font-size: 11px; }
+.embedded-workbench.view-ontology .ontology-catalog-view,
+.embedded-workbench.view-ontology .ontology-catalog { gap: 8px; }
+.embedded-workbench.view-ontology .catalog-tabs { padding: 0 8px; }
+.embedded-workbench.view-ontology .review-tabs button { min-height: 34px; padding: 4px 8px; font-size: 12px; }
+.embedded-workbench.view-ontology .catalog-list,
+.embedded-workbench.view-ontology .catalog-detail { padding: 10px; }
+.embedded-workbench.view-ontology .ontology-graph-toolbar { gap: 4px 10px; }
+.embedded-workbench.view-ontology .ontology-graph-filters { gap: 5px 8px; }
+.embedded-workbench.view-ontology .ontology-graph-filters label { gap: 3px; font-size: 11px; }
+.embedded-workbench.view-ontology .ontology-graph-filters select { width: min(155px, 100%); min-height: 30px; padding: 4px 6px; font-size: 12px; }
+.embedded-workbench.view-ontology .ontology-graph-toolbar small { font-size: 11px; }
+.embedded-workbench.view-ontology .ontology-graph-help { margin: 6px 0; }
+.embedded-workbench.view-ontology .ontology-spatial-graph .network-canvas { height: clamp(215px, 44dvh, 460px); min-height: 0; }
+.embedded-workbench.view-ontology .ontology-spatial-graph .network-tools { padding: 6px 8px; gap: 4px; }
+.embedded-workbench.view-ontology .ontology-spatial-graph .network-tools small { font-size: 10px; }
+.embedded-workbench.view-ontology .ontology-spatial-graph .network-tools button { min-height: 30px; padding: 4px 7px; font-size: 12px; }
+.embedded-workbench.view-ontology .ontology-spatial-graph .node-star-glow { opacity: 0; }
+.embedded-workbench.view-ontology .ontology-spatial-graph .graph-node:is(.selected, :focus-visible) .node-star { stroke: var(--wb-text); stroke-width: 1.5; }
+.embedded-workbench.view-ontology .catalog-detail h3 { margin-top: 12px; padding-top: 8px; }
+.embedded-workbench.view-ontology .catalog-property { margin: 8px 0; }
+.embedded-workbench.view-ontology .catalog-footnote { margin-top: 9px; padding-top: 6px; }
+/* The catalog keeps type selection and the selected definition together. */
+.ontology-page .rules-catalog-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 4px 0 6px;
+}
+.rules-catalog-toolbar .review-tabs { margin: 0; flex-wrap: wrap; }
+.rules-catalog-toolbar .review-tabs button > span {
+  margin-left: 7px;
+  font-size: 11px;
+  color: var(--wb-muted);
+}
+.ontology-page .rules-catalog-grid { grid-template-columns: minmax(0, 1fr); align-items: start; gap: 12px; }
+.rules-catalog-grid > section, .rules-catalog-grid > aside { min-width: 0; }
+.rules-catalog-list { overflow: hidden; }
+.rules-catalog-grid:not(.rules-catalog-graph) .rules-catalog-list { padding: 0; }
+.rules-catalog-graph .rules-catalog-list { padding: 14px; }
+.rules-catalog-search { display: grid; gap: 5px; padding: 12px; border-bottom: 1px solid var(--wb-line); }
+.rules-catalog-search input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--wb-line);
+  padding: 8px 10px;
+}
+.rules-catalog-search small { color: var(--wb-muted); }
+.rules-type-list {
+  max-height: 240px;
+  overflow: auto;
+  list-style: none;
+  padding: 5px;
+  margin: 0;
+}
+.workbench-app .rules-type-list button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  text-align: left;
+  gap: 8px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  padding: 8px 9px;
+}
+.workbench-app .rules-type-list button[aria-pressed=true] {
+  border-color: var(--wb-line);
+  background: var(--wb-tint);
+}
+.rules-type-list button > strong { min-width: 0; overflow-wrap: anywhere; }
+.rules-type-list small { flex: none; color: var(--wb-muted); font-size: 11px; }
+.workbench-app .rules-catalog-detail { padding: 16px 18px; overflow-wrap: anywhere; }
+.rules-catalog-detail > header { align-items: flex-start; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+.workbench-app .rules-catalog-detail h2 { margin: 3px 0 2px; font-family: inherit; font-size: 21px; font-weight: 650; line-height: 1.3; }
+.workbench-app .rules-catalog-detail :is(.rules-type-direction, .rules-type-boundary, .rules-properties) h3 {
+  margin: 0 0 5px;
+  padding: 0;
+  border: 0;
+  font-size: 13px;
+}
+.rules-type-direction, .rules-type-boundary { margin: 12px 0; padding: 10px; border-radius: 7px; background: var(--wb-subtle); }
+.rules-type-direction p, .rules-type-boundary p { margin: 0; }
+.rules-properties { margin: 14px 0; padding-top: 12px; border-top: 1px solid var(--wb-line); }
+.rules-properties h3 span { color: var(--wb-muted); font-weight: 500; margin-left: 4px; }
+.rules-properties dl { margin: 0; }
+.rules-properties dl > div { display: grid; gap: 4px 8px; padding: 8px 0; grid-template-columns: minmax(0, 1fr) auto; }
+.rules-properties dl > div + div { border-top: 1px solid var(--wb-line); }
+.rules-properties dd { display: contents; }
+.rules-properties dd p { grid-column: 1 / -1; margin: 0; color: var(--wb-muted); font-size: 12px; }
+.rules-definition-source, .rules-related-knowledge {
+  border-top: 1px solid var(--wb-line);
+  padding: 9px 0 3px;
+  color: var(--wb-muted);
+}
+.rules-definition-source summary, .rules-related-knowledge summary { cursor: pointer; }
+.rules-draft-tabs, .rules-assistant-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+.workbench-app .rules-draft-tabs button[aria-pressed=true],
+.workbench-app .rules-assistant-tabs button[aria-pressed=true] {
+  background: var(--wb-tint);
+  color: var(--wb-accent);
+}
+.rules-assistant-dot { display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: var(--wb-accent); vertical-align: middle; }
+.workbench-app .ontology-assistant.workbench-inline .assistant-workspace > [hidden] { display: none; }
+@media (min-width: 670px) {
+  .ontology-page .rules-catalog-grid { grid-template-columns: minmax(215px, 34%) minmax(0, 1fr); }
+  .ontology-page .rules-catalog-grid.rules-catalog-graph { grid-template-columns: minmax(0, 1fr) minmax(220px, 33%); }
+  .rules-type-list { max-height: min(62dvh, 540px); }
+}
+
+.workbench-app.embedded-workbench.view-ontology button:is(.primary, .ontology-apply) {
+  background: #a6533f; border-color: #a6533f; color: #fffdf8;
+}
+.workbench-app.embedded-workbench.view-ontology button:is(.primary, .ontology-apply):hover:not(:disabled) {
+  background: #914532; border-color: #914532;
+}
+.workbench-app.embedded-workbench.view-ontology .ontology-current button { color: var(--wb-text); }
+.ontology-page-state { padding: 16px; }
+.ontology-page-state p { margin: 6px 0 10px; }
+.ontology-type-page .ontology-drawer-header, .ontology-type-page .ontology-drawer-footer {
+  padding: 12px 16px; border-color: var(--wb-line);
+}
+.ontology-type-page .ontology-drawer-header h2 { margin: 0 0 4px; }
+.ontology-type-page .ontology-drawer-body { display: block; padding: 16px; overflow: visible; }
+.ontology-type-page .ontology-drawer-footer {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; background: var(--wb-surface);
+  position: sticky; bottom: 0; z-index: 2; border-radius: 0 0 9px 9px;
+}
+.ontology-type-page .ontology-drawer-footer > div { margin-left: auto; flex-wrap: wrap; }
+.ontology-type-fields { display: grid; gap: 14px; align-items: start; }
+.ontology-type-form { min-width: 0; }
+.ontology-type-form .ontology-fields label, .ontology-type-form .ontology-property label {
+  display: grid; gap: 5px; font-size: 12px; color: var(--wb-muted);
+}
+.ontology-type-page .ontology-type-form input:not([type="checkbox"]) {
+  width: 100%; min-width: 0; padding: 8px; border-color: var(--wb-line);
+}
+.ontology-type-page .ontology-hint { font-size: 12px; color: var(--wb-muted); }
+.ontology-type-form > .ontology-hint { margin: 6px 0; }
+.ontology-type-page :is(.ontology-endpoint-section, .ontology-properties) {
+  border-top: 1px solid var(--wb-line); margin-top: 14px; padding-top: 12px; gap: 8px;
+}
+.ontology-type-page .ontology-endpoints {
+  display: grid; min-width: 0; gap: 6px; padding: 8px 10px; border: 1px solid var(--wb-line);
+  max-height: 184px; overflow: auto; border-radius: 8px; font-size: 12px;
+}
+.ontology-type-page .ontology-check { display: flex; align-items: flex-start; gap: 5px; overflow-wrap: anywhere; }
+.ontology-type-page .ontology-check input { accent-color: var(--wb-accent); flex: none; }
+.ontology-type-page .ontology-property { border-color: var(--wb-line); border-radius: 8px; padding: 9px; gap: 7px; }
+.ontology-type-page .ontology-live-review {
+  min-width: 0; min-height: 0; margin: 0; padding: 12px; overflow-wrap: anywhere;
+  border: 1px solid var(--wb-line); border-radius: 8px; background: var(--wb-subtle);
+}
+.ontology-type-page .ontology-live-review h3 { margin: 0 0 8px; font-size: 14px; }
+.ontology-type-page .ontology-live-review p { margin: 6px 0; }
+.ontology-type-fields > [role="alert"] { grid-column: 1 / -1; }
+.ontology-saved-drafts { padding: 12px; margin: 0 0 10px; border-color: var(--wb-line); background: var(--wb-surface); }
+.ontology-saved-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.ontology-saved-drafts p { margin: 5px 0 0; color: var(--wb-muted); }
+.ontology-saved-drafts .workflow-draft-row { border-color: var(--wb-line); }
+.embedded-workbench.view-ontology .ontology-editor :is(.ontology-suggestions, .ontology-change-summary) {
+  border-color: var(--wb-line); border-radius: 8px; background: var(--wb-subtle);
+}
+.embedded-workbench.view-ontology .ontology-editor .ontology-suggestions > summary { color: var(--wb-accent); }
+.embedded-workbench.view-ontology .ontology-editor .ontology-table th { background: var(--wb-subtle); color: var(--wb-muted); }
+.embedded-workbench.view-ontology .ontology-editor .ontology-table td { padding: 8px 10px; vertical-align: middle; }
+.embedded-workbench.view-ontology .ontology-editor .ontology-table button.ontology-name { color: var(--wb-accent); }
+.workbench-app.embedded-workbench.view-ontology .ontology-table button.ontology-name { min-height: 26px; }
+.ontology-draft-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.embedded-workbench .ontology-draft-actions {
+  position: sticky; bottom: 0; z-index: 2; padding: 8px 0;
+  background: var(--wb-surface); border-top: 1px solid var(--wb-line);
+}
+.workbench-inline > header {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 8px 12px; border-bottom: 1px solid var(--wb-line);
+}
+.workbench-inline > .workbench-drawer-body { padding: 12px; }
+.workbench-inline { background: var(--wb-surface); border: 1px solid var(--wb-line); border-radius: 10px; min-width: 0; }
+.ontology-assistant.workbench-inline .workbench-drawer-body { padding: 10px; overflow: visible; }
+.ontology-assistant.workbench-inline .assistant-workspace { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+.ontology-assistant.workbench-inline :is(.assistant-proposal, .assistant-conversation) {
+  border-color: var(--wb-line); background: var(--wb-surface); padding: 12px;
+}
+.ontology-assistant.workbench-inline .assistant-conversation { min-height: 320px; max-height: 550px; }
+.ontology-assistant.workbench-inline .assistant-proposal { max-height: 560px; }
+.ontology-assistant.workbench-inline :is(.assistant-messages article, .assistant-questions, .assistant-suggestion, .assistant-target, .assistant-resume-confirmation) {
+  background: var(--wb-subtle); border-color: var(--wb-line);
+}
+.ontology-assistant.workbench-inline .assistant-composer textarea { min-height: 72px; max-height: 160px; }
+@media (min-width: 640px) {
+  .ontology-type-page .ontology-endpoint-section { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .ontology-type-page .ontology-endpoint-section > :is(h3, p) { grid-column: 1 / -1; }
+  .ontology-type-fields { grid-template-columns: minmax(0,1.85fr) minmax(180px,1fr); }
+  .ontology-assistant.workbench-inline { display: flex; flex-direction: column; height: clamp(380px, calc(100dvh - 14px), 740px); }
+  .ontology-assistant.workbench-inline .assistant-workspace { flex: 1; }
+  .ontology-assistant.workbench-inline :is(.assistant-proposal, .assistant-conversation) { min-height: 0; max-height: none; }
+}
+.workbench-app.embedded-workbench.view-ontology .rules-workspace-header {
+  display: grid; gap: 8px; margin-bottom: 16px;
+}
+.rules-workspace-top {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+  gap: 8px 14px; padding: 7px 9px; border: 1px solid var(--wb-line); border-radius: 9px;
+  background: var(--wb-surface);
+}
+.rules-workspace-tabs, .rules-workspace-version, .rules-detail-actions {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+}
+.rules-workspace-version > strong { font-size: 12px; font-weight: 600; }
+.workbench-app .rules-workspace-header button { padding: 5px 9px; min-height: 32px; }
+.workbench-app .rules-workspace-tabs button:not([aria-current]) { background: transparent; border-color: transparent; }
+.workbench-app .rules-workspace-header button[aria-current="page"] {
+  background: var(--wb-tint); color: #795235; border-color: var(--wb-line); font-weight: 650;
+}
+.rules-draft-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  background: var(--wb-tint); border-left: 3px solid var(--wb-accent);
+  padding: 7px 10px; border-radius: 5px; color: #63472f;
+}
+.rules-draft-banner span { font-size: 12px; margin-left: 9px; color: var(--wb-muted); }
+.workbench-app .rules-dialogue-draft { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 12px 14px; margin: 0 0 12px; }
+.rules-dialogue-draft h2, .rules-dialogue-draft p { margin: 0; }
+.rules-dialogue-draft p { margin-top: 4px; color: var(--wb-muted); }
+.rules-detail-kind { font-size: 11px; color: var(--wb-muted); }
+.workbench-app .rules-detail-actions .primary { background: #a2523b; border-color: #a2523b; color: #fffaf6; }
+.rules-related-types { margin: 12px 0; }
+.rules-related-types h3 { font-size: 13px; margin: 0 0 5px; }
+.rules-related-types ul { list-style: none; margin: 0; padding: 0; }
+.rules-related-types li { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; padding: 4px 0; }
+.rules-related-types li > span { color: var(--wb-muted); font-size: 11px; }
+.workbench-app .rules-related-types button, .workbench-app .rules-type-direction .rules-endpoint { min-height: 24px; padding: 2px 6px; font-size: 11px; }
+.rules-related-types summary { color: var(--wb-accent); cursor: pointer; font-size: 12px; }
+.workbench-app .rules-assistant-page .assistant-workspace {
+  display: grid; grid-template-columns: minmax(0,1fr); align-items: stretch; gap: 12px;
+}
+.workbench-app .rules-assistant-page .assistant-workspace > [hidden] { display: none; }
+.workbench-app .rules-assistant-page :is(.assistant-conversation,.assistant-proposal) {
+  background: var(--wb-surface); border-color: var(--wb-line); padding: 12px;
+}
+.workbench-app .rules-assistant-page .assistant-proposal { border-top: 2px solid #a2523b; }
+.workbench-app .rules-assistant-page .assistant-conversation { min-height: 365px; }
+.rules-assistant-page .assistant-toolbar {
+  display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center;
+  gap: 6px; border-bottom: 1px solid var(--wb-line); padding-bottom: 9px;
+}
+.workbench-app .rules-assistant-page .assistant-toolbar button { min-height: 29px; padding: 4px 7px; font-size: 11px; }
+.workbench-app .rules-assistant-page .rules-quiet-button { background: transparent; border-color: transparent; color: var(--wb-muted); }
+.rules-assistant-page .assistant-scope-picker { flex-basis: 100%; display: flex; align-items: center; gap: 8px; }
+.rules-assistant-page .assistant-scope-picker select { width: auto; max-width: 100%; margin: 0; }
+.rules-assistant-page :is(.assistant-chat-content,.assistant-preview-content) { min-height: 0; }
+.rules-assistant-page .assistant-chat-content { padding: 10px 0 0; }
+.rules-assistant-page .assistant-welcome .assistant-actions { margin-top: 10px; }
+.rules-assistant-page .assistant-messages article { background: var(--wb-subtle); margin: 8px 0; }
+.rules-assistant-page .assistant-user { background: var(--wb-tint); }
+.rules-assistant-page .assistant-suggestion { border-color: var(--wb-line); margin: 8px 0; }
+.rules-assistant-page .assistant-suggestion > p { margin: 5px 0 0; }
+.rules-assistant-page .assistant-composer textarea { min-height: 52px; max-height: 150px; }
+.ontology-assistant.rules-assistant-page .assistant-composer { padding-top: 8px; margin-top: 6px; }
+.ontology-assistant.rules-assistant-page .assistant-send { margin-top: 4px; }
+.rules-assistant-page .assistant-review-actions { display: flex; flex-wrap: wrap; gap: 6px; border-top: 1px solid var(--wb-line); margin-top: 10px; padding-top: 9px; }
+.workbench-app .rules-assistant-page .assistant-proposal .section-title { margin-bottom: 7px; padding-bottom: 7px; }
+.rules-assistant-page .assistant-impact article { padding: 6px 0; }
+.rules-assistant-page .assistant-impact article p { margin: 4px 0; }
+.ontology-change-values > p > span { display: inline-block; margin-right: 7px; font-weight: 600; }
+.rules-assistant-page .ontology-change-values > p { margin: 6px 0; padding: 7px 9px; background: var(--wb-subtle); border-radius: 6px; }
+.rules-assistant-page .ontology-change-values > p:last-child { background: #eaf2ed; }
+.rules-assistant-page .ontology-change-values > p > span { display: block; font-size: 11px; color: var(--wb-muted); }
+@media (min-width: 640px) {
+  .workbench-app.embedded-workbench.view-ontology .rules-catalog-grid:not(.rules-catalog-graph) { grid-template-columns: clamp(170px, 24%, 265px) minmax(0,1fr); }
+  .workbench-app .rules-assistant-page .assistant-workspace.has-review { grid-template-columns: minmax(0,1.1fr) minmax(250px,1fr); }
+  .rules-assistant-page .assistant-history-rail { grid-column: 1 / -1; }
+}
+@media (min-width: 900px) {
+  .workbench-app.embedded-workbench.view-ontology .app-content:has(.rules-assistant-view) {
+    display: flex; flex-direction: column; padding-bottom: 8px;
+  }
+  .rules-assistant-view, .rules-assistant-region:not([hidden]), .rules-assistant-view .rules-assistant-page {
+    display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0;
+  }
+  .rules-assistant-view { min-height: 325px; }
+  .workbench-app .rules-assistant-page .assistant-workspace {
+    grid-template-columns: minmax(136px, 18%) minmax(0,1fr);
+    grid-template-rows: minmax(0,1fr);
+  }
+  .workbench-app .rules-assistant-page .assistant-workspace.has-review {
+    grid-template-columns: minmax(136px, 17%) minmax(0,1.05fr) minmax(260px,1fr);
+  }
+  .workbench-app .rules-assistant-page :is(.assistant-conversation,.assistant-proposal) { min-height: 0; }
+  .rules-assistant-page .assistant-history-rail { grid-column: auto; }
+}
+.rules-assistant-page .assistant-history-rail {
+  min-width: 0; overflow: auto; min-height: 0; border: 1px solid var(--wb-line);
+  background: var(--wb-subtle); padding: 12px; border-radius: 9px;
+}
+.rules-assistant-page .assistant-history-rail h3 { font-size: 13px; margin: 0 0 8px; color: var(--wb-text); }
+.workbench-app .assistant-history-rail > button { display: block; max-width: 100%; width: 100%; text-align: left; margin-bottom: 4px; }
+.assistant-base-version { color: var(--wb-muted); font-size: 11px; }
+.workbench-app .rules-assistant-page .assistant-reference-chip { background: var(--wb-tint); }
+.assistant-accept-proposal { display: flex; width: 100%; align-items: center; gap: 7px; padding: 3px 0; }
+.assistant-accept-proposal input, .rules-material-row input { width: auto; margin: 0; accent-color: var(--wb-accent); }
+.workbench-app .rules-catalog-detail .rules-instances {
+  border: 1px dashed var(--wb-line); background: var(--wb-subtle); margin: 0 0 12px;
+  padding: 13px; border-radius: 9px; overflow-wrap: anywhere;
+}
+.rules-instances .section-title { margin-bottom: 5px; }
+.rules-instances .section-title h3 { margin: 0; font-size: 15px; }
+.rules-instances .section-title button { min-height: 25px; font-size: 11px; }
+.rules-instances > p { margin: 4px 0 9px; }
+.rules-instance-row { margin-top: 6px; }
+.workbench-app .rules-instance-row > button {
+  text-align: left; width: 100%; min-height: 36px; justify-content: space-between; display: flex; gap: 10px;
+}
+.rules-instance-row > button small { color: var(--wb-accent); flex: none; }
+.rules-instance-sources { margin: 5px 0 10px; padding: 0 0 0 8px; border-left: 2px solid var(--wb-line); }
+.rules-instance-sources article { margin: 6px 0; padding: 8px 10px; background: var(--wb-surface); border: 1px solid var(--wb-line); border-radius: 6px; }
+.rules-instance-sources article > div { display: flex; justify-content: space-between; align-items: center; }
+.rules-instance-sources article p { margin: 4px 0 0; }
+.rules-direction-group { margin-top: 10px; }
+.rules-direction-group h4 { font-size: 11px; font-weight: 650; margin: 0; color: var(--wb-muted); }
+.rules-direction-group li strong { font-size: 12px; font-weight: 600; }
+.rules-material-impact { padding: 10px 14px 14px; }
+.rules-material-toolbar { padding-bottom: 8px; border-bottom: 1px solid var(--wb-line); }
+.rules-material-toolbar > strong { margin-right: auto; }
+.rules-material-selection, .rules-batch-confirm {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  padding: 10px; margin: 10px 0; background: var(--wb-tint); border-radius: 7px;
+}
+.rules-material-selection > strong { margin-right: auto; }
+.rules-batch-confirm { display: block; border-left: 3px solid var(--wb-accent); }
+.rules-batch-confirm h3 { margin: 0 0 7px; }
+.rules-batch-confirm ul { max-height: 190px; overflow: auto; padding-inline-start: 20px; }
+.rules-material-row label { display: flex; align-items: center; gap: 8px; }
+.rules-material-row p { margin: 4px 0; font-size: 12px; color: var(--wb-muted); }
+.rules-material-pages { margin-top: 10px; }
+.rules-field-changes { margin: 7px 0; }
+.rules-field-changes > div { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 5px; margin: 6px 0; }
+.rules-field-changes dt { grid-column: 1 / -1; color: var(--wb-muted); font-size: 12px; }
+.rules-field-changes dd { margin: 0; padding: 6px 8px; border-radius: 6px; background: var(--wb-subtle); }
+.rules-field-changes dd:last-child { background: #eaf2ed; }
+.rules-field-changes dd span { display: block; font-size: 11px; color: var(--wb-muted); }
+
+/* The type editor belongs to the same ontology workspace as the inline form. */
+.workbench-app.embedded-workbench .ontology-drawer {
+  --type-drawer-gap: 8px;
+  inset: var(--type-drawer-gap) var(--type-drawer-gap) var(--type-drawer-gap) auto;
+  width: min(610px, calc(100% - 2 * var(--type-drawer-gap)));
+  height: auto;
+  max-height: calc(100dvh - 2 * var(--type-drawer-gap));
+  border: 1px solid var(--wb-line);
+  border-radius: 12px;
+  background: var(--wb-surface);
+  color: var(--wb-text);
+  box-shadow: 0 12px 32px #4933241f;
+}
+.workbench-app.embedded-workbench .ontology-drawer::backdrop { background: #44352830; }
+.embedded-workbench .ontology-drawer :is(.ontology-drawer-header, .ontology-drawer-body, .ontology-drawer-footer) {
+  padding: 14px clamp(12px, 3vw, 20px);
+  border-color: var(--wb-line);
+}
+.embedded-workbench .ontology-drawer .ontology-drawer-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: var(--wb-surface);
+}
+.embedded-workbench .ontology-drawer .ontology-drawer-footer > div { margin-left:auto; }
+.embedded-workbench .ontology-drawer .ontology-drawer-header h2 { margin: 0 0 3px; font-size: 18px; }
+.embedded-workbench .ontology-drawer :is(label, .ontology-hint, .ontology-list-heading small, .ontology-empty, .ontology-live-review p) { color: var(--wb-muted); }
+.embedded-workbench .ontology-drawer :is(.ontology-property, .ontology-endpoints, .ontology-live-review) {
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  background: var(--wb-subtle);
+  padding: 12px;
+}
+.embedded-workbench .ontology-drawer input[type="checkbox"] { accent-color: var(--wb-accent); }
+.workbench-app.embedded-workbench .ontology-drawer :focus-visible { outline-color: var(--wb-accent); }
+.workbench-app.embedded-workbench button.starxiaotu-term { min-height: 24px; }

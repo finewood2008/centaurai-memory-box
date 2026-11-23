@@ -16,6 +16,9 @@ const HOP_HEADERS = new Set([
   "transfer-encoding",
   "upgrade",
 ]);
+const EXPERT_LAUNCH_HEADER='x-wanx-expert-launch';
+const expertLaunchHeader=(path,method,value)=>typeof value==='string'&&/^[A-Za-z0-9_-]{43}$/.test(value)&&
+  (method==='GET'&&path==='/api/wanx-expert-app/v1/context'||method==='POST'&&path==='/api/wanx-expert-app/v1/invoke');
 const MAX_SOCKET_BYTES = 16 * 1024 * 1024;
 const TOKEN_QUERY_FIELDS = ["token", "access_token"];
 const PROFILE_ROUTES = new Set([
@@ -115,6 +118,7 @@ export async function createDashboardGateway({
     const headers = headersWithoutHop(request.headers);
     headers.host = target.host;
     delete headers.forwarded;
+    if(request.headers.upgrade||!expertLaunchHeader(request.url,request.method,headers[EXPERT_LAUNCH_HEADER]))delete headers[EXPERT_LAUNCH_HEADER];
     for (const name of Object.keys(headers)) {
       if (name.startsWith("x-forwarded-") || name.startsWith("sec-websocket-"))
         delete headers[name];
@@ -747,7 +751,7 @@ export async function createDashboardGateway({
         headers: {
           host: localURL.host,
           origin: localURL.origin,
-          ...Object.fromEntries(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]).filter(([key,value]) => ["accept", "accept-language", "content-type", "x-octop-agent-id", "x-wanx-metering-session", "x-content-sha256", "range", "if-none-match", "if-modified-since"].includes(key) || (key === "x-space-link" && ["/api/personal-space/agent-access", "/api/personal-space/connection-access", "/api/clipboard/v1/agent-access"].includes(path.split("?")[0])) || (key === "x-wanx-data-context" && /^\/api\/semantica\//.test(path.split("?")[0]) && ["team","personal"].includes(value)) || (key === "x-wanx-data-context" && /^\/api\/assistant\/knowledge(?:\/|-)/.test(path.split("?")[0]) && ["team","personal"].includes(value)) || (key === "x-xingtu-key" && /^\/api\/semantica\/open\/v1\//.test(path.split("?")[0])))),
+          ...Object.fromEntries(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]).filter(([key,value]) => ["accept", "accept-language", "content-type", "x-octop-agent-id", "x-wanx-metering-session", "x-content-sha256", "range", "if-none-match", "if-modified-since"].includes(key) || (key === EXPERT_LAUNCH_HEADER && expertLaunchHeader(path,method,value)) || (key === "x-space-link" && ["/api/personal-space/agent-access", "/api/personal-space/connection-access", "/api/clipboard/v1/agent-access"].includes(path.split("?")[0])) || (key === "x-wanx-data-context" && /^\/api\/semantica\//.test(path.split("?")[0]) && ["team","personal"].includes(value)) || (key === "x-wanx-data-context" && /^\/api\/assistant\/knowledge(?:\/|-)/.test(path.split("?")[0]) && ["team","personal"].includes(value)) || (key === "x-xingtu-key" && /^\/api\/semantica\/open\/v1\//.test(path.split("?")[0])))),
           ...(session ? { authorization: `Bearer ${marker}` } : {}),
         },
       };

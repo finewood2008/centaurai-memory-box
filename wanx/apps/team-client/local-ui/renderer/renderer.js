@@ -139,6 +139,12 @@ const dialogueModelSettings = window.createDialogueModelSettingsView?.({
   request: (action, input) => window.wanxClient.action(action, input),
   onSaved: () => aiDialogueView?.modelsChanged(),
 });
+let restoringWalletFocus = false;
+function restoreWalletFocus(element) {
+  restoringWalletFocus = true;
+  try { element.focus({ preventScroll: true }); }
+  finally { restoringWalletFocus = false; }
+}
 const creditsView = window.createWalletView({
   getBoxName: deviceId => {
     const device = currentState?.devices?.find(item => item.deviceId === deviceId);
@@ -397,6 +403,10 @@ function deviceNetworkStatus(device) {
   if (device.local || device.cloudPresence === "offline" ||
       !["ready", "unreachable"].includes(device.accessState) ||
       (device.networkReady !== false && device.accessState !== "unreachable")) return null;
+  if (currentState.platform?.reason === "NETWORK_LEASE_EXPIRED") return {
+    label: "连接授权已到期",
+    detail: "请点击“刷新设备”重连，再重新打开应用查询原任务状态，避免重复提交。",
+  };
   const connecting = device.localReachability !== "unreachable" && (device.networkConnectionState === "connecting" ||
     (!device.networkConnectionState && (currentState.platform?.phase === "enrolling" ||
       currentState.network?.phase === "checking")));
@@ -934,7 +944,7 @@ function resourceSize(value) {
 function boxesView() {
   const devices = currentState.devices || [], ready = currentState.canLaunchApplications;
   const refreshing = busyRequest?.action === "devices.refresh";
-  const metrics = window.wanxSpace?.overview?.();
+  const metrics = ready ? window.wanxSpace?.overview?.() : null;
   const storage = ready ? metrics?.wanxStorage : null;
   const cpu = ready ? metrics?.cpu : null, memory = ready ? metrics?.memory : null;
   const lanIPs = ready && Array.isArray(metrics?.network?.lanAddresses) ? metrics.network.lanAddresses : [];
@@ -944,7 +954,7 @@ function boxesView() {
     <div class="page-heading"><div><h2>盒子</h2><p class="muted">连接设备，查看状态，维护盒子上的服务。</p></div><div class="settings-actions"><button class="button small ${refreshing ? "activity-button" : ""}" data-action="refresh" aria-busy="${refreshing}" ${busy ? "disabled" : ""}>${refreshing ? '<span class="activity-spinner" aria-hidden="true"></span>正在刷新…' : "刷新设备"}</button><button class="button primary small" data-action="provisioning" ${busy ? "disabled" : ""}>＋ 添加盒子</button><button class="text-button box-faq-entry" data-action="show-help" data-scene="box_connection">常见问题 ›</button></div></div>
     ${pendingOpenView()}${notice ? `<div class="notice error" role="status">${escapeHTML(notice)}</div>` : ""}
     <section class="box-overview" aria-label="当前盒子"><div class="box-overview-heading"><div class="box-identity"><img src="./assets/centaurai-mark.png" alt=""/><div><span class="box-eyebrow">当前使用的盒子</span><h3 class="current-device">${currentState.selectedDeviceId || currentState.activeDeviceId ? escapeHTML(activeDeviceName()) : "尚未连接盒子"}</h3><p>${ready ? currentState.connection?.mode === "local" ? "本机万象 · 文件与服务运行在这台电脑上" : "万象网络 · 已建立盒子连接" : network.detail}</p><div class="box-addresses" aria-label="盒子 IP" title="当前盒子的局域网地址"><span>盒子 IP</span>${lanIPs.length ? lanIPs.map(address => `<code>${escapeHTML(address)}</code>`).join("") : `<span>${ready ? "暂未获取盒子内网 IP" : "连接后显示"}</span>`}</div></div></div><span class="box-status ${ready ? "ready" : ""}"><i class="status-dot ${ready ? "ready" : ""}"></i>${status}</span></div>
-    <div class="box-resource-grid"><div><span>可用存储</span><strong>${resourceSize(metrics?.volume?.free)}</strong><small>总容量 ${resourceSize(metrics?.volume?.total)}</small></div><div><span>万象占用</span><strong>${storage && !storage.complete ? "≥ " : ""}${resourceSize(storage?.bytes)}</strong><small title="万象数据、应用与运行组件，含日志、缓存、历史版本和回收站；重叠文件仅计一次。按文件大小汇总，每 30 秒更新。">${storage ? storage.complete ? "数据、应用与运行组件" : "部分目录暂时无法读取" : ready ? "等待盒子返回完整统计" : "连接后显示实际状态"}</small></div><div><span>CPU 使用率</span><strong>${cpu ? `${cpu.percent.toFixed(1)}%` : "—"}</strong><small>${cpu ? "盒子当前负载" : ready ? "暂未获取 CPU 指标" : "连接后显示实际状态"}</small></div><div><span>内存使用</span><strong>${memory ? `${memory.percent.toFixed(1)}%` : "—"}</strong><small>${memory ? `${resourceSize(memory.used)} / ${resourceSize(memory.total)}` : ready ? "暂未获取内存指标" : "连接后显示实际状态"}</small></div></div></section>
+    <div class="box-resource-grid"><div><span>可用存储</span><strong>${resourceSize(metrics?.volume?.free)}</strong><small>${ready ? `总容量 ${resourceSize(metrics?.volume?.total)}` : "连接后显示实际状态"}</small></div><div><span>万象占用</span><strong>${storage && !storage.complete ? "≥ " : ""}${resourceSize(storage?.bytes)}</strong><small title="万象数据、应用与运行组件，含日志、缓存、历史版本和回收站；重叠文件仅计一次。按文件大小汇总，每 30 秒更新。">${storage ? storage.complete ? "数据、应用与运行组件" : "部分目录暂时无法读取" : ready ? "等待盒子返回完整统计" : "连接后显示实际状态"}</small></div><div><span>CPU 使用率</span><strong>${cpu ? `${cpu.percent.toFixed(1)}%` : "—"}</strong><small>${cpu ? "盒子当前负载" : ready ? "暂未获取 CPU 指标" : "连接后显示实际状态"}</small></div><div><span>内存使用</span><strong>${memory ? `${memory.percent.toFixed(1)}%` : "—"}</strong><small>${memory ? `${resourceSize(memory.used)} / ${resourceSize(memory.total)}` : ready ? "暂未获取内存指标" : "连接后显示实际状态"}</small></div></div></section>
     ${maintenanceToolsView()}
     <section class="content-section" aria-label="设备管理"><div class="box-section-heading"><div><h3>已关联的盒子 <span class="count">${devices.length}</span></h3><p class="muted ${refreshing ? "activity-status" : ""}" role="status">${refreshing ? '<span class="activity-spinner" aria-hidden="true"></span>正在读取最新设备状态…' : "连接或切换盒子后，文件空间和应用将使用所选盒子。"}</p></div></div>${devices.length ? `<div class="box-device-grid">${devices.map(deviceCard).join("")}</div>` : `<div class="empty-state"><h3>还没有盒子</h3><p>发现附近的盒子，完成配网和账号绑定。</p><button class="button small" data-action="provisioning">添加盒子</button></div>`}</section>
     ${ownershipView()}
@@ -1050,6 +1060,7 @@ function pendingOpenView() {
 function marketErrorMessage(error) {
   const message = String(error?.code || error?.message || error || "");
   const messages = {
+    STUDIO_BOX_UPDATE_REQUIRED: "当前盒子的开物服务版本较旧，请先更新盒端 WANX 服务后重试；需求与配置仍然保留。",
     BOX_APPLICATION_PLATFORM_SESSION_REQUIRED: "请登录万象并选择已关联的盒子后打开此应用。",
     BOX_APPLICATION_RUNTIME_UPDATE_REQUIRED: "盒子需要更新万象服务后才能打开此应用，请联系管理员。",
     BOX_APPLICATION_ACCESS_DENIED: "此账号尚未获得应用使用权限，请联系管理员启用并授权。",
@@ -1125,6 +1136,8 @@ function marketErrorMessage(error) {
     APPLICATION_BUSY: "请先关闭应用，再进行此操作。",
     APPLICATION_RUNNING: "请先关闭应用，再进行此操作。",
     APPLICATION_ROLLBACK: "没有可恢复的上一个版本。",
+    APPLICATION_MANAGED_DEPLOYMENT_REQUIRED: "此应用由开物部署管理，请在本机安装中卸载；版本恢复请前往开物。",
+    APPLICATION_DEPLOYMENT_USER_REMOVED: "此电脑已卸载该部署版本，请在开物重新部署后安装。",
   };
   return Object.entries(messages).find(([code]) => message.includes(code))?.[1]
     || "暂时无法完成应用市场操作，请刷新后重试；如仍失败，请联系管理员。";
@@ -1215,9 +1228,12 @@ function applicationActions(item, installed) {
     ? `<p class="muted">历史版本无法自动比较，请选择当前版本。</p><div class="version-choices">${item.versions.map(({ version }) => { const pending = selecting && operation.version === version; return `<button class="button small ${pending ? "activity-button" : ""}" data-action="applications-select-current" data-application-id="${id}" data-version="${escapeHTML(version)}" aria-busy="${pending}" ${disabled}>${pending ? activityLabel("正在选择…") : `使用 ${escapeHTML(version)}`}</button>`; }).join("")}</div>`
     : `<div class="application-actions">${candidate?.status === "available" ? `<button class="button ${active ? "" : "primary"} small ${installing ? "activity-button" : ""}" data-action="market-install" data-application-id="${id}" aria-busy="${installing}" ${disabled}>${installing ? activityLabel(status || "正在安装…") : staged ? active ? "重试更新" : "继续安装" : active ? "更新" : "安装"}</button>` : ""}${active ? `<button class="button primary small ${opening ? "activity-button" : ""}" data-action="applications-launch" data-application-id="${id}" aria-busy="${opening}" ${disabled}>${opening ? activityLabel(status || "正在打开…") : operationBusy(item.applicationId) ? status || "处理中…" : operation?.phase === "running" ? "已打开" : "打开"}</button>${studioHome.continueButton(item.applicationId)}` : ""}</div>`;
 }
+function isManagedLocalApplication(item) {
+  return Boolean(window.wanxApplicationPresentation?.environment(currentState?.applications?.find(record => record.applicationId === item.applicationId)));
+}
 function applicationManagement(item, installed) {
   const candidate = applicationsTab === "local" ? null : marketCandidates.get(item.applicationId);
-  const availability = applicationsTab === "local" ? "通过本机安装包管理版本" : candidateLabel(candidate);
+  const availability = isManagedLocalApplication(item) ? "由开物管理版本" : applicationsTab === "local" ? "通过本机安装包管理版本" : candidateLabel(candidate);
   const id = escapeHTML(item.applicationId);
   const previous = typeof item.previous === "string" ? item.previous : item.previous?.version;
   const disabled = operationBusy(item.applicationId) ? "disabled" : "";
@@ -1225,10 +1241,10 @@ function applicationManagement(item, installed) {
   const operation = operationFor(item.applicationId);
   const restoring = ["rolling_back", "rollback", "rolling-back"].includes(operation?.phase);
   const uninstalling = operation?.phase === "uninstalling";
-  return `<div class="store-detail-body">${item.description ? `<p class="store-full-description">${escapeHTML(item.description)}</p>` : ""}${installed && item.version ? `<p class="muted">${active ? "当前版本" : "待安装版本"} v${escapeHTML(item.version)}</p>` : ""}<p class="market-status">${escapeHTML(availability)}</p>${candidateDetails(candidate)}${installed && !item.selectionRequired ? `<div class="market-actions">${active && previous ? `<button class="text-button ${restoring ? "activity-button" : ""}" data-action="${applicationsTab === "local" ? "local-rollback" : "market-rollback"}" data-application-id="${id}" aria-busy="${restoring}" ${disabled}>${restoring ? activityLabel("正在恢复…") : "恢复上一版本"}</button>` : ""}<button class="text-button danger-text ${uninstalling ? "activity-button" : ""}" data-action="${applicationsTab === "local" ? "local-uninstall" : "market-uninstall"}" data-application-id="${id}" aria-busy="${uninstalling}" ${disabled}>${uninstalling ? activityLabel("正在卸载…") : "卸载"}</button></div>` : ""}${!candidate?.artifact && !candidate?.release?.notes && !installed ? '<p class="muted">暂无更多版本信息。</p>' : ""}</div>`;
+  return `<div class="store-detail-body">${item.description ? `<p class="store-full-description">${escapeHTML(item.description)}</p>` : ""}${installed && item.version ? `<p class="muted">${active ? "当前版本" : "待安装版本"} v${escapeHTML(item.version)}</p>` : ""}<p class="market-status">${escapeHTML(availability)}</p>${candidateDetails(candidate)}${installed && !item.selectionRequired ? `<div class="market-actions">${active && previous && !isManagedLocalApplication(item) ? `<button class="text-button ${restoring ? "activity-button" : ""}" data-action="${applicationsTab === "local" ? "local-rollback" : "market-rollback"}" data-application-id="${id}" aria-busy="${restoring}" ${disabled}>${restoring ? activityLabel("正在恢复…") : "恢复上一版本"}</button>` : ""}<button class="text-button danger-text ${uninstalling ? "activity-button" : ""}" data-action="${isManagedLocalApplication(item) || applicationsTab === "local" ? "local-uninstall" : "market-uninstall"}" data-application-id="${id}" aria-busy="${uninstalling}" ${disabled}>${uninstalling ? activityLabel("正在卸载…") : "卸载"}</button></div>` : ""}${!candidate?.artifact && !candidate?.release?.notes && !installed ? '<p class="muted">暂无更多版本信息。</p>' : ""}</div>`;
 }
 function applicationCard(item, installed = true) {
-  if (applicationsTab !== "local") item = withMarketName(item);
+  item = withMarketName(item);
   const candidate = applicationsTab === "local" ? null : marketCandidates.get(item.applicationId);
   const id = escapeHTML(item.applicationId);
   const operation = operationFor(item.applicationId);
@@ -1236,7 +1252,7 @@ function applicationCard(item, installed = true) {
   const preparation = applicationPreparationStatus(item);
   const actions = applicationActions(item, installed);
   return `<article class="application-card" data-application="${id}" data-tone="${applicationTone(item)}"><button class="store-icon-link" data-action="store-details" data-application-id="${id}" aria-label="了解${escapeHTML(item.name)}">${applicationIcon(item)}</button><div class="application-main">
-    <div class="application-title"><h3><button class="store-title-link" data-action="store-details" data-application-id="${id}">${escapeHTML(item.name)}</button></h3></div>
+    <div class="application-title"><h3><button class="store-title-link" data-action="store-details" data-application-id="${id}">${escapeHTML(item.name)}</button></h3>${window.wanxApplicationPresentation?.badge(currentState.applications?.find(record => record.applicationId === item.applicationId)) || ""}</div>
     ${item.description ? `<p class="application-description">${escapeHTML(item.description)}</p>` : ""}
     ${status || preparation ? `<p class="market-status ${operation?.error ? "inline-error" : ""}" role="status">${escapeHTML(status || preparation)}</p>` : ""}
     ${!installed && (item.applicationId !== "ai.wanx.studio" || teamUIRole === "admin") && candidate?.status !== "available" ? `<p class="market-status" role="status">${escapeHTML(candidate ? candidateLabel(candidate) : marketLoading ? "正在检查可安装版本…" : "暂未提供可安装版本")}</p>` : ""}
@@ -1249,6 +1265,15 @@ function discoverableApplications() {
   return [...new Map(marketItems.map(item => [item.applicationId, item])).values()];
 }
 function withMarketName(item) {
+  const installed = currentState.applications?.find(record => record.applicationId === item.applicationId);
+  if (window.wanxApplicationPresentation?.environment(installed)) {
+    const name = studioHome.projectName(installed.deployment?.baseApplicationId);
+    return { ...item, name: name || installed.name };
+  }
+  if (installed) {
+    const name = studioHome.projectName(installed.applicationId);
+    if (name) return { ...item, name };
+  }
   if (applicationsTab === "local") return item;
   const cloud = marketItems.find(entry => entry.applicationId === item.applicationId);
   // Directory presentation comes only from cloud; installed runtime metadata stays intact.
@@ -1269,7 +1294,7 @@ function localInstalledApplications() {
 }
 function localApplicationsView() {
   const items = localInstalledApplications(), installing = busyFor("applications.install-local");
-  return `<section class="content-section local-applications" aria-label="本机安装"><div class="section-heading"><div><h3>本机安装 <span class="count">${items.length}</span></h3><p>从本机安装包安装与更新。卸载保留应用业务数据。</p></div><div class="store-toolbar"><button class="button small" data-action="local-refresh" ${busy ? "disabled" : ""}>刷新</button><button class="button primary ${installing ? "activity-button" : ""}" data-action="local-install" ${busy ? "disabled" : ""}>${installing ? activityLabel("正在安装…") : "＋ 安装本地应用"}</button></div></div><p class="muted">支持万象 ZIP 应用包；安装时会检查包内容、平台与版本。</p>${items.length ? `<div class="application-list">${items.map(item => applicationCard(item)).join("")}</div>` : '<div class="empty-state"><h3>暂无本地安装的应用</h3><p>选择电脑上的应用安装包，安装后可在这里打开、管理版本或卸载。</p></div>'}</section>${teamView.catalog()}`;
+  return `<section class="content-section local-applications" aria-label="本机安装"><div class="section-heading"><div><h3>本机安装 <span class="count">${items.length}</span></h3><p>从本机安装包安装与更新。卸载保留应用业务数据。</p></div><div class="store-toolbar"><button class="button small" data-action="local-refresh" ${busy ? "disabled" : ""}>刷新</button><button class="button primary ${installing ? "activity-button" : ""}" data-action="local-install" ${busy ? "disabled" : ""}>${installing ? activityLabel("正在安装…") : "＋ 安装本地应用"}</button></div></div><p class="muted">支持万象 ZIP 应用包；安装时会检查包内容、平台与版本。</p>${items.length ? `<div class="application-list">${items.map(item => applicationCard(item)).join("")}</div>` : '<div class="empty-state"><h3>暂无本地安装的应用</h3><p>选择电脑上的应用安装包，安装后可在这里打开、管理版本或卸载。</p></div>'}</section>${teamView.catalog(studioHome.projectName)}`;
 }
 function applicationMedia(id) { return window.wanxAppMedia?.[id]; }
 function storeFeatures() {
@@ -1295,7 +1320,7 @@ function applicationDetailView() {
   const version = installedItem?.version || candidate?.release?.version;
   return `<div class="app-layout store-layout" ${marketConfirmation || modal ? "inert" : ""}>${shellHeader("应用介绍")}<div class="page-content app-detail-page">
     <button class="store-back" data-action="store-back"><span aria-hidden="true">‹</span> 应用</button>
-    ${item ? `<section class="app-detail-hero" data-application-detail="${escapeHTML(item.applicationId)}" data-tone="creation">${applicationIcon(item)}<div class="app-detail-identity"><h2 class="app-detail-title" tabindex="-1">${escapeHTML(item.name)}</h2>${item.description ? `<p class="app-detail-tagline">${escapeHTML(item.description)}</p>` : ""}${applicationActions(item, Boolean(installedItem))}</div></section>
+    ${item ? `<section class="app-detail-hero" data-application-detail="${escapeHTML(item.applicationId)}" data-tone="creation">${applicationIcon(item)}<div class="app-detail-identity"><h2 class="app-detail-title" tabindex="-1">${escapeHTML(item.name)}</h2>${window.wanxApplicationPresentation?.badge(currentState.applications?.find(record => record.applicationId === item.applicationId)) || ""}${item.description ? `<p class="app-detail-tagline">${escapeHTML(item.description)}</p>` : ""}${applicationActions(item, Boolean(installedItem))}</div></section>
     ${pendingOpenView()}${notice ? `<div class="notice error" role="status">${escapeHTML(notice)}</div>` : ""}${status || preparation ? `<p class="market-status ${operation?.error ? "inline-error" : ""}" role="status">${escapeHTML(status || preparation)}</p>` : ""}
     <dl class="app-detail-facts">${version ? `<div><dt>${installedItem?.installationState === "pending" ? "待安装版本" : installedItem ? "当前版本" : "商店版本"}</dt><dd>${escapeHTML(version)}</dd></div>` : ""}<div><dt>安装状态</dt><dd>${installedItem ? installedItem.selectionRequired ? "待选择当前版本" : installedItem.installationState === "pending" ? "待完成盒端准备" : "已安装在此电脑" : "尚未安装"}</dd></div></dl>
     ${media.length ? `<section class="app-detail-section"><div class="section-heading"><h3>产品介绍</h3><span class="app-preview-hint">点击图片，放大查看</span></div><div class="app-poster-gallery ${media.length===1 ? "single" : ""}" role="region" aria-label="${escapeHTML(item.name)}产品海报" tabindex="0">${media.map((file,index)=>`<figure><button class="app-poster" data-action="poster-open" data-poster-index="${index}" aria-label="放大：${escapeHTML(item.name)}产品海报"><img src="./assets/posters/${file}" alt="${escapeHTML(item.name)}产品海报" decoding="async" /></button><figcaption><strong>${escapeHTML(item.name)}</strong></figcaption></figure>`).join("")}</div></section>` : ""}
@@ -1763,7 +1788,7 @@ function render(state) {
     const previous = walletInput ? nextWalletDialog.querySelector('#wallet-custom-amount:not(:disabled)')
       : buttons.find(button => button.dataset.action === walletFocus?.action && button.dataset.amount === walletFocus?.amount && button.dataset.channel === walletFocus?.channel);
     if (!nextWalletDialog.contains(document.activeElement) || document.activeElement.disabled) {
-      (previous || buttons.find(button => button.getAttribute('aria-pressed') === 'true') || buttons.find(button => button.dataset.action === 'credits-buy') || nextWalletDialog).focus({ preventScroll: true });
+      restoreWalletFocus(previous || buttons.find(button => button.getAttribute('aria-pressed') === 'true') || buttons.find(button => button.dataset.action === 'credits-buy') || nextWalletDialog);
     }
     if (walletSelection && previous) previous.setSelectionRange(...walletSelection);
     if (walletScroll && walletScroll.step !== nextWalletDialog.dataset.step) {
@@ -1897,6 +1922,7 @@ function operationErrorMessage(error, fallback) {
     boxSessionMessages[code] = "盒端服务暂不可用，请稍后重新连接；如仍失败，请联系管理员。";
   if (Object.hasOwn(boxSessionMessages, message)) return `${boxSessionMessages[message]}（${message}）`;
   const messages = {
+    STUDIO_BOX_UPDATE_REQUIRED: "当前盒子的开物服务版本较旧，请先更新盒端 WANX 服务后重试；需求与配置仍然保留。",
       OWNERSHIP_RETAIN_DATA_REQUIRED: "此功能仅转移所有权并保留数据；清空交付请使用盒子清除。",
       OWNERSHIP_TRANSFER_PENDING: "此盒子已有待处理的转移邀请，请等待客户接受或邀请过期。",
       OWNERSHIP_TRANSFER_NOT_FOUND: "未找到属于你的转移邀请，请刷新记录。",
@@ -2049,6 +2075,7 @@ async function run(action, input = {}) {
 app.addEventListener("click", async (event) => {
   activeInteraction = false;
   finishInteraction();
+  if (event.target.id === "wallet-custom-amount") return creditsView.action("credits-custom");
   const target = event.target.closest("[data-action]");
   if (!target) { if (profileMenuOpen) { profileMenuOpen = false; render(currentState); } return; }
   if (target.disabled) return;
@@ -2121,10 +2148,10 @@ app.addEventListener("click", async (event) => {
     const id = target.dataset.applicationId, item = localInstalledApplications().find(row => row.applicationId === id);
     if (!item || operationBusy(id)) return;
     const rollback = action === "local-rollback", previous = typeof item.previous === "string" ? item.previous : item.previous?.version;
-    if (rollback && !previous) return;
+    if (rollback && (!previous || isManagedLocalApplication(item))) return;
     marketConfirmation = { applicationId: id, action: rollback ? "applications.rollback-local" : "applications.uninstall-local",
       title: `${rollback ? "恢复" : "卸载"}${item.name}`, verb: rollback ? "恢复" : "卸载",
-      detail: rollback ? `将程序恢复到 v${previous}，业务数据保持当前状态。` : "将移除此电脑上的应用程序，保留应用业务数据。" };
+      detail: rollback ? `将程序恢复到 v${previous}，业务数据保持当前状态。` : isManagedLocalApplication(item) ? "仅移除此电脑上的应用程序，保留应用业务数据和盒端服务；之后可在开物重新部署。" : "将移除此电脑上的应用程序，保留应用业务数据。" };
     render(currentState); return;
   }
   if (action === "store-details") {
@@ -2450,6 +2477,9 @@ function selectWifi(key) {
   const hidden = form.querySelector('[name="hidden"]'); if (hidden) hidden.checked = false;
   updateWifiPicker();
 }
+app.addEventListener("focusin", event => {
+  if (!restoringWalletFocus && event.target.id === "wallet-custom-amount") void creditsView.action("credits-custom");
+});
 app.addEventListener("input", event => {
   if (event.target.closest?.('[data-form="help-feedback"]')) { helpView?.input(event.target.name, event.target.value); return; }
   if (event.target.id === "wallet-custom-amount") void creditsView.action("credits-custom-change", { amount: event.target.value, value: event.target.value });

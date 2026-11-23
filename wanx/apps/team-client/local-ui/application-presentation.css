@@ -1,0 +1,4 @@
+.application-environment-badge{display:inline-flex;align-items:center;flex:none;margin-left:8px;padding:2px 7px;border:1px solid #cbd8d0;border-radius:5px;background:#eef4ef;color:#3d5d4c;font-size:11px;font-weight:500;line-height:1.4;white-space:nowrap;vertical-align:middle}
+.application-environment-badge[data-environment="dev"]{border-color:#e2d7bf;background:#f8f3e8;color:#7a6036}
+.app-body .app-name:has(>.application-environment-badge){display:flex;align-items:center;min-width:0}
+.app-body .app-name:has(>.application-environment-badge)>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

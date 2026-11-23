@@ -1,6 +1,7 @@
 (() => {
   const esc = value => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
-  const parseTags = value => [...new Set(String(value || "").split(/[,，;；\n]+/).map(tag => tag.trim()).filter(Boolean))];
+  const tagSeparators = /[,，;；\n]+/;
+  const parseTags = value => [...new Map((Array.isArray(value) ? value : String(value || "").split(tagSeparators)).map(tag => tag.trim()).filter(Boolean).map(tag => [tag.toLocaleLowerCase(), tag])).values()];
   const ownTags = row => row?.annotation?.manual?.tags ?? row?.annotation?.automatic?.tags ?? [];
   const ownDescription = row => row?.annotation?.manual?.description ?? row?.annotation?.automatic?.description ?? "";
   const effectiveDescription = row => row?.annotation?.description ?? ownDescription(row);
@@ -14,6 +15,7 @@
   const analysisLabel = suggestion => suggestion.contentMode === "content" ? "内容分析" : suggestion.contentMode === "unsupported" ? "不支持内容分析" : "仅分析名称";
   const analysisReason = suggestion => !suggestion.reason ? "" : analysisReasons[suggestion.reason] || "本次无法读取文件正文，可继续手工标注";
   const readingLimits = "每项最大 64 MB；文本型 PDF 最多读取前 200 页；每项最多分析 32768 个字符";
+  const pageSizes = [5, 10, 20, 50];
 
   window.createSpaceAnnotationWorkbench = ({ call, changed = () => {}, onClose = () => {} }) => {
     let visible = false, epoch = 0, origin = null, job = null, items = [], total = 0, filteredTotal = 0, offset = 0;
@@ -22,11 +24,12 @@
     let cache = new Map(), drafts = new Map(), draftTimers = new Map(), draftWrites = new Map(), draftError = new Set(), committingDrafts = new Map();
     let scrollTop = 0, poll = null, queryTimer = null, loadingList = false, nextAfterApply = null;
     let schemesLoading = false;
+    let reusableTags = [], tagInputs = new Map(), tagFocus = "", tagRepaint = false;
     let tab = "edit", schemes = [], scheme = "", instructions = "", schemeName = "";
     let bulk = { tagMode: "keep", tags: "", descriptionMode: "keep", description: "", inherit: "keep" };
     let suggestionPolicy = { tagMode: "add", descriptionMode: "fill-empty" };
     let plan = null, planKind = "", preview = null, previewURL = null, previewOpen = false, composing = false, scopeHistory = [], pendingFocus = "", focusedPlan = "";
-    const pageSize = 200, rowHeight = 58, visibleRows = 22;
+    let pageSize = 10, listRequest = 0;
     const current = () => cache.get(activeId);
     const selectedCount = () => allMatching ? filteredTotal : selected.size || (activeId ? 1 : 0);
     const selection = () => allMatching ? { allMatching: { ...allMatching } } : { ids: selected.size ? [...selected] : activeId ? [activeId] : [] };
@@ -38,6 +41,14 @@
     const check = revision => { if (!visible || revision !== epoch) throw Object.assign(Error("SPACE_CONTEXT_CHANGED"), { code: "SPACE_CONTEXT_CHANGED" }); };
     const invoke = async input => { const revision = epoch; check(revision); const value = await call(input); check(revision); return value; };
     function releasePreview() { if (previewURL) URL.revokeObjectURL(previewURL); previewURL = null; preview = null; }
+    function reconcileFocus() {
+      if (selected.size || allMatching || items.some(row => row.id === activeId)) return;
+      const position = nextAfterApply ? nextAfterApply.position - offset : 0;
+      activeId = items[Math.max(0, Math.min(items.length - 1, position))]?.id || "";
+      anchor = activeId;
+      previewOpen = false;
+      releasePreview();
+    }
     function schedulePoll() {
       clearTimeout(poll); poll = null;
       if (visible && busyStates.has(job?.status)) poll = setTimeout(() => { void loadPage(true); }, 1000);
@@ -45,7 +56,7 @@
     function consume(value, preservePage = false) {
       if (value?.job) job = value.job;
       if (Array.isArray(value?.items)) {
-        if (!preservePage) items = value.items;
+        if (!preservePage) items = value.items.slice(0, pageSize);
         else { const updated = new Map(value.items.map(row => [row.id, row])); items = items.map(row => updated.get(row.id) || row); }
         for (const row of value.items) {
           const draft = drafts.get(row.id), applied = committingDrafts.get(row.id), revisionChanged = draft && draft._baseRevision !== row.annotation?.revision;
@@ -64,25 +75,58 @@
       if (!preservePage) filteredSummary = value?.filteredSummary || null;
       resumableJobs = value?.resumableJobs || resumableJobs;
       if (!preservePage) offset = value?.offset ?? offset;
-      if (!activeId && items.length) activeId = items[0].id;
-      if (nextAfterApply && !preservePage && !busyStates.has(job?.status)) {
-        const prior = nextAfterApply; nextAfterApply = null;
-        if (cache.get(prior)?.status !== "failed") { const index = items.findIndex(row => row.id === prior); activeId = items[Math.min(items.length - 1, index + 1)]?.id || prior; selected.clear(); }
-      }
+      if (!preservePage) reconcileFocus();
       schedulePoll();
     }
-    async function loadPage(quiet = false) {
-      if (!job || loadingList) return;
-      const revision = epoch;
+    async function loadPage(quiet = false, targetOffset = offset, limit = pageSize) {
+      if (!job || (quiet && loadingList)) return false;
+      const revision = epoch, request = ++listRequest;
+      const latest = () => revision === epoch && request === listRequest;
       loadingList = true; if (!quiet) { loading = true; emit(); }
-      try { consume(await invoke({ op: "list", jobId: job.id, offset, limit: pageSize, query, type, status: state })); error = ""; }
-      catch (cause) { if (visible && revision === epoch) error = errorText(cause); }
-      finally { if (revision === epoch) { loadingList = false; loading = false; emit(); } }
+      try {
+        const input = { op: "list", jobId: job.id, offset: targetOffset, limit, query, type, status: state };
+        let value = await invoke(input);
+        if (!latest()) return false;
+        const count = value.filteredTotal ?? value.total ?? 0;
+        const lastOffset = Math.max(0, Math.ceil(count / limit) - 1) * limit;
+        if (targetOffset > lastOffset) {
+          value = await invoke({ ...input, offset: lastOffset });
+          if (!latest()) return false;
+        }
+        if (offset !== value.offset || pageSize !== limit) scrollTop = 0;
+        pageSize = limit;
+        consume(value);
+        error = "";
+      } catch (cause) {
+        if (latest()) { error = errorText(cause); schedulePoll(); }
+        return false;
+      } finally {
+        if (latest()) { loadingList = false; loading = false; emit(); }
+      }
+      if (nextAfterApply && !busyStates.has(job?.status)) {
+        const prior = nextAfterApply;
+        nextAfterApply = null;
+        if (activeId === prior.id && job?.applied?.includes(prior.id)) {
+          selected.clear();
+          if (items.some(row => row.id === prior.id)) await moveRow(1);
+          else {
+            // Saving can remove the current file from the filtered list.
+            const index = Math.max(0, Math.min(items.length - 1, prior.position - offset));
+            if (items[index]) await focusRow(items[index].id);
+            else reconcileFocus();
+          }
+          if (revision === epoch) emit();
+        } else if (activeId === prior.id) {
+          error = errorText(cache.get(prior.id)?.error || job?.error);
+          emit();
+        }
+      }
+      return revision === epoch;
     }
     async function loadSchemes() {
       if (schemesLoading) return;
       const revision = epoch; schemesLoading = true; emit();
-      try { schemes = (await invoke({ op: "schemes" })).items || []; }
+      try { const value = await invoke({ op: "schemes" }); schemes = value.items || []; reusableTags = value.tags || []; }
       catch (cause) { if (visible && revision === epoch) error = errorText(cause); }
       finally { if (revision === epoch) { schemesLoading = false; emit(); } }
     }
@@ -91,19 +135,25 @@
       reset(); scopeHistory = history; visible = true; epoch++; origin = { ...input }; loading = true;
       const revision = epoch;
       selected = new Set(input.ids || []); activeId = input.ids?.[0] || ""; error = ""; emit();
-      try { consume(await invoke({ op: "open", space_id: input.space_id || "personal", parent: input.parent || "", ...(input.ids?.length ? { ids: input.ids } : {}), recursive: input.recursive === true, ...(input.fresh ? { fresh: true } : {}) })); }
+      try {
+        const value = await invoke({ op: "open", space_id: input.space_id || "personal", parent: input.parent || "", ...(input.ids?.length ? { ids: input.ids } : {}), recursive: input.recursive === true, ...(input.fresh ? { fresh: true } : {}) });
+        consume(value);
+        if (value.directoryRefreshError) message = "暂时无法检查新增文件，当前显示上次扫描的列表。可返回空间后重新打开工作台重试。";
+      }
       catch (cause) { if (visible && revision === epoch) error = errorText(cause); }
-      finally { if (revision === epoch) { loading = false; emit(); } }
+      finally { if (revision === epoch) { loading = false; emit(); void loadSchemes(); } }
     }
     function reset() {
       visible = false; epoch++; clearTimeout(poll); clearTimeout(queryTimer); poll = queryTimer = null;
       for (const timer of draftTimers.values()) clearTimeout(timer);
       draftTimers.clear(); draftWrites.clear(); draftError.clear(); drafts.clear(); committingDrafts.clear(); cache.clear(); releasePreview();
       origin = null; job = null; items = []; total = filteredTotal = offset = scrollTop = 0; loading = loadingList = false;
+      pageSize = 10;
       activeId = anchor = ""; selected.clear(); allMatching = null; error = message = ""; plan = null; nextAfterApply = null;
       summary = {}; filteredSummary = null; resumableJobs = []; query = type = state = ""; previewOpen = composing = false;
       scopeHistory = []; pendingFocus = focusedPlan = "";
       schemesLoading = false; scheme = schemeName = instructions = ""; schemes = []; tab = "edit"; leftHidden = true;
+      reusableTags = []; tagInputs.clear(); tagFocus = ""; tagRepaint = false;
       bulk = { tagMode: "keep", tags: "", descriptionMode: "keep", description: "", inherit: "keep" };
       suggestionPolicy = { tagMode: "add", descriptionMode: "fill-empty" };
     }
@@ -114,22 +164,27 @@
     }
     async function flushDraft(id, force = false) {
       clearTimeout(draftTimers.get(id)); draftTimers.delete(id);
-      if (!job || !drafts.has(id) || (!force && !draftError.has(id) && !drafts.get(id)._dirty)) return;
+      if (!job || !drafts.has(id)) return;
       if (drafts.get(id)._conflict) throw Object.assign(Error("SPACE_ANNOTATION_CONFLICT"), { code: "SPACE_ANNOTATION_CONFLICT" });
       const value = drafts.get(id), patch = {};
+      if (!force && !draftError.has(id) && !value._dirty) return draftWrites.get(id);
       for (const key of value._fields) patch[key] = key === "tags" ? [...value.tags] : value[key];
       if (force && !Object.keys(patch).length) patch.tags = [...value.tags];
-      const revision = epoch, jobId = job.id;
+      const revision = epoch, jobId = job.id, expectedRevision = value._baseRevision;
       value._dirty = false;
       const previous = draftWrites.get(id) || Promise.resolve();
-      const work = previous.catch(() => {}).then(() => { check(revision); return invoke({ op: "draft", jobId, id, patch }); }).then(() => { if (revision === epoch) draftError.delete(id); }, cause => { if (revision === epoch) draftError.add(id); throw cause; });
+      const work = previous.catch(() => {}).then(() => { check(revision); return invoke({ op: "draft", jobId, id, patch, expectedRevision }); }).then(() => { if (revision === epoch) draftError.delete(id); }, cause => { if (revision === epoch) draftError.add(id); throw cause; });
       draftWrites.set(id, work);
       try { await work; }
       catch (cause) { if (visible && revision === epoch) { error = errorText(cause); emit(); } throw cause; }
+      finally { if (draftWrites.get(id) === work) draftWrites.delete(id); }
     }
     async function focusRow(id, event = {}) {
       if (id === activeId) return;
+      const revision = epoch;
+      if (!commitTags(tagField(), false)) return;
       if (activeId) try { await flushDraft(activeId); } catch { return; }
+      if (!visible || revision !== epoch) return;
       const before = activeId; activeId = id;
       pendingFocus = id;
       if (event.shiftKey) {
@@ -139,6 +194,26 @@
       } else { anchor = id; if (!event.preserveSelection && selected.size === 1 && !selected.has(id)) selected.clear(); }
       if (previewOpen) void fetchPreview();
       emit();
+    }
+    async function moveRow(direction, event) {
+      const revision = epoch, prior = activeId;
+      const index = items.findIndex(row => row.id === prior);
+      const row = items[index < 0 ? 0 : index + direction];
+      if (row) return focusRow(row.id, event);
+      const target = offset + direction * pageSize;
+      if (!items.length || target < 0 || target >= filteredTotal || !commitTags(tagField(), false)) return;
+      if (prior) await flushDraft(prior);
+      if (revision !== epoch || prior !== activeId) return;
+      if (await loadPage(false, target)) {
+        const first = direction > 0 ? items[0] : items.at(-1);
+        if (!first) return;
+        if (event?.shiftKey) {
+          selected.add(prior);
+          selected.add(first.id);
+          anchor = first.id;
+        }
+        await focusRow(first.id, event);
+      }
     }
     async function fetchPreview() {
       const id = activeId, revision = epoch; releasePreview(); previewOpen = true; preview = { loading: true }; emit();
@@ -156,18 +231,50 @@
       return { tagMode: bulk.tagMode, tags: parseTags(bulk.tags), descriptionMode: bulk.descriptionMode, description: bulk.description,
         ...(bulk.inherit !== "keep" ? { inherit: bulk.inherit === "on" } : {}) };
     }
+    const tagField = () => isBatch() || tab === "schemes" ? "bulk-tag-input" : "item-tag-input";
+    const tagKey = field => field === "bulk-tag-input" ? "bulk" : activeId;
+    const tagValues = field => field === "bulk-tag-input" ? parseTags(bulk.tags) : [...draftFor(current()).tags];
+    const tagWritable = field => !isBusy() && (field === "bulk-tag-input" && tab === "schemes" || writable() && (field !== "item-tag-input" || current()?.writable !== false));
+    function setTags(field, values, focus = true) {
+      if (!tagWritable(field)) return false;
+      const tags = [...new Map(values.map(tag => [tag.trim().toLocaleLowerCase(), tag.trim()]).filter(([tag]) => tag)).values()];
+      if (tags.length > 30 || tags.some(tag => tag.length > 80)) { error = "最多添加 30 个标签，每个标签最多 80 个字符。"; tagRepaint = true; if (focus) tagFocus = field; emit(); return false; }
+      input(field === "bulk-tag-input" ? "bulk-tags" : "item-tags", tags);
+      error = ""; tagRepaint = true; if (focus) tagFocus = field; return true;
+    }
+    function commitTags(field = tagField(), focus = true) {
+      const text = (tagInputs.get(tagKey(field)) || "").trim();
+      if (!text) return true;
+      const known = tagSeparators.test(text) && availableTags().find(tag => tag.toLocaleLowerCase() === text.toLocaleLowerCase());
+      if (!setTags(field, [...tagValues(field), ...(known ? [known] : parseTags(text))], focus)) return false;
+      tagInputs.delete(tagKey(field)); return true;
+    }
+    function availableTags() {
+      return parseTags([...drafts.values()].reverse().flatMap(draft => draft.tags).concat((summary.tagCounts || []).map(item => item.tag), reusableTags, schemes.flatMap(item => item.tags || []))).slice(0, 500);
+    }
+    function tagsEditor(field, tags, label, disabled) {
+      const selected = new Set(tags.map(tag => tag.toLocaleLowerCase())), choices = availableTags().filter(tag => !selected.has(tag.toLocaleLowerCase()));
+      return `<div class="awb-tag-editor"><label for="awb-tag-input">${esc(label)}</label>
+        <div class="awb-tag-field">${tags.map(tag => `<span class="awb-tag-token">${esc(tag)}<button type="button" data-action="space-wb-tag-remove" data-field="${field}" data-tag="${esc(tag)}" aria-label="移除标签 ${esc(tag)}" ${disabled ? "disabled" : ""}>×</button></span>`).join("")}
+          <div class="awb-tag-entry"><input id="awb-tag-input" data-wb-field="${field}" value="${esc(tagInputs.get(tagKey(field)) || "")}" maxlength="2400" placeholder="输入标签" aria-label="${esc(label)}，按回车添加" ${disabled ? "disabled" : ""}>
+            ${choices.length ? `<select data-wb-field="tag-existing" aria-label="选择已有标签" ${disabled ? "disabled" : ""}><option value="" selected disabled>已有标签</option>${choices.map(tag => `<option value="${esc(tag)}">${esc(tag)}</option>`).join("")}</select>` : ""}
+          </div>
+        </div><small class="awb-hint">回车或逗号添加，支持多个标签。</small></div>`;
+    }
     async function prepare(kind, forCurrent = false) {
       if (!job || !selectedCount() || !writable() || isBusy() || ((forCurrent || ["single", "next"].includes(kind)) && current()?.writable === false)) return;
+      if (!commitTags(tagField(), false)) return;
+      const id = activeId;
       error = ""; loading = true; emit();
       try {
-        if (kind === "single" || kind === "next") await flushDraft(activeId, true);
-        plan = await invoke({ op: "prepare", jobId: job.id, selection: forCurrent || kind === "single" || kind === "next" ? { ids: [activeId] } : selection(),
+        if (kind === "single" || kind === "next") await flushDraft(id, true);
+        plan = await invoke({ op: "prepare", jobId: job.id, selection: forCurrent || kind === "single" || kind === "next" ? { ids: [id] } : selection(),
           change: kind === "single" || kind === "next" ? { tagMode: "keep", tags: [], descriptionMode: "keep", description: "" } : kind === "suggestion" ? { ...suggestionPolicy, tags: [], description: "" } : changes(),
           ...(kind === "single" || kind === "next" ? { useDrafts: true } : {}), ...(kind === "suggestion" ? { acceptSuggestions: true } : {}) });
         planKind = kind;
       } catch (cause) {
         if (kind === "next" && String(cause?.code || cause?.message || "").includes("SPACE_ANNOTATION_NO_CHANGES")) {
-          message = errorText(cause); selected.clear(); const index = items.findIndex(row => row.id === activeId); await focusRow(items[Math.min(items.length - 1, index + 1)]?.id || activeId);
+          message = errorText(cause); selected.clear(); await moveRow(1);
         } else error = errorText(cause);
       }
       finally { loading = false; emit(); }
@@ -178,37 +285,54 @@
       try {
         if (kind === "single" || kind === "next") { const draft = drafts.get(activeId); if (draft) committingDrafts.set(activeId, { serial: draft._serial, revision: draft._baseRevision }); }
         const value = await invoke({ op: "apply", jobId: job.id, planId: prepared.planId });
-        if (kind === "next") nextAfterApply = activeId;
+        if (kind === "next") nextAfterApply = {id: activeId, position: offset + items.findIndex(row => row.id === activeId)};
         plan = null; message = "已提交本批次，冲突和失败项会单独保留。"; consume(value, true); await loadPage(true);
       } catch (cause) { error = errorText(cause); }
       finally { loading = false; emit(); }
     }
     async function close() {
+      const revision = epoch;
+      if (!commitTags(tagField(), false)) return;
       try { for (const id of drafts.keys()) await flushDraft(id); await Promise.all([...draftWrites.values()]); }
       catch { return; }
+      if (!visible || revision !== epoch) return;
       reset(); onClose(); changed();
     }
     async function changeScope(input, push = true) {
+      const revision = epoch;
+      if (!commitTags(tagField(), false)) return;
       for (const id of drafts.keys()) await flushDraft(id);
       await Promise.all([...draftWrites.values()]);
+      check(revision);
       if (push) scopeHistory.push({ ...origin });
       await open(input, true);
     }
     async function changeJob(id) {
       if (!id || id === job?.id || loading) return;
+      const revision = epoch;
+      if (!commitTags(tagField(), false)) return;
       for (const draftId of drafts.keys()) await flushDraft(draftId);
       await Promise.all([...draftWrites.values()]);
+      check(revision);
       epoch++; loadingList = false; schemesLoading = false;
       clearTimeout(poll); clearTimeout(queryTimer); poll = queryTimer = null;
       drafts.clear(); draftWrites.clear(); draftError.clear(); committingDrafts.clear(); cache.clear(); releasePreview();
+      tagInputs.clear(); tagFocus = ""; tagRepaint = false;
       selected.clear(); allMatching = null; activeId = anchor = ""; items = []; offset = scrollTop = 0; plan = null; nextAfterApply = null; previewOpen = false; filteredSummary = null;
       suggestionPolicy = { tagMode: "add", descriptionMode: "fill-empty" };
       bulk = { tagMode: "keep", tags: "", descriptionMode: "keep", description: "", inherit: "keep" };
       scheme = schemeName = instructions = ""; tab = "edit"; job = { id, status: "paused" }; await loadPage();
     }
     async function action(name, data = {}, event = {}) {
-      if (!visible) return;
+      if (!visible || loading) return;
+      const revision = epoch;
       try {
+        if (["check", "page-select", "matching-select", "clear", "tab", "use-scheme", "filter", "previous-page", "next-page", "scope-parent"].includes(name)) {
+          const field = tagField();
+          if (!commitTags(field, false)) return;
+          if (field === "item-tag-input" && activeId) await flushDraft(activeId);
+          check(revision);
+        }
         if (name === "close") return await close();
         if (name === "focus") return await focusRow(data.id, event);
         if (name === "check") {
@@ -217,20 +341,24 @@
           if (adding) next.add(data.id); else next.delete(data.id);
           const focus = next.size === 1 ? [...next][0] : adding ? data.id : activeId;
           if (focus !== activeId) { await focusRow(focus, { preserveSelection: true }); if (activeId !== focus) return; }
-          selected = next; emit(); return;
+          selected = next; reconcileFocus(); emit(); return;
         }
         if (name === "page-select") {
-          if (allMatching) { allMatching = null; selected.clear(); emit(); return; }
+          if (allMatching) { allMatching = null; selected.clear(); reconcileFocus(); emit(); return; }
           const next = new Set(selected), all = items.length > 0 && items.every(row => selected.has(row.id));
           for (const row of items) if (all) next.delete(row.id); else next.add(row.id);
           if (next.size === 1) { const focus = [...next][0]; await focusRow(focus, { preserveSelection: true }); if (activeId !== focus) return; }
-          selected = next; emit(); return;
+          selected = next; reconcileFocus(); emit(); return;
         }
         if (name === "matching-select") { if (!job?.scanComplete) { message = "目录仍在扫描，完成后可选择整个筛选范围。"; emit(); return; } selected.clear(); allMatching = { query, type, status: state }; emit(); return; }
-        if (name === "clear") { selected.clear(); allMatching = null; emit(); return; }
-        if (name === "filter") { state = data.status || ""; offset = scrollTop = 0; allMatching = null; filteredSummary = null; await loadPage(); return; }
-        if (name === "previous-page" || name === "next-page") { offset = Math.max(0, offset + (name === "next-page" ? pageSize : -pageSize)); scrollTop = 0; await loadPage(); return; }
-        if (name === "previous" || name === "next") { const index = items.findIndex(row => row.id === activeId); await focusRow(items[Math.max(0, Math.min(items.length - 1, index + (name === "next" ? 1 : -1)))]?.id || activeId); return; }
+        if (name === "clear") { selected.clear(); allMatching = null; reconcileFocus(); emit(); return; }
+        if (name === "filter") { state = data.status || ""; scrollTop = 0; allMatching = null; filteredSummary = null; await loadPage(false, 0); return; }
+        if (name === "previous-page" || name === "next-page") {
+          const target = offset + (name === "next-page" ? pageSize : -pageSize);
+          if (target >= 0 && target < filteredTotal && await loadPage(false, target) && !selected.size && items[0]) await focusRow(items[0].id);
+          return;
+        }
+        if (name === "previous" || name === "next") return await moveRow(name === "next" ? 1 : -1, event);
         if (name === "preview") { if (previewOpen) { previewOpen = false; releasePreview(); emit(); } else await fetchPreview(); return; }
         if (name === "left") { leftHidden = !leftHidden; emit(); return; }
         if (name === "tab") { if (!["edit", "schemes"].includes(data.tab)) return; tab = data.tab; emit(); if (tab === "schemes") await loadSchemes(); return; }
@@ -240,7 +368,7 @@
           if (isBatch()) bulk.tagMode = "add";
           else {
             const row = current(); if (!row || row.writable === false) return;
-            const draft = draftFor(row); draft.tags = [...new Set([...draft.tags, ...parseTags(bulk.tags)])]; draft._fields.add("tags");
+            const draft = draftFor(row); draft.tags = parseTags([...draft.tags, ...parseTags(bulk.tags)]); draft._fields.add("tags");
             if (bulk.inherit !== "keep") { draft.inherit = bulk.inherit === "on"; draft._fields.add("inherit"); }
             draft._dirty = draft._edited = true; draft._serial++; await flushDraft(row.id);
           }
@@ -266,31 +394,56 @@
         if (name === "scope-parent" && scopeHistory.length) { const previous = scopeHistory.pop(); return await changeScope(previous, false); }
         if (name === "scope-folder") return await changeScope({ space_id: origin.space_id, parent: data.id || "", recursive: origin.recursive, scopeName: data.name || "文件夹" });
         if (name === "source") return await changeScope({ space_id: origin.space_id, parent: "", ids: [data.id], scopeName: data.name || "来源文件夹" });
-        if (name === "chip") { if (!writable() || isBusy()) return; if (isBatch()) { bulk.tagMode = "add"; bulk.tags = [...new Set([...parseTags(bulk.tags), data.tag])].join("，"); } else { const value = draftFor(current()); value.tags = [...new Set([...value.tags, data.tag])]; value._fields.add("tags"); value._dirty = value._edited = true; value._serial++; if (!value._conflict) void flushDraft(activeId).catch(() => {}); } emit(); return; }
+        if (name === "tag-remove") {
+          const field = tagField(), tags = tagValues(field);
+          if (data.field !== field || typeof data.tag !== "string") return;
+          if (setTags(field, tags.filter(tag => tag !== data.tag))) emit();
+          return;
+        }
         if (name === "save-scheme") {
+          if (!commitTags("bulk-tag-input", false)) return;
           if (!schemeName.trim()) { error = "请为方案填写名称。"; emit(); return; }
           if (schemeName.trim().length > 80) { error = "方案名称最多 80 个字符。"; emit(); return; }
           await invoke({ op: "save-scheme", scheme: { ...(scheme ? { id: scheme } : {}), name: schemeName.trim(), tags: parseTags(bulk.tags), instructions, ...(bulk.inherit !== "keep" ? { inherit: bulk.inherit === "on" } : {}) } });
           schemes = (await invoke({ op: "schemes" })).items || []; message = "方案已保存，可在其他批次复用。"; emit(); return;
         }
         if (name === "delete-scheme" && scheme) { await invoke({ op: "delete-scheme", id: scheme }); scheme = ""; schemes = (await invoke({ op: "schemes" })).items || []; emit(); return; }
-      } catch (cause) { error = errorText(cause); loading = false; emit(); }
+      } catch (cause) { if (visible && revision === epoch) { error = errorText(cause); loading = false; emit(); } }
     }
     function input(name, value) {
       if (!visible) return;
+      if (name === "tag-existing") {
+        const field = tagField();
+        if (availableTags().includes(value) && commitTags(field, false) &&
+            setTags(field, [...tagValues(field), value])) emit();
+        return;
+      }
+      if (["item-tag-input", "bulk-tag-input"].includes(name)) {
+        if (!tagWritable(name)) return;
+        tagInputs.set(tagKey(name), String(value));
+        if (!composing && tagSeparators.test(value)) { commitTags(name); emit(); }
+        return;
+      }
       if (["item-tags", "item-description", "item-inherit"].includes(name)) {
         const row = current(); if (!row || row.writable === false || isBusy()) return;
         const draft = draftFor(row), key = name === "item-tags" ? "tags" : name === "item-description" ? "description" : "inherit"; draft[key] = name === "item-tags" ? parseTags(value) : value; draft._fields.add(key);
         draft._dirty = draft._edited = true; draft._serial++; clearTimeout(draftTimers.get(row.id)); if (!draft._conflict) draftTimers.set(row.id, setTimeout(() => { void flushDraft(row.id).catch(() => {}); }, 250)); return;
       }
-      if (name === "query") { query = value; offset = scrollTop = 0; allMatching = null; filteredSummary = null; clearTimeout(queryTimer); queryTimer = setTimeout(() => { void loadPage(); }, 250); return; }
-      if (name === "status") { if (value && !Object.hasOwn(stateNames, value)) return; state = value; offset = scrollTop = 0; allMatching = null; filteredSummary = null; void loadPage(); return; }
-      if (name === "type") { type = value; offset = scrollTop = 0; allMatching = null; filteredSummary = null; void loadPage(); return; }
+      if (["query", "status", "type", "page-size", "bulk-tagMode"].includes(name) && !commitTags(tagField(), false)) { emit(); return; }
+      if (name === "page-size") {
+        const limit = Number(value);
+        if (pageSizes.includes(limit) && limit !== pageSize) void loadPage(false, Math.floor(offset / limit) * limit, limit);
+        return;
+      }
+      if (name === "query") { query = value; scrollTop = 0; allMatching = null; filteredSummary = null; clearTimeout(queryTimer); queryTimer = setTimeout(() => { void loadPage(false, 0); }, 250); return; }
+      if (name === "status") { if (value && !Object.hasOwn(stateNames, value)) return; state = value; scrollTop = 0; allMatching = null; filteredSummary = null; clearTimeout(queryTimer); void loadPage(false, 0); return; }
+      if (name === "type") { type = value; scrollTop = 0; allMatching = null; filteredSummary = null; clearTimeout(queryTimer); void loadPage(false, 0); return; }
       if (name === "recursive") { void changeScope({ ...origin, recursive: value, fresh: true }, false).catch(cause => { error = errorText(cause); emit(); }); return; }
       if (name === "job") { void changeJob(value).catch(cause => { error = errorText(cause); emit(); }); return; }
       if (name === "scheme") {
+        tagInputs.delete("bulk");
         scheme = value; const chosen = schemes.find(item => item.id === value);
-        if (chosen) { bulk.tags = (chosen.tags || []).join("，"); bulk.tagMode = "add"; instructions = chosen.instructions || ""; bulk.inherit = chosen.inherit === undefined ? "keep" : chosen.inherit ? "on" : "off"; schemeName = chosen.name; }
+        if (chosen) { bulk.tags = [...(chosen.tags || [])]; bulk.tagMode = "add"; instructions = chosen.instructions || ""; bulk.inherit = chosen.inherit === undefined ? "keep" : chosen.inherit ? "on" : "off"; schemeName = chosen.name; }
         else schemeName = "";
         emit(); return;
       }
@@ -307,11 +460,13 @@
     }
     async function keydown(event) {
       if (!visible || composing || event.isComposing) return false;
+      const field = event.target?.dataset?.wbField;
+      if (["item-tag-input", "bulk-tag-input"].includes(field) && event.key === "Enter" && !event.metaKey && !event.ctrlKey) { event.preventDefault(); commitTags(field); emit(); return true; }
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { if (tab === "schemes" && !plan) return false; event.preventDefault(); if (plan) await submitPlan(); else await prepare(isBatch() ? "batch" : "next"); return true; }
       if (plan) { if (event.key === "Escape") { event.preventDefault(); plan = null; emit(); } return true; }
       if (event.key === "Escape" && !leftHidden) { event.preventDefault(); leftHidden = true; emit(); return true; }
       if (event.target?.closest?.("input, textarea, select, button, summary, a, [role=button]")) return false;
-      if (["ArrowDown", "ArrowUp"].includes(event.key)) { event.preventDefault(); const index = items.findIndex(row => row.id === activeId); const row = items[Math.max(0, Math.min(items.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)))]; if (row) await focusRow(row.id, event); return true; }
+      if (["ArrowDown", "ArrowUp"].includes(event.key)) { event.preventDefault(); await action(event.key === "ArrowDown" ? "next" : "previous", {}, event); return true; }
       if (event.key === " " && activeId) { event.preventDefault(); await action("check", { id: activeId }); return true; }
       return false;
     }
@@ -349,8 +504,7 @@
         <div class="awb-panel-heading"><h3>${batch ? `批量处理 ${selectedCount()} 项` : esc(row.name)}</h3>${row?.writable === false ? '<span class="awb-badge">只读</span>' : ""}</div>
         ${batch ? '<p class="awb-hint">默认追加标签、只填空说明，未修改的内容保留。</p>' : ""}
         ${row?.annotation?.needsReview ? '<p class="awb-alert">文件内容已变化，保存前请复核原标注。</p>' : ""}
-        <label>${tagLabel}<input data-wb-field="${batch ? "bulk-tags" : "item-tags"}" value="${esc(batch ? bulk.tags : draft.tags.join("，"))}" maxlength="2400" placeholder="输入标签，用逗号分隔" ${disabled ? "disabled" : ""}></label>
-        ${(summary.tagCounts || []).length ? `<div class="awb-quick-tags"><span>常用</span>${summary.tagCounts.slice(0, 8).map(item => `<button type="button" class="awb-chip" data-action="space-wb-chip" data-tag="${esc(item.tag)}" ${disabled ? "disabled" : ""}>+ ${esc(item.tag)}</button>`).join("")}</div>` : ""}
+        ${tagsEditor(batch ? "bulk-tag-input" : "item-tag-input", batch ? parseTags(bulk.tags) : draft.tags, tagLabel, disabled)}
         <label>${descriptionLabel}<textarea data-wb-field="${batch ? "bulk-description" : "item-description"}" rows="5" maxlength="2000" placeholder="简单说明这份资料的内容或用途" ${disabled ? "disabled" : ""}>${esc(batch ? bulk.description : draft.description)}</textarea></label>
         ${scheme && instructions ? `<p class="awb-hint">填写提示：${esc(instructions)}</p>` : ""}
         ${!batch && row?.kind === "folder" ? '<p class="awb-hint">文件夹标注可由子文件继承，无需逐项填写。</p>' : ""}
@@ -369,7 +523,7 @@
         ${schemesLoading ? '<p class="awb-hint" role="status">正在读取方案…</p>' : ""}
         <label>选择方案<select data-wb-field="scheme"><option value="">新建方案</option>${schemes.map(item => `<option value="${esc(item.id)}" ${item.id === scheme ? "selected" : ""}>${esc(item.name)}</option>`).join("")}</select></label>
         <label>方案名称<input data-wb-field="scheme-name" maxlength="80" value="${esc(schemeName)}" placeholder="例如：客户项目资料"></label>
-        <label>常用标签<input data-wb-field="bulk-tags" maxlength="2400" value="${esc(bulk.tags)}" placeholder="客户资料，项目归档"></label>
+        ${tagsEditor("bulk-tag-input", parseTags(bulk.tags), "常用标签", isBusy())}
         <label>说明填写提示<textarea data-wb-field="instructions" rows="3" maxlength="4000" placeholder="提醒自己需要填写哪些内容">${esc(instructions)}</textarea></label>
         <details class="awb-details"><summary>继承偏好</summary><label><select aria-label="方案继承偏好" data-wb-field="bulk-inherit"><option value="keep" ${bulk.inherit === "keep" ? "selected" : ""}>保留各项设置</option><option value="on" ${bulk.inherit === "on" ? "selected" : ""}>开启继承</option><option value="off" ${bulk.inherit === "off" ? "selected" : ""}>关闭继承</option></select></label></details>
         <div class="awb-editor-actions">${scheme ? button("使用此方案", "use-scheme", "", loading || schemesLoading || !selectedCount() || !writable(), true) : ""}${button("保存方案", "save-scheme", "", loading || schemesLoading, !scheme)}${scheme ? button("删除此方案", "delete-scheme", "", loading || schemesLoading) : ""}</div>
@@ -400,8 +554,8 @@
     }
     function render() {
       if (!visible) return "";
-      const start = Math.max(0, Math.floor(scrollTop / rowHeight) - 4), end = Math.min(items.length, start + visibleRows);
-      const rendered = items.slice(start, end), selectedVisible = items.length && items.every(row => selected.has(row.id));
+      const selectedVisible = items.length && items.every(row => selected.has(row.id));
+      const pageNumber = Math.floor(offset / pageSize) + 1, pageCount = Math.max(1, Math.ceil(filteredTotal / pageSize));
       const typeOptions = [...new Set([...cache.values()].map(row => row.kind === "folder" ? "folder" : String(row.name).split(".").at(-1).toLowerCase()).concat(type ? [type] : []))].sort();
       const folders = items.filter(row => row.kind === "folder"), hasSelection = selected.size > 0 || !!allMatching;
       const resumeAllowed = ["paused", "partial"].includes(job?.status) && job?.activity !== "suggest" && (job?.activity || job?.scanComplete === false);
@@ -426,8 +580,8 @@
             ${button("范围设置", "left", `aria-expanded="${!leftHidden}"`)}</div>
             <div class="awb-selection-bar"><span>${allMatching ? `已选全部筛选结果 ${filteredTotal} 项` : selected.size ? `已选 ${selected.size} 项` : `共 ${filteredTotal} 项 · 点击文件开始标注`}</span>${hasSelection ? button("清除选择", "clear") : ""}${hasSelection && !allMatching && filteredTotal > items.length ? button(`选择整个筛选范围（${filteredTotal}）`, "matching-select", "", !job?.scanComplete) : ""}</div>
             <div class="awb-table-head" role="row"><span><input type="checkbox" data-action="space-wb-page-select" aria-label="选择当前页" title="选择当前页" ${selectedVisible || allMatching ? "checked" : ""} ${!items.length ? "disabled" : ""}></span><span>文件</span><span>标签</span><span>状态</span></div>
-            <div class="awb-virtual" data-wb-scroll tabindex="0" role="listbox" aria-multiselectable="true" aria-label="标注文件列表" aria-busy="${loading}"><div style="height:${start * rowHeight}px" aria-hidden="true"></div>${rendered.map(row => `<article class="awb-file ${row.id === activeId ? "is-current" : ""} ${allMatching || selected.has(row.id) ? "is-selected" : ""}" role="option" aria-selected="${allMatching || selected.has(row.id)}" data-action="space-wb-focus" data-id="${esc(row.id)}" tabindex="${row.id === activeId ? "0" : "-1"}"><input type="checkbox" aria-label="选择 ${esc(row.name)}" data-action="space-wb-check" data-id="${esc(row.id)}" ${allMatching || selected.has(row.id) ? "checked" : ""} ${allMatching ? 'disabled title="先清除全部范围选择，再逐项选择"' : ""}><div class="awb-file-name"><strong><span aria-hidden="true">${row.kind === "folder" ? "▰" : "▤"}</span> ${esc(row.name)}</strong><small title="${esc(row.path || "")}">${esc(row.path || "当前目录")} · ${row.kind === "folder" ? "文件夹" : size(row.size)}</small></div><div class="awb-row-tags">${(row.annotation?.tags || []).slice(0, 2).map(tag => `<span class="awb-chip">${esc(tag)}</span>`).join("")}${(row.annotation?.tags?.length || 0) > 2 ? `<small>+${row.annotation.tags.length - 2}</small>` : ""}</div><div><span class="awb-status is-${esc(row.status || "unannotated")}">${stateNames[row.status] || "待标注"}</span>${row.writable === false ? '<small class="awb-readonly">只读</small>' : ""}${row.error ? `<small title="${esc(errorText(row.error))}">需重试</small>` : ""}</div></article>`).join("") || `<div class="awb-empty">${loading ? "正在读取文件…" : "没有匹配的文件"}</div>`}<div style="height:${Math.max(0, items.length - end) * rowHeight}px" aria-hidden="true"></div></div>
-            <footer class="awb-list-footer"><span>${filteredTotal ? offset + 1 : 0}–${Math.min(offset + items.length, filteredTotal)} / ${filteredTotal}${job?.scanComplete === false ? " · 扫描中" : ""}</span><div>${button("上一页", "previous-page", "", offset === 0 || loading)}${button("下一页", "next-page", "", offset + items.length >= filteredTotal || loading)}</div></footer>
+            <div class="awb-list-viewport" data-wb-scroll tabindex="0" role="listbox" aria-multiselectable="true" aria-label="标注文件列表" aria-busy="${loadingList}">${items.map(row => `<article class="awb-file ${row.id === activeId ? "is-current" : ""} ${allMatching || selected.has(row.id) ? "is-selected" : ""}" role="option" aria-selected="${allMatching || selected.has(row.id)}" data-action="space-wb-focus" data-id="${esc(row.id)}" tabindex="${row.id === activeId ? "0" : "-1"}"><input type="checkbox" aria-label="选择 ${esc(row.name)}" data-action="space-wb-check" data-id="${esc(row.id)}" ${allMatching || selected.has(row.id) ? "checked" : ""} ${allMatching ? 'disabled title="先清除全部范围选择，再逐项选择"' : ""}><div class="awb-file-name"><strong><span aria-hidden="true">${row.kind === "folder" ? "▰" : "▤"}</span> ${esc(row.name)}</strong><small title="${esc(row.path || "")}">${esc(row.path || "当前目录")} · ${row.kind === "folder" ? "文件夹" : size(row.size)}</small></div><div class="awb-row-tags">${(row.annotation?.tags || []).slice(0, 2).map(tag => `<span class="awb-chip">${esc(tag)}</span>`).join("")}${(row.annotation?.tags?.length || 0) > 2 ? `<small>+${row.annotation.tags.length - 2}</small>` : ""}</div><div><span class="awb-status is-${esc(row.status || "unannotated")}">${stateNames[row.status] || "待标注"}</span>${row.writable === false ? '<small class="awb-readonly">只读</small>' : ""}${row.error ? `<small title="${esc(errorText(row.error))}">需重试</small>` : ""}</div></article>`).join("") || `<div class="awb-empty">${loading ? "正在读取文件…" : "没有匹配的文件"}</div>`}</div>
+            <footer class="awb-list-footer"><span class="awb-page-range" aria-live="polite">${items.length ? offset + 1 : 0}–${Math.min(offset + items.length, filteredTotal)} / ${filteredTotal}${job?.scanComplete === false ? " · 扫描中" : ""}</span><div class="awb-pagination"><label class="awb-page-size">每页 <select data-wb-field="page-size" aria-label="每页文件数" ${loading || !job ? "disabled" : ""}>${pageSizes.map(count => `<option value="${count}" ${pageSize === count ? "selected" : ""}>${count}</option>`).join("")}</select> 项</label><span class="awb-page-count">第 ${pageNumber} / ${pageCount} 页</span>${button("上一页", "previous-page", "", offset === 0 || loading)}${button("下一页", "next-page", "", offset + pageSize >= filteredTotal || loading)}</div></footer>
             <div class="awb-reader-bar">${button("上一项", "previous", "", !activeId)}${button("下一项", "next", "", !activeId)}${button(previewOpen ? "收起预览" : "文件预览", "preview", "", !activeId)}</div>${previewView()}
           </main>
           <aside class="awb-right" aria-label="标注编辑器">${tab === "schemes" ? schemesPanel() : editPanel()}</aside>
@@ -436,17 +590,25 @@
       </section>`;
     }
     function mounted(root = document) {
+      tagRepaint = false;
+      if (tagFocus) { const field = tagFocus; tagFocus = ""; root.querySelector?.(`[data-wb-field="${field}"]`)?.focus?.({ preventScroll: true }); }
       const viewport = root.querySelector?.("[data-wb-scroll]");
       if (viewport) { if (Math.abs(viewport.scrollTop - scrollTop) > 2) viewport.scrollTop = scrollTop; }
       for (const node of root.querySelectorAll?.(".awb-top, .awb-layout, .awb-bottom") || []) node.inert = !!plan;
       if (plan && focusedPlan !== plan.planId) { focusedPlan = plan.planId; root.querySelector?.(".awb-confirm")?.focus?.(); }
-      else if (!plan && pendingFocus) { root.querySelector?.(`.awb-file[data-id="${pendingFocus}"]`)?.focus?.({ preventScroll: true }); pendingFocus = ""; focusedPlan = ""; }
+      else if (!plan && pendingFocus) {
+        const row = root.querySelector?.(`.awb-file[data-id="${pendingFocus}"]`);
+        row?.focus?.({ preventScroll: true });
+        row?.scrollIntoView?.({ block: "nearest" });
+        if (viewport) scrollTop = viewport.scrollTop;
+        pendingFocus = ""; focusedPlan = "";
+      }
     }
-    function onScroll(top) { if (Math.floor(top / rowHeight) === Math.floor(scrollTop / rowHeight)) { scrollTop = top; return; } scrollTop = top; emit(); }
+    function onScroll(top) { scrollTop = top; }
     function retainEditor() {
-      if (!visible || plan || drafts.get(activeId)?._conflict || isBusy()) return false;
+      if (!visible || plan || tagRepaint || drafts.get(activeId)?._conflict || isBusy()) return false;
       const field = document.activeElement;
-      return !!field?.dataset?.wbField && !["type", "status", "recursive", "job", "scheme", "suggestion-tags", "suggestion-description", "bulk-tagMode", "bulk-descriptionMode", "bulk-inherit"].includes(field.dataset.wbField);
+      return !!field?.dataset?.wbField && !["type", "status", "page-size", "tag-existing", "recursive", "job", "scheme", "suggestion-tags", "suggestion-description", "bulk-tagMode", "bulk-descriptionMode", "bulk-inherit"].includes(field.dataset.wbField);
     }
     return { open, render, action, input, keydown, reset, active: () => visible, mounted, onScroll, retainEditor,
       composition(value) { composing = value; }, refresh: loadPage };

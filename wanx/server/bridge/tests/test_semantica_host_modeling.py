@@ -8,8 +8,9 @@ from types import SimpleNamespace
 import httpx
 import pytest
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from test_semantica_conversation_registration import BODIES, concrete
 
-from wanx_bridge.semantica import host_modeling, host_routes
+from wanx_bridge.semantica import conversation_contract, host_modeling, host_routes
 
 WAREHOUSE = "11111111-1111-4111-8111-111111111111"
 
@@ -114,6 +115,10 @@ async def env(tmp_path, monkeypatch):
             {"operation_id": "create-1", "expected_revision": 1, "name": "test"},
         ),
         ("GET", f"/warehouses/{WAREHOUSE}/modeling/suggestion-context", None),
+        ("POST", f"/warehouses/{WAREHOUSE}/modeling/assistant-intent", {
+            "operation_id":"intent-1", "version":2, "context":{"focus":"page","material_title":""}, "text":"Where can I configure the model?",
+            "page":"graph", "history":[], "ontology_conversation":False,
+        }),
         (
             "POST",
             f"/warehouses/{WAREHOUSE}/modeling/answer-confirmations",
@@ -136,7 +141,7 @@ async def env(tmp_path, monkeypatch):
         ("GET", f"/warehouses/{WAREHOUSE}/modeling/answer-suggestions/result-1", None),
     ],
 )
-async def test_eight_routes_preserve_body_and_derive_scope(env, method, path, body):
+async def test_registered_routes_preserve_body_and_derive_scope(env, method, path, body):
     state, client, app = env
     response = await client.request(method, "/api/semantica" + path, json=body)
     assert response.status_code == 200, response.text
@@ -159,6 +164,27 @@ async def test_eight_routes_preserve_body_and_derive_scope(env, method, path, bo
     if path.endswith("/answer-suggestions"):
         assert request.extensions["timeout"]["read"] == 285
     assert "/api/semantica/modeling/onboarding" in app.openapi()["paths"]
+
+
+@pytest.mark.parametrize("method,suffix,summary,model,query", [
+    row for row in conversation_contract.ROUTES if row[1].startswith("/modeling/")
+])
+async def test_warehouse_rule_routes_use_the_signed_workspace(env, method, suffix, summary, model, query):
+    state, client, app = env
+    route = "/api/semantica" + conversation_contract.PREFIX + suffix
+    assert route in app.openapi()["paths"]
+    body = BODIES.get(model)
+    state.response_status = conversation_contract.success_status(method, suffix)
+    response = await client.request(method, "/api/semantica/warehouses/" + WAREHOUSE + concrete(suffix), json=body)
+    assert response.status_code == state.response_status, response.text
+    [(request, claims)] = state.calls
+    workspace = claims["workspace_id"]
+    assert claims["workspace_bindings"] == {workspace: "personal:wanx:7:warehouse:" + WAREHOUSE}
+    assert request.url.path == "/api/integration/modeling/warehouses/" + workspace + concrete(suffix).removeprefix("/modeling")
+    operation = (body or {}).get("operation_id")
+    assert claims["operation_id"] == operation
+    assert claims["permissions"] == (["read", "write"] if operation else ["read"])
+    assert (json.loads(request.content) if request.content else None) == body
 
 
 async def test_permissions_and_required_gate_are_not_bypassed(env):

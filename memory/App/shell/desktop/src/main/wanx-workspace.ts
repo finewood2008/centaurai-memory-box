@@ -1,4 +1,5 @@
 import { WebContentsView, type BrowserWindow, type Rectangle } from "electron";
+import { allowsWanxFrameNavigation } from './wanx-frame-navigation.js';
 import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -163,7 +164,7 @@ export function createWanxWorkspace(userDataPath: () => string, accountChanged: 
           contents.webContents.on("render-process-gone", invalidateView);
           contents.webContents.on("destroyed", invalidateView);
           contents.webContents.on("will-frame-navigate", (event) => {
-            if (event.isMainFrame || !event.url.startsWith("blob:file:")) event.preventDefault();
+            if (!allowsWanxFrameNavigation(url, event.url, event.isMainFrame)) event.preventDefault();
           });
           contents.webContents.on("will-redirect", (event) => event.preventDefault());
           contents.setBackgroundColor("#faf8f4");

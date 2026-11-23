@@ -1,0 +1,6328 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "WANX Octop · chat",
+    "description": "**CentaurAI-WANX** is a smarter, self-hosted AI assistant for multiple users and agents. All routes are served under `/api`.\n\n## Authentication\n\nMost endpoints require a JWT bearer token:\n\n1. Complete initial setup via `/api/setup/*` (first install only).\n2. `GET /api/auth/captcha` then `POST /api/auth/login` with `username` and `password`\n   (and `captcha_token` when a strong provider is active), or complete SSO with\n   `/api/auth/oidc/*` or `/api/auth/oauth/*` when a provider is enabled.\n3. Send `Authorization: Bearer <access_token>` on subsequent requests.\n\nAccess tokens use sliding renewal: when less than one-third of\n`access_token_ttl_seconds` remains, authenticated responses may include a fresh\ntoken in the `X-Octop-Access-Token` header. Clients should replace the stored\ntoken when present.\n\nPublic endpoints (no login token): `/api/docs`, `/api/openapi.json`, `/api/health`,\n`/api/setup/*` (wizard authorization applies), `/api/auth/login`, `/api/auth/register`,\n`/api/auth/captcha`, `/api/auth/oidc/status`, `/api/auth/oidc/start`,\n`/api/auth/oidc/callback`, `/api/auth/oidc/exchange`, `/api/auth/oauth/status`,\n`/api/auth/oauth/start`, `/api/auth/oauth/callback`, `/api/auth/oauth/exchange`,\n`/api/auth/invite/validate`,\n`/api/auth/invite/redeem`, `/api/connectors/oauth/callback`,\nand `/api/internal/mcp/*`.\n\n## Agent scope\n\nMany agent-scoped routes use the agent ID in the URL path (`/api/agents/{agent_id}/…`).\nRoutes first check the signed token's application scope; legacy tokens default to WANX.\nResources in another application are treated as not found, including for administrators.\nWithin the same application, each route applies its ownership or shared-resource access\nrules. WANX administrators may bypass ownership where supported; Zhijun personal profiles,\nmemories and uploaded sources require the owner.\n\n## Streaming chat\n\nDashboard live turns use **WebSocket** at `/api/agents/{agent_id}/chat/ws` (pass JWT as\n`?token=` query param). Send `{\"type\":\"user_turn\", ...}` frames; the server replies with JSON\nchunks matching the harness stream format, ending with `{\"type\":\"done\"}` or\n`{\"type\":\"error\",\"message\":\"...\"}`.\n\nText-type dashboard pushes (cron reminders, proactive care) also emit\n`{\"type\":\"dashboard_push\", ...}` on `/api/notifications/ws` (same `?token=` auth) so the\nSPA can show a toast even when the chat socket is not subscribed.\n\nHITL resume still uses `POST /api/agents/{agent_id}/chat/hitl/resume` (SSE).\n\n## Knowledge libraries\n\n`/api/knowledge-bases` uses the signed application scope for creation, visibility,\ndocument access, and citations. Existing libraries remain in WANX. Zhijun libraries\nare private to their owner and use local document parsers, downloaded native ONNX\nembeddings and RapidOCR. Remote WANX embedding/OCR settings do not affect Zhijun;\nmissing local components are reported as unavailable without remote fallback.\n",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/assistant/context/validate": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Validate assistant draft source choices without granting access",
+        "operationId": "assistant_context_validate_api_assistant_context_validate_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConversationContext"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Assistant Context Validate Api Assistant Context Validate Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/assistant/context/defaults": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Read last explicitly selected sources for a new conversation",
+        "description": "Account and box scoped, separated by data scope. Revalidates selections without creating access grants. Existing conversations are unaffected.",
+        "operationId": "assistant_context_defaults_get_api_assistant_context_defaults_get",
+        "parameters": [
+          {
+            "name": "data_scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "personal",
+                "team"
+              ],
+              "type": "string",
+              "default": "team",
+              "title": "Data Scope"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Assistant Context Defaults Get Api Assistant Context Defaults Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Remember explicitly selected sources for future new conversations",
+        "description": "Validates scope and stores a selection template only. Does not grant MCP access or change any existing conversation.",
+        "operationId": "assistant_context_defaults_patch_api_assistant_context_defaults_patch",
+        "parameters": [
+          {
+            "name": "data_scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "personal",
+                "team"
+              ],
+              "type": "string",
+              "default": "team",
+              "title": "Data Scope"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConversationContext"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Assistant Context Defaults Patch Api Assistant Context Defaults Patch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/assistant/conversations": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "List logical assistant conversations",
+        "description": "Owner and box scoped. Includes native channel conversations and their channel_type without copying history. Internal answer-version threads are grouped under the original conversation.",
+        "operationId": "assistant_conversations_list_api_assistant_conversations_get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Assistant Conversations List Api Assistant Conversations Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/assistant/conversations/{conversation_id}": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Read assistant conversation sources and versions",
+        "description": "Restores saved source choices without granting MCP access. Revalidates available sources; unavailable choices are retained with explicit validation_errors.",
+        "operationId": "assistant_conversation_get_api_assistant_conversations__conversation_id__get",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Conversation Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Update conversation sources or selected answer version",
+        "description": "Uses revision compare-and-swap. Source preferences are separate from two-hour grants. Disabling access revokes all capabilities for this conversation, including connected MCP reads. New access and version switches are blocked while a turn or confirmation is pending.",
+        "operationId": "assistant_conversation_patch_api_assistant_conversations__conversation_id__patch",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Conversation Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConversationPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/assistant/conversations/{conversation_id}/open": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Remember the most recently opened assistant conversation",
+        "description": "Records navigation for the current account on this box after validating conversation ownership. Does not change source selections, versions or grants.",
+        "operationId": "assistant_conversation_open_api_assistant_conversations__conversation_id__open_post",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Conversation Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/assistant/conversations/{conversation_id}/versions": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Create an edit or regenerate version without deleting history",
+        "description": "Clones only the history before the target request; no tool execution is replayed. Stable message IDs and ownership are required. Returns prepared_content only to the authenticated trusted client for the next native turn; this route does not invoke a model.",
+        "operationId": "assistant_conversation_version_api_assistant_conversations__conversation_id__versions_post",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Conversation Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConversationVersion"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationVersionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/assistant/profile": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Ensure the current user's private general assistant",
+        "description": "WANX accounts only. Reuses an owned private default-template expert, or creates one using the user's existing workspace/resource policies. Repeated and concurrent calls share the same binding. Does not generate a chat turn or change model settings.",
+        "operationId": "ensure_assistant_api_assistant_profile_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantProfileResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/assistant/history": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Read this user's assistant history organization",
+        "description": "Account and box scoped names, pins, archives and recoverable trash. Source conversations are retained.",
+        "operationId": "assistant_history_api_assistant_history_get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantHistoryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Organize assistant history, including batch operations",
+        "description": "Validates ownership of all selected conversations before an atomic update. Trash is reversible; no messages or checkpoints are deleted.",
+        "operationId": "update_assistant_history_api_assistant_history_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssistantHistoryUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantHistoryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/assistant/space-grant": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Choose or revoke an assistant's read-only space scope",
+        "description": "Off by default. Explicitly select all owned spaces, one space, or one folder subtree. Grants are owner-bound, thread-bound on first send, expire after two hours without renewal, and are checked on every MCP read. Revocation stops subsequent reads including an ongoing turn.",
+        "operationId": "assistant_space_grant_api_assistant_space_grant_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssistantSpaceGrantBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantSpaceGrantResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/assistant/knowledge/sources/{thread_id}": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Read previously retrieved source references in an owned assistant conversation",
+        "operationId": "knowledge_sources_api_assistant_knowledge_sources__thread_id__get",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeSourcesResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/assistant/knowledge/warehouses": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "List owned personal or authorized team knowledge warehouses",
+        "operationId": "knowledge_warehouses_api_assistant_knowledge_warehouses_get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-wanx-data-context",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "enum": [
+                "personal",
+                "team"
+              ],
+              "type": "string",
+              "default": "team",
+              "title": "X-Wanx-Data-Context"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeWarehousesResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/assistant/knowledge/access/{warehouse_id}": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Read warehouse assistant access and team members (admin)",
+        "operationId": "knowledge_access_api_assistant_knowledge_access__warehouse_id__get",
+        "parameters": [
+          {
+            "name": "warehouse_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Warehouse Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeAccessResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Authorize all or selected team members for assistant knowledge (admin)",
+        "description": "Transactional, revision-checked warehouse ACL. New members inherit all-member rules; selected rules require explicit membership. Revocation applies to ongoing MCP calls.",
+        "operationId": "update_knowledge_access_api_assistant_knowledge_access__warehouse_id__put",
+        "parameters": [
+          {
+            "name": "warehouse_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Warehouse Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KnowledgeAccessUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeAccessResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/assistant/knowledge-grant": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Choose or revoke this conversation's read-only Starlink warehouses",
+        "description": "Off until explicitly configured. Owner and box bound, one thread, two-hour expiry renewed on send. Does not modify expert defaults or Starlink documents.",
+        "operationId": "knowledge_grant_api_assistant_knowledge_grant_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-wanx-data-context",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "enum": [
+                "personal",
+                "team"
+              ],
+              "type": "string",
+              "default": "team",
+              "title": "X-Wanx-Data-Context"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KnowledgeGrantBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeGrantResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/assistant/knowledge/evidence": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Preview protected evidence from a currently selected warehouse",
+        "operationId": "knowledge_evidence_api_assistant_knowledge_evidence_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-wanx-data-context",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "enum": [
+                "personal",
+                "team"
+              ],
+              "type": "string",
+              "default": "team",
+              "title": "X-Wanx-Data-Context"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KnowledgeEvidenceBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeReadResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/chat/welcome": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Chat welcome quick cards",
+        "description": "Welcome copy for the empty chat screen.\n\nResolution order:\n1. Agent row ``welcome_message`` (instance-owned; set at create/edit).\n2. Agent workspace ``.octop/manifest.json`` (seeded at create; quick cards + fallback copy).\n3. Default quick cards (``general-assistant`` or a small built-in set).\n\nTeam hosts keep the team intro and show members' own quick cards — the host\nis not turned into cards.",
+        "operationId": "get_chat_welcome_api_agents__agent_id__chat_welcome_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Chat Welcome Api Agents  Agent Id  Chat Welcome Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/chat/hitl/resume": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Resume HITL approval (SSE)",
+        "description": "Resume a paused human-in-the-loop tool approval and stream subsequent chunks.",
+        "operationId": "resume_hitl_api_agents__agent_id__chat_hitl_resume_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HitlResumeBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-wanx-application-contract": {
+          "operationId": "resumeHumanApproval",
+          "summary": "resumeHumanApproval",
+          "tags": [
+            "agent.thread"
+          ],
+          "x-wanx-status": "ready-for-acceptance",
+          "x-wanx-permission": "threads.hitl",
+          "requestBody": {
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WanxApp_hitl-resume.v1"
+                }
+              }
+            }
+          },
+          "description": "重连规则：SSE is best-effort; reload thread history after disconnect",
+          "responses": {
+            "200": {
+              "description": "Contract response",
+              "content": {
+                "text/event-stream": {
+                  "schema": {
+                    "$ref": "#/components/schemas/WanxApp_chat-ws.v1"
+                  }
+                }
+              }
+            },
+            "default": {
+              "$ref": "#/components/responses/WanxApp_Error"
+            }
+          },
+          "parameters": [
+            {
+              "name": "agent_id",
+              "in": "path",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "x-wanx-status": "ready-for-acceptance",
+        "x-wanx-permission": "threads.hitl"
+      }
+    },
+    "/api/agents/{agent_id}/chat/polish": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Polish prompt",
+        "description": "One-shot prompt refinement without touching thread history.",
+        "operationId": "polish_prompt_api_agents__agent_id__chat_polish_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PolishBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Polish Prompt Api Agents  Agent Id  Chat Polish Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/threads": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "List threads",
+        "description": "List conversation threads for an agent, including which thread is active for this user.",
+        "operationId": "list_threads_api_agents__agent_id__threads_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "as_user",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As User"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "title": "Response List Threads Api Agents  Agent Id  Threads Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-wanx-application-contract": {
+          "operationId": "listThreads",
+          "summary": "listThreads",
+          "tags": [
+            "agent.thread"
+          ],
+          "x-wanx-status": "ready-for-acceptance",
+          "x-wanx-permission": "threads.read",
+          "responses": {
+            "200": {
+              "description": "Contract response",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/WanxApp_thread-list.v1"
+                  }
+                }
+              }
+            },
+            "default": {
+              "$ref": "#/components/responses/WanxApp_Error"
+            }
+          },
+          "parameters": [
+            {
+              "name": "agent_id",
+              "in": "path",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "limit",
+              "in": "query",
+              "required": false,
+              "schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "cursor",
+              "in": "query",
+              "required": false,
+              "schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "x-wanx-status": "ready-for-acceptance",
+        "x-wanx-permission": "threads.read"
+      },
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "New thread",
+        "description": "Start a new conversation (/new equivalent for dashboard).",
+        "operationId": "create_thread_api_agents__agent_id__threads_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "as_user",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As User"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Create Thread Api Agents  Agent Id  Threads Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-wanx-application-contract": {
+          "operationId": "createThread",
+          "summary": "createThread",
+          "tags": [
+            "agent.thread"
+          ],
+          "x-wanx-status": "ready-for-acceptance",
+          "x-wanx-permission": "threads.create",
+          "responses": {
+            "201": {
+              "description": "Contract response",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/WanxApp_thread-create.v1"
+                  }
+                }
+              }
+            },
+            "default": {
+              "$ref": "#/components/responses/WanxApp_Error"
+            }
+          },
+          "parameters": [
+            {
+              "name": "agent_id",
+              "in": "path",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "x-wanx-status": "ready-for-acceptance",
+        "x-wanx-permission": "threads.create"
+      }
+    },
+    "/api/agents/{agent_id}/history-migration/status": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Legacy history migration status",
+        "description": "Report old conversations awaiting the v10 dashboard history projection.",
+        "operationId": "get_history_migration_status_api_agents__agent_id__history_migration_status_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "as_user",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As User"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get History Migration Status Api Agents  Agent Id  History Migration Status Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/history-migration/start": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Start legacy history migration",
+        "description": "Queue a bounded batch; the gateway decodes exactly one checkpoint at a time.",
+        "operationId": "start_history_migration_api_agents__agent_id__history_migration_start_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "as_user",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As User"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Start History Migration Api Agents  Agent Id  History Migration Start Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/threads/{thread_id}/context-usage": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Context window usage breakdown",
+        "description": "Return persisted context-window usage for a thread (octop-harness snapshot).",
+        "operationId": "get_thread_context_usage_api_agents__agent_id__threads__thread_id__context_usage_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          },
+          {
+            "name": "max_tokens",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 128000,
+              "title": "Max Tokens"
+            }
+          },
+          {
+            "name": "input_tokens",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Input Tokens"
+            }
+          },
+          {
+            "name": "mcp_servers",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mcp Servers"
+            }
+          },
+          {
+            "name": "skills",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Skills"
+            }
+          },
+          {
+            "name": "as_user",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As User"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Thread Context Usage Api Agents  Agent Id  Threads  Thread Id  Context Usage Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/threads/{thread_id}/history": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Thread history",
+        "description": "Return recent messages for a thread, including tool calls and thinking blocks.\n\n``turn_active`` reports whether a turn is still streaming server-side, so a\nclient that reloaded (or navigated away) can re-subscribe over the chat\nWebSocket instead of inferring liveness from the message list.",
+        "operationId": "get_thread_history_api_agents__agent_id__threads__thread_id__history_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 25,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "as_user",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As User"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Thread History Api Agents  Agent Id  Threads  Thread Id  History Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-wanx-application-contract": {
+          "operationId": "readThreadHistory",
+          "summary": "readThreadHistory",
+          "tags": [
+            "agent.thread"
+          ],
+          "x-wanx-status": "ready-for-acceptance",
+          "x-wanx-permission": "threads.read",
+          "responses": {
+            "200": {
+              "description": "Contract response",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/WanxApp_thread-history.v1"
+                  }
+                }
+              }
+            },
+            "default": {
+              "$ref": "#/components/responses/WanxApp_Error"
+            }
+          },
+          "parameters": [
+            {
+              "name": "agent_id",
+              "in": "path",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "thread_id",
+              "in": "path",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "limit",
+              "in": "query",
+              "required": false,
+              "schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "cursor",
+              "in": "query",
+              "required": false,
+              "schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "x-wanx-status": "ready-for-acceptance",
+        "x-wanx-permission": "threads.read"
+      }
+    },
+    "/api/agents/{agent_id}/threads/{thread_id}/read": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Mark thread read",
+        "description": "Clear unread message count for a thread (e.g. when the user opens it in the dashboard).",
+        "operationId": "mark_thread_read_api_agents__agent_id__threads__thread_id__read_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          },
+          {
+            "name": "as_user",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As User"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/threads/{thread_id}/fork": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Fork thread from an assistant message",
+        "description": "Create a new dashboard thread with history through *message_id*.\n\nThe original thread is left unchanged. History includes the selected\nassistant reply so the user can continue from that point.",
+        "operationId": "fork_thread_api_agents__agent_id__threads__thread_id__fork_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          },
+          {
+            "name": "as_user",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As User"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForkThreadBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Fork Thread Api Agents  Agent Id  Threads  Thread Id  Fork Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/session": {
+      "patch": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Rebind dashboard session",
+        "description": "Point the user's dashboard session at an existing thread.",
+        "operationId": "rebind_session_api_agents__agent_id__session_patch",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RebindSessionBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Rebind Session Api Agents  Agent Id  Session Patch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/threads/{thread_id}/history/export": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Export unrendered conversation history",
+        "description": "Read-only JSON export of legacy and versioned messages with archive turn status.",
+        "operationId": "export_history_api_agents__agent_id__threads__thread_id__history_export_get",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          },
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "as_user",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As User"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Export History Api Agents  Agent Id  Threads  Thread Id  History Export Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/threads/{thread_id}": {
+      "patch": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Update thread",
+        "description": "Update sidebar metadata or sticky composer settings for a thread.",
+        "operationId": "patch_thread_api_agents__agent_id__threads__thread_id__patch",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          },
+          {
+            "name": "as_user",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As User"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameThreadBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Patch Thread Api Agents  Agent Id  Threads  Thread Id  Patch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Delete thread",
+        "description": "Remove a conversation thread, its actual checkpoint data, and its metadata.\n\nCheckpoint deletion runs first: if it fails (as opposed to simply\nfinding nothing to delete — agent not running / no checkpointer),\nthe row is intentionally left in place so the thread stays visible\nand the caller can retry, instead of orphaning undeleted data with\nno remaining handle to it.",
+        "operationId": "delete_thread_api_agents__agent_id__threads__thread_id__delete",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          },
+          {
+            "name": "as_user",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As User"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/threads/{thread_id}/trajectory": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Thread trajectory history",
+        "description": "Return a page of trajectory events for a thread (newest page by default).\n\nList payloads omit message bodies (``content`` / ``text`` / ``thinking``) but\ninclude clipped tool ``args`` / ``result`` for ledger rendering. Use the\nevent detail endpoint for full payloads.",
+        "operationId": "get_thread_trajectory_api_agents__agent_id__threads__thread_id__trajectory_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "before_seq",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Load events with seq less than this.",
+              "title": "Before Seq"
+            },
+            "description": "Load events with seq less than this."
+          },
+          {
+            "name": "kinds",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Comma-separated event kinds to include.",
+              "title": "Kinds"
+            },
+            "description": "Comma-separated event kinds to include."
+          },
+          {
+            "name": "as_user",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As User"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrajectoryHistoryOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/threads/{thread_id}/trajectory/events/{event_id}": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Trajectory event detail",
+        "description": "Return one trajectory event with its full payload.",
+        "operationId": "get_trajectory_event_api_agents__agent_id__threads__thread_id__trajectory_events__event_id__get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          },
+          {
+            "name": "event_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Event Id"
+            }
+          },
+          {
+            "name": "as_user",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As User"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrajectoryEventOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/threads/{thread_id}/trajectory/metrics": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Thread trajectory metrics",
+        "description": "Return aggregated session metrics for a thread's trajectory ledger.",
+        "operationId": "get_trajectory_metrics_api_agents__agent_id__threads__thread_id__trajectory_metrics_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          },
+          {
+            "name": "as_user",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As User"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrajectoryMetricsOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/threads/{thread_id}/trajectory/stream": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Live trajectory SSE stream",
+        "description": "Subscribe to live trajectory events for a thread.\n\nEmits SSE ``event``, ``metrics``, and ``heartbeat`` frames. Resume with\n``after_seq`` or the ``Last-Event-ID`` header (seq). Disconnect unsubscribes.",
+        "operationId": "stream_thread_trajectory_api_agents__agent_id__threads__thread_id__trajectory_stream_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          },
+          {
+            "name": "after_seq",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Replay events with seq greater than this, then follow live.",
+              "title": "After Seq"
+            },
+            "description": "Replay events with seq greater than this, then follow live."
+          },
+          {
+            "name": "as_user",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As User"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/threads/{thread_id}/trajectory/export": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Export thread trajectory",
+        "description": "Download the full trajectory ledger. Default ``jsonl``; ``json`` returns an array.",
+        "operationId": "export_thread_trajectory_api_agents__agent_id__threads__thread_id__trajectory_export_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "jsonl",
+                "json"
+              ],
+              "type": "string",
+              "description": "Download format. Default is JSON Lines with full payloads.",
+              "default": "jsonl",
+              "title": "Format"
+            },
+            "description": "Download format. Default is JSON Lines with full payloads."
+          },
+          {
+            "name": "as_user",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As User"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/upload": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Upload a chat attachment",
+        "description": "Store in the selected agent's inbound area. Zhijun extracts bounded reference text locally; unavailable OCR and extraction failures are reported without remote OCR calls.",
+        "operationId": "upload_attachment_api_agents__agent_id__upload_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "as_user",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As User"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_attachment_api_agents__agent_id__upload_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadedAttachmentResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/upload/source": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Read a Zhijun uploaded source",
+        "description": "Owner-only plain extracted text from a registered upload in this profile. The signed application must be Zhijun. Does not expose workspace files or arbitrary original bytes. Each page reads at most 12000 characters from at most 48000 retained characters. Read subsequent pages using offset; has_more=false does not mean a truncated original was fully read.",
+        "operationId": "uploaded_source_api_agents__agent_id__upload_source_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Exact inbound path returned by upload.",
+              "title": "Path"
+            },
+            "description": "Exact inbound path returned by upload."
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Zero-based character offset into retained extraction text.",
+              "default": 0,
+              "title": "Offset"
+            },
+            "description": "Zero-based character offset into retained extraction text."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 12000,
+              "minimum": 1,
+              "description": "Maximum extracted text characters in this page.",
+              "default": 12000,
+              "title": "Limit"
+            },
+            "description": "Maximum extracted text characters in this page."
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachmentSourceResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "responses": {
+      "WanxApp_Error": {
+        "description": "按 errors.v1.json 返回稳定 code",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/WanxApp_ErrorEnvelope"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "AssistantHistoryEntry": {
+        "properties": {
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "pinned": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pinned"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "archived",
+              "trash"
+            ],
+            "title": "Status",
+            "default": "active"
+          },
+          "previous_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "active",
+                  "archived"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Status"
+          },
+          "deleted_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "title": "AssistantHistoryEntry"
+      },
+      "AssistantHistoryItem": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "thread",
+              "legacy"
+            ],
+            "title": "Kind"
+          },
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$",
+            "title": "Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "id"
+        ],
+        "title": "AssistantHistoryItem"
+      },
+      "AssistantHistoryResponse": {
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "entries": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/AssistantHistoryEntry"
+            },
+            "type": "object",
+            "title": "Entries"
+          }
+        },
+        "type": "object",
+        "required": [
+          "revision",
+          "entries"
+        ],
+        "title": "AssistantHistoryResponse"
+      },
+      "AssistantHistoryUpdate": {
+        "properties": {
+          "operation": {
+            "type": "string",
+            "enum": [
+              "rename",
+              "pin",
+              "unpin",
+              "archive",
+              "unarchive",
+              "trash",
+              "restore"
+            ],
+            "title": "Operation"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AssistantHistoryItem"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Items"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "operation",
+          "items"
+        ],
+        "title": "AssistantHistoryUpdate"
+      },
+      "AssistantProfileResponse": {
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id",
+            "description": "Current user's private general-expert instance."
+          },
+          "template_id": {
+            "type": "string",
+            "title": "Template Id",
+            "description": "Bundled expert template; always default."
+          },
+          "default_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Model",
+            "description": "Expert default; turns may override it."
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_id",
+          "template_id",
+          "default_model"
+        ],
+        "title": "AssistantProfileResponse"
+      },
+      "AssistantSpaceGrantBody": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "grant_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9a-f]{32}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grant Id"
+          },
+          "selection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AssistantSpaceSelection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{1,128}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thread Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "title": "AssistantSpaceGrantBody"
+      },
+      "AssistantSpaceGrantResponse": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "grant_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grant Id"
+          },
+          "mcp_server": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mcp Server"
+          },
+          "selection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AssistantSpaceSelection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "title": "AssistantSpaceGrantResponse"
+      },
+      "AssistantSpaceSelection": {
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "all",
+              "space",
+              "folder"
+            ],
+            "title": "Mode"
+          },
+          "space_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(personal|[0-9a-f]{32})$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Space Id"
+          },
+          "folder_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9a-f]{32}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Folder Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "mode"
+        ],
+        "title": "AssistantSpaceSelection"
+      },
+      "AttachmentSourceResponse": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok",
+            "description": "True only when local extraction produced readable text."
+          },
+          "path": {
+            "type": "string",
+            "title": "Path",
+            "description": "Original uploaded file path in this agent's inbound area."
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "media_type": {
+            "type": "string",
+            "title": "Media Type"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content",
+            "description": "Extracted reference text; render as plain text."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "empty",
+              "unsupported",
+              "failed"
+            ],
+            "title": "Status",
+            "description": "Actual local extraction state; only ready has readable text."
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated",
+            "description": "Original extraction exceeded the retained text cap."
+          },
+          "total_chars": {
+            "type": "integer",
+            "title": "Total Chars",
+            "description": "Full locally extracted text length before the retention cap."
+          },
+          "stored_chars": {
+            "type": "integer",
+            "title": "Stored Chars",
+            "description": "Retained text length, at most 48000 characters."
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More",
+            "description": "More retained text can be read by increasing offset."
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset",
+            "description": "Zero-based character offset into retained text, not a byte offset."
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit",
+            "description": "Requested page size, at most 12000 characters."
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error",
+            "description": "Localized extraction limitation or failure, if any."
+          }
+        },
+        "type": "object",
+        "required": [
+          "ok",
+          "path",
+          "filename",
+          "media_type",
+          "content",
+          "status",
+          "truncated",
+          "total_chars",
+          "stored_chars",
+          "has_more",
+          "offset",
+          "limit"
+        ],
+        "title": "AttachmentSourceResponse"
+      },
+      "Body_upload_attachment_api_agents__agent_id__upload_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_attachment_api_agents__agent_id__upload_post"
+      },
+      "ConversationContext": {
+        "properties": {
+          "space": {
+            "$ref": "#/components/schemas/ConversationSpace"
+          },
+          "knowledge": {
+            "$ref": "#/components/schemas/ConversationKnowledge"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ConversationContext"
+      },
+      "ConversationKnowledge": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": false
+          },
+          "warehouses": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "Warehouses"
+          },
+          "data_scope": {
+            "type": "string",
+            "enum": [
+              "personal",
+              "team"
+            ],
+            "title": "Data Scope",
+            "default": "team"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ConversationKnowledge"
+      },
+      "ConversationPatch": {
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Revision"
+          },
+          "context": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConversationContext"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "active_thread_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{1,128}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Thread Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "revision"
+        ],
+        "title": "ConversationPatch"
+      },
+      "ConversationResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "active_thread_id": {
+            "type": "string",
+            "title": "Active Thread Id"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "context": {
+            "$ref": "#/components/schemas/ConversationContext"
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/ConversationVersionInfo"
+            },
+            "type": "array",
+            "title": "Versions"
+          },
+          "validation_errors": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Validation Errors"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "active_thread_id",
+          "revision",
+          "context",
+          "versions",
+          "validation_errors"
+        ],
+        "title": "ConversationResponse"
+      },
+      "ConversationSpace": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": false
+          },
+          "selection": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selection"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ConversationSpace"
+      },
+      "ConversationVersion": {
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Revision"
+          },
+          "source_thread_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$",
+            "title": "Source Thread Id"
+          },
+          "message_id": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Message Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "edit",
+              "regenerate"
+            ],
+            "title": "Kind"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 32000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "revision",
+          "source_thread_id",
+          "message_id",
+          "kind"
+        ],
+        "title": "ConversationVersion"
+      },
+      "ConversationVersionInfo": {
+        "properties": {
+          "thread_id": {
+            "type": "string",
+            "title": "Thread Id"
+          },
+          "parent_thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Thread Id"
+          },
+          "target_message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Message Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "original",
+              "edit",
+              "regenerate"
+            ],
+            "title": "Kind"
+          }
+        },
+        "type": "object",
+        "required": [
+          "thread_id",
+          "kind"
+        ],
+        "title": "ConversationVersionInfo"
+      },
+      "ConversationVersionResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "active_thread_id": {
+            "type": "string",
+            "title": "Active Thread Id"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "context": {
+            "$ref": "#/components/schemas/ConversationContext"
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/ConversationVersionInfo"
+            },
+            "type": "array",
+            "title": "Versions"
+          },
+          "validation_errors": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Validation Errors"
+          },
+          "prepared_content": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Prepared Content"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "active_thread_id",
+          "revision",
+          "context",
+          "versions",
+          "validation_errors",
+          "prepared_content"
+        ],
+        "title": "ConversationVersionResponse"
+      },
+      "ForkThreadBody": {
+        "properties": {
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Id",
+            "description": "Selected assistant message id from the chat UI (optional with turns locator)."
+          },
+          "content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content",
+            "description": "Plain text of that assistant message, used when ids differ."
+          },
+          "assistant_turns_from_end": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assistant Turns From End",
+            "description": "1 = latest assistant answer, 2 = second-to-last, … (preferred locator)."
+          }
+        },
+        "type": "object",
+        "title": "ForkThreadBody"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HitlResumeBody": {
+        "properties": {
+          "thread_id": {
+            "type": "string",
+            "title": "Thread Id",
+            "description": "Conversation thread awaiting approval."
+          },
+          "decisions": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "maxItems": 16,
+            "minItems": 1,
+            "title": "Decisions",
+            "description": "Human decisions, e.g. [{\"type\": \"approve\"}], [{\"type\": \"reject\", \"message\": \"...\"}] or [{\"type\": \"respond\", \"message\": \"<answer>\"}]."
+          },
+          "hitl_policy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HitlSessionPolicyBody"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional thread-scoped tool-approval bypass applied before resume."
+          }
+        },
+        "type": "object",
+        "required": [
+          "thread_id",
+          "decisions"
+        ],
+        "title": "HitlResumeBody"
+      },
+      "HitlSessionPolicyBody": {
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "ask",
+              "allow_all",
+              "allow_tools"
+            ],
+            "title": "Mode",
+            "default": "ask"
+          },
+          "tools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tools"
+          }
+        },
+        "type": "object",
+        "title": "HitlSessionPolicyBody",
+        "description": "Dashboard chat bypass for tool approval (does not change global HITL)."
+      },
+      "KnowledgeAccessResponse": {
+        "properties": {
+          "audience": {
+            "type": "string",
+            "enum": [
+              "none",
+              "all",
+              "selected"
+            ],
+            "title": "Audience"
+          },
+          "members": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "maxItems": 1000,
+            "title": "Members"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Revision"
+          },
+          "warehouse": {
+            "$ref": "#/components/schemas/KnowledgeWarehouse"
+          },
+          "updated_by": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated By"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "users": {
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeMember"
+            },
+            "type": "array",
+            "title": "Users"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "audience",
+          "revision",
+          "warehouse",
+          "users"
+        ],
+        "title": "KnowledgeAccessResponse"
+      },
+      "KnowledgeAccessUpdate": {
+        "properties": {
+          "audience": {
+            "type": "string",
+            "enum": [
+              "none",
+              "all",
+              "selected"
+            ],
+            "title": "Audience"
+          },
+          "members": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "maxItems": 1000,
+            "title": "Members"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Revision"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "audience",
+          "revision"
+        ],
+        "title": "KnowledgeAccessUpdate"
+      },
+      "KnowledgeEvidenceBody": {
+        "properties": {
+          "grant_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$",
+            "title": "Grant Id"
+          },
+          "warehouse_id": {
+            "type": "string",
+            "title": "Warehouse Id"
+          },
+          "evidence_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$",
+            "title": "Evidence Id"
+          },
+          "thread_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$",
+            "title": "Thread Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "grant_id",
+          "warehouse_id",
+          "evidence_id",
+          "thread_id"
+        ],
+        "title": "KnowledgeEvidenceBody"
+      },
+      "KnowledgeGrantBody": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "grant_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9a-f]{32}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grant Id"
+          },
+          "warehouses": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 100,
+                "minItems": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Warehouses"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{1,128}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thread Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "title": "KnowledgeGrantBody"
+      },
+      "KnowledgeGrantResponse": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "grant_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grant Id"
+          },
+          "mcp_server": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mcp Server"
+          },
+          "warehouses": {
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeWarehouse"
+            },
+            "type": "array",
+            "title": "Warehouses"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "title": "KnowledgeGrantResponse"
+      },
+      "KnowledgeMember": {
+        "properties": {
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "disabled": {
+            "type": "boolean",
+            "title": "Disabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "role",
+          "id",
+          "name",
+          "disabled"
+        ],
+        "title": "KnowledgeMember"
+      },
+      "KnowledgeReadResponse": {
+        "properties": {
+          "warehouse": {
+            "$ref": "#/components/schemas/KnowledgeWarehouse"
+          },
+          "result": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Result"
+          },
+          "assistant_knowledge_sources": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Assistant Knowledge Sources"
+          }
+        },
+        "type": "object",
+        "required": [
+          "warehouse",
+          "result",
+          "assistant_knowledge_sources"
+        ],
+        "title": "KnowledgeReadResponse"
+      },
+      "KnowledgeSourcesResponse": {
+        "properties": {
+          "sources": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Sources"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sources"
+        ],
+        "title": "KnowledgeSourcesResponse"
+      },
+      "KnowledgeWarehouse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "available": {
+            "type": "boolean",
+            "title": "Available",
+            "default": true
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "KnowledgeWarehouse"
+      },
+      "KnowledgeWarehousesResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeWarehouse"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "KnowledgeWarehousesResponse"
+      },
+      "PolishBody": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "default_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Model"
+          }
+        },
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "PolishBody"
+      },
+      "RebindSessionBody": {
+        "properties": {
+          "thread_id": {
+            "type": "string",
+            "title": "Thread Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "thread_id"
+        ],
+        "title": "RebindSessionBody"
+      },
+      "RenameThreadBody": {
+        "properties": {
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "pinned": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pinned"
+          },
+          "model_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Ref"
+          },
+          "reasoning_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "enabled",
+                  "disabled"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Mode"
+          },
+          "reasoning_effort": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Effort"
+          },
+          "conversation_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "ask",
+                  "plan",
+                  "craft"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Mode"
+          },
+          "hitl_policy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HitlSessionPolicyBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "title": "RenameThreadBody"
+      },
+      "TrajectoryEventOut": {
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "title": "Event Id"
+          },
+          "thread_id": {
+            "type": "string",
+            "title": "Thread Id"
+          },
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "seq": {
+            "type": "integer",
+            "title": "Seq"
+          },
+          "ts": {
+            "type": "number",
+            "title": "Ts"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "turn_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turn Id"
+          },
+          "request_seq": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Seq"
+          },
+          "is_error": {
+            "type": "boolean",
+            "title": "Is Error"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Payload"
+          }
+        },
+        "type": "object",
+        "required": [
+          "event_id",
+          "thread_id",
+          "agent_id",
+          "seq",
+          "ts",
+          "kind",
+          "is_error",
+          "summary"
+        ],
+        "title": "TrajectoryEventOut"
+      },
+      "TrajectoryHistoryOut": {
+        "properties": {
+          "thread_id": {
+            "type": "string",
+            "title": "Thread Id"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/TrajectoryEventOut"
+            },
+            "type": "array",
+            "title": "Events"
+          },
+          "next_before_seq": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Before Seq"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "thread_id",
+          "events"
+        ],
+        "title": "TrajectoryHistoryOut"
+      },
+      "TrajectoryMetricsOut": {
+        "properties": {
+          "turns": {
+            "type": "integer",
+            "title": "Turns"
+          },
+          "steps": {
+            "type": "integer",
+            "title": "Steps"
+          },
+          "llm_duration_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llm Duration Ms"
+          },
+          "tool_duration_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Duration Ms"
+          },
+          "ttft_avg_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ttft Avg Ms"
+          },
+          "tok_per_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tok Per S"
+          },
+          "cache_hit_ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Hit Ratio"
+          },
+          "input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Tokens"
+          },
+          "output_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tokens"
+          },
+          "cache_read_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Read Tokens"
+          }
+        },
+        "type": "object",
+        "required": [
+          "turns",
+          "steps"
+        ],
+        "title": "TrajectoryMetricsOut"
+      },
+      "UploadedAttachmentResponse": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path",
+            "description": "Stored original upload's workspace-relative inbound path."
+          },
+          "workspace_path": {
+            "type": "string",
+            "title": "Workspace Path",
+            "description": "Exact path to send in a native chat file/image block."
+          },
+          "url": {
+            "type": "string",
+            "title": "Url",
+            "description": "Same protected source/preview URL as access_url."
+          },
+          "access_url": {
+            "type": "string",
+            "title": "Access Url",
+            "description": "Zhijun returns the owner-only upload/source JSON text endpoint, not original file bytes. WANX retains native preview/download URLs."
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "media_type": {
+            "type": "string",
+            "title": "Media Type"
+          },
+          "extraction_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "ready",
+                  "empty",
+                  "unsupported",
+                  "failed"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extraction Status",
+            "description": "Zhijun local extraction result; upload alone does not imply readable text or completed memory extraction."
+          },
+          "extraction_truncated": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extraction Truncated",
+            "description": "True when extracted text exceeded the 48000-character retention cap."
+          },
+          "extraction_characters": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extraction Characters",
+            "description": "Full locally extracted text length before the retention cap, in characters."
+          },
+          "extraction_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extraction Error",
+            "description": "Localized explanation for unavailable/failed text extraction; original upload remains retained."
+          }
+        },
+        "type": "object",
+        "required": [
+          "path",
+          "workspace_path",
+          "url",
+          "access_url",
+          "filename",
+          "media_type"
+        ],
+        "title": "UploadedAttachmentResponse"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "WanxApp_ErrorEnvelope": {
+        "type": "object",
+        "properties": {
+          "detail": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "code"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                }
+              }
+            ]
+          },
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "WanxApp_chat-ws.v1": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "WebSocket frames. Unknown provider/tool payload fields are extension fields and must not be interpreted as permissions.",
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "const": "ping"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": true,
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "const": "user_turn"
+              },
+              "text": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "thread_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "session_key": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "model": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "default_model": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reasoning_mode": {
+                "enum": [
+                  "auto",
+                  "enabled",
+                  "disabled",
+                  null
+                ]
+              },
+              "reasoning_effort": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "conversation_mode": {
+                "enum": [
+                  "ask",
+                  "plan",
+                  "craft",
+                  null
+                ]
+              },
+              "mcp_servers": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "string"
+                }
+              },
+              "knowledge_base_ids": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "string"
+                }
+              },
+              "skills": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "string"
+                }
+              },
+              "messages": {
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "target_agent_ids": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": true,
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "enum": [
+                  "pong",
+                  "turn_status",
+                  "delta",
+                  "tool_start",
+                  "tool_end",
+                  "error",
+                  "done"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "WanxApp_hitl-resume.v1": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "thread_id",
+          "decisions"
+        ],
+        "properties": {
+          "thread_id": {
+            "type": "string"
+          },
+          "decisions": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 16,
+            "items": {
+              "type": "object",
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "enum": [
+                    "approve",
+                    "edit",
+                    "reject",
+                    "respond"
+                  ]
+                },
+                "edited_action": {
+                  "type": "object"
+                },
+                "message": {
+                  "type": "string",
+                  "maxLength": 8000
+                }
+              },
+              "additionalProperties": true
+            }
+          },
+          "hitl_policy": {
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        }
+      },
+      "WanxApp_thread-create.v1": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "thread_id",
+          "session_key"
+        ],
+        "properties": {
+          "thread_id": {
+            "type": "string"
+          },
+          "session_key": {
+            "type": "string"
+          }
+        }
+      },
+      "WanxApp_thread-history.v1": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "thread_id",
+          "model_ref",
+          "messages",
+          "has_more",
+          "limit",
+          "offset",
+          "next_cursor",
+          "history_loading",
+          "history_status",
+          "history_retry_after_ms",
+          "turn_active",
+          "hitl_pending",
+          "conversation_mode",
+          "pending_plan_path",
+          "hitl_policy"
+        ],
+        "properties": {
+          "thread_id": {
+            "type": "string"
+          },
+          "model_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "history_loading": {
+            "type": "boolean"
+          },
+          "history_status": {
+            "type": "string"
+          },
+          "history_retry_after_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "turn_active": {
+            "type": "boolean"
+          },
+          "hitl_pending": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "conversation_mode": {
+            "enum": [
+              "ask",
+              "plan",
+              "craft"
+            ]
+          },
+          "pending_plan_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hitl_policy": {
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        }
+      },
+      "WanxApp_thread-list.v1": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": [
+            "thread_id",
+            "title",
+            "channel_type",
+            "session_key",
+            "last_active",
+            "created_at",
+            "is_active",
+            "has_messages",
+            "pinned",
+            "model_ref",
+            "reasoning_mode",
+            "reasoning_effort",
+            "conversation_mode",
+            "pending_plan_path",
+            "hitl_policy"
+          ],
+          "properties": {
+            "thread_id": {
+              "type": "string"
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "channel_type": {
+              "type": "string"
+            },
+            "session_key": {
+              "type": "string"
+            },
+            "last_active": {
+              "type": [
+                "number",
+                "integer",
+                "null"
+              ]
+            },
+            "created_at": {
+              "type": [
+                "number",
+                "integer",
+                "null"
+              ]
+            },
+            "is_active": {
+              "type": "boolean"
+            },
+            "has_messages": {
+              "type": "boolean"
+            },
+            "pinned": {
+              "type": "boolean"
+            },
+            "model_ref": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reasoning_mode": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reasoning_effort": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "conversation_mode": {
+              "enum": [
+                "ask",
+                "plan",
+                "craft"
+              ]
+            },
+            "pending_plan_path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "hitl_policy": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "JWT from `POST /api/auth/login` (`access_token` field)."
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "chat",
+      "description": "Dashboard chat: WebSocket streaming, threads, conversation history, trajectory ledger, and text-push toasts."
+    }
+  ],
+  "x-wanx-supplemental-routes": [],
+  "x-wanx-contract": "wanx-business-api/1",
+  "x-wanx-catalog": "../api-catalog.v1.json",
+  "x-wanx-permissions": "../permissions.v1.json"
+}

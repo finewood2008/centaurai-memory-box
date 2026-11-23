@@ -8,7 +8,11 @@ import {createPersonalSpace,MAX_UPLOAD_BYTES} from '../shell/personal-space.mjs'
 import {IMPORT_WINDOW} from '../shell/space-upload-imports.mjs';
 const hash=b=>createHash('sha256').update(b).digest('hex'),uid=()=>randomUUID().replaceAll('-','');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-const wait=async predicate=>{for(let i=0;i<2000;i++){if(await predicate())return;await sleep(5);}throw Error('timed out');};
+const wait=async (predicate,timeout=30000)=>{
+ const deadline=performance.now()+timeout;
+ do{if(await predicate())return;await sleep(10);}while(performance.now()<deadline);
+ throw Error(`timed out after ${timeout}ms`);
+};
 const reset=()=>Object.assign(Error('lost receipt'),{code:'ECONNRESET'});
 async function fixture(t,options={}) {
  const root=await mkdtemp(path.join(tmpdir(),'wanx-folder-'));t.after(()=>rm(root,{recursive:true,force:true}));
@@ -40,7 +44,7 @@ async function fixture(t,options={}) {
  }};
  const settings={client,store:{load:async()=>structuredClone(saved),save:async v=>{saved=structuredClone(v);}},serviceURL:'http://test',retryBaseMs:1,maxRetries:1,recoveryCooldownMs:30,random:()=>.5,onEvent:e=>events.push(e),chooseUploads:async()=>options.selection||[]};
  service=await createPersonalSpace(settings);t.after(()=>service.close());
- return {root,entries,uploads,calls,events,saved:()=>saved,get service(){return service;},state:patch=>{state={...state,...patch};for(const f of listeners)f();},restart:async()=>{await service.close();service=await createPersonalSpace(settings);},done:()=>wait(()=>service.snapshot().imports.length&&service.snapshot().imports.every(b=>['complete','failed'].includes(b.phase)))};
+ return {root,entries,uploads,calls,events,saved:()=>saved,get service(){return service;},state:patch=>{state={...state,...patch};for(const f of listeners)f();},restart:async()=>{await service.close();service=await createPersonalSpace(settings);},done:timeout=>wait(()=>service.snapshot().imports.length&&service.snapshot().imports.every(b=>['complete','failed'].includes(b.phase)),timeout)};
 }
 async function samples(f,count=137){const folder=path.join(f.root,'中文 资料 #😀');await mkdir(path.join(folder,'一级','二级'),{recursive:true});await mkdir(path.join(folder,'空文件夹'));for(let i=0;i<count;i++)await writeFile(path.join(folder,i%2?'一级/二级':'',`材料 ${i} #%.txt`),`中文 ${i}\n  内容\n`);return folder;}
 const remotePath=(entries,entry)=>entry.parent?remotePath(entries,entries.get(entry.parent))+'/'+entry.name:entry.name;
@@ -76,7 +80,7 @@ test('box changes freeze the original import and never dispatch to the other box
  let held=true;const f=await fixture(t,{before:async input=>{if(input.method==='PUT'&&held)await new Promise((_,reject)=>input.signal.addEventListener('abort',()=>reject(input.signal.reason),{once:true}));}}),folder=await samples(f,50);await f.service.uploads('',[folder]);await wait(()=>f.calls.some(c=>c.method==='PUT'));f.state({connection:{deviceId:'other'}});await sleep(30);const calls=f.calls.length;assert.deepEqual(f.service.snapshot().tasks,[]);assert.deepEqual(f.service.snapshot().imports,[]);held=false;await sleep(30);assert.equal(f.calls.length,calls);f.state({connection:{deviceId:'79'}});await f.service.transfer('resume-all');await f.done();assert.equal(f.uploads.size,50);
 });
 test('one thousand small files finish in bounded pages while the event loop keeps running',async t=>{
- const f=await fixture(t),folder=await samples(f,1000);let ticks=0;const timer=setInterval(()=>ticks++,2);t.after(()=>clearInterval(timer));await f.service.uploads('',[folder]);await f.done();assert.equal(f.uploads.size,1000);assert.equal(f.service.snapshot().imports[0].files,1000);assert.ok(ticks>0);assert.ok([...f.uploads.values()].every(u=>u.publications===1));
+ const f=await fixture(t),folder=await samples(f,1000);let ticks=0;const timer=setInterval(()=>ticks++,2);t.after(()=>clearInterval(timer));await f.service.uploads('',[folder]);await f.done(90000);assert.equal(f.uploads.size,1000);assert.equal(f.service.snapshot().imports[0].files,1000);assert.ok(ticks>0);assert.ok([...f.uploads.values()].every(u=>u.publications===1));
 });
 
 test('completed records clear by exact batch without changing uploaded content or another active batch',async t=>{

@@ -34,7 +34,7 @@ async def test_engine_checks_are_explicit_and_never_claim_model_inference(svc):
 
 async def test_intake_binds_default_and_explicit_check_recovers_only_unbound_intake(svc):
  svc.engines.provider=lambda _:deepcopy(CONFIG)
- p=create(svc)
+ p=svc.create_project('alice','会议','整理会议记录','intake-engine')
  p=svc.preparation.enable('alice',p['id'])
  assert p['engine']['id']=='codex'
  original=p['engine'].copy()

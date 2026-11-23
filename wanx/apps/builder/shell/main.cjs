@@ -5,6 +5,7 @@ const{studioRoute}=require('../integration/workspace-policy.mjs');
 const{requestErrorCode}=require('../core/request-errors.mjs');
 const{requestTimeout}=require('./request-policy.cjs');
 const{capturePreview}=require('../integration/preview-capture.cjs');
+const{installPreviewNavigationGuard}=require('../integration/preview-navigation.cjs');
 const{rememberRequest,rememberEdits,stopEdits,heartbeatEdits}=require('../integration/edit-scope.mjs');
 const edits=new Map();
 function cancelEdits(){stopEdits(edits,(path,body)=>host?.request(path,{method:'POST',body,timeoutMs:5000}))}
@@ -59,16 +60,14 @@ app.whenReady().then(async()=>{
   ]));
   win=new BrowserWindow({icon:brandIcon,width:1440,height:900,minWidth:900,minHeight:680,title:'万象·开物 · WanX Builder',backgroundColor:nativeTheme.shouldUseDarkColors?'#262421':'#faf7f2',webPreferences:{preload:path.join(__dirname,'preload.cjs'),sandbox:true,nodeIntegration:false,contextIsolation:true,backgroundThrottling:false}});
   win.webContents.on('page-title-updated',event=>event.preventDefault());
-  win.webContents.on('will-attach-webview',event=>event.preventDefault());
+  installPreviewNavigationGuard(win.webContents);
   win.webContents.session.setPermissionRequestHandler((_wc,_permission,reply)=>reply(false));
   win.webContents.session.setPermissionCheckHandler(()=>false);
-  win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
-  win.webContents.on('will-navigate',event=>event.preventDefault());
   ipcMain.handle('studio:capture-preview',async(event,rect)=>{sender(event);await host.context();const result=await capturePreview(win.webContents,{width:win.getContentSize()[0],height:win.getContentSize()[1]},rect);sender(event);await host.context();return result});
   ipcMain.handle('studio:theme',(event,theme)=>{sender(event);if(!['light','dark','system'].includes(theme))throw new Error('THEME_INVALID');nativeTheme.themeSource=theme;win.setBackgroundColor(nativeTheme.shouldUseDarkColors?'#262421':'#faf7f2')});
   ipcMain.handle('studio:return',async(event,destination)=>{sender(event);if(!['projects','models','connectors','skills','environment'].includes(destination))throw new Error('STUDIO_DESTINATION_DENIED');return control('return',{protocolVersion:2,destination})});
   ipcMain.handle('studio:navigation',event=>{sender(event);return control('navigation',{})});
-  ipcMain.handle('studio:request',async(event,raw,method,body)=>{sender(event);const result=await request(raw,method,body);const match=/^\/api\/app-studio\/(?:_builder\/)?projects\/([a-f0-9]{32})\/build$/.exec(raw);if(match)watch(match[1]);if(result.id&&hasWork(result))watch(result.id);if(method!=='GET'&&/^\/api\/app-studio\/projects(?:\/|$)/.test(raw))await control('projectChanged',{protocolVersion:2,projectId:result.id}).catch(()=>{});return result});
+  ipcMain.handle('studio:request',async(event,raw,method,body)=>{sender(event);const result=await request(raw,method,body);const match=/^\/api\/app-studio\/(?:_builder\/)?projects\/([a-f0-9]{32})\/build$/.exec(raw);if(match)watch(match[1]);if(result?.id&&hasWork(result))watch(result.id);if(method!=='GET'&&/^\/api\/app-studio\/projects(?:\/|$)/.test(raw))await control('projectChanged',{protocolVersion:2,projectId:result.id}).catch(()=>{});return result});
   ipcMain.handle('studio:install',async(event,projectId,artifactHash)=>{sender(event);return control('install',{projectId,artifactHash})});
   ipcMain.handle('studio:open',async(event,applicationId)=>{sender(event);return control('open',{applicationId})});
   host.onSessionInvalidated(()=>{cancelEdits();invalid=true;for(const timer of beats.values())clearInterval(timer);beats.clear();win?.webContents.send('studio:invalidated');win?.close()});

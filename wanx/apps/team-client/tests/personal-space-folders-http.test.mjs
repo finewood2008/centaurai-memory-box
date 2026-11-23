@@ -8,7 +8,7 @@ import net from 'node:net';
 import {once} from 'node:events';
 import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
-import {createPersonalSpace} from '../shell/personal-space.mjs';
+import {createPersonalSpace} from '../build/app/shell/personal-space.mjs';
 import {createDashboardGateway} from '../octop/gateway.mjs';
 const digest=b=>createHash('sha256').update(b).digest('hex');
 const wait=async fn=>{for(const until=Date.now()+90_000;Date.now()<until;){if(await fn())return;await new Promise(r=>setTimeout(r,20));}throw Error('timed out');};

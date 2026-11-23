@@ -19,7 +19,7 @@ export function createDesktopIntegration({
       : versionInfo?.distributionClass === "local-verification-only" ? "本地测试包"
         : versionInfo ? "构建状态未验证" : null;
   app.setAboutPanelOptions({
-    applicationName: DESKTOP_NAME, applicationVersion: app.getVersion(), iconPath: APP_ICON,
+    applicationName: DESKTOP_NAME, applicationVersion: versionInfo?.internalVersion || app.getVersion(), iconPath: APP_ICON,
     credits: `你的个人 AI 记忆空间。${edition ? `\n${edition}` : ""}\n\nPowered by wanx`,
   });
   if (mac) app.dock.setIcon(APP_ICON);

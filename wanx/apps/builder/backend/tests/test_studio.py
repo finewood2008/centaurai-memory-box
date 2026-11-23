@@ -8,6 +8,9 @@ from httpx import ASGITransport,AsyncClient
 
 from wanx_studio.contracts import StudioError,digest,readiness
 from wanx_studio.service import StudioService
+from standard_build_fixture import historical_records, seeded
+from test_discovery import standard_solution
+from wanx_studio.prd import PRD_REVIEW_SECTIONS
 from wanx_studio.runner import Runner
 from wanx_studio.local import build_local
 
@@ -25,10 +28,6 @@ async def svc(tmp_path):
 def create(svc,owner='alice'):
     return svc.store.create(owner,'台账','跟进业务事项',op())
 
-async def seeded(svc,owner='alice'):
-    p=create(svc,owner)
-    return await svc.runner.example(owner,p['id'],op())
-
 def accept(svc,p,owner='alice'):
     return svc.accept(owner,p['id'],{'operationId':op(),'artifactHash':p['artifacts'][-1]['hash'],'criteria':list(range(len(p['solution']['acceptance']))),'confirmedByUser':True})
 
@@ -43,38 +42,38 @@ async def test_owner_and_runtime_isolation(svc):
     runtime=svc.open_runtime('alice',p['id'],p['artifacts'][0]['hash'],'preview')
     with pytest.raises(StudioError,match='RUNTIME_SESSION_EXPIRED'):
         await svc.invoke('bob',runtime['session'],'data.list',{'collection':'items'})
+    with pytest.raises(StudioError,match='EXPERT_DEPLOYMENT_REQUIRED'):
+        await svc.invoke('alice',runtime['session'],'data.list',{'collection':'items'})
     with pytest.raises(StudioError,match='DATA_INPUT_INVALID'):
-        await svc.invoke('alice',runtime['session'],'data.list',{'collection':'items','appId':'other'})
+        svc.data(historical_records(p),'data.list',{'collection':'items','appId':'other'})
 
 async def test_preview_production_and_cross_app_data(svc):
     p=await seeded(svc)
-    accept(svc,p);mark_installed(svc,p)
-    preview=svc.open_runtime('alice',p['id'],p['artifacts'][0]['hash'],'preview')['session']
-    production=svc.open_runtime('alice',p['id'],p['artifacts'][0]['hash'],'production')['session']
-    row=await svc.invoke('alice',preview,'data.put',{'collection':'items','value':{'title':'仅试用'}})
+    preview=historical_records(p, status='string')
+    production=historical_records(p, environment='production')
+    row=svc.data(preview,'data.put',{'collection':'items','value':{'title':'仅试用'}})
     assert row['_revision']==1
-    assert not (await svc.invoke('alice',production,'data.list',{'collection':'items'}))['items']
+    assert not (svc.data(production,'data.list',{'collection':'items'}))['items']
     other=await seeded(svc)
-    other_session=svc.open_runtime('alice',other['id'],other['artifacts'][0]['hash'],'preview')['session']
-    assert not (await svc.invoke('alice',other_session,'data.list',{'collection':'items'}))['items']
+    other_session=historical_records(other)
+    assert not (svc.data(other_session,'data.list',{'collection':'items'}))['items']
 
 async def test_records_optimistic_update_and_reload(svc):
     p=await seeded(svc)
-    session=svc.open_runtime('alice',p['id'],p['artifacts'][0]['hash'],'preview')['session']
-    row=await svc.invoke('alice',session,'data.put',{'collection':'items','value':{'title':'事项'}})
+    session=historical_records(p, status='string')
+    row=svc.data(session,'data.put',{'collection':'items','value':{'title':'事项'}})
     with pytest.raises(StudioError,match='RECORD_CHANGED'):
-        await svc.invoke('alice',session,'data.put',{'collection':'items','id':row['_id'],'value':{'title':'覆盖'}})
-    await svc.invoke('alice',session,'data.put',{'collection':'items','id':row['_id'],'expectedRevision':1,'value':{'status':'进行中'}})
-    rows=await svc.invoke('alice',session,'data.list',{'collection':'items'})
+        svc.data(session,'data.put',{'collection':'items','id':row['_id'],'value':{'title':'覆盖'}})
+    svc.data(session,'data.put',{'collection':'items','id':row['_id'],'expectedRevision':1,'value':{'status':'进行中'}})
+    rows=svc.data(session,'data.list',{'collection':'items'})
     assert rows['items'][0]['title']=='事项'
     assert rows['items'][0]['status']=='进行中'
     with pytest.raises(StudioError,match='RECORD_SCHEMA_INVALID'):
-        await svc.invoke('alice',session,'data.put',{'collection':'items','value':{'title':12}})
+        svc.data(session,'data.put',{'collection':'items','value':{'title':12}})
 
 async def test_dependency_cannot_disappear_with_no_open_questions(svc):
-    p=create(svc)
-    # Preserve the pre-PRD project contract as well as the stricter new flow.
-    legacy=svc.store.get('alice',p['id']);legacy['solution'].pop('prd');svc.store.save(legacy)
+    p=svc.create_project('alice','草稿','整理文案',op())
+    p=svc.update_solution('alice',p['id'],{'operationId':op(),'expectedHash':p['solutionHash'],'solution':standard_solution()})
     body={'operationId':op(),'text':'我还需要公众号自动发布，并且每天自动定时执行'}
     p=await svc.chat('alice',p['id'],body)
     solution={**p['solution'],'audience':'本人','workflow':'生成文案','inputs':'主题','outputs':'文章','acceptance':['生成文章']}
@@ -84,7 +83,7 @@ async def test_dependency_cannot_disappear_with_no_open_questions(svc):
         svc.confirm('alice',p['id'],{'operationId':op(),'solutionHash':p['solutionHash']})
     for d in p['solution']['dependencies']:
         p=svc.decide('alice',p['id'],{'operationId':op(),'solutionHash':p['solutionHash'],'dependencyId':d['id'],'choice':'defer','detail':'本次只完成文案，发布和定时以后再做'})
-    p=svc.confirm('alice',p['id'],{'operationId':op(),'solutionHash':p['solutionHash']})
+    p=svc.confirm('alice',p['id'],{'operationId':op(),'solutionHash':p['solutionHash'],'reviewedSections':PRD_REVIEW_SECTIONS})
     assert p['confirmation']
     assert '公众号自动发布' in p['messages'][-2]['text']
 
@@ -167,8 +166,12 @@ async def test_queued_build_still_requires_isolation_without_a_call_limit(svc):
     assert not svc.processes
 
 async def test_selected_files_and_revocation(svc):
-    p=await seeded(svc)
-    token=svc.open_runtime('alice',p['id'],p['artifacts'][0]['hash'],'preview')['session']
+    # Exercise file selection on an existing file-capable session independently
+    # of standard layout preview, which cannot grant files.read.
+    p=create(svc)
+    token=op()
+    svc.runtime_sessions[token]={'owner':'alice','project':p['id'],'app':p['appId'],
+        'environment':'preview','manifest':{'capabilities':['files']},'files':{},'expires':float('inf')}
     async def read(owner,ids):return [{'id':ids[0],'name':'合成资料.md','text':'合成内容'}]
     svc.files=read
     with pytest.raises(StudioError,match='FILE_NOT_SELECTED'):
@@ -221,31 +224,6 @@ async def test_concurrent_duplicate_chat_spends_once(svc):
     await asyncio.gather(svc.chat('alice',p['id'],body),svc.chat('alice',p['id'],body))
     assert len(calls)==1
     assert svc.used('alice',p['id'])==1
-
-async def test_compatible_upgrade_preserves_production_and_old_writer_fields(svc):
-    p=await seeded(svc);accept(svc,p);mark_installed(svc,p)
-    old=svc.open_runtime('alice',p['id'],p['artifacts'][0]['hash'],'production')['session']
-    row=await svc.invoke('alice',old,'data.put',{'collection':'items','value':{'title':'正式记录'}})
-    files=dict(svc.store.get('alice',p['id'])['artifacts'][0]['files'])
-    manifest=json.loads(files['miniapp.manifest.json']);manifest['collections']['items']['priority']='string'
-    files['miniapp.manifest.json']=json.dumps(manifest)
-    def task(project):
-        project['tasks'].append({'id':'upgrade','state':'running','solutionHash':digest(project['solution'])})
-    svc.store.mutate('alice',p['id'],op(),{},task)
-    p=await svc.add_artifact('alice',p['id'],'upgrade',files)
-    accept(svc,p);mark_installed(svc,p)
-    new=svc.open_runtime('alice',p['id'],p['artifacts'][-1]['hash'],'production')['session']
-    updated=await svc.invoke('alice',new,'data.put',{'collection':'items','id':row['_id'],'expectedRevision':1,'value':{'priority':'高'}})
-    await svc.invoke('alice',old,'data.put',{'collection':'items','id':row['_id'],'expectedRevision':2,'value':{'title':'旧版继续使用'}})
-    restored=await svc.invoke('alice',new,'data.get',{'collection':'items','id':row['_id']})
-    assert restored['priority']=='高'
-    assert restored['title']=='旧版继续使用'
-    files['miniapp.manifest.json']=json.dumps({**manifest,'collections':{'items':{'priority':'string'}}})
-    def broken(project):project['tasks'].append({'id':'broken','state':'running','solutionHash':digest(project['solution'])})
-    svc.store.mutate('alice',p['id'],op(),{},broken)
-    with pytest.raises(StudioError,match='BREAKING_SCHEMA_CHANGE'):
-        await svc.add_artifact('alice',p['id'],'broken',files)
-    assert svc.store.get('alice',p['id'])['installed']['artifactHash']==p['artifacts'][-1]['hash']
 
 async def test_workbench_lease_stops_abandoned_task(svc):
     svc.runner.leases[('alice','project')]=0

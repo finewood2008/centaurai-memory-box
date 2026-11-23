@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # Decision types understood by langchain's HumanInTheLoopMiddleware.
 _DECISION_TYPES: frozenset[str] = frozenset({"approve", "edit", "reject", "respond"})
@@ -18,6 +18,17 @@ class HitlSessionPolicyBody(BaseModel):
 
     mode: Literal["ask", "allow_all", "allow_tools"] = "ask"
     tools: list[str] = Field(default_factory=list)
+
+
+class ZhijunReference(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    source: Literal["space", "starlink", "memmy"]
+    title: str = Field(min_length=1, max_length=180)
+    text: str = Field(min_length=1, max_length=650)
+    file_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
+    warehouse_id: str | None = Field(default=None, pattern=r"^[a-f0-9-]{36}$")
+    evidence_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,128}$")
 
 
 class ChatTurnBody(BaseModel):
@@ -62,6 +73,13 @@ class ChatTurnBody(BaseModel):
         default=None,
         description="Turn permission mode: ask (read-only), plan (write plans/*.md), craft (default).",
     )
+    assistant_persona: Literal["zhijun"] | None = Field(
+        default=None,
+        description="Optional MemoBox conversational persona for the owner's private assistant.",
+    )
+    zhijun_references: list[ZhijunReference] = Field(default_factory=list, max_length=9)
+    zhijun_memory: bool | None = None
+    zhijun_agent_only: bool = False
     hitl_policy: HitlSessionPolicyBody | None = Field(
         default=None,
         description="Thread-scoped tool-approval bypass for this turn (does not change global HITL).",
@@ -111,6 +129,10 @@ class ChatTurnBody(BaseModel):
             conversation_mode=payload.get("conversation_mode")
             if payload.get("conversation_mode") in ("ask", "plan", "craft")
             else None,
+            assistant_persona=payload.get("assistant_persona"),
+            zhijun_references=payload.get("zhijun_references", []),
+            zhijun_memory=payload.get("zhijun_memory"),
+            zhijun_agent_only=payload.get("zhijun_agent_only", False),
             hitl_policy=payload.get("hitl_policy")
             if isinstance(payload.get("hitl_policy"), dict)
             else None,
@@ -135,6 +157,10 @@ class UserTurnWsFrame(BaseModel):
     reasoning_mode: Literal["auto", "enabled", "disabled"] | None = None
     reasoning_effort: str | None = None
     conversation_mode: Literal["ask", "plan", "craft"] | None = None
+    assistant_persona: Literal["zhijun"] | None = None
+    zhijun_references: list[ZhijunReference] = Field(default_factory=list, max_length=9)
+    zhijun_memory: bool | None = None
+    zhijun_agent_only: bool = False
     hitl_policy: HitlSessionPolicyBody | None = None
     mcp_servers: list[str] | None = None
     knowledge_base_ids: list[str] | None = None

@@ -89,6 +89,12 @@ async def test_success_keeps_usage_budget_and_cleanup(model):
     model.close.assert_awaited_once()
 
 
+async def test_brackets_inside_json_strings_do_not_count_toward_nesting_limit(model):
+    value = {"entities": [{"confidence": 0.5, "text": '"' + "[{" * 200 + "\\"}]}
+    model.reply.content = json.dumps(value)
+    assert json.loads((await generate())["text"]) == value
+
+
 async def test_upstream_failure_is_not_relabelled(model):
     model.mock.ainvoke.side_effect = httpx.ReadTimeout("PRIVATE")
     with pytest.raises(httpx.ReadTimeout):
@@ -96,7 +102,24 @@ async def test_upstream_failure_is_not_relabelled(model):
     model.close.assert_awaited_once()
 
 
+async def test_native_billing_failure_keeps_safe_status_without_provider_body(model, caplog):
+    request = httpx.Request("POST", "https://synthetic.invalid")
+    response = httpx.Response(402, request=request, text="PRIVATE_PROVIDER_BODY")
+    model.mock.ainvoke.side_effect = httpx.HTTPStatusError("PRIVATE_PROVIDER_BODY", request=request, response=response)
+    with pytest.raises(SemanticaError) as caught:
+        await generate()
+    error = caught.value
+    assert (error.status, error.code) == (402, "MODEL_BILLING_REQUIRED")
+    assert error.message is None
+    models._log_model_failure(error, "synthetic-job", "synthetic-nonce")
+    event = json.loads(caplog.records[-1].getMessage())
+    assert (event["upstreamStatus"], event["publicCode"]) == (402, "MODEL_BILLING_REQUIRED")
+    assert "PRIVATE_PROVIDER_BODY" not in caplog.text
+    model.close.assert_awaited_once()
+
+
 @pytest.mark.parametrize("status,code,include", [(502, "MODEL_INVALID_OUTPUT", True),
+                                               (402, "MODEL_BILLING_REQUIRED", False),
                                                (403, "MODEL_AUTH_REQUIRED", False)])
 async def test_native_http_returns_sanitized_diagnostic(monkeypatch, status, code, include):
     error = SemanticaError(code, status)

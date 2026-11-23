@@ -28,7 +28,8 @@ vendor_one() {
   uv export --project "$REPO_ROOT" --frozen --no-dev --no-emit-project --no-editable --no-hashes -o "$req_file" >/dev/null
 
   override_file="$(write_green_overrides "$plat" || true)"
-  local extra=()
+  # Bash 3.2 treats an empty array as unset under nounset.
+  local extra=( -r "$req_file" )
   if [[ -n "$override_file" ]]; then
     extra+=( --overrides "$override_file" )
   fi
@@ -43,8 +44,7 @@ vendor_one() {
     --python-platform "$pyplat" \
     --python-version 3.12 \
     --only-binary cryptography \
-    "${extra[@]}" \
-    -r "$req_file"
+    "${extra[@]}"
 
   echo "[wheels] ${plat}: done ($(find "$wheel_dir" -maxdepth 1 -type f -name '*.whl' | wc -l | tr -d ' ') wheels)"
 }

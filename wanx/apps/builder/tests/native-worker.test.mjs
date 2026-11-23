@@ -4,10 +4,13 @@ import {spawn} from 'node:child_process';
 import readline from 'node:readline';
 import path from 'node:path';
 import os from 'node:os';
-import {mkdtemp,readFile,writeFile,rm,readdir} from 'node:fs/promises';
+import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises';
 import {stopGroup} from '../dsh/sandbox.mjs';
 const root=path.resolve('.');
-async function files(){const result={};for(const name of ['miniapp.manifest.json','src/app.js','src/styles.css']){try{result[name]=await readFile('examples/ledger/'+name,'utf8')}catch{}}return result}
+const files = {
+ 'app/host.html': '<main>Worker test</main><script type="module" src="host.mjs"></script>',
+ 'app/host.mjs': 'document.querySelector("main").textContent = "Worker test";',
+};
 async function worker(t,terminal){
  const dir=await mkdtemp(path.join(os.tmpdir(),'wanx-native-worker-')),python=path.join(dir,'terminal');
  await writeFile(python,'#!/usr/bin/env node\n'+(terminal==='slow'?'process.stdin.resume();setInterval(()=>{},10000)':'process.exit(1)'),{mode:0o700});
@@ -20,15 +23,15 @@ async function worker(t,terminal){
 test('two builds reuse native process/session; failed terminal does not fail delivery',async t=>{
  const w=await worker(t,'failed');let session;
  for(let i=0;i<2;i++){
-  const taskRoot=path.join(w.dir,'task-'+i);await import('node:fs/promises').then(x=>x.mkdir(taskRoot));
-  w.proc.stdin.write(JSON.stringify({taskRoot,scope:'same-project',sessionId:session,files:await files(),material:{marker:i},authorizeTools:true})+'\n');
+  const taskRoot=path.join(w.dir,'task-'+i);await mkdir(taskRoot);
+  w.proc.stdin.write(JSON.stringify({taskRoot,scope:'same-project',sessionId:session,devKit:true,files,material:{marker:i},authorizeTools:true})+'\n');
   let result=false,reused=false,warning=false;
   for(;;){const {value,done}=await w.lines.next();assert.equal(done,false);const e=JSON.parse(value);
    if(e.type==='authorize')w.proc.stdin.write(JSON.stringify({id:e.id,result:true})+'\n');
    if(e.type==='session'){if(i)assert.equal(e.sessionId,session);session=e.sessionId;reused=e.reused}
    if(e.type==='failed')assert.fail(e.code);
    if(e.type==='status'&&e.text.includes('暂不可用'))warning=true;
-   if(e.type==='result'){result=true;assert.deepEqual(e.files,await files())}
+   if(e.type==='result'){result=true;assert.deepEqual(e.files,files)}
    if(e.type==='idle')break;
   }
   assert.ok(result&&warning);assert.equal(reused,i===1);assert.equal(w.proc.exitCode,null);
@@ -37,7 +40,7 @@ test('two builds reuse native process/session; failed terminal does not fail del
 
 test('slow terminal never blocks the model turn or first tool, and cancellation reaps worker',async t=>{
  const w=await worker(t,'slow');
- w.proc.stdin.write(JSON.stringify({taskRoot:w.dir,files:await files(),material:{},authorizeTools:true})+'\n');
+ w.proc.stdin.write(JSON.stringify({taskRoot:w.dir,devKit:true,files,material:{},authorizeTools:true})+'\n');
  let attached=false,message=false,tool=false;
  const deadline=setTimeout(()=>w.proc.kill('SIGTERM'),8000);
  try{

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,open,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
-import {createPersonalSpace,MAX_UPLOAD_BYTES} from '../shell/personal-space.mjs';
+import {createPersonalSpace,MAX_UPLOAD_BYTES} from '../build/app/shell/personal-space.mjs';
 async function fixture(t){
  const root=await mkdtemp(path.join(tmpdir(),'wanx-limits-'));let chosen=[],saved=[],writes=0;
  const requests=[],events=[],state={phase:'ready',account:{phase:'authenticated',accountId:'owner'},connection:{deviceId:'box'}};

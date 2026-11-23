@@ -146,7 +146,8 @@ function localControl({chosen = "/trusted/application.zip", confirm = true} = {}
     selectApplicationArchive:async()=>{calls.push(["picker"]);return chosen},
     confirmLocalApplicationArchive:async file=>{calls.push(["confirm",file]);return confirm},
     applications:{install:async input=>calls.push(["install",input]),
-      uninstall:id=>calls.push(["uninstall",id]), rollback:id=>calls.push(["rollback",id]),
+      uninstall:()=>assert.fail("local removal must use its dedicated entry"),
+      uninstallLocal:id=>calls.push(["uninstall-local",id]), rollback:id=>calls.push(["rollback",id]),
       launch:()=>assert.fail("installation must not auto-launch")}});
   return {calls,invoke:(name,input,event={sender:webContents,senderFrame:frame})=>handlers.get("wanx-client:"+name)(event,input)};
 }
@@ -165,5 +166,5 @@ for(const options of [{chosen:null},{confirm:false}])test("cancelling native loc
 });
 test("local version management uses the installer independently of the cloud market",()=>{
   const h=localControl();h.invoke("applications-local-uninstall",{applicationId:"test.zip"});h.invoke("applications-local-rollback",{applicationId:"test.zip"});
-  assert.deepEqual(h.calls,[["uninstall","test.zip"],["rollback","test.zip"]]);
+  assert.deepEqual(h.calls,[["uninstall-local","test.zip"],["rollback","test.zip"]]);
 });

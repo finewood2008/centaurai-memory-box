@@ -39,10 +39,12 @@ test('old installation needs explicit confirmation; confirmed repair coalesces a
     return true;
   });
   assert.equal(await f.config.isConfigured(), false);
-  await Promise.all([f.config.ensure(), f.config.ensure()]);
+  assert.deepEqual(await Promise.all([f.config.ensure(), f.config.ensure()]), [
+    {configurationChanged: true}, {configurationChanged: true},
+  ]);
   assert.equal(prompts, 1); assert.equal(f.writes, 1);
   assert.equal(await f.config.isConfigured(), true);
-  await f.config.ensure(); assert.equal(f.writes, 1);
+  assert.deepEqual(await f.config.ensure(), {configurationChanged: false}); assert.equal(f.writes, 1);
 });
 
 test('missing confirmation, cancel, foreign transports and disabled bridges never write', async () => {

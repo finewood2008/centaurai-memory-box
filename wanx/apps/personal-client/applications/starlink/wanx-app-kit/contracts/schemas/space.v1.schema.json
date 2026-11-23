@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wanx-personal-space/1",
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-f0-9]{32}$"},
+    "digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "entry": {"type": "object", "required": ["space_id", "id", "parent", "name", "kind", "size", "modified", "trashed", "digest", "version", "previous_size", "previous_digest"], "properties": {"space_id": {"type": "string"}, "id": {"$ref": "#/$defs/id"}, "parent": {"type": "string"}, "name": {"type": "string"}, "kind": {"enum": ["file", "folder"]}, "size": {"type": "integer", "minimum": 0}, "modified": {"type": "number"}, "trashed": {"type": ["number", "null"]}, "digest": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"}, "version": {"type": "integer", "minimum": 1}, "previous_size": {"type": "integer", "minimum": 0}, "previous_digest": {"type": ["string", "null"]}}, "additionalProperties": false},
+    "upload": {"type": "object", "required": ["id", "parent", "name", "size", "offset", "state", "modified"], "properties": {"id": {"$ref": "#/$defs/id"}, "parent": {"type": "string"}, "name": {"type": "string"}, "size": {"type": "integer", "minimum": 0}, "offset": {"type": "integer", "minimum": 0}, "state": {"type": "string"}, "modified": {"type": "number"}}, "additionalProperties": false},
+    "error": {"type": "object", "properties": {"detail": {"oneOf": [{"type": "string"}, {"type": "object", "required": ["code"], "properties": {"code": {"type": "string"}, "message": {"type": "string"}}, "additionalProperties": false}]}, "code": {"type": "string"}}, "additionalProperties": true}
+  }
+}

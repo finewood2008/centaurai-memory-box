@@ -20,8 +20,9 @@ from urllib.parse import urlsplit
 import httpx
 
 from .client import SemanticaClient, SemanticaError
-from .desktop import strict_json
+from .desktop import parse_model_output
 from .model_budget import InvalidModelOutputLimit, output_budget, truncated
+from .model_options import inference_options, thinking_overrides
 from .output_diagnostics import (
     diagnostic,
     safe_output_metadata,
@@ -66,12 +67,24 @@ def _invalid_output(kind, *, validator=None):
     return error
 
 
+def _provider_status(error: BaseException) -> int | None:
+    if isinstance(error, httpx.HTTPStatusError):
+        status = error.response.status_code
+    elif type(error).__module__ in {"openai", "openai._exceptions"} and any(
+        base.__name__ == "APIStatusError" for base in type(error).__mro__
+    ):
+        status = getattr(error, "status_code", None)
+    else:
+        return None
+    return status if type(status) is int and 100 <= status <= 599 else None
+
+
 def _log_model_failure(error: Exception, job_id: str | None, nonce: str) -> None:
     """Log only authorized correlation hashes and closed failure metadata."""
     category, status = "unknown", None
     public = (
-        "MODEL_INVALID_OUTPUT"
-        if isinstance(error, SemanticaError) and error.code == "MODEL_INVALID_OUTPUT"
+        error.code
+        if isinstance(error, SemanticaError) and error.code in {"MODEL_INVALID_OUTPUT", "MODEL_BILLING_REQUIRED"}
         else "MODEL_CALL_FAILED"
     )
     if public == "MODEL_INVALID_OUTPUT":
@@ -83,14 +96,7 @@ def _log_model_failure(error: Exception, job_id: str | None, nonce: str) -> None
             break
         seen.add(id(cause))
         sdk = type(cause).__module__ in {"openai", "openai._exceptions"}
-        if isinstance(cause, httpx.HTTPStatusError):
-            candidate: object = cause.response.status_code
-            if type(candidate) is int and 100 <= candidate <= 599:
-                status = candidate
-        elif sdk and any(base.__name__ == "APIStatusError" for base in type(cause).__mro__):
-            candidate = getattr(cause, "status_code", None)
-            if type(candidate) is int and 100 <= candidate <= 599:
-                status = candidate
+        status = _provider_status(cause)
         if status is not None:
             category = "upstream_http"
             break
@@ -146,43 +152,12 @@ def _local(url: str | None) -> bool:
 
 
 def _inference_options(body: dict[str, Any]) -> dict[str, str]:
-    options = body.get("inference_options", {})
-    if (
-        not isinstance(options, dict)
-        or set(options) - {"thinking_mode"}
-        or options.get("thinking_mode", "auto") not in ("auto", "on", "off")
-    ):
-        raise SemanticaError("MODEL_OPTIONS_INVALID", 422)
-    return {"thinking_mode": options.get("thinking_mode", "auto")}
+    return inference_options(body, error=SemanticaError)
 
 
 def _thinking_overrides(row: Any, selection: dict[str, Any], mode: str) -> dict[str, Any]:
-    if mode == "auto":
-        return {}
-    capability = selection.get("reasoning_config")
-    if not capability or (mode == "off" and not capability.get("toggle", False)):
-        raise SemanticaError("MODEL_THINKING_UNSUPPORTED", 422)
-    if _local(row.base_url) and (row.kind == "ollama" or ":11434" in (row.base_url or "")):
-        return {
-            "extra_body": {"think": mode == "on"},
-            "model_fields": {"reasoning_effort": "high" if mode == "on" else "none"},
-        }
-    effort = None
-    if mode == "on" and capability.get("adapter") == "openai_reasoning_effort":
-        effort = capability.get("default_effort")
-        if not effort or effort == "none":
-            effort = next(
-                (value for value in capability.get("efforts", []) if value != "none"), None
-            )
-        if not effort:
-            raise SemanticaError("MODEL_THINKING_UNSUPPORTED", 422)
-    # Avoid inheriting an effort while explicitly disabling thinking.
-    capability = {**capability, "default_effort": None} if mode == "off" else capability
-    return dict(
-        reasoning_request_parameters(
-            capability, mode="enabled" if mode == "on" else "disabled", effort=effort
-        )
-    )
+    return thinking_overrides(row, selection, mode,
+                              builder=reasoning_request_parameters, error=SemanticaError)
 
 
 def _thinking_modes(row: Any, entry: dict[str, Any]) -> list[str]:
@@ -312,7 +287,7 @@ async def _generate(
         if cleaned.startswith("```"):
             cleaned = cleaned.partition("\n")[2].rsplit("```", 1)[0].strip()
         try:
-            value = strict_json(cleaned)
+            value = parse_model_output(cleaned)
         except ValueError as exc:
             if isinstance(exc, json.JSONDecodeError):
                 metadata["json_error_position"] = exc.pos
@@ -340,6 +315,10 @@ async def _generate(
         error = _invalid_output("invalid_response")
         error.output_metadata = safe_output_metadata(metadata)
         raise error from exc
+    except Exception as exc:
+        if _provider_status(exc) == 402:
+            raise SemanticaError("MODEL_BILLING_REQUIRED", 402) from exc
+        raise
     finally:
         await aclose_session_http_clients(model)
 

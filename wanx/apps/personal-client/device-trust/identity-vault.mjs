@@ -1,6 +1,7 @@
 import { constants, closeSync, fsyncSync, linkSync, openSync, renameSync, unlinkSync } from 'node:fs';
 import { lstat, mkdir, open, unlink } from 'node:fs/promises';
 import path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import {
   createCipheriv, createDecipheriv, createHash, createPrivateKey, createPublicKey,
   generateKeyPairSync, randomBytes, randomUUID, scrypt,
@@ -27,6 +28,7 @@ const KDF_OPTIONS = Object.freeze({ N: 131072, r: 8, p: 1, maxmem: 192 * 1024 * 
 const MAX_STATE = 256 * 1024;
 const MAX_FILE = MAX_STATE * 2;
 const ACCESS_LIFETIME_MS = 15 * 60 * 1000;
+const WINDOWS_REPLACE_DELAYS = [50, 100, 200, 400];
 const PROTECTION = 'software-passphrase-v1';
 const INITIAL_STATE = { schemaVersion: 1, boxes: {} };
 let kdfQueue = Promise.resolve();
@@ -296,7 +298,20 @@ export function createIdentityVault({ directory, clock = Date.now, protectDirect
       // The check and atomic commit share one synchronous turn. A queued lock
       // cannot intervene after the check and before the filesystem commit.
       if (creating) { linkSync(temporary, file); unlinkSync(temporary); }
-      else renameSync(temporary, file);
+      else {
+        for (let retry = 0; ; retry++) {
+          try { renameSync(temporary, file); break; }
+          catch (error) {
+            if (process.platform !== 'win32' || retry >= WINDOWS_REPLACE_DELAYS.length ||
+                !['EPERM', 'EBUSY', 'EACCES'].includes(error.code)) throw error;
+            await delay(WINDOWS_REPLACE_DELAYS[retry]);
+            check(expected, guard);
+            const current = await readDisk();
+            check(expected, guard);
+            requireCondition(current && current.hash === fingerprint, current ? 'STATE_CONFLICT' : 'MISSING');
+          }
+        }
+      }
       if (process.platform !== 'win32') {
         const parent = openSync(root, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
         try { fsyncSync(parent); } finally { closeSync(parent); }

@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wanx-memory-page/1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "items"
+  ],
+  "properties": {
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "candidate_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "assertion": {
+            "type": "string"
+          },
+          "verbatim_quote": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "quote_event_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "candidate_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "confidence": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "importance": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "number",
+              "null"
+            ]
+          },
+          "occurred_at": {
+            "type": [
+              "string",
+              "number",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "total": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "offset": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1
+    }
+  }
+}

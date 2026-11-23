@@ -1,7 +1,6 @@
 """Route verified releases and runtime slots to their installed box profile."""
 from .adapters import Blocked
 from .expert_profile import PROFILE as EXPERT_PROFILE
-from .miniapp_profile import PROFILE as MINIAPP_PROFILE
 from ..contracts import StudioError
 
 
@@ -14,19 +13,18 @@ class DeploymentProfiles:
 
     @property
     def available(self):
-        return self.miniapp.available or self.expert.available
+        return self.expert.available
 
     def release_profile(self, bundle):
         profile=bundle.get('runtimeRequirements',{}).get('runtimeRef',{}).get('id') if bundle else None
         if profile==EXPERT_PROFILE:return self.expert
-        if profile==MINIAPP_PROFILE:return self.miniapp
         raise Blocked('RUNTIME_INCOMPATIBLE')
 
     def operation_profile(self, operation, bundle=None):
         if bundle:return self.release_profile(bundle)
         ref=operation['request'].get('decisionRef',{}).get('id')
         if ref and self.expert.get('preparation',ref):return self.expert
-        return self.miniapp
+        raise Blocked('RUNTIME_INCOMPATIBLE')
 
     async def authorize(self, owner, target, action):
         # A target check grants no profile execution. Release provenance and the
@@ -51,22 +49,6 @@ class DeploymentProfiles:
         # an editor session or an available miniapp execution profile.
         return await self.miniapp.deliver(receipt)
 
-    def context(self, owner, project_id):
-        return self.miniapp.context(owner,project_id)
-
-    async def prepare(self, owner, project_id, body):
-        # Existing project deployments cannot take over a directory-owned slot.
-        self.miniapp.authorize_owner(owner)
-        if not isinstance(body,dict):raise StudioError('DEPLOYMENT_PREPARATION_INVALID',422)
-        p=self.miniapp.svc.store.get(owner,project_id)
-        target=self.miniapp.target_for(owner,p['appId'],body.get('environment'))
-        if self.expert.get('binding',self.expert.slot_key(owner,target)):
-            raise StudioError('RUNTIME_INCOMPATIBLE',409)
-        return await self.miniapp.prepare(owner,project_id,body)
-
-    async def submit(self, owner, project_id, body):
-        return await self.miniapp.submit(owner,project_id,body)
-
     def find_binding(self, owner, slot):
         matches=[p.find_binding(owner,slot) for p in (self.miniapp,self.expert)]
         matches=[value for value in matches if value is not None]
@@ -79,7 +61,7 @@ class DeploymentProfiles:
     def slot_profile(self, owner, slot):
         self.find_binding(owner,slot)
         if self.expert.find_binding(owner,slot):return self.expert
-        return self.miniapp
+        raise StudioError('STANDARD_DEPLOYMENT_REQUIRED',409)
 
     def assert_runtime(self, session):
         if session.get('deploymentSlot'):

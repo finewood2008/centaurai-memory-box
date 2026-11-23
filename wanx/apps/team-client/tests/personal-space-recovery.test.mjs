@@ -4,7 +4,7 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { createPersonalSpace } from '../shell/personal-space.mjs';
+import { createPersonalSpace } from '../build/app/shell/personal-space.mjs';
 const hash = b => createHash('sha256').update(b).digest('hex');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const wait = async predicate => { for (let i = 0; i < 500; i++) { if (predicate()) return; await sleep(10); } throw Error('timed out'); };

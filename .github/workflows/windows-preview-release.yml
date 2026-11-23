@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Preview version matching client base, e.g. 1.0.6-windows-preview.2'
+        description: 'Preview version matching the client base version'
         required: true
-        default: 1.0.6-windows-preview.2
+        default: 1.5.2-windows-preview.1
         type: string
 
 permissions:
@@ -61,7 +61,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ steps.cache_paths.outputs.npm }}
-          key: ${{ runner.os }}-${{ runner.arch }}-memobox-npm-node22-v1-${{ hashFiles('memory/package-lock.json', 'wanx/apps/builder/package-lock.json', 'wanx/octop/dashboard/package-lock.json', 'wanx/apps/personal-client/package-lock.json') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-memobox-npm-node22-v1-${{ hashFiles('memory/package-lock.json', 'wanx/apps/builder/package-lock.json', 'wanx/apps/starlink/frontend/package-lock.json', 'wanx/octop/dashboard/package-lock.json', 'wanx/apps/personal-client/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-memobox-npm-node22-v1-
       - name: Restore Go modules and build cache
@@ -85,6 +85,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Memory dependency installation failed' }
           npm ci --prefix wanx/apps/builder --registry=https://registry.npmjs.org --replace-registry-host=registry.npmmirror.com --no-audit --no-fund
           if ($LASTEXITCODE -ne 0) { throw 'Builder dependency installation failed' }
+          npm ci --prefix wanx/apps/starlink/frontend --registry=https://registry.npmjs.org --replace-registry-host=registry.npmmirror.com --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'Starlink dependency installation failed' }
           npm ci --prefix wanx/octop/dashboard --registry=https://registry.npmjs.org --replace-registry-host=registry.npmmirror.com --no-audit --no-fund
           if ($LASTEXITCODE -ne 0) { throw 'Dashboard dependency installation failed' }
           npm ci --prefix wanx/apps/personal-client --registry=https://registry.npmjs.org --replace-registry-host=registry.npmmirror.com --no-audit --no-fund
@@ -105,8 +107,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Desktop interface build failed' }
       - name: Build branded client workspaces and native helpers
         run: |
-          npm --prefix wanx/apps/personal-client run build:memory
-          if ($LASTEXITCODE -ne 0) { throw 'My AI frontend build failed' }
+          npm --prefix wanx/apps/personal-client run build:studio
+          if ($LASTEXITCODE -ne 0) { throw 'Desktop and Starlink assembly failed' }
+          # The package step stages and verifies the engine and the API.
+          $env:MEMMY_RUNTIME_CONFIG_PATH = Join-Path $env:RUNNER_TEMP 'memobox-build-only-runtime.json'
+          try {
+            npm --prefix wanx/apps/personal-client run build:memory
+            if ($LASTEXITCODE -ne 0) { throw 'Memory frontend build failed' }
+          } finally {
+            Remove-Item Env:MEMMY_RUNTIME_CONFIG_PATH
+          }
           npm --prefix wanx/apps/personal-client run build:renderer
           if ($LASTEXITCODE -ne 0) { throw 'Client renderer build failed' }
           npm --prefix wanx/apps/personal-client run build:maintenance
@@ -122,6 +132,12 @@ jobs:
         run: |
           node --test tests/space-annotation-workbench-ui.test.mjs tests/space-annotations-batch.test.mjs tests/annotation-workbench-integration.test.mjs tests/space-annotations-preload.test.mjs tests/codex-context-config.test.mjs tests/codex-context-repair.test.mjs tests/my-ai-scoped-access.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Client contract validation failed' }
+      - name: Validate Starlink reading and warehouse scope
+        run: |
+          node --test wanx/apps/starlink/tests/onboarding-scope-editor.test.mjs wanx/apps/starlink/tests/material-import.test.mjs wanx/apps/starlink/tests/graph-exploration-tools.test.mjs wanx/apps/personal-client/tests/starlink-space-annotations.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Starlink workspace validation failed' }
+          node --test --test-name-pattern='^personal' wanx/apps/personal-client/tests/starlink-workbench-gateway.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Starlink validation failed' }
       - name: Validate mixed local collection and per-device backups
         working-directory: wanx/apps/personal-client
         run: |

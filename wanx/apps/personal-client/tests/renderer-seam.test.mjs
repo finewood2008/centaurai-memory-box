@@ -12,13 +12,13 @@ import { installElectronBluetoothPicker } from "@nexusaos/device-discovery-elect
 import { registerControlActions } from "../shell/control.mjs";
 import { BOX_SESSION_ERROR_CODES } from "../octop/platform.mjs";
 
-const indexURL = new URL("../local-ui/renderer/index.html", import.meta.url);
+const indexURL = new URL("../build/app/local-ui/renderer/index.html", import.meta.url);
 const html = await readFile(indexURL, "utf8");
 const rendererScripts = [...html.matchAll(/<script src="([^"]+)"><\/script>/g)]
   .map(match => match[1]).filter(src => !["./device-setup.bundle.js", "./academy-drawer.js"].includes(src));
 const source = (await Promise.all(rendererScripts.map(src => readFile(new URL(src, indexURL), "utf8")))).join("\n");
 const preload = await readFile(new URL("../local-ui/remote-preload.cjs", import.meta.url), "utf8");
-const transportBundle = await readFile(new URL("../local-ui/renderer/device-setup.bundle.js", import.meta.url), "utf8");
+const transportBundle = await readFile(new URL("../build/app/local-ui/renderer/device-setup.bundle.js", import.meta.url), "utf8");
 const application = { applicationId: "centaurai.wanx.zhijun", name: "知君", version: "0.4.3", description: "你的私人空间" };
 const devices = ["102", "103"].map((id) => ({
   deviceId: `box-${id}`, displayName: `CentuarAI-AMD-${id}`, accessState: "ready", canOpen: true,
@@ -142,7 +142,8 @@ async function harness(initial = state(), installed = [application], options = {
   };
   const applications = {
       listInstalled: async () => records,
-      uninstall: async () => { records = []; },
+      uninstall: async () => { calls.push(["ordinary-uninstall"]); records = []; },
+      uninstallLocal: async () => { calls.push(["local-uninstall-manager"]); if (options.localUninstallError) throw new Error(options.localUninstallError); records = []; },
       rollback: async () => { records = records.map(item => ({ ...item, version: "0.4.2" })); },
       selectCurrent: async (id, version) => {
         calls.push(["selected-current", id, version]);
@@ -169,7 +170,7 @@ async function harness(initial = state(), installed = [application], options = {
         release: { version: application.version },
       },
       install: async () => { const result = options.install ? await options.install() : application; records = [...records.filter((item) => item.applicationId !== result.applicationId), result]; return result; },
-      uninstall: async () => { records = []; },
+      uninstall: async () => { calls.push(["market-uninstall-manager"]); records = []; },
       rollback: async () => { records = [{ ...application, version: "0.4.2" }]; },
     },
     credits: options.credits,
@@ -181,7 +182,12 @@ async function harness(initial = state(), installed = [application], options = {
   });
   let bluetoothStatus = { status: options.bluetoothStatus || "available" }, bluetoothListener;
   const academy = { available: false, mode: null };
-  const window = { wanxAcademyCopilot: {
+  const windowEvents = new EventTarget();
+  const window = {
+    addEventListener: windowEvents.addEventListener.bind(windowEvents),
+    removeEventListener: windowEvents.removeEventListener.bind(windowEvents),
+    dispatchEvent: windowEvents.dispatchEvent.bind(windowEvents),
+    wanxAcademyCopilot: {
     async action(method, input) {
       assert.equal(method, "context");
       const context = { ...input };
@@ -240,14 +246,10 @@ async function harness(initial = state(), installed = [application], options = {
     window, setInterval() {}, clearInterval() {},
     Date, URL, crypto: globalThis.crypto,
     setTimeout, clearTimeout, TextEncoder, queueMicrotask,
-    document: { body:{dataset:{},classList:{toggle(){}},append(){}},createElement:()=>({dataset:{},setAttribute(){}}),addEventListener() {}, querySelector: (selector) => selector === "#app" ? app : selector === "#account-name" ? { value: forms.get("auth")?.values.username || "" } : null },
+    document: { body:{dataset:{},classList:{toggle(){}},append(){}},createElement:()=>({dataset:{},setAttribute(){}}),addEventListener() {}, getElementById: (id) => id === "app" ? app : null, querySelector: (selector) => selector === "#app" ? app : selector === "#account-name" ? { value: forms.get("auth")?.values.username || "" } : null },
     FormData: class { constructor(form) { return Object.entries(form.values || {}); } },
   });
   await new Promise((resolve) => setImmediate(resolve));
-  if (options.legacyApplications && rawState.account?.phase === "authenticated") {
-    listeners.get("wanx-client:navigate")({}, "applications");
-    await new Promise((resolve) => setImmediate(resolve));
-  }
   if (discoveryTest || options.setupRequest) {
     listeners.get("wanx:setup:ready")();
     await new Promise((resolve) => setImmediate(resolve));
@@ -314,17 +316,11 @@ test("login opens My AI while the network prepares, with registration available 
   assert.doesNotMatch(h.app.innerHTML, /account-1/);
 });
 
-test("memory models and budget stay in settings while My AI has a top-level tab", async () => {
+test("global settings omit memory settings while My AI and Memory keep their tabs", async () => {
   const h = await harness();
   assert.match(h.app.innerHTML, /class="memory-host" data-memory-section="my-ai"/);
   await h.click("show-settings");
-  assert.doesNotMatch(h.app.innerHTML, /来源与本机数据|data-section="sources"/);
-  for (const section of ["models", "budget"]) {
-    assert.match(h.app.innerHTML, new RegExp(`data-action="memory-settings" data-section="${section}"`));
-    await h.click("memory-settings", { section });
-    assert.match(h.app.innerHTML, new RegExp(`class="memory-host" data-memory-section="${section}"`));
-    await h.click("show-settings");
-  }
+  assert.doesNotMatch(h.app.innerHTML, /来源与本机数据|记忆模型|记忆预算|data-action="memory-settings"/);
   await h.click("show-my-ai");
   assert.match(h.app.innerHTML, /data-action="show-my-ai" aria-current="page"\s*>我的 AI<\/button>/);
   assert.match(h.app.innerHTML, /wanx-section-banner my-ai-banner/);
@@ -333,83 +329,22 @@ test("memory models and budget stay in settings while My AI has a top-level tab"
   assert.doesNotMatch(h.app.innerHTML, /个人版/);
   assert.match(h.app.innerHTML, /class="memory-host" data-memory-section="my-ai"/);
   await h.click("show-memory");
+  assert.match(h.app.innerHTML, /data-action="show-memory" aria-current="page"\s*>记忆<\/button>/);
+  assert.match(h.app.innerHTML, /wanx-section-banner memory-banner/);
+  assert.match(h.app.innerHTML, /智能体记忆.*agent memory/);
   assert.match(h.app.innerHTML, /class="memory-host" data-memory-section=""/);
 });
 
-test("a staged first installation offers continuation without claiming the app is usable", async () => {
-  const pending = { ...application, installationState: "pending", resourcePreparation: { status: "pending", code: "APPLICATION_RESOURCES_PENDING" } };
-  const h = await harness(state(), [pending], { legacyApplications: true,  candidate: async () => ({ status: "available", release: { version: application.version } }) });
-  await h.click("market-refresh");
-  assert.match(h.app.innerHTML, /应用包已下载/);
-  assert.match(h.app.innerHTML, /继续安装/);
-  assert.doesNotMatch(h.app.innerHTML, /data-action="applications-launch"/);
-  assert.match(h.app.innerHTML, /等待完成盒端准备/);
-  assert.match(h.app.innerHTML, /部分应用需连接盒子完成安装/);
-  await h.click("store-details", { applicationId: application.applicationId });
-  assert.match(h.app.innerHTML, /待安装版本/);
-  assert.match(h.app.innerHTML, /待完成盒端准备/);
-});
-
-test("a blocked candidate exposes retry and leaves the installed application's open button", async () => {
-  const next = { ...application, version: "0.5.0", installationState: "pending", resourcePreparation: { status: "blocked", code: "RESOURCE_MIGRATION_REQUIRED" } };
-  const h = await harness(state(), [{ ...application, pendingInstallation: next }], { legacyApplications: true,  candidate: async () => ({ status: "available", release: { version: next.version } }) });
-  await h.click("market-refresh");
-  assert.match(h.app.innerHTML, /v0.5.0 尚未启用，当前版本可继续使用/);
-  assert.match(h.app.innerHTML, /重试更新/);
-  assert.match(h.app.innerHTML, /data-action="applications-launch"/);
-  assert.match(h.app.innerHTML, /v0.4.3/);
-});
-
-for (const [code, message] of [
-  ["APPLICATION_START_FAILED", "应用启动失败"],
-  ["APPLICATION_START_TIMEOUT", "应用启动超时"],
-  ["RESOURCE_EXPERT_START_FAILED", "应用所需专家未能启动，请联系盒主或管理员检查模型配置和专家运行状态后重试。"],
-  ["APP_ENTITLEMENT_REQUIRED", "此账号尚未获得应用使用权限，请联系管理员启用并授权。"],
-  ["APP_AUTHORIZATION_UNVERIFIED", "应用使用权限尚未确认，请重新登录后重试，或联系盒主。"],
-  ["RESOURCE_SERVICE_NOT_CONFIGURED", "盒端应用准备服务尚未启用，请联系盒主或管理员检查盒端配置。"],
-  ["BACKEND_CONTRACT_INCOMPATIBLE", "此应用需要更新盒端服务，请联系盒主更新后再试。"],
-  ["APPLICATION_PREPARATION_UNAVAILABLE", "盒端应用准备服务暂不可用，请检查盒端服务后重试。"],
-]) {
-  test(`store surfaces ${code} and allows retry without disconnecting the box`, async () => {
-    const h = await harness(state("ready", "ready", "box-102"), [application], { legacyApplications: true });
-    h.failLaunch(code);
-    await h.click("applications-launch", { applicationId: application.applicationId });
-    assert.ok(h.app.innerHTML.includes(message));
-    if (code === "APP_AUTHORIZATION_UNVERIFIED") assert.doesNotMatch(h.app.innerHTML, /此账号尚未获得应用使用权限/);
-    assert.doesNotMatch(h.app.innerHTML, new RegExp(code));
-    assert.match(h.app.innerHTML, /data-action="applications-launch"[^>]*>打开/);
-    assert.doesNotMatch(h.app.innerHTML, /data-action="applications-launch"[^>]*disabled/);
-    await h.click("show-boxes");
-    assert.match(h.app.innerHTML, /class="current-device">CentuarAI-AMD-102/);
-  });
-}
-
-test("opening an app while disconnected asks which box to use and continues only after confirmation", async () => {
-  const h = await harness(state(), [application], { legacyApplications: true });
-  await h.click("applications-launch", { applicationId: application.applicationId });
-  assert.match(h.app.innerHTML, /连接盒子并打开应用/);
-  assert.deepEqual(h.calls.filter(([name]) => name === "scroll-pending-open"), [["scroll-pending-open", "start", "instant", "92px"]]);
-  h.update(state("ready", "checking"));
-  h.update(state());
-  assert.equal(h.calls.filter(([name]) => name === "scroll-pending-open").length, 1);
-  assert.equal(h.launches.length, 0);
-  h.changePendingDevice("box-103");
-  await h.click("pending-confirm");
-  assert.deepEqual(h.launches, [[application.applicationId, undefined]]);
-  assert.doesNotMatch(h.app.innerHTML, /data-action="pending-confirm"/);
-  await h.click("show-boxes");
-  assert.match(h.app.innerHTML, /class="current-device">CentuarAI-AMD-103/);
-});
-
-test("pending app launch may be cancelled without connecting a box", async () => {
-  const h = await harness(state(), [application], { legacyApplications: true });
-  await h.click("applications-launch", { applicationId: application.applicationId });
-  await h.click("pending-cancel");
-  assert.doesNotMatch(h.app.innerHTML, /data-action="pending-confirm"/);
-  assert.equal(h.launches.length, 0);
-  assert.equal(h.calls.filter(([name]) => name === "wanx-client:connect-box").length, 0);
-  await h.click("applications-launch", { applicationId: application.applicationId });
-  assert.equal(h.calls.filter(([name]) => name === "scroll-pending-open").length, 2);
+test("My AI shortcuts open Boxes and deep-link to backup without changing ordinary Memory navigation", async () => {
+  const h = await harness();
+  const open = destination => h.window.dispatchEvent(new CustomEvent("wanx:my-ai-destination", { detail: destination }));
+  open("backup");
+  assert.match(h.app.innerHTML, /data-memory-section="" data-memory-agent="" data-memory-page="backup"/);
+  await h.click("show-memory");
+  assert.match(h.app.innerHTML, /data-memory-page=""/);
+  await h.click("show-my-ai");
+  open("boxes");
+  assert.match(h.app.innerHTML, /data-action="show-boxes" aria-current="page"/);
 });
 
 test("box management has its own top-level tab and exposes no console action", async () => {
@@ -497,220 +432,6 @@ test("switching or disconnecting a box warns that the original application conne
   assert.equal(h.calls.filter(([name]) => name === "wanx-client:set-network-enabled").length, 0);
 });
 
-test("network failure is actionable without disabling independent app requests", async () => {
-  const h = await harness(state("ready", "ready", "box-102"), [application], { legacyApplications: true });
-  h.update(state("unavailable", "unavailable", "box-102"));
-  assert.match(h.app.innerHTML, /网络暂不可用/);
-  assert.match(h.app.innerHTML, /data-action="applications-launch"/);
-  await h.click("show-boxes");
-  assert.match(h.app.innerHTML, /刷新设备.*重连/);
-  await h.click("refresh");
-  assert.ok(h.calls.some(([name]) => name === "wanx-client:refresh-devices"));
-  h.update(state());
-  await h.click("show-boxes");
-  assert.match(h.app.innerHTML, /data-action="connect"/);
-});
-
-test("market installation requires confirmation and works without a connected box", async () => {
-  const h = await harness(state(), [], { legacyApplications: true });
-  assert.match(h.app.innerHTML, /发现应用/);
-  assert.match(h.app.innerHTML, /data-action="market-install"/);
-  assert.doesNotMatch(h.app.innerHTML, /application-source|sourceDir|应用目录路径/);
-  await h.click("market-install", { applicationId: application.applicationId });
-  assert.match(h.app.innerHTML, /role="alertdialog"/);
-  assert.equal(h.calls.filter(([name]) => name === "wanx-client:market-install").length, 0);
-  await h.click("market-confirm");
-  assert.match(h.app.innerHTML, /class="application-card"/);
-  assert.match(h.app.innerHTML, /已是最新版本/);
-  assert.equal(h.launches.length, 0);
-  assert.equal(h.calls.find(([name]) => name === "wanx-client:market-install")[1].applicationId, application.applicationId);
-});
-
-test("market cancellation, uninstall and rollback require explicit confirmation", async () => {
-  const h = await harness(state(), [{ ...application, previous: { version: "0.4.2" } }], { legacyApplications: true });
-  assert.match(h.app.innerHTML, /恢复上一版本/);
-  await h.click("market-uninstall", { applicationId: application.applicationId });
-  assert.match(h.app.innerHTML, /保留应用业务数据/);
-  await h.click("market-cancel");
-  assert.equal(h.calls.filter(([name]) => name === "wanx-client:market-uninstall").length, 0);
-  await h.click("market-rollback", { applicationId: application.applicationId });
-  assert.match(h.app.innerHTML, /恢复到 v0.4.2/);
-  await h.keydown("Escape");
-  assert.doesNotMatch(h.app.innerHTML, /role="alertdialog"/);
-  await h.click("market-rollback", { applicationId: application.applicationId });
-  await h.click("market-confirm");
-  assert.equal(h.calls.filter(([name]) => name === "wanx-client:market-rollback").length, 1);
-  await h.click("market-uninstall", { applicationId: application.applicationId });
-  await h.click("market-confirm");
-  assert.match(h.app.innerHTML, /发现应用/);
-});
-
-test("Admin catalog names replace installed names across cards, details and confirmations", async () => {
-  const installed = { ...application, applicationId: "centaurai.wanx.superadvisors", name: "超级参谋团", previous: { version: "0.4.2" } };
-  let name = "个人议事厅";
-  const h = await harness(state(), [installed], { legacyApplications: true,  list: async () => ({ items: [{ applicationId: installed.applicationId, name, version: "9.9.9" }] }) });
-  assert.match(h.app.innerHTML, /store-title-link[^>]*>个人议事厅<\/button>/);
-  assert.doesNotMatch(h.app.innerHTML, /超级参谋团/);
-  await h.click("store-details", { applicationId: installed.applicationId });
-  assert.match(h.app.innerHTML, /app-detail-title[^>]*>个人议事厅<\/h2>/);
-  assert.match(h.app.innerHTML, /当前版本<\/dt><dd>0\.4\.3/);
-  assert.match(h.app.innerHTML, /恢复上一版本/);
-  for (const [action, title] of [["market-uninstall", "卸载个人议事厅"], ["market-rollback", "恢复个人议事厅"]]) {
-    await h.click(action, { applicationId: installed.applicationId });
-    assert.ok(h.app.innerHTML.includes(title));
-    await h.click("market-cancel");
-  }
-  await h.click("applications-launch", { applicationId: installed.applicationId });
-  assert.match(h.app.innerHTML, /个人议事厅需要一台盒子提供服务/);
-  await h.click("pending-cancel");
-  name = "议事厅 & <新名>";
-  await h.click("market-refresh");
-  assert.match(h.app.innerHTML, /app-detail-title[^>]*>议事厅 &amp; &lt;新名&gt;<\/h2>/);
-  assert.doesNotMatch(h.app.innerHTML, /个人议事厅<\/h2>|<新名>/);
-  assert.equal(installed.name, "超级参谋团");
-});
-
-test("approved local posters keep cloud-owned app labels", async () => {
-  const name = "后台中的知君名称";
-  const h = await harness(state(), [], { legacyApplications: true,  list: async () => ({ items: [{ ...application, name }] }) });
-  assert.match(h.app.innerHTML, /store-title-link[^>]*>后台中的知君名称/);
-  assert.doesNotMatch(h.app.innerHTML, /应用精选|半人马环/);
-  assert.match(h.app.innerHTML, /zhijun-product-v1.png/);
-  await h.click("store-details", { applicationId: application.applicationId });
-  assert.match(h.app.innerHTML, /app-detail-title[^>]*>后台中的知君名称<\/h2>/);
-});
-
-test("approved local app icons keep cloud-owned names", async () => {
-  const installed = { ...application, applicationId: "centaurai.wanx.centaurloop", name: "半人马环" };
-  const h = await harness(state(), [installed], { legacyApplications: true,  list: async () => ({ items: [{ ...installed, name: "后台环名称" }] }) });
-  assert.match(h.app.innerHTML, /carousel-slide/);
-  assert.match(h.app.innerHTML, /store-title-link[^>]*>后台环名称<\/button>/);
-  await h.click("store-details", { applicationId: installed.applicationId });
-  assert.match(h.app.innerHTML, /app-detail-title[^>]*>后台环名称<\/h2>/);
-  assert.match(h.app.innerHTML, /assets\/app-icons\/loop-v1.png/);
-  assert.match(h.app.innerHTML, /loop-product-v1.png/);
-});
-
-test("retired task workspace does not bypass standalone Loop compatibility", async () => {
-  const loop = { applicationId: "centaurai.wanx.centaurloop", name: "半人马环", version: "0.10.4" };
-  const methods = [];
-  const h = await harness(state("ready", "ready", "box-102"), [], { legacyApplications: true, 
-    list: async () => ({ items: [loop] }),
-    candidate: async () => ({ status: "incompatible", reason: "wanx_version", release: { version: "0.10.4" } }),
-    aiDialogue: { action: async method => { methods.push(method); return {}; } },
-  });
-  assert.doesNotMatch(h.app.innerHTML, /data-action="open-loop-engine"/);
-  assert.match(h.app.innerHTML, /请先升级记忆盒子/);
-  await h.click("store-details", { applicationId: loop.applicationId });
-  assert.doesNotMatch(h.app.innerHTML, /data-action="open-loop-engine"/);
-  assert.match(h.app.innerHTML, /尚未安装/);
-  assert.deepEqual(methods, []);
-  assert.equal(h.launches.length, 0);
-});
-
-for (const mode of ["unlisted", "offline", "blank"]) test(`installed names remain available when Admin metadata is ${mode}`, async () => {
-  const installed = { ...application, name: "本机安装名称" };
-  const h = await harness(state(), [installed], { legacyApplications: true,  list: async () => {
-    if (mode === "offline") throw new Error("ACCOUNT_NETWORK_ERROR");
-    return { items: mode === "blank" ? [{ ...application, name: "   " }] : [] };
-  } });
-  await h.click("applications-tab", { tab: "local" });
-  assert.match(h.app.innerHTML, /store-title-link[^>]*>本机安装名称<\/button>/);
-  assert.match(h.app.innerHTML, /data-action="applications-launch"/);
-});
-
-test("discovery follows the remote catalog when apps are added and removed", async () => {
-  const remote = { applicationId: "publisher.new-app", name: "服务端新应用", description: "动态目录中的应用" };
-  let items = [remote];
-  const h = await harness(state(), [], { legacyApplications: true,  list: async () => ({ items }) });
-  const cards = () => [...h.app.innerHTML.matchAll(/class="application-card" data-application="([^"]+)"/g)].map(match => match[1]);
-  assert.deepEqual(cards(), [remote.applicationId]);
-  assert.match(h.app.innerHTML, /服务端新应用/);
-  items = [application];
-  await h.click("market-refresh");
-  assert.deepEqual(cards(), [application.applicationId]);
-  items = [];
-  await h.click("market-refresh");
-  assert.deepEqual(cards(), []);
-});
-
-test("empty remote discovery never invents official application cards", async () => {
-  const h = await harness(state(), [], { legacyApplications: true,  list: async () => ({ items: [] }) });
-  assert.doesNotMatch(h.app.innerHTML, /class="application-card" data-application=/);
-  assert.match(h.app.innerHTML, /暂无已上架应用/);
-});
-
-test("discovery shows loading and retry states without bundled application cards", async () => {
-  let rejectList;
-  let fail = true;
-  const h = await harness(state(), [], { legacyApplications: true,  list: () => fail
-    ? new Promise((resolve, reject) => { rejectList = reject; })
-    : Promise.resolve({ items: [application] }) });
-  assert.match(h.app.innerHTML, /正在加载应用/);
-  assert.doesNotMatch(h.app.innerHTML, /class="application-card" data-application=/);
-  rejectList(new Error("ACCOUNT_NETWORK_ERROR"));
-  await flushActions();
-  assert.match(h.app.innerHTML, /刷新重试/);
-  assert.doesNotMatch(h.app.innerHTML, /class="application-card" data-application=/);
-  fail = false;
-  await h.click("market-refresh");
-  assert.match(h.app.innerHTML, /class="application-card" data-application="centaurai.wanx.zhijun"/);
-});
-
-test("unlisted official apps stay installed but do not reappear in discovery after uninstall or restart", async () => {
-  const dialogue = { applicationId: "centaurai.wanx.superadvisors", name: "个人议事厅", version: "0.3.3" };
-  const options = { list: async () => ({ items: [] }), candidate: async () => ({ status: "unavailable", reason: "application_unlisted" }) };
-  const h = await harness(state(), [dialogue], { ...options, legacyApplications: true });
-  await h.click("applications-tab", { tab: "local" });
-  assert.match(h.app.innerHTML, /class="application-card" data-application="centaurai.wanx.superadvisors"/);
-  assert.match(h.app.innerHTML, /data-action="applications-launch"/);
-  await h.click("market-uninstall", { applicationId: dialogue.applicationId });
-  await h.click("market-confirm");
-  assert.match(h.app.innerHTML, /我的应用 <span class="count">0<\/span>/);
-  assert.doesNotMatch(h.app.innerHTML, /class="application-card" data-application=/);
-  assert.match(h.app.innerHTML, /暂无已下载或盒子本地应用/);
-  await h.click("applications-tab", { tab: "wanx" });
-  assert.match(h.app.innerHTML, /暂无已上架应用/);
-  await h.click("store-details", { applicationId: dialogue.applicationId });
-  assert.doesNotMatch(h.app.innerHTML, /data-application-detail="centaurai.wanx.superadvisors"/);
-  assert.doesNotMatch(h.app.innerHTML, /council-product-v1.png/);
-  assert.doesNotMatch(h.app.innerHTML, /data-action="market-install"|data-action="applications-launch"/);
-  await h.click("market-install", { applicationId: dialogue.applicationId });
-  assert.doesNotMatch(h.app.innerHTML, /role="alertdialog"/);
-  const restarted = await harness(state(), [], { ...options, legacyApplications: true });
-  assert.doesNotMatch(restarted.app.innerHTML, /class="application-card" data-application=/);
-});
-
-test("published official apps are listed once and can be reinstalled after uninstall", async () => {
-  const h = await harness(state(), [application], { legacyApplications: true });
-  await h.click("market-uninstall", { applicationId: application.applicationId });
-  await h.click("market-confirm");
-  assert.equal((h.app.innerHTML.match(/class="application-card" data-application="centaurai.wanx.zhijun"/g) || []).length, 1);
-  await h.click("market-install", { applicationId: application.applicationId });
-  await h.click("market-confirm");
-  await h.click("applications-tab", {tab:"local"});
-  assert.match(h.app.innerHTML, /我的应用 <span class="count">1<\/span>/);
-  assert.equal((h.app.innerHTML.match(/class="application-card" data-application="centaurai.wanx.zhijun"/g) || []).length, 1);
-});
-
-for (const [status, label] of [["local_newer", "本机版本较新"], ["incompatible", "暂不兼容"], ["unavailable", "暂无适用版本"]]) {
-  test(`market status ${status} never enables an install action`, async () => {
-    const h = await harness(state(), [], { legacyApplications: true,  candidate: async () => ({ status }) });
-    assert.match(h.app.innerHTML, new RegExp(label));
-    assert.doesNotMatch(h.app.innerHTML, /data-action="market-install"/);
-    await h.click("market-install", { applicationId: application.applicationId });
-    assert.doesNotMatch(h.app.innerHTML, /role="alertdialog"/);
-  });
-}
-
-test("market update displays the target version while app opening stays available", async () => {
-  const h = await harness(state("enrolling", "checking"), [application], { legacyApplications: true,  candidate: async () => ({ status: "available", release: { version: "0.5.0" } }) });
-  assert.match(h.app.innerHTML, /可更新至 v0.5.0/);
-  await h.click("market-install", { applicationId: application.applicationId });
-  assert.match(h.app.innerHTML, /将 v0.4.3 更新至 v0.5.0/);
-  assert.match(h.app.innerHTML, /data-action="applications-launch"/);
-});
-
 test("preload strips untrusted package inputs and hides directory installation", async () => {
   const h = await harness(state(), []);
   await h.window.wanxClient.action("market.install", { applicationId: application.applicationId, url: "https://attacker.example/file", sourceDir: "/tmp/evil", sha256: "evil" });
@@ -719,40 +440,6 @@ test("preload strips untrusted package inputs and hides directory installation",
   const response = await h.window.wanxClient.action("applications.install", { sourceDir: "/tmp/evil" });
   assert.equal(response.ok, false);
   assert.equal(response.code, "UNKNOWN_CLIENT_ACTION");
-});
-
-test("late market responses after logout do not leak the previous account catalog", async () => {
-  let resolveList;
-  const h = await harness(state(), [], { legacyApplications: true,  list: () => new Promise((resolve) => { resolveList = resolve; }) });
-  await h.click("logout");
-  resolveList({ items: [{ ...application, name: "Private old catalog" }] });
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.match(h.app.innerHTML, /登录记忆盒子/);
-  assert.doesNotMatch(h.app.innerHTML, /Private old catalog/);
-});
-
-test("market installation errors explain incompatible packages and allow retry", async () => {
-  let failure = true;
-  const h = await harness(state(), [], { legacyApplications: true,  install: async () => {
-    if (failure) throw new Error("APPLICATION_PLATFORM_UNSUPPORTED");
-    return application;
-  } });
-  await h.click("market-install", { applicationId: application.applicationId });
-  await h.click("market-confirm");
-  assert.match(h.app.innerHTML, /此安装包不适用于当前电脑/);
-  assert.doesNotMatch(h.app.innerHTML, /APPLICATION_PLATFORM_UNSUPPORTED/);
-  failure = false;
-  await h.click("market-install", { applicationId: application.applicationId });
-  await h.click("market-confirm");
-  assert.match(h.app.innerHTML, /class="application-card"/);
-});
-
-test("a stale open button starts explicit box confirmation rather than bypassing the main-process check", async () => {
-  const h = await harness(state("ready", "ready", "box-102"), [application], { legacyApplications: true });
-  h.update(state(), false);
-  await h.click("applications-launch", { applicationId: application.applicationId });
-  assert.equal(h.launches.length, 0);
-  assert.match(h.app.innerHTML, /连接盒子并打开应用/);
 });
 
 test("logout resets settings and the next login returns to My AI", async () => {
@@ -1009,156 +696,6 @@ test("native menu navigation reaches settings and home while preserving login an
 });
 
 
-test("legacy version selection shows one application and persists through trusted IPC", async () => {
-  const h = await harness(state(), [{ applicationId: application.applicationId, name: application.name, selectionRequired: true, versions: [{ version: "preview" }, { version: "1.0.0" }] }], { legacyApplications: true });
-  assert.equal((h.app.innerHTML.match(/class="application-card" data-application="centaurai.wanx.zhijun"/g) || []).length, 1);
-  assert.match(h.app.innerHTML, /历史版本无法自动比较/);
-  assert.doesNotMatch(h.app.innerHTML, /data-action="applications-launch"/);
-  await h.click("applications-select-current", { applicationId: application.applicationId, version: "1.0.0" });
-  assert.ok(h.calls.some(([action, id, version]) => action === "selected-current" && id === application.applicationId && version === "1.0.0"));
-  assert.doesNotMatch(h.app.innerHTML, /历史版本无法自动比较/);
-  assert.match(h.app.innerHTML, /v1.0.0/);
-});
-
-
-test("market failure leaves installed applications available and presents a Chinese retry message", async () => {
-  const h = await harness(state("ready", "ready", "box-102"), [application], { legacyApplications: true,  list: async () => { throw new Error("MARKET_NOT_CONFIGURED"); } });
-  assert.match(h.app.innerHTML, /应用市场尚未配置完成/);
-  assert.doesNotMatch(h.app.innerHTML, /data-action="applications-launch"/);
-  await h.click("applications-tab", { tab: "local" });
-  assert.match(h.app.innerHTML, /data-action="applications-launch"/);
-  assert.doesNotMatch(h.app.innerHTML, /MARKET_NOT_CONFIGURED/);
-});
-
-test("catalog text is escaped and unauthenticated users do not request the market", async () => {
-  const signedOut = await harness({ account: { phase: "signed_out" } }, [application], { legacyApplications: true });
-  assert.equal(signedOut.calls.filter(([name]) => name.startsWith("wanx-client:market-")).length, 0);
-  const h = await harness(state(), [], { legacyApplications: true,  list: async () => ({ items: [{ ...application, name: '<script>unsafe</script>', description: '<img src=x onerror="unsafe()">' }] }) });
-  assert.match(h.app.innerHTML, /&lt;script&gt;unsafe&lt;\/script&gt;/);
-  assert.doesNotMatch(h.app.innerHTML, /<script>unsafe|<img src=x/);
-});
-
-for (const installed of [[], [application]]) {
-  test(`candidate package details and escaped release notes appear on ${installed.length ? "installed" : "market"} cards`, async () => {
-    const h = await harness(state(), installed, { legacyApplications: true,  candidate: async () => ({
-      status: "available", release: { version: "0.5.0", notes: '支持新模型\n<script>alert("unsafe")</script>' },
-      artifact: { os: "macos", arch: "arm64", size: 2568392 },
-    }) });
-    assert.match(h.app.innerHTML, /macOS · Apple 芯片 · 2.4 MB/);
-    assert.match(h.app.innerHTML, /v0.5.0 更新说明/);
-    assert.match(h.app.innerHTML, /支持新模型\n&lt;script&gt;/);
-    assert.doesNotMatch(h.app.innerHTML, /<script>alert/);
-  });
-}
-
-test("missing artifacts and blank release notes do not create empty detail sections", async () => {
-  const h = await harness(state(), [], { candidate: async () => ({ status: "unavailable", release: { version: "0.5.0", notes: " \n " }, artifact: null }) });
-  assert.doesNotMatch(h.app.innerHTML, /class="market-metadata"|class="market-notes"|undefined|NaN/);
-});
-
-test("universal application cards show a shared package and allow installation", async () => {
-  const h = await harness(state(), [], { legacyApplications: true,  candidate: async () => ({
-    status: "available", release: { version: "0.5.0" },
-    artifact: { os: "universal", arch: "universal", size: 2568392 },
-  }) });
-  assert.match(h.app.innerHTML, /通用应用包 · 2.4 MB/);
-  assert.match(h.app.innerHTML, /data-action="market-install"/);
-});
-
-for (const [reason, label] of [
-  ["application_unlisted", "此应用尚未上架或已下架"],
-  ["no_published_target", "暂无可安装的应用包.*通用应用包"],
-  ["release_unavailable", "此发行版本暂不可用"],
-  ["wanx_version", "请先升级记忆盒子"],
-  ["host_protocol", "当前记忆盒子运行协议不兼容"],
-  ["reinstall_required", "此版本需管理员协助重新安装"],
-]) {
-  test(`candidate reason ${reason} explains how to proceed without enabling install`, async () => {
-    const h = await harness(state(), [], { legacyApplications: true,  candidate: async () => ({ status: reason.endsWith("unlisted") || reason.endsWith("target") || reason.endsWith("unavailable") ? "unavailable" : "incompatible", reason }) });
-    assert.match(h.app.innerHTML, new RegExp(label));
-    assert.doesNotMatch(h.app.innerHTML, /data-action="market-install"/);
-  });
-}
-
-for (const [code, label] of [
-  ["MARKET_SERVICE_NOT_DEPLOYED", "应用市场接口尚未部署"],
-  ["MARKET_UNTRUSTED_SIGNING_KEY", "服务器不信任此发行签名"],
-  ["MARKET_STORAGE_UNAVAILABLE", "安装包存储暂不可用"],
-  ["APPLICATION_RETIRED", "此应用已退役"],
-]) {
-  test(`candidate error ${code} survives IPC and presents its recovery message`, async () => {
-    let failed = true;
-    const h = await harness(state(), [], { legacyApplications: true,  candidate: async () => {
-      if (failed) throw Object.assign(new Error("request failed"), { code });
-      return { status: "available", release: { version: "0.4.3" } };
-    } });
-    assert.match(h.app.innerHTML, new RegExp(label));
-    assert.doesNotMatch(h.app.innerHTML, /data-action="market-install"/);
-    failed = false;
-    await h.click("market-refresh");
-    assert.match(h.app.innerHTML, /data-action="market-install"/);
-    assert.doesNotMatch(h.app.innerHTML, new RegExp(label));
-  });
-}
-
-test("one candidate failure does not hide another app's installable version", async () => {
-  const other = { ...application, applicationId: "example.other", name: "另一个应用" };
-  const h = await harness(state(), [], { legacyApplications: true, 
-    list: async () => ({ items: [application, other] }),
-    candidate: async (id) => {
-      if (id === application.applicationId) throw new Error("MARKET_DATABASE_UNAVAILABLE");
-      return { status: "available", release: { version: "1.0.0" } };
-    },
-  });
-  assert.match(h.app.innerHTML, /应用市场服务暂不可用/);
-  assert.match(h.app.innerHTML, /data-action="market-install" data-application-id="example.other"/);
-  assert.doesNotMatch(h.app.innerHTML, /data-action="market-install" data-application-id="centaurai.wanx.zhijun"/);
-});
-
-for (const provisioning of [false, true]) {
-  test(`account switching discards stale candidates${provisioning ? " while provisioning" : ""}`, async () => {
-    let resolveCandidate;
-    let listCalls = 0;
-    const h = await harness(state(), [], { legacyApplications: true, 
-      list: async () => ({ items: [{ ...application, name: ++listCalls === 1 ? "旧账号目录" : "新账号目录" }] }),
-      candidate: () => listCalls === 1 ? new Promise((resolve) => { resolveCandidate = resolve; })
-        : Promise.resolve({ status: "available", release: { version: "0.5.0", notes: "新账号版本说明" } }),
-    });
-    if (provisioning) await h.click("provisioning");
-    h.update({ ...state(), account: { phase: "authenticated", accountId: "account-2" } });
-    await new Promise((resolve) => setImmediate(resolve));
-    resolveCandidate({ status: "available", release: { version: "99.0.0", notes: "旧账号版本说明" } });
-    await new Promise((resolve) => setImmediate(resolve));
-    h.navigate("applications");
-    await flushActions();
-    assert.match(h.app.innerHTML, /新账号目录/);
-    assert.match(h.app.innerHTML, /新账号版本说明/);
-    assert.doesNotMatch(h.app.innerHTML, /旧账号|99.0.0/);
-    assert.equal(listCalls, 2);
-  });
-}
-
-
-test("installing one application keeps another application's open action available", async () => {
-  let finishInstall;
-  const other = { ...application, applicationId: "example.other", name: "另一个应用" };
-  const h = await harness(state("ready", "ready", "box-102"), [other], { legacyApplications: true, 
-    list: async () => ({ items: [application, other] }),
-    install: () => new Promise((resolve) => { finishInstall = resolve; }),
-  });
-  await h.click("market-install", { applicationId: application.applicationId });
-  const installing = h.click("market-confirm");
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.match(h.app.innerHTML, /正在安装/);
-  assert.doesNotMatch(h.app.innerHTML, /data-action="applications-launch" data-application-id="example.other" disabled/);
-  await h.click("applications-launch", { applicationId: other.applicationId });
-  assert.deepEqual(h.launches, [[other.applicationId, undefined]]);
-  finishInstall(application);
-  await installing;
-  assert.match(h.app.innerHTML, /知君/);
-  assert.doesNotMatch(h.app.innerHTML, /正在安装/);
-});
-
 test("network polling and external navigation never reconstruct an active Wi-Fi form", async () => {
   const h = await harness();
   await h.click("provisioning");
@@ -1168,7 +705,7 @@ test("network polling and external navigation never reconstruct an active Wi-Fi 
   form.values = { ssid: "My Wi-Fi", password: "unsent-network-password" };
   assert.match(h.app.innerHTML, /data-form="wifi"/);
   h.update({ ...state("enrolling", "checking"), devices: [{ ...devices[0], displayName: "Renamed box" }] });
-  h.navigate("applications");
+  h.navigate("my-ai");
   assert.equal(h.renderCount, count, "the actual input nodes must stay attached while polling");
   assert.equal(h.form("wifi"), form);
   assert.equal(h.form("wifi").values.password, "unsent-network-password");
@@ -1495,17 +1032,6 @@ test("logging out clears the box connection failure before the same account retu
   h.navigate("boxes");
   assert.match(h.app.innerHTML, /CentuarAI-AMD-102/);
   assert.doesNotMatch(h.app.innerHTML, /role="alert"|health_unavailable/);
-});
-
-test("market installation shows progress on the clicked app until it completes", async () => {
-  const install = pendingResponse();
-  const h = await harness(state(), [], { legacyApplications: true,  install: () => install.promise });
-  await h.click("market-install", { applicationId: application.applicationId });
-  const request = h.click("market-confirm");
-  assert.match(h.app.innerHTML, /data-action="market-install"[^>]*aria-busy="true" disabled><span class="activity-spinner"[^>]*><\/span>正在安装…/);
-  install.resolve(application);
-  await request;
-  assert.doesNotMatch(h.app.innerHTML, /正在安装…/);
 });
 
 test("reset-code request shows sending progress and restores the button", async () => {
@@ -2726,52 +2252,6 @@ for (const phase of ['waitingCloud', 'attentionRequired']) {
     });
   }
 }
-test("cloud app detail uses returned metadata and never bundled promotions", async () => {
-  const item = { applicationId: "example.new-app", name: "云端新应用", description: "服务器介绍", iconUrl: "https://cdn.example.org/app.png" };
-  const h = await harness(state(), [], { legacyApplications: true,  list: async () => ({ items: [item] }) });
-  assert.match(h.app.innerHTML, /云端新应用/);
-  assert.doesNotMatch(h.app.innerHTML, /应用精选|assets\/posters|知君|半人马环/);
-  const before = h.calls.length;
-  await h.click("store-details", { applicationId: item.applicationId });
-  assert.match(h.app.innerHTML, /服务器介绍/);
-  assert.match(h.app.innerHTML, /https:\/\/cdn.example.org\/app.png/);
-  assert.doesNotMatch(h.app.innerHTML, /产品介绍|app-feature-grid|使用方式|分类/);
-  assert.deepEqual(h.calls.slice(before), [
-    ["academy-context", { module: "app-detail" }],
-  ]);
-  assert.equal(h.launches.length, 0);
-  await h.click("store-back");
-  assert.doesNotMatch(h.app.innerHTML, /data-application-detail=/);
-});
-
-test("empty cloud directory never invents app details; installed apps retain management", async () => {
-  const item = { ...application, applicationId: "example.app", name: "已安装应用", previous: "0.4.2" };
-  const h = await harness(state(), [item], { list: async () => ({ items: [] }) });
-  await h.click("applications-tab", { tab: "local" });
-  assert.match(h.app.innerHTML, /已安装应用/);
-  assert.match(h.app.innerHTML, /恢复上一版本/);
-  assert.match(h.app.innerHTML, /data-action="(?:market|local)-uninstall"/);
-  assert.doesNotMatch(h.app.innerHTML, /应用精选|assets\/posters/);
-  await h.click("store-details", { applicationId: "centaurai.wanx.dialogue" });
-  assert.doesNotMatch(h.app.innerHTML, /data-application-detail=/);
-});
-
-test("cloud names override installed names without local branding exceptions", async () => {
-  for (const id of ["ai.wanx.studio", "centaurai.wanx.semantica"]) {
-    const h = await harness(state(), [{ ...application, applicationId: id }], { legacyApplications: true,  list: async () => ({ items: [{ applicationId: id, name: "云端新名称", description: "" }] }) });
-    assert.match(h.app.innerHTML, /云端新名称/);
-    assert.doesNotMatch(h.app.innerHTML, /在你的盒子上使用 AI 服务。/);
-  }
-});
-
-test("offline directory is clearly marked and cannot install cached offers", async () => {
-  const h = await harness(state(), [application], { legacyApplications: true,  list: async () => ({ items: [{ applicationId: "example.cached", name: "离线应用" }], catalogState: { offline: true, fetchedAt: 1700000000000 } }) });
-  assert.match(h.app.innerHTML, /正在显示.*缓存的目录/);
-  await h.click("applications-tab", { tab: "local" });
-  assert.match(h.app.innerHTML, /data-action="applications-launch"/);
-  assert.doesNotMatch(h.app.innerHTML, /data-action="market-install"/);
-});
-
 for (const [ownershipState, copy] of [
   ["owned_self", /已属于当前账号，无需再次认领/],
   ["owned_other", /已属于其他账号，需要原主人完成转移/],
@@ -3050,75 +2530,19 @@ test('local lock hides private shell despite an authenticated cloud account', as
   assert.doesNotMatch(h.app.innerHTML, /class="main-nav"/);
 });
 
-test("approved product images remain presentation only and preserve install gating", async () => {
-  let items = [{ ...application, name: "云端新名称", description: "服务器介绍", iconUrl: "" }];
-  const h = await harness(state(), [], { legacyApplications: true,  list: async () => ({ items }), candidate: async () => ({ status: "incompatible", reason: "wanx_version" }) });
-  assert.match(h.app.innerHTML, /assets\/app-icons\/zhijun-v1.png/);
-  assert.match(h.app.innerHTML, /zhijun-product-v1.png/);
-  assert.doesNotMatch(h.app.innerHTML, /data-action="market-install"|data-action="applications-launch"/);
-  await h.click("store-details", { applicationId: application.applicationId });
-  assert.match(h.app.innerHTML, /app-detail-title[^>]*>云端新名称/);
-  assert.match(h.app.innerHTML, /服务器介绍/);
-  await h.click("poster-open", { posterIndex: "0" });
-  assert.match(h.app.innerHTML, /poster-modal/);
-  await h.click("poster-close");
-  assert.doesNotMatch(h.app.innerHTML, /poster-modal/);
-  await h.click("store-back");
-  items = [];
-  await h.click("market-refresh");
-  assert.doesNotMatch(h.app.innerHTML, /zhijun-product-v1.png|class="application-card"/);
-  await h.click("store-details", { applicationId: application.applicationId });
-  assert.doesNotMatch(h.app.innerHTML, /data-application-detail=/);
-});
-
-test("valid cloud icon wins over temporary local image assets", async () => {
-  const h = await harness(state(), [], { legacyApplications: true,  list: async () => ({ items: [{ ...application, iconUrl: "https://cdn.example.org/new-icon.png" }] }) });
-  assert.match(h.app.innerHTML, /src="https:\/\/cdn.example.org\/new-icon.png"/);
-  assert.match(h.app.innerHTML, /data-fallback-src=".\/assets\/app-icons\/zhijun-v1.png"/);
-});
-
-
-test("cloud apps exclude local packages while Local apps retains their management", async () => {
- const local = { ...application, applicationId: "example.local", name: "火花测试本地应用", installationSource: "local", previous: "0.4.2" };
- const h = await harness(state(), [local], { legacyApplications: true,  list: async () => ({ items: [{ applicationId: "example.cloud", name: "云端应用" }] }) });
- assert.match(h.app.innerHTML, /云端应用/);
- assert.doesNotMatch(h.app.innerHTML, /火花测试本地应用/);
- await h.click("applications-tab", { tab: "local" });
- assert.match(h.app.innerHTML, /本地应用/);
- assert.match(h.app.innerHTML, /火花测试本地应用/);
- assert.doesNotMatch(h.app.innerHTML, /data-action="local-install"/);
- assert.match(h.app.innerHTML, /data-action="local-uninstall"/);
- assert.doesNotMatch(h.app.innerHTML, /data-action="market-install"/);
- await h.click("local-uninstall", { applicationId: local.applicationId });
- assert.match(h.app.innerHTML, /保留应用业务数据/);
- await h.click("market-cancel");
- assert.match(h.app.innerHTML, /火花测试本地应用/);
- await h.click("applications-tab", { tab: "wanx" });
- assert.doesNotMatch(h.app.innerHTML, /火花测试本地应用/);
-});
-
-test("local package provenance remains local even when the same app is cloud-listed", async () => {
- const local = { ...application, name: "本地包的名称", installationSource: "local" };
- const h=await harness(state(),[local],{ legacyApplications: true, list:async()=>({items:[{...application,name:"云端名称"}]}) });
- assert.match(h.app.innerHTML,/云端名称/);
- await h.click("applications-tab",{tab:"local"});
- assert.match(h.app.innerHTML,/本地包的名称/);
- assert.doesNotMatch(h.app.innerHTML,/data-action="market-install"/);
-});
-
 test('personal Starlink is embedded and keeps individual knowledge separate from Team management', async () => {
   const calls=[];
   const h=await harness(state('ready','ready','box-102'),[],{personalDataService:{action:async(action,input)=>{calls.push([action,input]);return action==='warehouses'?{items:[{id:'12345678-1234-1234-1234-123456789abc',name:'个人仓库',entity_count:1}]}:action==='graph'?{nodes:[{entity_id:'real',canonical_name:'真实个人知识',entity_type:'CONCEPT'}],edges:[]}:{hostBase:'/api/semantica/open/v1',keys:[]}}}});
   await h.click('show-data');await new Promise(r=>setImmediate(r));
-  await h.dataClick("graph-isolated");
   assert.match(h.app.innerHTML,/data-action="show-data" aria-current="page"/);
-  assert.match(h.app.innerHTML,/个人数据仓/);assert.match(h.app.innerHTML,/真实个人知识/);
+  assert.match(h.app.innerHTML,/id="starlink-panel-region"/);
+  assert.doesNotMatch(h.app.innerHTML,/精简版|打开完整版/);
   assert.doesNotMatch(h.app.innerHTML,/团队管理员共同维护|助理授权/);
   assert.doesNotMatch(h.app.innerHTML, /data-action="show-workshop"/);
   assert.doesNotMatch(h.app.innerHTML.match(/data-action="show-data"[^>]*>[\s\S]*?<\/button>/)[0],/feature-beta/);
-  assert.equal(h.launches.length,0);assert(calls.some(([action])=>action==='warehouses'));
+  assert.equal(h.launches.length,0);assert.equal(calls.length,0);
   h.update(state('ready','ready','box-103'));await new Promise(r=>setImmediate(r));
-  assert(calls.filter(([action])=>action==='warehouses').length>=2);
+  assert.equal(calls.length,0, 'the old simplified service no longer loads the panel');
 });
 
 
@@ -3142,69 +2566,20 @@ test("box CPU and memory distinguish missing connected metrics from a disconnect
 });
 
 
-test("personal Workshop follows My Apps and keeps its existing project workflow", async () => {
-  const actions=[];
-  const h=await harness(state("ready","ready","box-102"),[application],{legacyApplications:true,personalWorkshop:{action:async(action,input)=>{
-    actions.push([action,input]);
-    if(action==="list")return{items:[]};
-    if(action==="sources")return{items:[{id:"test-source",name:"可编辑测试应用",version:"1.0.0",origin:"本地应用",editable:true}]};
-    throw Error("unexpected workshop action");
-  }}});
-  const tabRow=h.app.innerHTML.match(/<nav class="applications-tabs"[^>]*>([\s\S]*?)<\/nav>/)?.[1]||"";
-  const tabs=[...tabRow.matchAll(/data-action="applications-tab" data-tab="([^"]+)"[^>]*>([^<]+)/g)]
-    .map(match=>[match[1],match[2]]);
-  assert.deepEqual(tabs,[["wanx","应用市场"],["local","我的应用"],["workshop","应用工坊"]]);
-  const nav=[...h.app.innerHTML.matchAll(/class="nav-item[^" ]*(?: [^"]*)?"[^>]*data-action="show-([^"]+)"[^>]*>([^<]+)/g)].map(m=>[m[1],m[2]]);
-  assert.deepEqual(nav,[["my-ai","我的 AI"],["memory","记忆"],["data","星图"],["space","空间"],["boxes","盒子"]]);
-  await h.click("applications-tab",{tab:"workshop"});await flushActions();
-  assert.doesNotMatch(h.app.innerHTML, /data-action="show-applications"/);
-  assert.match(h.app.innerHTML,/id="applications-panel-workshop"[^>]*aria-label="应用工坊"/);
-  assert.doesNotMatch(h.app.innerHTML,/选择应用开始修改|workshop-choose/);
-  assert.doesNotMatch(h.app.innerHTML,/创建新产品|首次访谈/);
-  await h.click("workshop-choose");await flushActions();
-  assert.doesNotMatch(h.app.innerHTML,/可编辑测试应用/);
-  assert.deepEqual(actions.map(([action])=>action).filter(a=>a!=="library"),["list"]);
-  h.update(state());
-  assert.match(h.app.innerHTML,/新定制请从“我的应用”发起/);
-  assert.doesNotMatch(h.app.innerHTML,/可编辑测试应用/);
-});
-
-
 test('personal module banners retain consistent bilingual identity when disconnected', async () => {
   const h=await harness();
-  for(const [route,key,name,english] of [['workshop','workshop','应用工坊','App Workshop'],['data','starlink','知识星图','STARLINK'],['space','space','文件空间','Files'],['boxes','boxes','我的设备','Devices']]) {
-    await h.click('show-'+route);
-    assert.match(h.app.innerHTML,new RegExp('wanx-section-banner[^>]*data-section="'+key+'"'));
-    assert.match(h.app.innerHTML,new RegExp('<h2>'+name+' '+(key==='workshop'?'<span class="feature-beta">Beta</span> ':key==='starlink'?'<small class="data-edition-label">精简版</small> ':'')+'<span class="wanx-section-english">'+english+'</span></h2>'));
+  for (const [route, name, english] of [
+    ['my-ai', '我的 AI', 'My AI'], ['memory', '智能体记忆', 'agent memory'],
+    ['space', '私有云空间', 'Private Cloud'], ['boxes', '我的设备', 'Devices'],
+  ]) {
+    await h.click('show-' + route);
+    assert.match(h.app.innerHTML, new RegExp('wanx-section-banner[^>]*data-section="' + route + '"'));
+    assert.match(h.app.innerHTML, new RegExp('<h2>' + name + ' <span class="wanx-section-english">' + english + '</span></h2>'));
   }
+  await h.click('show-data');
+  assert.match(h.app.innerHTML,/连接盒子后，创建知识仓/);
+  assert.doesNotMatch(h.app.innerHTML,/精简版|打开完整版/);
   assert.equal(h.calls.some(call=>call[0]==='workshop'),false);
-});
-
-test('My apps includes cloud, legacy and box-enabled apps; only verified editable sources enter Workshop',async()=>{
- const events=[];
- const project={id:'a'.repeat(32),appId:'private.copy',name:'盒子定制应用',installedVersion:'0.1.1',latestVersion:'0.1.2',workshop:{applicationId:application.applicationId},versions:[]};
- const h=await harness(state('ready','ready','box-102'),[application,{...application,applicationId:'legacy.app',name:'历史应用',installationSource:'local'}],{legacyApplications:true,personalWorkshop:{action:async(action,input)=>{
-  events.push([action,input]);if(action==='library')return{items:[{applicationId:application.applicationId,editable:true}],projects:[project],workshopApplicationIds:[]};if(action==='list')return{items:[project]};throw Error('unexpected '+action);
- }}});
- await flushActions();await h.click('applications-tab',{tab:'local'});await flushActions();
- assert.match(h.app.innerHTML,/我的应用 <span class="count">3<\/span>/);assert.match(h.app.innerHTML,/历史应用/);assert.match(h.app.innerHTML,/盒子定制应用/);
- assert.match(h.app.innerHTML,/可定制/);assert.match(h.app.innerHTML,/安装到此电脑/);assert.doesNotMatch(h.app.innerHTML,/data-action="local-install"/);
- h.navigate('applications');await flushActions();assert.match(h.app.innerHTML,/aria-label="应用市场"/);await h.click('applications-tab',{tab:'local'});
- await h.click('application-customize',{applicationId:application.applicationId});await flushActions();
- assert.match(h.app.innerHTML,/id="applications-panel-workshop"/);
- assert.match(h.app.innerHTML,/本地应用/);assert.match(h.app.innerHTML,/盒子定制应用/);
- assert.equal(events.some(([a])=>a==='copy'),false);
-});
-
-test('a stale library cannot inject the previous box projects after switching boxes',async()=>{
- let resolveOld,first=true;
- const h=await harness(state('ready','ready','box-102'),[],{legacyApplications:true,personalWorkshop:{action:async action=>{
-  if(action==='library'&&first){first=false;return new Promise(r=>resolveOld=r)}
-  return{items:[],projects:[],workshopApplicationIds:[]};
- }}});
- h.update(state('ready','ready','box-103'));await flushActions();
- resolveOld({items:[],projects:[{id:'p',appId:'secret',name:'旧盒子私有应用',installedVersion:'0.1.0'}],workshopApplicationIds:[]});await flushActions();
- await h.click('applications-tab',{tab:'local'});assert.doesNotMatch(h.app.innerHTML,/旧盒子私有应用/);
 });
 
 test("box network setup explains progress and interruption offers refresh", async () => {
@@ -3253,7 +2628,7 @@ test('wallet login takes one snapshot and page navigation controls subsequent id
   assert.equal(balances, 1, 'login preserves the first balance and active-order recovery');
   assert.equal(orders, 1);
   t.mock.timers.tick(60000); await settle();
-  assert.equal(balances, 1, 'the initial applications page must not keep polling the wallet');
+  assert.equal(balances, 1, 'the initial My AI page must not keep polling the wallet');
   await h.click('profile-menu');
   assert.match(h.app.innerHTML, /1,250 点/);
   await h.click('show-credits'); await settle();
@@ -3262,7 +2637,7 @@ test('wallet login takes one snapshot and page navigation controls subsequent id
   assert.equal(balances, 2);
   t.mock.timers.tick(1); await settle();
   assert.equal(balances, 3, 'the active idle page uses a 30-second interval');
-  h.navigate('applications');
+  h.navigate('my-ai');
   t.mock.timers.tick(60000); await settle();
   assert.equal(balances, 3, 'native navigation also pauses the idle wallet');
   h.navigate('credits'); await settle();
@@ -3272,56 +2647,35 @@ test('wallet login takes one snapshot and page navigation controls subsequent id
   assert.equal(balances, 4, 'click navigation also pauses the idle wallet');
 });
 
-test("Main-window navigation keeps the Academy drawer available and redirects the old dialogue route", async () => {
-  const h = await harness(state(), [], { legacyApplications: true });
+test("main-window navigation ignores retired application pages and opens dialogue over the active module", async () => {
+  const h = await harness();
   assert.equal(h.academy.available, true);
-  assert.match(h.app.innerHTML, /aria-label="应用市场"/);
-  assert.deepEqual(h.academy.context, { module: "app-market" });
-  assert.doesNotMatch(h.app.innerHTML, /data-action="(?:show-ai-dialogue|academy-open)"/);
-  assert.match(h.app.innerHTML, /data-action="applications-tab" data-tab="workshop"[^>]*>应用工坊/);
+  assert.match(h.app.innerHTML, /data-section="my-ai"/);
+  assert.equal(h.academy.context.module, "general");
+  h.navigate("space");
+  await flushActions();
+  assert.match(h.app.innerHTML, /data-section="space"/);
+  for (const retired of ["applications", "application-detail", "workshop"]) {
+    h.navigate(retired);
+    assert.match(h.app.innerHTML, /data-section="space"/);
+    assert.equal(h.academy.context.module, "space");
+  }
   h.navigate("ai-dialogue");
   assert.equal(h.academy.mode, "dialogue");
-  assert.match(h.app.innerHTML, /aria-label="应用市场"/);
-  await h.click("applications-tab", { tab: "workshop" });
-  assert.match(h.app.innerHTML, /data-section="workshop"/);
-  assert.doesNotMatch(h.app.innerHTML, /data-action="academy-copilot-toggle"/);
-  assert.match(h.app.innerHTML, /连接盒子后开始修改/);
-  assert.equal(h.academy.mode, "dialogue");
-  h.navigate("applications");
-  await flushActions();
-  assert.equal(h.academy.mode, "dialogue");
-  await h.click("applications-tab", { tab: "local" });
-  assert.match(h.app.innerHTML, /我的应用 <span class="count">0<\/span>/);
-  assert.deepEqual(h.academy.context, { module: "my-apps" });
-  assert.doesNotMatch(h.app.innerHTML, /半人马AI学院/);
-  await h.click("applications-tab", { tab: "wanx" });
-  await h.click("store-details", { applicationId: application.applicationId });
-  assert.deepEqual(h.academy.context, { module: "app-detail" });
+  assert.match(h.app.innerHTML, /data-section="space"/);
   assert.deepEqual(h.launches, []);
 });
 
-test("Workshop updates the Academy with a step and standard error, omitting project content", async () => {
-  const projectId = "a".repeat(32);
-  const privateName = "Private fixture project";
-  const project = { id: projectId, name: privateName, latestVersion: "0.1.0", versions: [] };
-  const h = await harness(state("ready", "ready", "box-102"), [], {
-    personalWorkshop: { action: async action => {
-      if (action === "list") return { items: [project] };
-      if (action === "open") throw Error("HOST_SESSION_EXPIRED");
-      return { items: [], projects: [], workshopApplicationIds: [] };
-    } },
-  });
-  await h.click("applications-tab", { tab: "workshop" });
-  await flushActions();
-  await h.click("workshop-select", { projectId });
-  await h.click("workshop-open");
-  await flushActions();
-  assert.deepEqual(h.academy.context, { module: "workshop", stage: "project", errorCode: "HOST_SESSION_EXPIRED" });
-  await h.click("show-space");
-  assert.deepEqual(h.academy.context, { module: "space" });
-  const updates = h.calls.filter(call => call[0] === "academy-context").map(call => call[1]);
-  assert.ok(updates.some(value => value.module === "workshop" && value.stage === "projects"));
-  assert.ok(updates.some(value => value.module === "workshop" && value.stage === "project" && value.errorCode === "HOST_SESSION_EXPIRED"));
-  assert.deepEqual(updates.at(-1), { module: "space" });
-  assert.doesNotMatch(JSON.stringify(updates), new RegExp(projectId + "|" + privateName));
+test("box overview hides cached storage capacity until connected", async () => {
+  const h = await harness(state("ready", "ready", "box-102"));
+  h.window.wanxSpace.overview = () => ({ volume: { free: 601 * 1024 ** 3, total: 936 * 1024 ** 3 } });
+  await h.click("show-boxes");
+  assert.match(h.app.innerHTML, /可用存储<\/span><strong>601.0 GB<\/strong><small>总容量 936.0 GB/);
+  for (const next of [state(), { ...state(), phase: "connecting" }]) {
+    h.update(next);
+    assert.match(h.app.innerHTML, /可用存储<\/span><strong>—<\/strong><small>连接后显示实际状态/);
+    assert.doesNotMatch(h.app.innerHTML, /601.0 GB|936.0 GB/);
+  }
+  h.update(state("ready", "ready", "box-102"));
+  assert.match(h.app.innerHTML, /可用存储<\/span><strong>601.0 GB/);
 });

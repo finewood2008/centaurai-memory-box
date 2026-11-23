@@ -51,6 +51,7 @@ import { createSecureAccountStore } from "../account/store.mjs";
 import { createLocalBoxes } from "../octop/local-boxes.mjs";
 import { createPlatformClient } from "../platform.mjs";
 import { createApplicationManager } from "../applications/manager.mjs";
+import { installPreviewNavigationGuard } from "../applications/studio.mjs";
 import { createApplicationMarket } from "../applications/market.mjs";
 import { createDefaultApplicationDelivery } from "../applications/delivery.mjs";
 import { createDefaultApplicationScheduler } from "../applications/delivery-scheduler.mjs";
@@ -453,9 +454,7 @@ if (process.argv.includes("--wanx-managed-app")) {
         if (process.platform === "darwin") panel.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
       }
       for (const window of [control, panel].filter(Boolean)) {
-        window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-        window.webContents.on("will-navigate", event => event.preventDefault());
-        window.webContents.on("will-attach-webview", event => event.preventDefault());
+        installPreviewNavigationGuard(window.webContents);
       }
       const teamService=createTeamService({client,applications,assets:path.join(app.getAppPath(),"applications/studio-runtime")});
       const teamTrusted=event=>isControlSender(event,control,controlURL);

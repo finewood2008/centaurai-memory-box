@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wanx-agent-status/1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "state",
+    "last_error",
+    "channels",
+    "cron_jobs",
+    "memory_maintenance"
+  ],
+  "properties": {
+    "state": {
+      "type": "string"
+    },
+    "last_error": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "channels": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "cron_jobs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "prompt",
+          "trigger"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "trigger": {}
+        }
+      }
+    },
+    "memory_maintenance": {
+      "type": [
+        "object",
+        "null"
+      ]
+    }
+  }
+}

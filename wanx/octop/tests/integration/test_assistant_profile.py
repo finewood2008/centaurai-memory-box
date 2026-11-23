@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from octop.infra.agents.assistant_conversations import AssistantConversations
 from octop.infra.agents.assistant_profile import PREFERENCE_KEY, AssistantProfiles
 from octop.infra.agents.experts.catalog import build_create_spec_from_expert
 from octop.infra.errors import OctopError
@@ -105,13 +106,25 @@ async def test_assistant_native_model_switch_attachment_and_scope(env_with_provi
     assert uploaded.status_code == 200, uploaded.text
     file = uploaded.json()
     tid = (await client.post(f"/api/agents/{aid}/threads", headers=auth)).json()["thread_id"]
+    reference = {
+        "source": "space",
+        "title": "synthetic.txt",
+        "text": "Synthetic QA material",
+        "file_id": "a" * 32,
+    }
     async with ws_connect(client._octop_app, chat_ws_path(aid, auth)) as ws:
         for model in ("openai/gpt-4o", "second/model-b"):
+            persona = (
+                {"assistant_persona": "zhijun", "zhijun_references": [reference]}
+                if model == "openai/gpt-4o"
+                else {}
+            )
             await ws.send_json(
                 {
                     "type": "user_turn",
                     "thread_id": tid,
                     "model": model,
+                    **persona,
                     "messages": [
                         {
                             "role": "user",
@@ -130,9 +143,16 @@ async def test_assistant_native_model_switch_attachment_and_scope(env_with_provi
             )
             frames = await ws.drain_turn()
             assert any(f.get("type") == "token" for f in frames), frames
+            message = agent.last_request["messages"][-1]
+            assert message.additional_kwargs.get("assistant_persona") == persona.get(
+                "assistant_persona"
+            )
     history = (await client.get(f"/api/agents/{aid}/threads/{tid}/history", headers=auth)).json()
     users = [m for m in history["messages"] if m["role"] == "user"]
     assert [m["composer_context"]["model"] for m in users] == ["openai/gpt-4o", "second/model-b"]
+    assert users[0]["zhijun_evidence"] == [reference]
+    assert "zhijun_evidence" not in users[1]
+    assert "assistant_persona" not in json.dumps(users)
     assert history["model_ref"] == "second/model-b"
     assert server.services.agent_repo.get(aid).default_model == "openai/gpt-4o"
     assert (await client.get("/api/providers/active-model", headers=admin)).json() == before
@@ -170,3 +190,124 @@ async def test_assistant_preserves_workspace_policy_quota_and_existing_names(
     assert row.agent_id != existing and row.template_name == "default"
     assert row.name != "通用专家"
     assert json.loads(row.config_json)["backend"]["root_dir"] == str(root)
+
+
+async def test_sidebar_memory_replays_writes_and_only_returns_current_owner_atoms(
+    env_with_provider: Any,
+    monkeypatch: Any,
+) -> None:
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    client, server, admin = env_with_provider
+    alice = await create_user(client, admin, username="zhijun-memory-alice")
+    bob = await create_user(client, admin, username="zhijun-memory-bob")
+    uid = await resolve_user_id(client, admin, "zhijun-memory-alice")
+    profile = (await client.post("/api/assistant/profile", headers=alice)).json()
+    assert profile["sidebar_conversation_modes"] is True
+    aid = profile["agent_id"]
+    await client.post("/api/assistant/profile", headers=bob)
+    thread = (await client.post(f"/api/agents/{aid}/threads", headers=alice)).json()["thread_id"]
+    cfg = server.app_runtime.agent_registry._build_harness_config(
+        server.services.agent_repo.get(aid)
+    )
+    assert not cfg.memory_capture_enabled
+    assert not cfg.memory_extract_on_session_end
+    assert not cfg.memory_recall_inject_enabled
+    assert cfg.memory == ("AGENTS.md", "SOUL.md")
+
+    route = "/api/assistant/sidebar-memory"
+    conversation = f"/api/assistant/conversations/{thread}"
+    query = {"query": "小林是谁？我们上次聊了什么"}
+    remember = {
+        "action": "remember",
+        "requestId": str(uuid4()),
+        "text": "小林是大学室友，上周说要搬去杭州。",
+        "threadId": thread,
+    }
+    assert (await client.post(route, json=remember)).status_code == 401
+    assert (await client.post(route, headers=bob, json=remember)).status_code == 404
+    assert (await client.get(conversation, headers=alice)).json()["conversation_mode"] is None
+    forged = {**remember, "conversation_id": thread, "conversation_mode": "craft"}
+    for body in (remember, forged):
+        denied = await client.post(route, headers=alice, json=body)
+        assert denied.status_code == 403
+        assert denied.json()["detail"]["code"] == "ZHIJUN_ADVANCED_REQUIRED"
+    for mode in ("plan", None):
+        assert (
+            await client.patch(
+                conversation, headers=alice, json={"revision": 0, "conversation_mode": mode}
+            )
+        ).status_code == 422
+    saved_mode = await client.patch(
+        conversation, headers=alice, json={"revision": 0, "conversation_mode": "craft"}
+    )
+    assert saved_mode.status_code == 200, saved_mode.text
+    assert saved_mode.json()["revision"] == 1
+    assert (await client.get(conversation, headers=alice)).json()["conversation_mode"] == "craft"
+    assert (
+        await client.patch(
+            conversation, headers=alice, json={"revision": 0, "conversation_mode": "ask"}
+        )
+    ).status_code == 409
+    legacy = await client.post(route, headers=alice, json=remember)
+    assert legacy.status_code == 403
+    other = (await client.post(f"/api/agents/{aid}/threads", headers=alice)).json()["thread_id"]
+    assert (
+        await client.post(route, headers=alice, json={**forged, "threadId": other})
+    ).status_code == 404
+
+    async def source_messages(_: Any, agent_id: str, thread_id: str) -> list[Any]:
+        assert agent_id == aid and thread_id == thread
+        return [SimpleNamespace(id="source-message")]
+
+    monkeypatch.setattr(AssistantConversations, "messages", source_messages)
+    assert (
+        await client.post(route, headers=alice, json={**forged, "messageId": "wrong-message"})
+    ).status_code == 404
+    remember = {**forged, "messageId": "source-message"}
+    response = await client.post(route, headers=alice, json=remember)
+    assert response.status_code == 200, response.text
+    saved = response.json()["item"]
+    assert saved["threadId"] == thread
+    assert saved["messageId"] == "source-message"
+    assert (await client.post(route, headers=alice, json=remember)).json()["item"] == saved
+    assert (
+        await client.post(route, headers=alice, json={**remember, "conversation_mode": "ask"})
+    ).json()["item"] == saved
+    assert (
+        await client.post(route, headers=alice, json={**remember, "text": "different"})
+    ).status_code == 409
+    assert (await client.get(route, headers=alice, params=query)).json()["items"] == [saved]
+    assert (await client.get(route, headers=bob, params=query)).json()["items"] == []
+
+    correct = {
+        "action": "correct",
+        "requestId": str(uuid4()),
+        "id": saved["id"],
+        "text": "小林是大学室友，上周说要搬去苏州。",
+        "conversation_mode": "craft",
+    }
+    assert (await client.post(route, headers=bob, json=correct)).status_code == 404
+    fixed = (await client.post(route, headers=alice, json=correct)).json()["item"]
+    assert fixed["id"] != saved["id"] and "苏州" in fixed["text"]
+    assert (await client.post(route, headers=alice, json=correct)).json()["item"] == fixed
+    assert (
+        await client.post(route, headers=alice, json={**correct, "requestId": str(uuid4())})
+    ).status_code == 409
+    old_query = {"query": "杭州"}
+    assert (await client.get(route, headers=alice, params=old_query)).json()["items"] == []
+    assert not (await client.post(route, headers=alice, json=remember)).json()["item"]
+    forget = {
+        "action": "forget",
+        "requestId": str(uuid4()),
+        "id": fixed["id"],
+        "conversation_mode": "craft",
+    }
+    for _ in range(2):
+        assert (await client.post(route, headers=alice, json=forget)).json() == {
+            "item": None,
+            "applied": True,
+        }
+    assert (await client.get(route, headers=alice, params=query)).json()["items"] == []
+    assert server.services.thread_repo.get(thread).user_id == uid

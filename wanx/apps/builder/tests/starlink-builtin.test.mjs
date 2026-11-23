@@ -22,7 +22,12 @@ async function pack(source,target){const stream=await asar.createPackage(source,
 test('both editions preserve pinned Starlink with isolated product copy; stale UI and missing dependencies fail verification',async t=>{
  const temp=await directory(t);const digests=[];
  for(const edition of ['personal','team']) {
-  const result=await assembleStarlink(edition);
+  const buildRoot=path.join(root,`apps/${edition === 'personal' ? 'personal' : 'team'}-client/build`);
+  await mkdir(buildRoot,{recursive:true});
+  const outputRoot=await mkdtemp(path.join(buildRoot,'starlink-test-'));t.after(()=>rm(outputRoot,{recursive:true,force:true}));
+  const result=await assembleStarlink(edition,{outputRoot});
+  assert.equal(result.target,path.join(outputRoot,'applications/starlink'));
+  assert.equal(JSON.parse(await readFile(path.join(result.target,'application.manifest.json'),'utf8')).name,edition === 'personal' ? '知识星图' : '万象·星图');
   const stage=path.join(temp,edition),payload=path.join(stage,'applications/starlink');await mkdir(path.dirname(payload),{recursive:true});await cp(result.target,payload,{recursive:true});
   const archive=path.join(temp,edition+'.asar');await pack(stage,archive);
   assert.equal((await verifyPackagedStarlink(archive,path.join(root,edition==='personal'?'apps/personal-client':'apps/team-client'))).version,currentStarlinkVersion);
@@ -34,14 +39,17 @@ test('both editions preserve pinned Starlink with isolated product copy; stale U
   }
  }
  assert.notEqual(digests[0],digests[1]);
- assert.equal(JSON.parse(await readFile(path.join(root,'apps/personal-client/applications/starlink/application.manifest.json'),'utf8')).name,'知识星图');
- assert.equal(JSON.parse(await readFile(path.join(root,'apps/team-client/applications/starlink/application.manifest.json'),'utf8')).name,'万象·星图');
 });
 
 test('both editions verify Builder-filtered contracts and reject missing or changed runtime schemas',async t=>{
  const temp=await directory(t);
  for(const edition of ['personal','team']) {
-  const result=await assembleStarlink(edition);
+  const buildRoot=path.join(root,`apps/${edition === 'personal' ? 'personal' : 'team'}-client/build`);
+  await mkdir(buildRoot,{recursive:true});
+  const outputRoot=await mkdtemp(path.join(buildRoot,'starlink-test-'));t.after(()=>rm(outputRoot,{recursive:true,force:true}));
+  const result=await assembleStarlink(edition,{outputRoot});
+  assert.equal(result.target,path.join(outputRoot,'applications/starlink'));
+  assert.equal(JSON.parse(await readFile(path.join(result.target,'application.manifest.json'),'utf8')).name,edition === 'personal' ? '知识星图' : '万象·星图');
   const client=path.join(root,edition==='personal'?'apps/personal-client':'apps/team-client');
   const stage=path.join(temp,edition),payload=path.join(stage,'applications/starlink');
   await mkdir(path.dirname(payload),{recursive:true});

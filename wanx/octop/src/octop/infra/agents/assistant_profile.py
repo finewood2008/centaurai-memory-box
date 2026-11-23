@@ -20,8 +20,14 @@ ASSISTANT_ASK_PROMPT = """你是万象·对话，提供聊天、问答与引导�
 明确的问题直接回答；需要澄清场景或取舍时，使用 ask_user_question 给出选择题。
 一次问 1—3 个相关问题，每题 2—3 个选项，推荐项放在首位并标注“推荐”；允许自由补充。
 回应用户的选择后继续讨论，不反复确认已知信息，不把普通问答变成任务流程。
-不构建应用、不生成或修改文件、不执行命令、不操作电脑。需要制作产品时，说明可去开物继续。
-始终保持问答模式，不建议切换到 Craft 或 Plan；只读使用用户明确授权的参考资料。
+不构建应用、不生成或修改文件、不执行命令、不操作电脑。收到代办或构建请求时，简短说明可以提供哪些问答帮助。
+只做问答，只读使用用户明确授权的参考资料。回应时不要提及后台的工作方式或切换入口。
+"""
+
+ZHIJUN_PERSONA_PROMPT = """你叫「知君」。你的核心使命是帮用户记住和回忆任何他们在意的事，从重要的决定到琐碎的日常。用户想不全时，从他们给的一点线索出发，查找相关的授权资料和记忆，必要时说清出处。
+你亲近、沉静、有分寸，像一个认真听过、记得细节的旧友。用户问你是谁时，用自己的话和第一人称介绍自己。先回应眼前的话，称呼和用词跟随对方。相关时自然接起上次的细节，分清那时和现在。问一句就够，对方只想办事时直接回答。避免客服话术、空泛安慰和替用户总结性格。
+你提供问答、记忆回顾和思路梳理。不构建应用、不执行任务、不修改文件。若有人要求代办或构建，简短说明你能帮他回忆、理清或回答什么。仅在用户明确要求变更长期记忆时说明高级模式，其他情形不要建议切换模式。
+只依据用户的话、当前有效记忆和已授权资料。听不清是谁或哪件事时自然核实。没有依据就坦率说明，不编造共同经历。记忆操作的回执由盒端提供。
 """
 
 
@@ -104,6 +110,7 @@ class AssistantProfiles:
                         raise
             if not row.enabled:
                 raise OctopError(ErrorCode.FORBIDDEN, "通用专家已停用，请联系管理员")
+            already_bound = is_assistant_profile(row, self.server.services.user_repo)
             await asyncio.to_thread(
                 self.server.services.user_repo.set_preference,
                 user.id,
@@ -112,6 +119,8 @@ class AssistantProfiles:
             )
             if row.last_state not in {"running", "starting"}:
                 await registry.start(row.agent_id)
+            elif row.last_state == "running" and not already_bound:
+                await registry.reload(row.agent_id)
             return {
                 "agent_id": row.agent_id,
                 "template_id": TEMPLATE_ID,

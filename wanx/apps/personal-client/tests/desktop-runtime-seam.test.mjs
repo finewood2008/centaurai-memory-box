@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { prepareDesktopRuntime } from "../tools/start-desktop.mjs";
+import { prepareDesktopRuntime, resolveDesktopApplication, syncDesktopNativeBinaries } from "../tools/start-desktop.mjs";
 
 test("macOS development bundle presents MemoBox while preserving Electron and account identity", { skip: process.platform !== "darwin" }, async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "wanx-desktop-seam-"));
@@ -47,4 +47,37 @@ test("macOS development bundle presents MemoBox while preserving Electron and ac
 test("non-macOS development keeps the supplied runtime without touching a bundle", async () => {
   const executable = path.join("runtime", "electron.exe");
   assert.equal(await prepareDesktopRuntime({ platform: "win32", electronPath: executable, root: "unused" }), executable);
+});
+
+test("development startup requires the assembled app and never falls back to source", async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "wanx-development-app-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, "shell"));
+  await writeFile(path.join(root, "package.json"), JSON.stringify({ main: "shell/entry.mjs" }));
+  await writeFile(path.join(root, "shell/entry.mjs"), "// source entry");
+  await assert.rejects(resolveDesktopApplication(root), /CLIENT_BUILD_REQUIRED/);
+  const application = path.join(root, "build/app");
+  await mkdir(path.join(application, "shell"), { recursive: true });
+  await writeFile(path.join(application, "package.json"), JSON.stringify({ main: "shell/entry.mjs" }));
+  await assert.rejects(resolveDesktopApplication(root), /CLIENT_BUILD_REQUIRED/);
+  await writeFile(path.join(application, "shell/entry.mjs"), "// assembled entry");
+  assert.equal(await resolveDesktopApplication(root), application);
+});
+
+test("development native helpers are refreshed inside the assembled app", async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "wanx-development-native-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const source = path.join(root, "native/bin");
+  const target = path.join(root, "build/app/native/bin");
+  await mkdir(source, { recursive: true });
+  await writeFile(path.join(source, "wanx-helper"), "current native bytes");
+  await mkdir(target, { recursive: true });
+  await writeFile(path.join(target, "obsolete-helper"), "old bytes");
+  await syncDesktopNativeBinaries(root);
+  assert.equal(await readFile(path.join(target, "wanx-helper"), "utf8"), "current native bytes");
+  await assert.rejects(readFile(path.join(target, "obsolete-helper")), { code: "ENOENT" });
+  await writeFile(path.join(source, "wanx-helper"), "rebuilt bytes");
+  await syncDesktopNativeBinaries(root);
+  assert.equal(await readFile(path.join(target, "wanx-helper"), "utf8"), "rebuilt bytes");
+  assert.equal(await readFile(path.join(source, "wanx-helper"), "utf8"), "rebuilt bytes");
 });

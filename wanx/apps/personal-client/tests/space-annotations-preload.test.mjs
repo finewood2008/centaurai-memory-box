@@ -18,7 +18,10 @@ function harness() {
     ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
     control: { webContents, isDestroyed: () => false }, controlURL: frame.url,
     client: { snapshot: () => ({ account: { phase: "authenticated", accountId: "synthetic-owner" } }) },
-    personalSpace: { async operation(method, value) {
+    personalSpace: { async preview() {
+      if (failure) throw Object.assign(new Error(failure), { code: failure });
+      return { type: "text/plain", data: "dGVzdA==" };
+    }, async operation(method, value) {
       operations.push([method, value]);
       if (failure) throw Object.assign(new Error(failure), { code: failure });
       return { method, annotation: { revision: 4, tags: ["synthetic"] } };
@@ -63,6 +66,22 @@ test("annotation failures retain their main-process error codes through the real
     assert.equal(result.ok, false);
     assert.equal(result.code, code);
   }
+});
+
+test("preview download-only outcomes cross IPC without an Electron handler error", async () => {
+  const h = harness();
+  const handle = h.handlers.get("wanx-client:space-preview");
+  for (const code of ["SPACE_PREVIEW_DOWNLOAD", "SPACE_PREVIEW_TOO_LARGE", "SPACE_PREVIEW_UNSUPPORTED"]) {
+    h.fail(code);
+    assert.deepEqual(await handle(h.event, input), { previewRejection: code });
+    const result = await h.api.action("space.preview", input);
+    assert.equal(result.ok, false);
+    assert.equal(result.code, code);
+  }
+  h.fail("SPACE_CHUNK_INVALID");
+  await assert.rejects(handle(h.event, input), { code: "SPACE_CHUNK_INVALID" });
+  h.fail(null);
+  assert.equal((await h.api.action("space.preview", input)).value.data, "dGVzdA==");
 });
 
 test("annotation bridge keeps unknown operations closed and main-process sender checks intact", async () => {

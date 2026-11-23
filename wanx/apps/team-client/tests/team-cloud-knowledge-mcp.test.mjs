@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { createSpaceLinkBridge } from '../shell/space-links.mjs';
+import { createSpaceLinkBridge } from '../build/app/shell/space-links.mjs';
 
 const key = 'xg_synthetic_team_warehouse_key_never_a_real_credential';
 const timeout = { timeout: 10000 };

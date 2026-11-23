@@ -3,11 +3,17 @@
 from types import SimpleNamespace
 
 
-def memory_model_host() -> dict:
-    from octop_harness.llm.factory import build_chat_model
+def semantica_model_host() -> SimpleNamespace:
     from octop_harness.llm.session_header import aclose_session_http_clients
 
-    from octop.infra.agents.providers.store import ProviderStore
+    from octop.infra.agents.providers.application_defaults import (
+        managed_provider,
+        read_application_defaults,
+    )
+    from octop.infra.agents.providers.probe import build_probe_chat_model
+    from octop.infra.agents.providers.reasoning import reasoning_request_parameters
+    from octop.infra.agents.providers.resolved import list_resolved_models
+    from octop.infra.users.permissions import user_has_permission
     from octop.infra.utils.llm_text import llm_text_content
     from octop.infra.voice.manager import VoiceManager
 
@@ -35,29 +41,9 @@ def memory_model_host() -> dict:
             "image_generation": {"models": images, "defaultRef": default_image},
         }
 
-    return {
-        "providers": ProviderStore,
-        "build_chat_model": build_chat_model,
-        "close_clients": aclose_session_http_clients,
-        "text_content": llm_text_content,
-        "model_inventory": model_inventory,
-    }
-
-
-def semantica_model_host() -> SimpleNamespace:
-    from octop_harness.llm.session_header import aclose_session_http_clients
-
-    from octop.infra.agents.providers.application_defaults import (
-        managed_provider,
-        read_application_defaults,
-    )
-    from octop.infra.agents.providers.probe import build_probe_chat_model
-    from octop.infra.agents.providers.reasoning import reasoning_request_parameters
-    from octop.infra.agents.providers.resolved import list_resolved_models
-    from octop.infra.users.permissions import user_has_permission
-    from octop.infra.utils.llm_text import llm_text_content
 
     return SimpleNamespace(
+        memory_model_inventory=model_inventory,
         managed_provider=managed_provider,
         read_application_defaults=read_application_defaults,
         build_probe_chat_model=build_probe_chat_model,

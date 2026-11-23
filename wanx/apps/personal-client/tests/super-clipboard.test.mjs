@@ -210,6 +210,19 @@ test('retrying the same note recovers a failed local save without losing the dra
  assert.equal(f.service.snapshot().tasks.length,1);
 });
 
+test('an older box without the collection endpoint still opens the original note',async t=>{
+ const server=backend(),request=server.request.bind(server),blocks=[{type:'text',text:'原来的便签'}];
+ server.request=(route,options)=>{
+  if(route==='/note')return {blocks,revision:1,has_backup:false};
+  if(route==='/notes')throw Object.assign(Error('CLIPBOARD_SERVICE_UNAVAILABLE'),{code:'CLIPBOARD_SERVICE_UNAVAILABLE'});
+  return request(route,options);
+ };
+ const f=await fixture(t,{server});
+ const state=await f.service.operation('note-refresh');
+ assert.deepEqual(state.note.blocks,blocks);
+ assert.equal(state.notes,undefined);
+});
+
 test('a native note picker or paste finishing after a box switch cannot capture into the new target',async t=>{
  const f=await fixture(t);const chosen=[],clipboard=[];
  f.opts.chooseFiles=async()=>new Promise(resolve=>chosen.push(resolve));

@@ -37,7 +37,7 @@ export function validateApplicationManifest(input, { allowLegacyVersion = false,
     throw fail("APPLICATION_CONTRACT_UNSUPPORTED");
   if (manifest.protocolVersion >= 2) {
     const allowed = ["applicationId", "name", "version", "protocolVersion", "runtime", "launchMode", "platform", "arch", "entrypoint", "capabilities", "description", "compatibility", "critical", "releaseAccess",
-      "artifactId", "descriptor", "envelope", "installPath", "installedAt", "previous", "installationSource"];
+      "artifactId", "descriptor", "envelope", "installPath", "installedAt", "previous", "installationSource", "packageSha256"];
     if (Object.keys(manifest).some(key => !allowed.includes(key))) throw fail("APPLICATION_CONTRACT_UNSUPPORTED");
   }
   if (typeof manifest.applicationId !== "string" || !ID.test(manifest.applicationId)) throw fail("INVALID_APPLICATION_ID");

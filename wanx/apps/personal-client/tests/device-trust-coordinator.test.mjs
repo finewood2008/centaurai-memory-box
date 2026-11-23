@@ -6,8 +6,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { createDeviceTrustCoordinator as createCoordinator } from '../device-trust/coordinator.mjs';
-import { protectPrivateDirectory } from '../shell/private-storage.mjs';
-// windows-device-trust-tests-v1: supply the same Windows directory protection used by Electron main.
+import { createPrivateDirectoryFixture } from './support/private-directory.mjs';
+// windows-device-trust-tests-v1: protect synthetic identity directories on Windows.
+const protectPrivateDirectory = createPrivateDirectoryFixture();
 const createDeviceTrustCoordinator = options => createCoordinator({ ...options, protectDirectory: protectPrivateDirectory });
 import { createIdentityVault as createVault } from '../device-trust/identity-vault.mjs';
 const createIdentityVault = options => createVault({ ...options, protectDirectory: protectPrivateDirectory });

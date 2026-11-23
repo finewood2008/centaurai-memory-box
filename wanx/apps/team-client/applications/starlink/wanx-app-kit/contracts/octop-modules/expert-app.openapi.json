@@ -1,0 +1,1004 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "WANX Octop · expert-app",
+    "description": "**CentaurAI-WANX** is a smarter, self-hosted AI assistant for multiple users and agents. All routes are served under `/api`.\n\n## Authentication\n\nMost endpoints require a JWT bearer token:\n\n1. Complete initial setup via `/api/setup/*` (first install only).\n2. `GET /api/auth/captcha` then `POST /api/auth/login` with `username` and `password`\n   (and `captcha_token` when a strong provider is active), or complete SSO with\n   `/api/auth/oidc/*` or `/api/auth/oauth/*` when a provider is enabled.\n3. Send `Authorization: Bearer <access_token>` on subsequent requests.\n\nAccess tokens use sliding renewal: when less than one-third of\n`access_token_ttl_seconds` remains, authenticated responses may include a fresh\ntoken in the `X-Octop-Access-Token` header. Clients should replace the stored\ntoken when present.\n\nPublic endpoints (no login token): `/api/docs`, `/api/openapi.json`, `/api/health`,\n`/api/setup/*` (wizard authorization applies), `/api/auth/login`, `/api/auth/register`,\n`/api/auth/captcha`, `/api/auth/oidc/status`, `/api/auth/oidc/start`,\n`/api/auth/oidc/callback`, `/api/auth/oidc/exchange`, `/api/auth/oauth/status`,\n`/api/auth/oauth/start`, `/api/auth/oauth/callback`, `/api/auth/oauth/exchange`,\n`/api/auth/invite/validate`,\n`/api/auth/invite/redeem`, `/api/connectors/oauth/callback`,\nand `/api/internal/mcp/*`.\n\n## Agent scope\n\nMany agent-scoped routes use the agent ID in the URL path (`/api/agents/{agent_id}/…`).\nRoutes first check the signed token's application scope; legacy tokens default to WANX.\nResources in another application are treated as not found, including for administrators.\nWithin the same application, each route applies its ownership or shared-resource access\nrules. WANX administrators may bypass ownership where supported; Zhijun personal profiles,\nmemories and uploaded sources require the owner.\n\n## Streaming chat\n\nDashboard live turns use **WebSocket** at `/api/agents/{agent_id}/chat/ws` (pass JWT as\n`?token=` query param). Send `{\"type\":\"user_turn\", ...}` frames; the server replies with JSON\nchunks matching the harness stream format, ending with `{\"type\":\"done\"}` or\n`{\"type\":\"error\",\"message\":\"...\"}`.\n\nText-type dashboard pushes (cron reminders, proactive care) also emit\n`{\"type\":\"dashboard_push\", ...}` on `/api/notifications/ws` (same `?token=` auth) so the\nSPA can show a toast even when the chat socket is not subscribed.\n\nHITL resume still uses `POST /api/agents/{agent_id}/chat/hitl/resume` (SSE).\n\n## Knowledge libraries\n\n`/api/knowledge-bases` uses the signed application scope for creation, visibility,\ndocument access, and citations. Existing libraries remain in WANX. Zhijun libraries\nare private to their owner and use local document parsers, downloaded native ONNX\nembeddings and RapidOCR. Remote WANX embedding/OCR settings do not affect Zhijun;\nmissing local components are reported as unavailable without remote fallback.\n",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/wanx-expert-app/v1/context": {
+      "get": {
+        "tags": [
+          "expert-app"
+        ],
+        "summary": "Context",
+        "operationId": "context_api_wanx_expert_app_v1_context_get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-wanx-application-contract": {
+          "operationId": "expertAppContext",
+          "summary": "Read deployed expert application context",
+          "tags": [
+            "expert-app"
+          ],
+          "parameters": [],
+          "responses": {
+            "200": {
+              "description": "Contract response",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/WanxApp_expert-app-context.v1"
+                  }
+                }
+              }
+            },
+            "default": {
+              "$ref": "#/components/responses/WanxApp_Error"
+            }
+          },
+          "x-wanx-permission": "http.request",
+          "x-wanx-status": "ready-for-acceptance"
+        },
+        "x-wanx-permission": "http.request",
+        "x-wanx-status": "ready-for-acceptance"
+      }
+    },
+    "/api/wanx-expert-app/v1/invoke": {
+      "post": {
+        "tags": [
+          "expert-app"
+        ],
+        "summary": "Invoke",
+        "operationId": "invoke_api_wanx_expert_app_v1_invoke_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "x-wanx-application-contract": {
+          "operationId": "expertAppInvoke",
+          "summary": "Invoke the bound expert application contract",
+          "tags": [
+            "expert-app"
+          ],
+          "parameters": [],
+          "responses": {
+            "200": {
+              "description": "Contract response",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/WanxApp_expert-app-result.v1"
+                  }
+                }
+              }
+            },
+            "default": {
+              "$ref": "#/components/responses/WanxApp_Error"
+            }
+          },
+          "x-wanx-permission": "http.request",
+          "x-wanx-status": "ready-for-acceptance",
+          "requestBody": {
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WanxApp_expert-app-invoke.v1"
+                }
+              }
+            }
+          }
+        },
+        "x-wanx-permission": "http.request",
+        "x-wanx-status": "ready-for-acceptance"
+      }
+    }
+  },
+  "components": {
+    "responses": {
+      "WanxApp_Error": {
+        "description": "按 errors.v1.json 返回稳定 code",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/WanxApp_ErrorEnvelope"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "WanxApp_ErrorEnvelope": {
+        "type": "object",
+        "properties": {
+          "detail": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "code"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                }
+              }
+            ]
+          },
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "WanxApp_expert-app-context.v1": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "schemaVersion": {
+            "const": 1
+          },
+          "scopeId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "applicationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "baseApplicationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "slotApplicationId": {
+            "type": "string",
+            "pattern": "^ai\\.wanx\\.selfmade\\.[a-f0-9]{32}$"
+          },
+          "boxId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "environment": {
+            "enum": [
+              "dev",
+              "prod"
+            ]
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "operationId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{32}$"
+          },
+          "artifactHash": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "packageSha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "runtimeNamespace": {
+            "const": "studio"
+          },
+          "contract": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "const": "wanx.expert-app.v1"
+              },
+              "version": {
+                "const": "1.0.0"
+              },
+              "features": {
+                "type": "array",
+                "items": {
+                  "enum": [
+                    "context",
+                    "expert",
+                    "data"
+                  ]
+                },
+                "uniqueItems": true,
+                "minItems": 3,
+                "maxItems": 3
+              }
+            },
+            "required": [
+              "id",
+              "version",
+              "features"
+            ]
+          },
+          "backend": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "schemaVersion": {
+                "const": 1
+              },
+              "productId": {
+                "const": "wanx"
+              },
+              "deviceId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "observedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "authorization": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "status": {
+                    "const": "ready"
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              },
+              "contracts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "const": "wanx.expert-app.v1"
+                    },
+                    "version": {
+                      "const": "1.0.0"
+                    },
+                    "features": {
+                      "type": "array",
+                      "items": {
+                        "enum": [
+                          "context",
+                          "expert",
+                          "data"
+                        ]
+                      },
+                      "uniqueItems": true,
+                      "minItems": 3,
+                      "maxItems": 3
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "version",
+                    "features"
+                  ]
+                },
+                "minItems": 1,
+                "maxItems": 1
+              },
+              "resources": {
+                "const": []
+              },
+              "bindings": {
+                "const": []
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "productId",
+              "deviceId",
+              "observedAt",
+              "authorization",
+              "contracts",
+              "resources",
+              "bindings"
+            ]
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "scopeId",
+          "applicationId",
+          "baseApplicationId",
+          "slotApplicationId",
+          "boxId",
+          "environment",
+          "generation",
+          "operationId",
+          "artifactHash",
+          "packageSha256",
+          "runtimeNamespace",
+          "contract",
+          "backend"
+        ]
+      },
+      "WanxApp_expert-app-invoke.v1": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "operation": {
+                "const": "expert.run"
+              },
+              "input": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{32}$"
+                  },
+                  "text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 12000,
+                    "pattern": "\\S"
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "text"
+                ]
+              }
+            },
+            "required": [
+              "operation",
+              "input"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "operation": {
+                "const": "expert.tasks"
+              },
+              "input": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "runId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9._-]{1,128}$"
+                  }
+                },
+                "required": []
+              }
+            },
+            "required": [
+              "operation",
+              "input"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "operation": {
+                "const": "expert.cancel"
+              },
+              "input": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "runId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9._-]{1,128}$"
+                  }
+                },
+                "required": [
+                  "runId"
+                ]
+              }
+            },
+            "required": [
+              "operation",
+              "input"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "operation": {
+                "const": "data.list"
+              },
+              "input": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "collection": {
+                    "const": "state"
+                  },
+                  "offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 200
+                  }
+                },
+                "required": [
+                  "collection"
+                ]
+              }
+            },
+            "required": [
+              "operation",
+              "input"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "operation": {
+                "const": "data.get"
+              },
+              "input": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "collection": {
+                    "const": "state"
+                  },
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  }
+                },
+                "required": [
+                  "collection",
+                  "id"
+                ]
+              }
+            },
+            "required": [
+              "operation",
+              "input"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "operation": {
+                "const": "data.put"
+              },
+              "input": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "collection": {
+                    "const": "state"
+                  },
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "value": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "json": {
+                        "type": "string",
+                        "maxLength": 262144
+                      }
+                    },
+                    "required": [
+                      "json"
+                    ]
+                  },
+                  "expectedRevision": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "collection",
+                  "id",
+                  "value"
+                ]
+              }
+            },
+            "required": [
+              "operation",
+              "input"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "operation": {
+                "const": "data.delete"
+              },
+              "input": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "collection": {
+                    "const": "state"
+                  },
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "expectedRevision": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "collection",
+                  "id"
+                ]
+              }
+            },
+            "required": [
+              "operation",
+              "input"
+            ]
+          }
+        ]
+      },
+      "WanxApp_expert-app-result.v1": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "run": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9._-]{1,128}$"
+                  },
+                  "state": {
+                    "enum": [
+                      "queued",
+                      "running",
+                      "cancel_requested",
+                      "succeeded",
+                      "failed",
+                      "cancelled",
+                      "interrupted"
+                    ]
+                  },
+                  "text": {
+                    "type": "string",
+                    "maxLength": 12000
+                  },
+                  "result": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 1048576
+                  },
+                  "errorCode": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 128
+                  },
+                  "createdAt": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "updatedAt": {
+                    "type": "number",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "id",
+                  "state",
+                  "text",
+                  "result",
+                  "errorCode",
+                  "createdAt",
+                  "updatedAt"
+                ]
+              },
+              "context": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "scopeId": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  }
+                },
+                "required": [
+                  "scopeId"
+                ]
+              }
+            },
+            "required": [
+              "run"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9._-]{1,128}$"
+                    },
+                    "state": {
+                      "enum": [
+                        "queued",
+                        "running",
+                        "cancel_requested",
+                        "succeeded",
+                        "failed",
+                        "cancelled",
+                        "interrupted"
+                      ]
+                    },
+                    "text": {
+                      "type": "string",
+                      "maxLength": 12000
+                    },
+                    "result": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 1048576
+                    },
+                    "errorCode": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 128
+                    },
+                    "createdAt": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "updatedAt": {
+                      "type": "number",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "state",
+                    "text",
+                    "result",
+                    "errorCode",
+                    "createdAt",
+                    "updatedAt"
+                  ]
+                },
+                "maxItems": 200
+              },
+              "context": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "scopeId": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  }
+                },
+                "required": [
+                  "scopeId"
+                ]
+              }
+            },
+            "required": [
+              "items",
+              "context"
+            ]
+          },
+          {
+            "type": "null"
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "json": {
+                "type": "string",
+                "maxLength": 262144
+              },
+              "_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "_revision": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "json",
+              "_id",
+              "_revision"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "json": {
+                      "type": "string",
+                      "maxLength": 262144
+                    },
+                    "_id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "_revision": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "json",
+                    "_id",
+                    "_revision"
+                  ]
+                },
+                "maxItems": 200
+              },
+              "total": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "items",
+              "total"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "deleted": {
+                "const": true
+              }
+            },
+            "required": [
+              "deleted"
+            ]
+          }
+        ]
+      }
+    },
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "JWT from `POST /api/auth/login` (`access_token` field)."
+      }
+    }
+  },
+  "tags": [],
+  "x-wanx-supplemental-routes": [],
+  "x-wanx-contract": "wanx-business-api/1",
+  "x-wanx-catalog": "../api-catalog.v1.json",
+  "x-wanx-permissions": "../permissions.v1.json"
+}

@@ -5,7 +5,7 @@ import json
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from .prd import ProductRequirement, prd_missing
 
 CAPABILITIES = {"data", "model", "files", "knowledge", "reports", "foundation", "dialogue"}
@@ -47,7 +47,19 @@ class Solution(Input):
     outputs: str = Field(default="", max_length=4000)
     fields: list[str] = Field(default_factory=list)
     acceptance: list[str] = Field(default_factory=list)
-    capabilities: list[Literal["data", "model", "files", "knowledge", "reports", "foundation", "dialogue"]] = Field(default_factory=lambda: ["data", "model"])
+    capabilities: list[str] = Field(default_factory=lambda: ["data", "model"])
+
+    @field_validator('capabilities')
+    @classmethod
+    def known_capabilities(cls, values):
+        # Persisted miniapp snapshots keep their vocabulary; new public IDs
+        # are validated against the SDK rather than another copied enum.
+        if not set(values) <= CAPABILITIES:
+            from .public_capabilities import catalog
+            if not set(values) <= CAPABILITIES | catalog().keys():
+                raise ValueError('CAPABILITY_UNSUPPORTED')
+        return values
+
     dependencies: list[Dependency] = Field(default_factory=list)
     prd: ProductRequirement | None = None
 
@@ -55,7 +67,7 @@ class Solution(Input):
 GAPS = [
     (r"公众号|微信.*发布|自动发布", "external-publishing", "外部平台发布", "首版尚无外部发布契约"),
     (r"定时|每天自动|周期执行|每周自动", "scheduling", "定时执行", "首版尚无后台调度契约"),
-    (r"连接器|CRM同步|ERP|调用技能|调用专家", "connectors", "外部系统或工具调用", "首版仅提供模型、应用数据与选定文本资料"),
+    (r"连接器|CRM同步|ERP|调用技能", "connectors", "外部系统或工具调用", "外部系统调用需对应的公共合同与授权"),
     (r"PDF|Word|Excel|OCR|扫描件", "document-parsing", "非文本资料解析", "首版只读取 UTF-8 文本、Markdown、CSV、JSON"),
 ]
 

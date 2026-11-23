@@ -20,7 +20,14 @@ from centuarai_local_data_gate import semantica_bootstrap, starlink_workbench
 from . import conversation_contract, desktop_workbench, modeling_contract, warehouse_contract
 from .config import DEFAULT_URL, upstream_origin
 from .document_contract import BLOCK_QUERY, validate_block_page
-from .transport_contract import operation_timeout, owner_error
+from . import annotation_contract
+from .transport_contract import (
+    operation_timeout,
+    owner_error,
+    owner_error_message,
+    private_import_error,
+    private_search_error,
+)
 
 APPS = {"wanx", "semantica", "centaurai.wanx.semantica"}
 NAMESPACE = uuid.UUID("8ae54f40-4054-4bba-a2e2-06e1c43d7514")
@@ -175,6 +182,8 @@ RULES = [
     ("GET", r"/(?:graph|owner/graph)", GRAPH),
     ("GET", rf"/documents/{ID}", frozenset({"segment_offset", "segment_limit"}) | BLOCK_QUERY),
     ("GET", rf"/documents/{ID}/text", frozenset({"version_id", "start", "end"})),
+    ("GET", rf"/documents/{ID}/source-annotation", frozenset()),
+    ("PUT", rf"/documents/{ID}/source-annotation", frozenset()),
     ("GET", rf"/documents/{ID}/blob", BLOB),
     ("GET", rf"/(?:jobs|evidence|operations)/{ID}", frozenset()),
     ("GET", r"/skills", PAGE | {"keyword"}),
@@ -265,6 +274,10 @@ def resolve(method: str, path: str) -> Operation:
         if not root and (scoped := re.fullmatch(rf"/warehouses/(?P<id>{UUID})(?P<path>/.*)", path)):
             warehouse, path = scoped["id"], scoped["path"]
         rules = ROOT_RULES if root else RULES
+        if warehouse and path == "/failure-events":
+            if method != "GET":
+                raise DesktopError("SEMANTICA_OPERATION_NOT_ALLOWED", 405)
+            return Operation(path, frozenset({"after", "limit"}), warehouse)
         if method == "DELETE" and warehouse and re.fullmatch(rf"/documents/{ID}", path):
             return Operation(path, frozenset(), warehouse)
         if warehouse and conversation_contract.matches(path):
@@ -311,6 +324,18 @@ def prepare(
 ) -> tuple[dict[str, Any] | None, str | None]:
     if set(query) - operation.query_keys:
         raise DesktopError("SEMANTICA_QUERY_NOT_ALLOWED", 422)
+    if operation.path == "/failure-events":
+        for key, minimum, maximum in (("after", 0, 9007199254740991), ("limit", 1, 500)):
+            value = query.get(key)
+            if value is not None and (
+                not re.fullmatch(r"[0-9]{1,16}", value) or not minimum <= int(value) <= maximum
+            ):
+                raise DesktopError("SEMANTICA_INVALID_REQUEST", 422)
+    if re.fullmatch(rf'/documents/{ID}/source-annotation', operation.path):
+        try:
+            return body, annotation_contract.validate(method, body, query)
+        except ValueError as exc:
+            raise DesktopError('SEMANTICA_INVALID_REQUEST', 422) from exc
     if method == "DELETE":
         if (
             not operation.warehouse
@@ -392,6 +417,13 @@ def prepare(
             if operation.path.startswith("/reasoning/")
             else {"query", "document_ids", "entity_types", "limit"}
         )
+        if operation.path == "/search" and operation.warehouse and not operation.public:
+            keys.add("annotation_search")
+            if "annotation_search" in payload:
+                try:
+                    annotation_contract.AnnotationSearch.model_validate(payload["annotation_search"])
+                except ValueError as exc:
+                    raise DesktopError("SEMANTICA_INVALID_REQUEST", 422) from exc
         if set(payload) - keys:
             raise DesktopError("SEMANTICA_QUERY_NOT_ALLOWED", 422)
         if not operation.public:
@@ -421,6 +453,28 @@ def strict_json(raw: bytes | str) -> Any:
         raise ValueError("JSON nesting too deep") from exc
 
 
+_MODEL_JSON_TOKENS = re.compile(r'\\.|["\[\]{}]', re.DOTALL)
+_MAX_MODEL_JSON_DEPTH = 128
+
+
+def parse_model_output(raw: str) -> Any:
+    # Limit nesting before decoding, independently of the Python JSON decoder.
+    depth = 0
+    in_string = False
+    for match in _MODEL_JSON_TOKENS.finditer(raw):
+        token = match[0]
+        if token == '"':
+            in_string = not in_string
+        elif not in_string and len(token) == 1:
+            if token in "[{":
+                depth += 1
+                if depth > _MAX_MODEL_JSON_DEPTH:
+                    raise ValueError("JSON nesting too deep")
+            else:
+                depth -= 1
+    return strict_json(raw)
+
+
 def decode(
     status: int,
     raw: bytes,
@@ -442,6 +496,10 @@ def decode(
     if not 200 <= status < 300:
         error = value if isinstance(value, dict) else {}
         error = error.get("detail") if isinstance(error.get("detail"), dict) else error
+        if not public and (import_code := private_import_error(status, error)):
+            raise DesktopError(import_code, status)
+        if not public and (search_code := private_search_error(status, error)):
+            raise DesktopError(search_code, status)
         code, message = error.get("code"), error.get("message")
         if (
             isinstance(code, str)
@@ -453,9 +511,7 @@ def decode(
         ):
             raise DesktopError(code, status)
         if native_workbench and not public and owner_error(code) and 400 <= status < 600:
-            # The native client owns its safe domain wording. Never relay
-            # domain diagnostics, including a nominal message field.
-            raise DesktopError(code, status)
+            raise DesktopError(code, status, owner_error_message(code, message))
         if (
             isinstance(code, str)
             and re.fullmatch(

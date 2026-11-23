@@ -387,6 +387,7 @@ class ModelCapabilityContractTests(unittest.TestCase):
     def test_derived_tasks_only_follow_the_finite_non_escalating_worker_graph(self):
         expected = {
             "parse": {"index", "sensitive"},
+            "extraction": {"publication"},
             "publication": {"index", "sensitive"},
             "index": {"sensitive"},
         }
@@ -409,6 +410,8 @@ class ModelCapabilityContractTests(unittest.TestCase):
             self.denied(
                 lambda value: contract.validate_task_transition("parse", "index", value), depth
             )
+        contract.validate_task_transition("index", "sensitive", 3)
+        self.denied(lambda value: contract.validate_task_transition("extraction", "publication", value), 3)
 
 
 if __name__ == "__main__":

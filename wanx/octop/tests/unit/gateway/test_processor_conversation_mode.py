@@ -2,19 +2,25 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from langchain_core.messages import HumanMessage
-from octop_gateway.models import ChannelSubject, InboundMessage, TextContent
+from octop_gateway.models import ChannelSubject, InboundMessage, MessageEvent, TextContent
 
 from octop.infra.gateway.process.processor import GlobalProcessor, _overwrite_last_user_text
 from octop.infra.gateway.slash.dispatcher import SlashDispatcher
 
 
 def _processor(*, thread: SimpleNamespace | None) -> GlobalProcessor:
+    @asynccontextmanager
+    async def thread_invocation(_agent_id: str, _thread_id: str):
+        yield
+
     agent_manager = MagicMock()
+    agent_manager.thread_invocation.side_effect = thread_invocation
     agent_manager.merge_turn_mcp_servers = MagicMock(return_value=None)
     agent_manager.get_row = MagicMock(return_value=None)
     agent_manager.default_mcp_servers = MagicMock(return_value=[])
@@ -176,3 +182,102 @@ def test_default_assistant_stays_in_ask_despite_craft_or_old_plan() -> None:
     processor._thread_registry.update_composer.assert_called_once_with(
         "thr", conversation_mode="ask", pending_plan_path=None
     )
+
+
+@pytest.mark.asyncio
+async def test_verified_zhijun_im_remember_and_desktop_recall_use_the_bound_assistant(
+    tmp_path, monkeypatch
+) -> None:
+    from wanx_bridge.zhijun_memory import run_memory
+
+    processor = _processor(
+        thread=SimpleNamespace(
+            agent_id="assistant", conversation_mode="ask", pending_plan_path=None, model_ref=None
+        )
+    )
+    row = SimpleNamespace(
+        agent_id="assistant", application_id="wanx", user_id=1, default_model=None
+    )
+    processor._agent_manager.paths = SimpleNamespace(root=tmp_path)
+    processor._agent_manager.get_row.return_value = row
+    append_messages = AsyncMock(side_effect=lambda _thread, messages: messages)
+    processor._agent_manager.get_agent.return_value = SimpleNamespace(
+        _mcp_tools=[], aappend_messages=append_messages
+    )
+    processor._agent_repo.get.return_value = row
+    processor._user_repo.get.return_value = SimpleNamespace(
+        locale="zh", preferences_json='{"wanx_assistant_agent_id":"assistant"}'
+    )
+    processor._thread_registry.get_or_create_by_key = AsyncMock(return_value="thr")
+    processor._thread_registry.get_bound_thread_id.return_value = None
+    processor.loop_message_interceptor = AsyncMock(return_value=True)
+    processor.resolve_zhijun_turn_mode = MagicMock(return_value="ask")
+    msg = InboundMessage(
+        channel_id="phone",
+        channel_type="weixin",
+        tenant_id="assistant",
+        channel_subject=ChannelSubject(subject_id="owner", chat_type="dm"),
+        content=[TextContent(text="记住，小林下周搬去杭州")],
+        metadata={"message_id": "provider-message", "conversation_mode": "craft"},
+    )
+    denied = [event async for event in processor(msg)]
+    assert "高级模式" in denied[0].content[0].text
+    filters = {"action": "search", "query": "小林", "limit": 10, "offset": 0}
+    assert run_memory(tmp_path, 1, filters)["items"] == []
+
+    processor.resolve_zhijun_turn_mode.return_value = "craft"
+    response = [event async for event in processor(msg)]
+    assert response[0].content[0].text == "已记住：小林下周搬去杭州"
+    retry = [event async for event in processor(msg)]
+    assert retry[0].content[0].text == response[0].content[0].text
+    assert run_memory(tmp_path, 2, filters)["items"] == []
+    items = run_memory(tmp_path, 1, filters)["items"]
+    assert len(items) == 1
+    assert items[0]["title"] == "微信私聊"
+    assert items[0]["threadId"] == "thr"
+    assert items[0]["messageId"] == append_messages.await_args_list[2].args[1][0].id
+
+    captured = []
+
+    async def fake_stream(_manager, _agent_id, request, **_kwargs):
+        captured.append(request)
+        yield MessageEvent.text("杭州")
+
+    monkeypatch.setattr("octop.infra.gateway.process.processor.project_stream", fake_stream)
+    recall = msg.model_copy(update={"content": [TextContent(text="小林搬去哪里？")]})
+    assert [event async for event in processor(recall)]
+    (im_request,) = captured
+    assert im_request["configurable"]["conversation_mode"] == "craft"
+    assert im_request["messages"][0].additional_kwargs["assistant_persona"] == "zhijun"
+    processor._thread_registry.update_composer.assert_called_once_with(
+        "thr", conversation_mode="craft", pending_plan_path=None
+    )
+
+    desktop = InboundMessage(
+        channel_id="ws",
+        channel_type="dashboard",
+        tenant_id="assistant",
+        channel_subject=ChannelSubject(subject_id="1"),
+        content=[TextContent(text="小林搬去哪里？")],
+    )
+    prepared = await processor._build_dashboard_request(
+        desktop,
+        agent_id="assistant",
+        user_id=1,
+        session_key="desktop",
+        thread_id="desktop-thread",
+        meta={
+            "assistant_persona": "zhijun",
+            "conversation_mode": "craft",
+            "zhijun_turn_mode": "ask",
+            "zhijun_agent_only": True,
+            "zhijun_references": [
+                {"source": "memmy", "title": "Claude Code", "text": "小林还在找房。"}
+            ],
+        },
+    )
+    own_memories, references = prepared["zhijun_prepared"]
+    assert prepared["configurable"]["conversation_mode"] == "ask"
+    assert own_memories == []
+    assert [ref["title"] for ref in references] == ["Claude Code"]
+    assert prepared["messages"][0].additional_kwargs["zhijun_evidence"] == references

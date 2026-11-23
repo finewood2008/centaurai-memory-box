@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import { PROVISIONING_SERVICE_UUID, DEVICE_INFO_UUID, COMMAND_UUID, STATUS_UUID } from '@nexusaos/local-provisioning-electron-ble';
 
-const bundle = await readFile(new URL('../local-ui/renderer/device-setup.bundle.js', import.meta.url), 'utf8');
+const bundle = await readFile(new URL('../build/app/local-ui/renderer/device-setup.bundle.js', import.meta.url), 'utf8');
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
 // Run the shipped renderer and SDK. Simulate only the physical Bluetooth API;

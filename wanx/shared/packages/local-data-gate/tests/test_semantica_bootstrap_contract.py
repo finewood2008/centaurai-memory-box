@@ -21,6 +21,29 @@ class BootstrapContractTests(unittest.TestCase):
                 self.assertEqual(contract.operation_name('POST', path), operation)
                 self.assertEqual(contract.validate_body('POST', path, body), body['operation_id'])
 
+    def test_profiles_are_bounded_business_data_for_both_creation_paths(self):
+        contract = self.contract()
+        for path, body in (('/warehouses', {}), ('/modeling/onboarding/test/warehouse', {'expected_revision': 1})):
+            body = {'operation_id': 'create', 'name': '检修仓', **body}
+            profile = {'occupation': '运维', 'service_objects': ['生产部门'], 'focus_objects': ['A 产线']}
+            self.assertEqual(contract.validate_body('POST', path, {**body, 'warehouse_scope': profile}), 'create')
+            for bad in ({'workspace_id': 'foreign'}, {'focus_objects': ['  ']}, {'service_objects': ['A'] * 7}):
+                with self.assertRaises(ValueError):
+                    contract.validate_body('POST', path, {**body, 'warehouse_scope': bad})
+
+    def test_guided_creation_accepts_existing_context_fields_alongside_focus_objects(self):
+        contract = self.contract()
+        profile = {'industry':'制造业', 'background':'厂区维护', 'material_types':'检修单',
+                   'questions':'哪些设备反复停机', 'focus_objects':['A 产线']}
+        body = {'operation_id':'create', 'name':'检修仓', 'warehouse_scope':profile}
+        guided = '/modeling/onboarding/test/warehouse'
+        self.assertEqual(contract.validate_body('POST', guided, {**body,'expected_revision':1}), 'create')
+        with self.assertRaises(ValueError):
+            contract.validate_body('POST', '/warehouses', body)
+        with self.assertRaises(ValueError):
+            contract.validate_body('POST', guided, {**body, 'expected_revision':1,
+                'warehouse_scope':{**profile,'industry':'业'*201}})
+
     def test_literal_warehouse_runtime_is_a_read_not_a_warehouse_identifier(self):
         contract = self.contract()
         self.assertEqual(contract.operation_name('GET', '/warehouses/runtime'), 'get_warehouse_runtime')
@@ -34,6 +57,23 @@ class BootstrapContractTests(unittest.TestCase):
                     contract.validate_query('GET', '/warehouses/runtime', query)
         with self.assertRaises(ValueError):
             contract.validate_body('GET', '/warehouses/runtime', {'actor_id': 'other'})
+
+    def test_warehouse_deletion_requires_a_target_path_and_confirmation(self):
+        contract = self.contract()
+        path = '/warehouses/10000000-0000-4000-8000-000000000001/delete'
+        self.assertEqual(
+            contract.validate_body('POST', path + '/prepare', {'operation_id': 'prepare'}),
+            'prepare',
+        )
+        body = {'operation_id': 'delete', 'confirmation_token': 'intent', 'typed_name': '测试仓'}
+        self.assertEqual(contract.validate_body('POST', path, body), 'delete')
+        for changed in (
+            {'confirmation_token': ''}, {'typed_name': []}, {'typed_name': ' '},
+            {'warehouse_id': '20000000-0000-4000-8000-000000000002'},
+        ):
+            with self.subTest(changed=changed):
+                with self.assertRaises(ValueError):
+                    contract.validate_body('POST', path, {**body, **changed})
 
     def test_initial_suggestion_and_model_check_shapes(self):
         contract = self.contract()

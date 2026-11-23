@@ -2989,6 +2989,70 @@
           }
         }
       }
+    },
+    "/api/wanx-expert-app/v1/context": {
+      "get": {
+        "operationId": "expertAppContext",
+        "summary": "Read deployed expert application context",
+        "tags": [
+          "expert-app"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Contract response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "schemas/expert-app-context.v1.schema.json"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-wanx-permission": "http.request",
+        "x-wanx-status": "ready-for-acceptance"
+      }
+    },
+    "/api/wanx-expert-app/v1/invoke": {
+      "post": {
+        "operationId": "expertAppInvoke",
+        "summary": "Invoke the bound expert application contract",
+        "tags": [
+          "expert-app"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Contract response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "schemas/expert-app-result.v1.schema.json"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-wanx-permission": "http.request",
+        "x-wanx-status": "ready-for-acceptance",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "schemas/expert-app-invoke.v1.schema.json"
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {

@@ -4,6 +4,7 @@ import pytest
 from wanx_studio.client_launch import ClientLaunch
 from wanx_studio.contracts import StudioError
 from test_preparation import env,op
+from test_public_capabilities import make_standard
 
 class LaunchContext:
  def __init__(self,base):self.base=base;self.reads=[];self.archives=[]
@@ -24,6 +25,7 @@ def body(pid=None):return {'operationId':op(),'projectId':pid,'expectedRevision'
 @pytest.fixture
 async def launch(env):
  svc,pid,calls=env
+ make_standard(svc,pid)
  provider=LaunchContext(svc.context_provider);svc.context_provider=provider
  svc.engines.provider=lambda owner:{'codex':{'command':'codex-acp','args':[],'trusted':True,'enabled':True}}
  bridge=ClientLaunch(svc);svc.client_launch=bridge
@@ -110,7 +112,7 @@ async def test_blocked_credential_source_is_explicitly_excluded_without_sending_
 async def test_known_launch_capabilities_probe_and_resume_pending_user_turn(launch):
  svc,pid,calls,bridge,provider=launch
  await bridge.configure('alice',body(pid));await bridge.start('alice',pid)
- p=svc.store.get('alice',pid);x=p['preparation'];x['required']=['data','model'];p['solution']['capabilities']=['data','model'];x['report']=None
+ p=svc.store.get('alice',pid);x=p['preparation'];x['required']=['host.session'];p['solution']['capabilities']=['host.session'];x['report']=None
  x['interview'].update({'state':'failed','sync':'saved','error':'CAPABILITY_CHECK_REQUIRED','needsCapabilities':True,'turns':[{'id':'pending-user','operationId':'pending-op','text':'用户尚未处理的补充','state':'paused'}]});svc.store.save(p)
  assert await svc.preparation.pm.check_launch_capabilities('alice',pid)
  p=svc.store.get('alice',pid);x=p['preparation'];s=x['interview']
@@ -118,19 +120,19 @@ async def test_known_launch_capabilities_probe_and_resume_pending_user_turn(laun
  assert len(s['turns'])==1 and s['turns'][0]['text']=='用户尚未处理的补充' and s['turns'][0]['state']=='queued'
  assert svc.preparation.valid_report('alice',p,development=True)
  assert p['confirmation'] is None and not p['tasks']
- assert len(calls)==1 # Actual synthetic model probe; no background content in prompt.
+ assert calls==[] # Contract checks do not invoke a model.
  assert 'PRIVATE' not in json.dumps(calls) and provider.reads==[]
 
 async def test_failed_or_unsupported_probe_remains_visible_and_cannot_build(launch):
  svc,pid,calls,bridge,provider=launch
  await bridge.configure('alice',body(pid));await bridge.start('alice',pid)
- p=svc.store.get('alice',pid);x=p['preparation'];x['required']=['model'];p['solution']['capabilities']=['model'];x['report']=None;x['interview']['needsCapabilities']=True;svc.store.save(p)
+ p=svc.store.get('alice',pid);x=p['preparation'];x['required']=['space.drive'];p['solution']['capabilities']=['space.drive'];x['report']=None;x['interview']['needsCapabilities']=True;svc.store.save(p)
  async def fail(*args):raise StudioError('MODEL_UPSTREAM_FAILED',502)
  svc.model=fail
  assert not await svc.preparation.pm.check_launch_capabilities('alice',pid)
  p=svc.store.get('alice',pid)
  assert p['preparation']['interview']['needsCapabilities'] and not svc.preparation.valid_report('alice',p,development=True)
- assert p['preparation']['report']['results']['model']['status']=='failed'
+ assert p['preparation']['report']['results']['space.drive']['status']=='failed'
  p['preparation']['gaps']=['未接入的外部连接器'];svc.store.save(p);before=len(calls)
  assert not await svc.preparation.pm.check_launch_capabilities('alice',pid)
  assert len(calls)==before and not svc.store.get('alice',pid)['tasks']
@@ -140,7 +142,7 @@ async def test_prd_added_capability_is_checked_without_manual_flag_or_extra_inte
  svc,pid,calls,bridge,provider=launch
  await bridge.configure('alice',body(pid));await bridge.start('alice',pid)
  p=svc.store.get('alice',pid);x=p['preparation']
- p['solution']['capabilities']=['data','model','files']
+ p['solution']['capabilities']=['host.session']
  x['interview'].update({'state':'completed','sync':'saved','turns':[]})
  x['interview'].pop('needsCapabilities',None);x.pop('launchConfiguration',None)
  svc.store.save(p)
@@ -155,7 +157,7 @@ async def test_prd_added_capability_is_checked_without_manual_flag_or_extra_inte
 async def test_build_prepares_stale_report_without_changing_selected_resources(launch):
  svc,pid,calls,bridge,provider=launch
  await bridge.configure('alice',body(pid));await bridge.start('alice',pid)
- p=svc.store.get('alice',pid);p['solution']['capabilities']=['data','model','files']
+ p=svc.store.get('alice',pid);p['solution']['capabilities']=['host.session']
  x=p['preparation'];x['report']=None;x['interview'].update({'state':'completed','sync':'saved','turns':[]})
  svc.store.save(p)
  from copy import deepcopy
@@ -171,15 +173,15 @@ async def test_build_prepares_stale_report_without_changing_selected_resources(l
 async def test_automatic_checks_report_real_failure_and_do_not_grant_knowledge(launch):
  svc,pid,calls,bridge,provider=launch
  await bridge.configure('alice',body(pid));await bridge.start('alice',pid)
- p=svc.store.get('alice',pid);p['solution']['capabilities']=['model']
+ p=svc.store.get('alice',pid);p['solution']['capabilities']=['space.drive']
  x=p['preparation'];x['report']=None;x['interview'].update({'state':'completed','sync':'saved','turns':[]});svc.store.save(p)
  async def failed(*args):raise StudioError('MODEL_UPSTREAM_FAILED',502)
  svc.model=failed
- with pytest.raises(StudioError,match='MODEL_UPSTREAM_FAILED'):
+ with pytest.raises(StudioError,match='PUBLIC_CONTRACT_ADAPTER_UNAVAILABLE'):
   await svc.preparation.ensure_development('alice',pid)
  assert not svc.store.get('alice',pid)['tasks']
- p=svc.store.get('alice',pid);p['solution']['capabilities']=['knowledge'];svc.store.save(p)
- with pytest.raises(StudioError,match='KNOWLEDGE_UNAVAILABLE'):
+ p=svc.store.get('alice',pid);p['solution']['capabilities']=['wanx.expert-app.v1'];svc.store.save(p)
+ with pytest.raises(StudioError,match='EXPERT_CONTRACT_REQUIRED'):
   await svc.preparation.ensure_development('alice',pid)
  assert not svc.store.get('alice',pid)['tasks']
 
@@ -194,3 +196,40 @@ async def test_automatic_readiness_keeps_prd_sync_and_admin_guards(launch):
  svc.team=Team()
  with pytest.raises(StudioError,match='STUDIO_ADMIN_REQUIRED'):
   await svc.preparation.ensure_development('alice',pid)
+
+
+@pytest.mark.parametrize('existing_legacy',[False,True])
+async def test_team_launch_http_defaults_new_projects_to_standard_without_migrating_legacy(launch,existing_legacy):
+ from fastapi import APIRouter,FastAPI
+ from httpx import ASGITransport,AsyncClient
+ from wanx_studio.client_launch import mount_client_launch
+ from wanx_studio import devkit_build
+ svc,pid,calls,bridge,provider=launch
+ if existing_legacy:
+  old=svc.store.get('alice',pid);old['devKit']=False;svc.store.save(old)
+ app=FastAPI();router=APIRouter()
+ from fastapi.responses import JSONResponse
+ @app.exception_handler(StudioError)
+ async def failure(_r,error):return JSONResponse({'code':error.code},status_code=error.status)
+ mount_client_launch(router,svc,lambda:'alice');app.include_router(router)
+ request=body(pid if existing_legacy else None)
+ async with AsyncClient(transport=ASGITransport(app=app),base_url='http://test') as client:
+  response=await client.post('/_client/launch/configure',json=request)
+  if existing_legacy:
+   assert response.status_code==409 and response.json()['code']=='STANDARD_PROJECT_REQUIRED'
+   assert svc.store.get('alice',pid)['preparation']['revision']==0
+   return
+  assert response.status_code==200
+  created=response.json();project_id=created['id']
+  assert created['devKit'] is True
+  assert devkit_build.enabled(svc.store.get('alice',project_id)) is True
+  # The same normal Team configuration request remains idempotent.
+  duplicate=await client.post('/_client/launch/configure',json=request)
+  assert duplicate.status_code==200 and duplicate.json()['id']==project_id
+  for _ in range(2):
+   started=await client.post('/_client/launch/'+project_id+'/start',json={})
+   assert started.status_code==200
+   assert started.json()['id']==project_id
+   assert started.json()['devKit'] is True
+   assert started.json()['confirmation'] is None and not started.json()['tasks']
+  assert project_id!=pid

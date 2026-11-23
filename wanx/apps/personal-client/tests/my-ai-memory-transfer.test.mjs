@@ -104,9 +104,20 @@ test("invalid, newer, unknown-table, symbolic-link and canceled inputs do not re
     await writeFile(h.input, value);
     await assert.rejects(h.transfer.action("preview"));
   }
-  const link = path.join(h.directory, "link.json");
-  await symlink(h.input, link); h.setChosen(link);
-  await assert.rejects(h.transfer.action("preview"), /不可读取/);
+  await t.test("refuses a symbolic link even when its target is a valid bundle", async t => {
+    const link = path.join(h.directory, "link.json");
+    await writeFile(h.input, JSON.stringify(bundle()));
+    try {
+      await symlink(h.input, link, "file");
+    } catch (error) {
+      if (process.platform === "win32" && ["EPERM", "EACCES"].includes(error.code)) {
+        return t.skip("Windows account cannot create file symbolic links");
+      }
+      throw error;
+    }
+    h.setChosen(link);
+    await assert.rejects(h.transfer.action("preview"), /不可读取/);
+  });
   h.setChosen(null);
   assert.deepEqual(await h.transfer.action("preview"), { canceled: true });
   assert.ok(h.calls.every(call => call.path === "/api/local-data/bundle"));

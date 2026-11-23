@@ -1,0 +1,11 @@
+{
+  "name": "wanx-starlink-panel",
+  "version": "0.3.6",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "npm --prefix frontend run build",
+    "test": "node --test tests/*.test.mjs && npm --prefix frontend test",
+    "check": "node --check shell/service.mjs && node --check integration/client-service.mjs && npm test && npm run build"
+  }
+}

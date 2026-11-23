@@ -16,7 +16,7 @@ from fastapi import Depends, Request
 from fastapi.responses import JSONResponse, Response
 from starlette.requests import ClientDisconnect
 
-from . import modeling_contract
+from . import conversation_contract, modeling_contract
 from .client import SemanticaClient, SemanticaError
 from .desktop import APPS, DesktopError, request_json, resolve
 from .desktop_routes import desktop_input, live_request
@@ -132,3 +132,15 @@ def register_host_modeling(router, *, current_user, get_server, require_permissi
             summary=summary,
             openapi_extra=modeling_contract.openapi_extra(route, model),
         )
+
+    for method, suffix, summary, model, query in conversation_contract.ROUTES:
+        if suffix.startswith("/modeling/"):
+            route = conversation_contract.PREFIX + suffix
+            router.add_api_route(
+                route,
+                endpoint(route),
+                methods=[method],
+                summary=summary,
+                status_code=conversation_contract.success_status(method, suffix),
+                openapi_extra=conversation_contract.schema_extra(method, suffix, model, query),
+            )

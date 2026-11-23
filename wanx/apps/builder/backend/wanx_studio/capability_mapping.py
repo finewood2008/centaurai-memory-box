@@ -3,33 +3,18 @@ from __future__ import annotations
 
 from typing import Any
 
-HOST_CAPABILITIES = frozenset({
-    "identity.read", "http.request", "experts.read", "experts.select", "chat.stream", "files.upload",
-})
+from .public_capabilities import EXPERT, gaps
 
-# Product capabilities are intentionally not copied into protocol-3 manifests.
-PRODUCT_MAP = {
-    "files": ("files.upload",),
-    "model": ("chat.stream",),
-}
+# Protocol permissions used by the fixed standard shell. Business contract IDs
+# are deliberately separate from these Host transport permissions.
+HOST_CAPABILITIES = frozenset({"identity.read", "http.request"})
 
 
 def resolve(capabilities: list[str], *, expert: bool = False, backend: dict[str, Any] | None = None) -> dict[str, Any]:
-    host: list[str] = ["identity.read"]
-    gaps: list[dict[str, str]] = []
-    for product in dict.fromkeys(capabilities):
-        mapped = PRODUCT_MAP.get(product)
-        if mapped:
-            host.extend(mapped)
-        elif product in {"data", "reports", "knowledge"}:
-            gaps.append({"id": product, "reason": "NO_PUBLIC_HOST_CONTRACT"})
-        elif product:
-            gaps.append({"id": product, "reason": "UNKNOWN_PRODUCT_CAPABILITY"})
+    host = ["identity.read"]
     if backend and backend.get("mode") != "none":
         host.append("http.request")
-    if expert:
-        host.extend(("experts.read", "experts.select"))
-    return {"hostCapabilities": list(dict.fromkeys(host)), "gaps": gaps}
+    return {"hostCapabilities": host, "gaps": gaps(capabilities, backend=backend)}
 
 
 def validate_manifest_capabilities(manifest: dict[str, Any]) -> list[dict[str, str]]:
@@ -41,3 +26,7 @@ def validate_manifest_capabilities(manifest: dict[str, Any]) -> list[dict[str, s
         for index, value in enumerate(values)
         if value not in HOST_CAPABILITIES
     ]
+
+
+def runtime_gaps(capabilities: list[str], *, expert: bool = False, backend: dict[str, Any] | None = None) -> list[dict[str, str]]:
+    return gaps(capabilities, backend=backend)

@@ -1,4 +1,3 @@
-import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,7 +9,7 @@ from httpx import ASGITransport,AsyncClient
 
 from wanx_studio.contracts import StudioError
 from wanx_studio.deployment.adapters import Blocked
-from wanx_studio.deployment.contracts import canonicalize_json
+from wanx_studio.deployment.standard_runtime import StandardRuntime
 from wanx_studio.deployment.expert_dispatch import authorize_studio_audience
 from wanx_studio.deployment.expert_profile import ExpertProfile
 from wanx_studio.deployment.expert_runtime import validate_backend
@@ -19,21 +18,13 @@ from wanx_studio.deployment.miniapp_profile import MiniappProfile, configure
 from wanx_studio.deployment.profiles import DeploymentProfiles
 from wanx_studio.deployment.source_registry import SourceRegistry
 from wanx_studio.service import StudioService
-from wanx_studio.workshop import PersonalWorkshop
-from test_directory_intake import write_source,replace_artifact
-from test_expert_deployment import Experts,progress
+from test_standard_expert_deployment import write_standard_source
+from test_directory_intake import write_source
+from test_expert_deployment import Experts,progress,launch
 
 ROOT=Path(__file__).resolve().parents[2]
 OWNER='wanx:7'
 RELEASE='studio-expert-0.1.0'
-
-
-def studio_source(path):
-    manifest,base=write_source(path,release_id=RELEASE)
-    base={**base,'runtimeNamespace':'studio'}
-    base['artifactHash']=hashlib.sha256(canonicalize_json({k:v for k,v in base.items() if k!='artifactHash'}).encode()).hexdigest()
-    replace_artifact(path,manifest,'client/payload.json',base)
-    return manifest,base
 
 
 @pytest.fixture
@@ -44,16 +35,15 @@ async def studio(tmp_path):
     registry=SourceRegistry(tmp_path);registry.seed_existing()
     intake=ReleaseIntake(service.store,tmp_path/'inbox',tmp_path/'snapshots',backend_validator=validate_backend,runtime_namespace='studio')
     path=intake.inbox/intake.owner_scope(OWNER)/RELEASE
-    studio_source(path)
+    write_standard_source(path, RELEASE)
     experts=Experts(service)
-    authority=lambda owner:None
+    authority=service.authorize_management
     mini=MiniappProfile(service)
     expert=ExpertProfile(service,{'boxId':'synthetic-box'},authority,runtime=experts,intake=intake,source='studio',source_registry=registry)
     profiles=DeploymentProfiles(mini,expert)
     service.deployment_profile=profiles;service.directory_profile=expert;service.expert_runtime=experts
     service.deployments.adapter=profiles;service.deployments.start=lambda:None;service.deployments.retry_delay=0
     yield service,user,registry,intake,expert,profiles
-    del service.expert_runtime
     await service.close();registry.close()
 
 
@@ -66,14 +56,16 @@ async def test_original_studio_service_executes_deployed_expert_without_workshop
     assert (await progress(service,profiles,expert,op))['state']=='succeeded'
     slot=profiles.slot_id(OWNER,prep['target']);binding=profiles.find_binding(OWNER,slot)
     assert binding['base']['runtimeNamespace']=='studio'
-    token=profiles.open_runtime(OWNER,slot,{'artifactHash':binding['artifactHash'],'environment':'dev','generation':1})['session']
-    assert (await service.invoke(OWNER,token,'foundation.invoke',{'operation':'expert.tasks','input':{}}))['items']==[]
+    principal = launch(service, profiles, slot)
+    runtime = StandardRuntime(service)
+    body = {'operation': 'expert.tasks', 'input': {}}
+    assert (await runtime.invoke(principal, body))['items'] == []
     registry.assert_source('studio',OWNER,prep['target'])
     with pytest.raises(StudioError,match='DEPLOYMENT_SOURCE_CONFLICT'):
         registry.claim('workshop',OWNER,prep['target'])
     user.role='user'
-    with pytest.raises(StudioError,match='STUDIO_ADMIN_REQUIRED'):
-        await service.invoke(OWNER,token,'foundation.invoke',{'operation':'expert.tasks','input':{}})
+    with pytest.raises(Blocked,match='DEPLOYMENT_TARGET_DENIED'):
+        await runtime.invoke(principal, body)
 
 
 async def test_studio_preview_foundation_requires_an_actual_expert_deployment(studio):
@@ -84,24 +76,21 @@ async def test_studio_preview_foundation_requires_an_actual_expert_deployment(st
         await service.invoke(OWNER,token,'foundation.invoke',{'operation':'expert.tasks','input':{}})
 
 
-async def test_two_editor_stores_cannot_prepare_independent_generations_for_the_same_slot(studio,tmp_path):
-    service,user,registry,intake,expert,profiles=studio
-    item=expert.ingest(OWNER,RELEASE)
-    prep=await expert.prepare_directory(OWNER,RELEASE,{'directoryDigest':item['directoryDigest'],'environment':'dev','operationId':uuid4().hex})
-    workshop=PersonalWorkshop(tmp_path/'.wanx-workshop',ROOT)
-    other_intake=ReleaseIntake(workshop.store,tmp_path/'other-inbox',tmp_path/'other-snapshots',backend_validator=validate_backend)
-    source=other_intake.inbox/other_intake.owner_scope(OWNER)/RELEASE
-    write_source(source,release_id=RELEASE)
-    other=ExpertProfile(workshop,{'boxId':'synthetic-box'},lambda owner:None,runtime=Experts(workshop),intake=other_intake,source_registry=registry)
-    try:
-        release=other.ingest(OWNER,RELEASE)
-        with pytest.raises(StudioError,match='DEPLOYMENT_SOURCE_CONFLICT'):
-            other.directory_context(OWNER,RELEASE)
-        with pytest.raises(StudioError,match='DEPLOYMENT_SOURCE_CONFLICT'):
-            await other.prepare_directory(OWNER,RELEASE,{'directoryDigest':release['directoryDigest'],'environment':'dev','operationId':uuid4().hex})
-        assert workshop.store.db.execute("SELECT count(*) FROM deployment_profile_objects WHERE kind='expert-preparation'").fetchone()[0]==0
-        registry.assert_source('studio',OWNER,prep['target'])
-    finally:await workshop.close()
+async def test_existing_workshop_claim_blocks_studio_preparation(studio):
+    service, _, registry, _, expert, _ = studio
+    item = expert.ingest(OWNER, RELEASE)
+    target = expert.target_for(OWNER, item['applicationId'], 'dev')
+    registry.claim('workshop', OWNER, target)
+    with pytest.raises(StudioError, match='DEPLOYMENT_SOURCE_CONFLICT'):
+        expert.directory_context(OWNER, RELEASE)
+    with pytest.raises(StudioError, match='DEPLOYMENT_SOURCE_CONFLICT'):
+        await expert.prepare_directory(OWNER, RELEASE, {
+            'directoryDigest': item['directoryDigest'], 'environment': 'dev', 'operationId': uuid4().hex,
+        })
+    assert service.store.db.execute(
+        "SELECT count(*) FROM deployment_profile_objects WHERE kind='expert-preparation'"
+    ).fetchone()[0] == 0
+    registry.assert_source('workshop', OWNER, target)
 
 
 def test_managed_audience_cannot_use_management_or_another_slot_session():
@@ -115,11 +104,11 @@ def test_managed_audience_cannot_use_management_or_another_slot_session():
             authorize_studio_audience(service,OWNER,app,path,method)
 
 
-def test_studio_intake_rejects_a_valid_workshop_payload_before_it_can_route_to_workshop(studio):
+def test_studio_intake_rejects_workshop_bundle_without_standard_package(studio):
     service,user,registry,intake,*_=studio
     source=intake.inbox/intake.owner_scope(OWNER)/'wrong-source'
     write_source(source,release_id='wrong-source')
-    with pytest.raises(StudioError,match='DIRECTORY_CLIENT_NAMESPACE_INVALID'):
+    with pytest.raises(StudioError,match='STANDARD_ARTIFACT_REQUIRED'):
         intake.ingest(OWNER,'wrong-source')
 
 

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFile} from 'node:fs/promises';
-const source=await readFile(new URL('../local-ui/renderer/space-agent-hub.js',import.meta.url),'utf8');
+const source=await readFile(new URL('../build/app/local-ui/renderer/space-agent-hub.js',import.meta.url),'utf8');
 const tick=()=>new Promise(r=>setImmediate(r));
 function setup(){
  const dialogs=[],calls=[],opened=[];let responder;

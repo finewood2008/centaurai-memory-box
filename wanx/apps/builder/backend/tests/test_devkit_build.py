@@ -3,6 +3,7 @@ import base64
 import hashlib
 import zipfile
 from pathlib import Path
+import pytest
 
 from wanx_studio import devkit_build
 
@@ -21,7 +22,8 @@ def project():
 
 
 def test_workspace_pipeline_generates_standard_package(tmp_path):
-    workspace = devkit_build.create_workspace(project(), ROOT, tmp_path)
+    value = {**project(), "name": "定制服装销售跟进助手"}
+    workspace = devkit_build.create_workspace(value, ROOT, tmp_path)
     root = Path(workspace["root"])
     assert (root / "project-spec.json").is_file()
     assert (root / "generation-manifest.json").is_file()
@@ -30,6 +32,8 @@ def test_workspace_pipeline_generates_standard_package(tmp_path):
     assert result["packageName"].endswith(".zip")
     assert len(result["packageSha256"]) == 64
     assert result["manifest"]["protocolVersion"] == 3
+    assert result["manifest"]["name"] == value["name"]
+    assert result["manifest"]["applicationId"] == value["appId"]
     assert len(base64.b64decode(result["packageBase64"])) > 100
 
 
@@ -46,20 +50,15 @@ def test_capability_mapping_and_backend_expert_declarations(tmp_path):
     value["solution"]["dependencies"] = [{"id": "svc", "requirement": "service", "reason": "needed"}]
     value["devKitBackend"] = {"mode": "custom", "deployment": "external", "contractRef": "wanx.service"}
     value["devKitExpert"] = {"enabled": True, "definitionRef": "wanx.expert"}
-    workspace = devkit_build.create_workspace(value, ROOT, tmp_path)
-    root = Path(workspace["root"])
-    assert workspace["capabilityGaps"] == [
-        {"id": "data", "reason": "NO_PUBLIC_HOST_CONTRACT"},
-        {"id": "knowledge", "reason": "NO_PUBLIC_HOST_CONTRACT"},
-        {"id": "reports", "reason": "NO_PUBLIC_HOST_CONTRACT"},
+    from wanx_studio.contracts import StudioError
+    from wanx_studio.capability_mapping import resolve
+    mapping = resolve(value["solution"]["capabilities"], expert=True, backend=value["devKitBackend"])
+    assert mapping["gaps"] == [
+        {"id": cap, "reason": "LEGACY_CAPABILITY_REPLAN_REQUIRED"} for cap in ["data", "files", "knowledge", "reports"]
     ]
-    assert json.loads((root / "integration/selection.json").read_text())["contractRef"] == "wanx.service"
-    assert json.loads((root / "expert/definition.json").read_text())["definitionRef"] == "wanx.expert"
-    manifest = json.loads((root / "application.manifest.json").read_text())
-    assert "files.upload" in manifest["capabilities"]
-    assert "http.request" in manifest["capabilities"]
-    assert "experts.select" in manifest["capabilities"]
-    assert devkit_build.validate_host_runtime(root) == []
+    with pytest.raises(StudioError, match="STANDARD_RUNTIME_CONTRACT_REQUIRED"):
+        devkit_build.create_workspace(value, ROOT, tmp_path)
+    assert not (tmp_path / "devkit-workspace").exists()
 
 
 def test_backend_contract_features_are_only_declared_for_public_drive(tmp_path):
@@ -131,3 +130,57 @@ def test_workspace_refuses_existing_output_and_leaks_no_absolute_path(tmp_path):
         raise AssertionError("workspace collision was not rejected")
     text = (Path(first["root"]) / "project-spec.json").read_text()
     assert str(ROOT) not in text
+
+
+def test_managed_expert_is_projected_to_fixed_public_contract(tmp_path):
+    value=project();value['solution']['capabilities']=['wanx.expert-app.v1']
+    value['deploymentExpert']={'schemaVersion':1,'profile':'wanx-expert-app-v1','revision':1}
+    spec=devkit_build.devkit.project_spec(value)
+    assert spec['expert']=={'enabled':True,'definitionRef':'wanx.expert-app.v1'}
+    assert spec['backend']=={'mode':'existing','connectionRef':'wanx.expert-app.v1'}
+    workspace=devkit_build.create_workspace(value,ROOT,tmp_path)
+    assert workspace['capabilityGaps']==[]
+    manifest=json.loads((Path(workspace['root'])/'application.manifest.json').read_text())
+    assert manifest['capabilities']==['identity.read','http.request']
+    assert manifest['compatibility']['backendContracts']==[{'id':'wanx.expert-app.v1','range':'>=1.0.0 <2.0.0','features':['context','expert','data']}]
+    assert manifest['compatibility']['resourceDependencies']==[]
+
+
+def test_npm_environment_uses_only_trusted_cache_flags(monkeypatch,tmp_path):
+    from types import SimpleNamespace
+    calls=[]
+    monkeypatch.setenv('WANX_DEVKIT_NPM_CACHE',str(tmp_path/'cache'))
+    monkeypatch.setenv('WANX_DEVKIT_NPM_OFFLINE','1')
+    monkeypatch.setenv('NPM_CONFIG_USERCONFIG','/private/user-credentials.npmrc')
+    monkeypatch.setattr(devkit_build.subprocess,'run',lambda args,**kwargs:(calls.append((args,kwargs)) or SimpleNamespace(returncode=0,stdout='',stderr='')))
+    devkit_build._run(tmp_path,'check')
+    args,kwargs=calls[-1]
+    assert kwargs['env']['NPM_CONFIG_CACHE']==str(tmp_path/'cache')
+    assert kwargs['env']['NPM_CONFIG_OFFLINE']=='true'
+    assert kwargs['env']['NPM_CONFIG_USERCONFIG']=='/dev/null'
+    assert '/private/user-credentials.npmrc' not in str(kwargs)
+
+
+@pytest.mark.parametrize('missing', ['module', 'stylesheet'])
+def test_pipeline_rejects_dangling_renderer_graph_before_packaging(tmp_path,missing):
+    root = Path(devkit_build.create_workspace(project(), ROOT, tmp_path)["root"])
+    if missing == 'module':
+        devkit_build.apply_mutable_files(root, {'app/host.mjs': 'import "./pages/missing.mjs";'})
+    else:
+        devkit_build.apply_mutable_files(root, {'app/host.html': '<link rel="stylesheet" href="missing.css"><script type="module" src="host.mjs"></script>'})
+    with pytest.raises(Exception,match='STANDARD_PREVIEW_INVALID'):
+        devkit_build.run_pipeline(root)
+    assert not (root/'dist').exists()
+
+
+@pytest.mark.parametrize('source,expected', [
+    ('import "./styles.css";', 'STANDARD_DELIVERY_LINK_CSS_REQUIRED'),
+    ('import value from "./config.json"; console.log(value);', 'STANDARD_DELIVERY_JSON_ATTRIBUTE_REQUIRED'),
+])
+def test_pipeline_rejects_preview_only_imports_for_native_delivery(tmp_path,source,expected):
+    from wanx_studio.contracts import StudioError
+    root = Path(devkit_build.create_workspace(project(), ROOT, tmp_path)["root"])
+    devkit_build.apply_mutable_files(root, {'app/host.mjs': source,'app/config.json':'{}'})
+    with pytest.raises(StudioError,match=expected):
+        devkit_build.run_pipeline(root)
+    assert not (root/'dist').exists()

@@ -13,6 +13,7 @@ import { clientBuildSource, clientTestSourceSnapshot } from "./package-client-so
 import { clientTrustFingerprints, validateClientTrust } from "./package-client-trust.mjs";
 import { prepareMacUpdatePermissions } from "./package-client-permissions.mjs";
 import { readPackagedNativeBinaries } from "./package-client-native.mjs";
+import { assertPackagedMemoryTarget, preparePackagedMemory, verifyPackagedMemory } from "./package-client-memory.mjs";
 import { createClientBlockMap } from "./client-blockmap.mjs";
 import { TEST_APP_ID, TEST_PACKAGE_NAME, TEST_PRODUCT_NAME, testPackageIdentity, validTestRunId } from "../updates/test-build.mjs";
 import { testFeedURL as validateTestFeedURL } from "../updates/test-runtime.mjs";
@@ -41,12 +42,14 @@ async function mustExist(file) {
 }
 
 export async function packageClient({ version, arch = process.arch, out, notaryProfile, local = false, trustFile,
-  channel = "stable", securityEpoch = 0, test = false, testRunId, testFeedURL, testCAFile }) {
+  channel = "stable", securityEpoch = 0, test = false, testRunId, testFeedURL, testCAFile },
+  { prepareMemory = preparePackagedMemory, verifyMemory = verifyPackagedMemory } = {}) {
   if (process.platform !== "darwin") throw new Error("正式 macOS 客户端包必须在 macOS 上构建。");
   const manifest = await readSourceClientManifest(root);
   const { pkg } = manifest;
   version = resolveClientVersion(pkg, version);
   if (!["arm64", "x64"].includes(arch)) throw new Error("--arch 仅支持 arm64 或 x64。");
+  assertPackagedMemoryTarget({ platform: "darwin", arch });
   let testCA, testCAFingerprint;
   if (test) {
     if (local || !validTestRunId(testRunId) || !semver.prerelease(version) || !testCAFile || !trustFile)
@@ -88,6 +91,8 @@ export async function packageClient({ version, arch = process.arch, out, notaryP
   try { await access(outputDir); throw new Error(`输出目录已存在，请另选 --out：${outputDir}`); }
   catch (error) { if (error.code !== "ENOENT") throw error; }
 
+  run("npm", ["run", "build:studio"]);
+  const memory = await prepareMemory({ clientRoot: root, platform: "darwin", arch });
   run(process.execPath, [path.join(root, "tools/build-network.mjs"), `darwin-${arch}`]);
   run(process.execPath, [path.join(root, "tools/build-discovery.mjs"), `darwin-${arch}`]);
   run(process.execPath, [path.join(root, "tools/build-clipboard.mjs"), arch]);
@@ -111,7 +116,8 @@ export async function packageClient({ version, arch = process.arch, out, notaryP
     forceCodeSigning: true, mac: { ...pkg.build.mac, defaultArch: "x64" },
     directories: { ...pkg.build.directories, output: outputDir }, extraMetadata: { version, wanxEdition: pkg.wanxEdition, wanxBuild: build,
       ...(test ? { name: TEST_PACKAGE_NAME, productName: TEST_PRODUCT_NAME, main: "updates/test-entry.mjs" } : {}) },
-    extraResources: [...pkg.build.extraResources, ...(trust ? [{ from: trustSnapshot, to: "wanx-update-trust.json" }] : []),
+    extraResources: [...pkg.build.extraResources, ...memory.extraResources,
+      ...(trust ? [{ from: trustSnapshot, to: "wanx-update-trust.json" }] : []),
       ...(test ? [{ from: testCASnapshot, to: "wanx-test-ca.pem" }] : [])],
   }));
   const args = ["--mac", "dmg", "zip", `--${arch}`, "--config", configurationFile, "--publish", "never"];
@@ -153,6 +159,8 @@ export async function packageClient({ version, arch = process.arch, out, notaryP
   if (signature.error || signature.status !== 0) throw signature.error || new Error("无法读取应用包签名。");
   const signatureText = signature.stderr;
   if (!signatureText.includes("Developer ID Application:")) throw new Error("应用包缺少 Developer ID Application 签名。");
+  const memoryRuntime = await verifyMemory({ resourcesPath: path.join(app, "Contents/Resources"),
+    executable, platform: "darwin", arch });
   const dmgs = (await readdir(outputDir)).filter(file => file.endsWith(".dmg"));
   if (dmgs.length !== 1) throw new Error(`预期生成一个 DMG，实际找到 ${dmgs.length} 个。`);
   const dmg = path.join(outputDir, dmgs[0]);
@@ -184,7 +192,7 @@ export async function packageClient({ version, arch = process.arch, out, notaryP
   await mkdir(outputDir, { recursive: true });
   await writeFile(path.join(outputDir, "SHA256SUMS.txt"), `${digest}  ${path.basename(dmg)}\n${zipDigest}  ${path.basename(zip)}\n${blockMap.sha256}  ${path.basename(blockMap.path)}\n`);
   const report = { version, appId, name, edition: pkg.wanxEdition, platform: "macos", arch, dmg, sha256: digest,
-    build, updateTrust, nativeBinaries, updateArtifact: { path: zip, kind: "mac-zip", notarized: !local && !test, sizeBytes: (await stat(zip)).size, sha256: zipDigest, sha512: zipSha512.digest("base64"), blockMap },
+    build, updateTrust, nativeBinaries, memoryRuntime, updateArtifact: { path: zip, kind: "mac-zip", notarized: !local && !test, sizeBytes: (await stat(zip)).size, sha256: zipDigest, sha512: zipSha512.digest("base64"), blockMap },
     signed: true, notarized: !local && !test, distributionClass: build.distributionClass };
   await writeFile(path.join(outputDir, "verification-client.json"), JSON.stringify(report, null, 2) + "\n");
   return report;

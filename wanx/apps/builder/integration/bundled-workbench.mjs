@@ -1,13 +1,17 @@
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import semver from 'semver';
 
 // Electron can read ASAR files, but fs.cp uses native opendir and cannot copy
 // ASAR directories. Materialize only this trusted bundle before normal install.
 export async function installBundledWorkbench(installer, sourceDir, { signal } = {}) {
   const bundled = JSON.parse(await readFile(path.join(sourceDir, 'application.manifest.json'), 'utf8'));
   const installed = (await installer.list()).find(record => record.applicationId === bundled.applicationId);
-  if (installed?.version === bundled.version) return;
+  // The bundled app is a minimum available version, not a forced downgrade.
+  // A separately installed update must remain launchable after Host rebuilds.
+  if (installed?.version === bundled.version || (semver.valid(installed?.version) &&
+      semver.valid(bundled.version) && semver.gte(installed.version, bundled.version))) return;
   const staging = await mkdtemp(path.join(tmpdir(), 'wanx-studio-bundle-'));
   async function copyDirectory(source, target) {
     signal?.throwIfAborted();

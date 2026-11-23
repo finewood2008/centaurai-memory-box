@@ -1,3 +1,4 @@
+import { createStatusBuild, networkSourceDigest } from "../../personal-client/tools/netbird-status-build.mjs";
 import { spawn } from "node:child_process";
 import {
   mkdir,
@@ -67,33 +68,39 @@ async function copyNotice(source, destination) {
 }
 
 await mkdir(path.join(root, "native/bin"), { recursive: true });
-for (const name of names) {
-  const [GOOS, GOARCH] = targets[name];
-  const output = path.join(
-    root,
-    "native/bin",
-    `wanx-netbird-${name}${GOOS === "windows" ? ".exe" : ""}`,
-  );
-  console.log(`Building embedded network: ${name}`);
-  await run(
-    [
-      "build",
-      "-p",
-      "2",
-      "-mod=readonly",
-      "-trimpath",
-      "-ldflags=-s -w",
-      "-o",
-      output,
-      "./cmd/wanx-netbird",
-    ],
-    {
-      GOOS,
-      GOARCH,
-      CGO_ENABLED: "0",
-    },
-  );
-}
+const statusBuild = await createStatusBuild(path.join(root, "native"));
+try {
+  const sourceDigest = await networkSourceDigest(root);
+  for (const name of names) {
+    const [GOOS, GOARCH] = targets[name];
+    const output = path.join(
+      root,
+      "native/bin",
+      `wanx-netbird-${name}${GOOS === "windows" ? ".exe" : ""}`,
+    );
+    console.log(`Building embedded network: ${name}`);
+    await run(
+      [
+        "build",
+        "-p",
+        "2",
+        "-mod=readonly",
+        `-modfile=${statusBuild.modfile}`,
+        "-trimpath",
+        "-ldflags=-s -w",
+        "-o",
+        output,
+        "./cmd/wanx-netbird",
+      ],
+      {
+        GOOS,
+        GOARCH,
+        CGO_ENABLED: "0",
+      },
+    );
+    await writeFile(`${output}.sources.json`, JSON.stringify({ sourceDigest }));
+  }
+} finally { await statusBuild.close(); }
 const netbirdDir = await run(
   [
     "list",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,8 @@ from octop.api.common.agent import require_agent_row
 from octop.api.common.validators import validate_chat_mcp_servers, validate_chat_skills
 from octop.api.common.workspace import require_running_workspace
 from octop.api.routers.chat.models import ChatTurnBody
+from octop.infra.agents.assistant_conversations import AssistantConversations, ConversationError
+from octop.infra.agents.assistant_profile import is_assistant_profile
 from octop.infra.agents.attachment_sources import attachment_path, attachment_turn_content
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.gateway.media.attachment_hints import (
@@ -58,6 +61,7 @@ class PreparedDashboardTurn:
     composer_context: dict[str, Any] | None
     inbound_attachments: list[dict[str, str]]
     application_id: str = "wanx"
+    zhijun_mode: str | None = None
 
 
 async def resolve_thread_id(
@@ -252,6 +256,7 @@ async def prepare_dashboard_turn(
 ) -> PreparedDashboardTurn:
     """Validate MCP/skills, resolve thread, return data for gateway enqueue."""
     local_private = getattr(user, "local_data", False) is True
+    zhijun = turn.assistant_persona == "zhijun"
     if local_private:
         from octop.infra.gateway.ws.local_data import validate_local_turn
 
@@ -261,8 +266,19 @@ async def prepare_dashboard_turn(
             raise OctopError.localized(ErrorCode.FORBIDDEN) from None
         # Do not attach agent/server default MCP, knowledge or skill context.
         turn.knowledge_base_ids = []
-        turn.conversation_mode = "ask"
+        if not zhijun:
+            turn.conversation_mode = "ask"
     row = require_agent_row(agent_id, user=user, as_user=None, server=server)
+    if zhijun and (
+        row.user_id != user.id
+        or getattr(user, "local_team", None) is not None
+        or not is_assistant_profile(row, server.services.user_repo)
+    ):
+        raise OctopError.localized(ErrorCode.FORBIDDEN)
+    if (turn.zhijun_references or turn.zhijun_memory is not None or turn.zhijun_agent_only) and (
+        turn.assistant_persona != "zhijun" or getattr(user, "local_team", None) is not None
+    ):
+        raise OctopError.localized(ErrorCode.FORBIDDEN)
     default_model = (row.default_model or "").strip() or None
 
     application_id = getattr(row, "application_id", "wanx")
@@ -363,6 +379,17 @@ async def prepare_dashboard_turn(
     )
     if row.template_name == "default" and model_ref is not None:
         composer_ctx = {**(composer_ctx or {}), "model": model_ref}
+    zhijun_mode = None
+    if zhijun:
+        try:
+            zhijun_mode = await asyncio.to_thread(
+                AssistantConversations(server).resolve_turn_mode,
+                user,
+                thread_id,
+                turn.conversation_mode,
+            )
+        except ConversationError as exc:
+            raise OctopError.localized(ErrorCode.FORBIDDEN) from exc
     return PreparedDashboardTurn(
         thread_id=thread_id,
         session_key=session_key,
@@ -373,6 +400,7 @@ async def prepare_dashboard_turn(
         composer_context=composer_ctx,
         inbound_attachments=inbound_attachments,
         application_id=application_id,
+        zhijun_mode=zhijun_mode,
     )
 
 
@@ -409,6 +437,18 @@ def build_dashboard_inbound(
         metadata["reasoning_effort"] = turn.reasoning_effort
     if turn.conversation_mode:
         metadata["conversation_mode"] = turn.conversation_mode
+    if turn.assistant_persona:
+        metadata["assistant_persona"] = turn.assistant_persona
+    if prepared.zhijun_mode is not None:
+        metadata["zhijun_turn_mode"] = prepared.zhijun_mode
+    if turn.zhijun_references:
+        metadata["zhijun_references"] = [
+            reference.model_dump(exclude_none=True) for reference in turn.zhijun_references
+        ]
+    if turn.zhijun_memory is not None:
+        metadata["zhijun_memory"] = turn.zhijun_memory
+    if turn.zhijun_agent_only:
+        metadata["zhijun_agent_only"] = True
     if turn.hitl_policy is not None:
         metadata["hitl_policy"] = turn.hitl_policy.model_dump()
     if prepared.composer_context:

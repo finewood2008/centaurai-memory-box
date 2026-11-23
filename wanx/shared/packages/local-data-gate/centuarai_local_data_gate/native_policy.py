@@ -80,6 +80,8 @@ def application_families(application_id):
 OCTOP_RULES = (
     ("GET", r"/api/wanx/memory-model", "memory-model", "read", 0),
     ("POST", r"/api/wanx/memory-model/complete", "memory-model", "execute", 2 * MIB),
+    ("GET", r"/api/wanx-expert-app/v1/context", "company-runtime", "read", 0),
+    ("POST", r"/api/wanx-expert-app/v1/invoke", "company-runtime", "execute", MIB),
     ("GET", r"/api/app-studio/(?:engines|preflight|_client/launch/sources)", "studio", "read", 0),
     ("GET", rf"/api/app-studio/_client/projects/{FILE}/runtime-model", "studio", "read", 0),
     ("PUT", rf"/api/app-studio/_client/projects/{FILE}/runtime-model", "studio", "write", MIB),
@@ -248,7 +250,7 @@ OCTOP_RULES = (
     ("POST", r"/api/personal-space/(?:agent-access|connection-access)", "space", "read", MIB),
     (
         "POST",
-        rf"/api/personal-space/(?:uploads/{FILE}/complete|files/{FILE}/previous|trash/{FILE}/restore)",
+        rf"/api/personal-space/(?:uploads/{FILE}/complete|files/{FILE}/(?:previous|edit-uploads)|trash/{FILE}/restore)",
         "space",
         "write",
         MIB,
@@ -325,7 +327,8 @@ OCTOP_RULES = (
     ("GET", r"/api/providers/(?:resolved|active-model)", "assistant", "read", 0),
     ("GET", r"/api/settings/timezone", "assistant", "read", 0),
     ("POST", r"/api/assistant/profile", "assistant", "execute", 0),
-    ("GET", r"/api/assistant/(?:conversations|history)", "assistant", "read", 0),
+    ("GET", r"/api/assistant/(?:conversations|history|sidebar-memory)", "assistant", "read", 0),
+    ("POST", r"/api/assistant/sidebar-memory", "assistant", "write", 32 * 1024),
     ("GET", rf"/api/assistant/conversations/{ID}", "assistant", "read", 0),
     ("POST", r"/api/assistant/(?:context/validate|history)", "assistant", "write", MIB),
     ("PATCH", rf"/api/assistant/conversations/{ID}", "assistant", "write", MIB),
@@ -552,6 +555,10 @@ def classify_octop(method, target, transport, application_id, data_context=None)
             query = query_values(target)
             if family == "memory-model":
                 need(method == allowed and transport == "http" and target == path, "LOCAL_DATA_ROUTE_DENIED")
+            if path.startswith('/api/wanx-expert-app/'):
+                need(re.fullmatch(r'ai\.wanx\.selfmade\.[a-f0-9]{32}', application_id) is not None
+                     and method == allowed and transport == 'http' and not query
+                     and '?' not in target and '%' not in target, 'LOCAL_DATA_ROUTE_DENIED')
             if re.fullmatch(rf"/api/(?:app-studio|_client/workshop)/projects/{FILE}/deployment/.*", path):
                 need(method == allowed and transport == "http" and not query and "?" not in target and "%" not in target, "LOCAL_DATA_ROUTE_DENIED")
             if family == "workshop-runtime" and application_id != "wanx-host" and "/apps/" in path:
@@ -561,10 +568,15 @@ def classify_octop(method, target, transport, application_id, data_context=None)
                     "LOCAL_DATA_SCOPE_DENIED",
                 )
             allowed_query = QUERY_KEYS[family]
+            if path == "/api/assistant/sidebar-memory" and method in {"GET", "HEAD"}:
+                allowed_query = {"query", "limit", "offset"}
             if re.fullmatch(r"/api/(?:app-studio|_client/workshop)/deployment/.*", path):
                 # Unlike legacy routes, deployment has no implicit HEAD or WS alias.
                 need(method == allowed and transport == "http", "LOCAL_DATA_ROUTE_DENIED")
                 allowed_query = _deployment_query(target, method, query)
+            if re.fullmatch(rf"/api/personal-space/files/{FILE}/edit-uploads", path):
+                need(application_id == "wanx-host", "LOCAL_DATA_ROUTE_DENIED")
+                need(method == "POST" and transport == "http" and target == path, "LOCAL_DATA_ROUTE_DENIED")
             preview = re.fullmatch(rf"/api/_client/space-previews/{FILE}(?:/content)?", path)
             if preview:
                 need(application_id == "wanx-host", "LOCAL_DATA_ROUTE_DENIED")

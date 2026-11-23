@@ -10,6 +10,58 @@
     {
       "file": "ui/workbench/index.html",
       "description": "Normalize CR/CRLF line endings to LF; retain built asset references and markup."
+    },
+    {
+      "file": "shared/conversation-instruction-contract.mjs",
+      "description": "Retain tracked files from the merged WANX workspace and pin their current bytes; preserve the selected source snapshot."
+    },
+    {
+      "file": "ui/graph-motion.d.mts",
+      "description": "Retain tracked files from the merged WANX workspace and pin their current bytes; preserve the selected source snapshot."
+    },
+    {
+      "file": "ui/graph-motion.mjs",
+      "description": "Retain tracked files from the merged WANX workspace and pin their current bytes; preserve the selected source snapshot."
+    },
+    {
+      "file": "ui/graph.d.ts",
+      "description": "Retain tracked files from the merged WANX workspace and pin their current bytes; preserve the selected source snapshot."
+    },
+    {
+      "file": "ui/material-change-conflicts.mjs",
+      "description": "Retain tracked files from the merged WANX workspace and pin their current bytes; preserve the selected source snapshot."
+    },
+    {
+      "file": "ui/material-evidence-view.mjs",
+      "description": "Retain tracked files from the merged WANX workspace and pin their current bytes; preserve the selected source snapshot."
+    },
+    {
+      "file": "ui/material-evidence.mjs",
+      "description": "Retain tracked files from the merged WANX workspace and pin their current bytes; preserve the selected source snapshot."
+    },
+    {
+      "file": "ui/material-fact-cards.mjs",
+      "description": "Retain tracked files from the merged WANX workspace and pin their current bytes; preserve the selected source snapshot."
+    },
+    {
+      "file": "ui/material-instructions-view.mjs",
+      "description": "Retain tracked files from the merged WANX workspace and pin their current bytes; preserve the selected source snapshot."
+    },
+    {
+      "file": "ui/material-instructions.mjs",
+      "description": "Retain tracked files from the merged WANX workspace and pin their current bytes; preserve the selected source snapshot."
+    },
+    {
+      "file": "ui/workbench/assets/index-BPBvFW5n.js",
+      "description": "Retain tracked files from the merged WANX workspace and pin their current bytes; preserve the selected source snapshot."
+    },
+    {
+      "file": "ui/workbench/assets/index-DWGjFdvP.css",
+      "description": "Retain tracked files from the merged WANX workspace and pin their current bytes; preserve the selected source snapshot."
+    },
+    {
+      "file": "ui/workbench/assets/SkillPackages-B2-iSB5I.js",
+      "description": "Retain tracked files from the merged WANX workspace and pin their current bytes; preserve the selected source snapshot."
     }
   ],
   "files": {
@@ -20,6 +72,7 @@
     "resources/icon.png": "3f937f746e991c72aba2658d8e2b52a2f9357e7c5929114ab9a1b3c764ec78e6",
     "shared/conversation-change-contract.mjs": "bdec042aed11b7b6d6c49f3ae9d7844dc0e35aeb116422125bbe8c599e967a74",
     "shared/conversation-contract.mjs": "8bacdfd81564e1a29f7a9f621f66a4017fda6726314dbd161cdf33e486ee12b3",
+    "shared/conversation-instruction-contract.mjs": "843f250e853fbd194ac735260f1083b53bc5e6a5310105c489a7cd329de4303f",
     "shared/onboarding-contract.mjs": "5b097a73c6561e25cd45855375f4ab18a0f88d08ff64846f3235bdd7014c5de8",
     "shared/onboarding-dialogue-contract.mjs": "8c4350fab4f29655c6ae1a5733a662bdee50659240f14d77964b3086064c5370",
     "shared/ontology-dialogue-contract.mjs": "b739926bae69db0c7dafb77bbb5cf363f815012e0c705e03d24b587f519fa241",
@@ -43,16 +96,25 @@
     "ui/conversation.css": "714c5d5409ced5b63c4cb03a5e8d048d478ac54dcc3f425ee222f7e0576cb29f",
     "ui/conversation.js": "878f0a129403b929ee72fd0385ea3a130306de3bc6d47916072840530b7e48ad",
     "ui/extraction-diagnostics.mjs": "161df30c8cc879516a7cc4bf3adedad0206aa865fb23619ae68f23c40afeeb92",
+    "ui/graph-motion.d.mts": "a4f40b6f420ea3d46a9cb7a01f1c65dcebeeac851d28ba8159ee86ff62b8ee07",
+    "ui/graph-motion.mjs": "c3284f29af76a639a1046e090727949a098d140b22f3dc4eb487bdf411ac4933",
     "ui/graph-presentation.mjs": "8c09a26d153cbf30b0003eff9f44775f2bca4f0b8bcdb76f558951cf2459532f",
+    "ui/graph.d.ts": "9b53592c5dc8a72ac8a56d913a1df710483ce8ef4a1151140b4d5e9d57b00761",
     "ui/graph.js": "f48f0f2d2e52c0c8f694443e19d32623eaf6c728fca8db712fc1a4fc248e8c81",
     "ui/icons.js": "db2ce8fab9fac70b23ee083cd29632cd95eba2d0a6f409b52014b15618345fea",
     "ui/index.html": "3d71e4f224490ee3440fe8f1b179033ae4ff646d6770d0e909fcb54c44233cab",
     "ui/material-agent.mjs": "07d5fad450a8f9e82dc331d7850a6d51b0d552c05aba71c6f647242794ef9cd6",
+    "ui/material-change-conflicts.mjs": "4c00459dc29cde887bbfbd0a0403e7d8723d9c493197583024fbbb44a51e8526",
     "ui/material-continuation.mjs": "70ff606ace1808c32850dcc996b51b43cbf9ae25d463af1efb336d5d56d83c15",
     "ui/material-deletion.mjs": "00b48d5110f4349b7d6ad3e7c8ae5f9923dda80e8259862729080b1b91f81285",
+    "ui/material-evidence-view.mjs": "80f84c3bdc5992b6c14f24bcf260173750db7d674185f573bca00969dc32a16f",
+    "ui/material-evidence.mjs": "89438461e135c4c9f318d6016c196b824c6f928e589f9c12e2fae66022820701",
+    "ui/material-fact-cards.mjs": "858bd5b57e0c91d9e0e55bc8efeb5ed1790ae91e7346a272ab6a59e175479b6e",
     "ui/material-goal-dialogue.mjs": "9477b8fd80d5f2487b2a0f45b7832dd0859d24f23e27e3e454e88d9b936077a4",
     "ui/material-history.mjs": "96c799cb93545ea21f696919172fea2f36b994fa609ce6688bde75079942441e",
     "ui/material-import.mjs": "4da37a2e7de1f4f549093a3a40e3403197366525015f5ae40485da9737fff124",
+    "ui/material-instructions-view.mjs": "054a1aadaa7bcd60029164692676168ce68e460525c77ae6c51acf93ce3466cf",
+    "ui/material-instructions.mjs": "190bda3f6657a391846f328005e7f5f81b569cd65ebc7e2c5bbac5129dc58b13",
     "ui/material-intent.mjs": "a515bff31b397c1d285cdab26f3688793a60470e82ed915b6cfbd8382888de39",
     "ui/material-library.mjs": "b83a28dce545148ba5ee909eed329d475bfb5e07912bf1032eae04849db92a4c",
     "ui/material-related-selection.mjs": "d1872468ca38974af07c9a3f6b675450e641b460c4cdc3c4fab2a1b45ce400c6",
@@ -87,6 +149,8 @@
     "ui/warehouse-preview.css": "d8d034246d05f1f17a31b5c4ddae20c0a13a8c2da2b21cc29b45a8cff2d365ec",
     "ui/warehouse-preview.html": "9215e2d33ac2933acbc60fbae0120adcb6bd2138b6ac5aff7692654a14ed27c3",
     "ui/workbench/assets/index-B-YdXwYq.css": "a5204c1b2898951afc25757716eb09ed865c3bc1a118f43d14ff8162a816593b",
+    "ui/workbench/assets/index-BPBvFW5n.js": "311e26859e61dd7bb6d35b945c0ec7d6e90374197e1c41c81b7af4ca97762d1b",
+    "ui/workbench/assets/index-DWGjFdvP.css": "e6a86a705a9717a89595aa687f581ad980440f5ec430dc9c9d87a5a251e29483",
     "ui/workbench/assets/index-DwMEVBGt.js": "e6513d2975391f78bb293857cf300a8d23cce24033cebd65a17bd4a0f95a5830",
     "ui/workbench/assets/material-review/0792b.svg": "8a1797fc1374740a61f19679d7ad1f63a3c3be686a1584606cb85ca61034ad00",
     "ui/workbench/assets/material-review/15329.svg": "b2fa95f1aead5f79d1aed8176122e42cf286a747a25a28d6a8070ce93d319157",
@@ -128,6 +192,7 @@
     "ui/workbench/assets/material-review/e3b60.svg": "de6031a888c0abe49f7b3e3a4966bd4cc1f78a9557deb57ca1ded7e6d91bc372",
     "ui/workbench/assets/material-review/f96fe.svg": "d287484d036f9b9aefcc457a10804e610f29502c74ffdcde7e79032fcd425182",
     "ui/workbench/assets/material-review/f9f6f.svg": "f03221fd66416b75cf903fe0a6d0cd3cdabe80f7acd3fba10e1ca90ab37b97a8",
+    "ui/workbench/assets/SkillPackages-B2-iSB5I.js": "738a98e7bda4e32ccec57b6451cba386710a98cfe32a155561802fc80796a830",
     "ui/workbench/assets/SkillPackages-BVwIHj2p.css": "be9855178066c75c58fa104a202ba00139cfd25b91eb9e1844e370311b6ff185",
     "ui/workbench/assets/SkillPackages-q6NKQZDH.js": "c983b1bbd94f6a97305d964282d6271fd4203707a7318ddb33302d3da0007276",
     "ui/workbench/index.html": "a19af48d64b1f0eb54afbc7511405d7c77bc4a46b5eb5242fd0a670313bb4b15",

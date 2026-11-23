@@ -12,9 +12,18 @@ async function setup(t, fetch, overrides = {}) {
   let time = 1000, delay = null, changes = 0;
   const options = { directory, baseURL: "https://consumer.test/prod-api", edition: "personal", fetch,
     now: () => time, setTimer: (_, value) => { delay = value; return 1; }, clearTimer() {}, changed() { changes++; }, ...overrides };
-  const service = createFaqCache(options);
-  t.after(async () => { await service.close(); await rm(directory, { recursive: true, force: true }); });
-  return { service, options, directory, delay: () => delay, changes: () => changes,
+  const services = [];
+  const open = (overrides = {}) => {
+    const service = createFaqCache({ ...options, ...overrides });
+    services.push(service);
+    return service;
+  };
+  const service = open();
+  t.after(async () => {
+    for (const cache of services) await cache.close();
+    await rm(directory, { recursive: true, force: true, maxRetries: 3 });
+  });
+  return { service, open, directory, delay: () => delay, changes: () => changes,
     advance: async value => { time += value; await service.checkDue(); } };
 }
 test("startup checks once; opening cache never fetches; 24h and resume coalesce overdue checks", async t => {
@@ -31,8 +40,7 @@ test("disk survives restart, startup revalidates ETag, 304 updates check time on
   const h = await setup(t, async () => ({ data: payload(), etag: 'W/"faq-1"' }));
   h.service.start(); await h.service.checkDue(); await h.service.close();
   const first = JSON.parse(await readFile(h.service.cacheFile, "utf8")); let sent;
-  const next = createFaqCache({ ...h.options, now: () => 5000, fetch: async input => { sent = input; return { notModified: true }; } });
-  t.after(() => next.close());
+  const next = h.open({ now: () => 5000, fetch: async input => { sent = input; return { notModified: true }; } });
   assert.equal((await next.read()).data.version, "faq-1"); next.start(); await next.checkDue();
   assert.equal(sent.etag, 'W/"faq-1"');
   const saved = JSON.parse(await readFile(next.cacheFile, "utf8"));
@@ -54,7 +62,7 @@ test("corrupt cache is discarded; invalid HTTP data cannot replace a valid snaps
   const h = await setup(t, async () => response);
   await h.service.read(); await h.service.close();
   await writeFile(h.service.cacheFile, "{broken");
-  const service = createFaqCache(h.options); t.after(() => service.close());
+  const service = h.open();
   assert.equal((await service.read()).data, null);
   service.start(); await service.checkDue();
   response = { data: { categories: [] }, etag: 'W/"invalid"' };
@@ -64,11 +72,11 @@ test("corrupt cache is discarded; invalid HTTP data cannot replace a valid snaps
 test("cache scopes isolate service URLs and editions; write failure retains usable memory", async t => {
   const h = await setup(t, async () => ({ data: payload(), etag: 'W/"faq-1"' }));
   for (const change of [{ baseURL: "https://other.test" }, { edition: "team" }]) {
-    const other = createFaqCache({ ...h.options, ...change }); t.after(() => other.close());
+    const other = h.open(change);
     assert.notEqual(h.service.cacheFile, other.cacheFile); assert.equal((await other.read()).data, null);
   }
   const blocked = path.join(h.directory, "not-a-directory"); await writeFile(blocked, "x");
-  const service = createFaqCache({ ...h.options, directory: blocked }); t.after(() => service.close());
+  const service = h.open({ directory: blocked });
   service.start(); await service.checkDue(); assert.equal((await service.read()).data.version, "faq-1");
 });
 test("in-flight checks coalesce and shutdown suppresses late updates", async t => {

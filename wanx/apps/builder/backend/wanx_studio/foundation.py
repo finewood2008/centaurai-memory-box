@@ -7,8 +7,15 @@ _POLICY = json.loads(files(__package__).joinpath('wanx-foundation.json').read_te
 FOUNDATION_PROMPT = _POLICY['instruction']
 
 
-def foundation_policy():
-    return deepcopy({k: v for k, v in _POLICY.items() if k != 'instruction'})
+def foundation_policy(project=None):
+    result = deepcopy({k: v for k, v in _POLICY.items() if k != 'instruction'})
+    if project and project.get('devKit'):
+        from .public_capabilities import catalog
+        # Legacy reports/data policies are not authority for standard apps.
+        return {key:result[key] for key in ('existingInterfacesOnly', 'backendInterfaceChangesAllowed', 'forbiddenCredentialFields')} | {
+            'version':'wanx-public-contract-policy/2', 'runtimeCapabilities':list(catalog()),
+            'authority':'Host SDK public contracts; resource grants and deployment acceptance required'}
+    return result
 
 
 def has_auth_storage(collections):

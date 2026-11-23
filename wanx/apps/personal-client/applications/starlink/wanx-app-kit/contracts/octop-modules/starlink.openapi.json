@@ -1,0 +1,2388 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "WANX Octop · starlink",
+    "description": "**CentaurAI-WANX** is a smarter, self-hosted AI assistant for multiple users and agents. All routes are served under `/api`.\n\n## Authentication\n\nMost endpoints require a JWT bearer token:\n\n1. Complete initial setup via `/api/setup/*` (first install only).\n2. `GET /api/auth/captcha` then `POST /api/auth/login` with `username` and `password`\n   (and `captcha_token` when a strong provider is active), or complete SSO with\n   `/api/auth/oidc/*` or `/api/auth/oauth/*` when a provider is enabled.\n3. Send `Authorization: Bearer <access_token>` on subsequent requests.\n\nAccess tokens use sliding renewal: when less than one-third of\n`access_token_ttl_seconds` remains, authenticated responses may include a fresh\ntoken in the `X-Octop-Access-Token` header. Clients should replace the stored\ntoken when present.\n\nPublic endpoints (no login token): `/api/docs`, `/api/openapi.json`, `/api/health`,\n`/api/setup/*` (wizard authorization applies), `/api/auth/login`, `/api/auth/register`,\n`/api/auth/captcha`, `/api/auth/oidc/status`, `/api/auth/oidc/start`,\n`/api/auth/oidc/callback`, `/api/auth/oidc/exchange`, `/api/auth/oauth/status`,\n`/api/auth/oauth/start`, `/api/auth/oauth/callback`, `/api/auth/oauth/exchange`,\n`/api/auth/invite/validate`,\n`/api/auth/invite/redeem`, `/api/connectors/oauth/callback`,\nand `/api/internal/mcp/*`.\n\n## Agent scope\n\nMany agent-scoped routes use the agent ID in the URL path (`/api/agents/{agent_id}/…`).\nRoutes first check the signed token's application scope; legacy tokens default to WANX.\nResources in another application are treated as not found, including for administrators.\nWithin the same application, each route applies its ownership or shared-resource access\nrules. WANX administrators may bypass ownership where supported; Zhijun personal profiles,\nmemories and uploaded sources require the owner.\n\n## Streaming chat\n\nDashboard live turns use **WebSocket** at `/api/agents/{agent_id}/chat/ws` (pass JWT as\n`?token=` query param). Send `{\"type\":\"user_turn\", ...}` frames; the server replies with JSON\nchunks matching the harness stream format, ending with `{\"type\":\"done\"}` or\n`{\"type\":\"error\",\"message\":\"...\"}`.\n\nText-type dashboard pushes (cron reminders, proactive care) also emit\n`{\"type\":\"dashboard_push\", ...}` on `/api/notifications/ws` (same `?token=` auth) so the\nSPA can show a toast even when the chat socket is not subscribed.\n\nHITL resume still uses `POST /api/agents/{agent_id}/chat/hitl/resume` (SSE).\n\n## Knowledge libraries\n\n`/api/knowledge-bases` uses the signed application scope for creation, visibility,\ndocument access, and citations. Existing libraries remain in WANX. Zhijun libraries\nare private to their owner and use local document parsers, downloaded native ONNX\nembeddings and RapidOCR. Remote WANX embedding/OCR settings do not affect Zhijun;\nmissing local components are reported as unavailable without remote fallback.\n",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/semantica/modeling/onboarding": {
+      "get": {
+        "tags": [
+          "semantica"
+        ],
+        "summary": "Read the current user's onboarding answers",
+        "operationId": "handle_api_semantica_modeling_onboarding_get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "semantica"
+        ],
+        "summary": "Save onboarding answers with revision checks",
+        "operationId": "handle_api_semantica_modeling_onboarding_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "operation_id": {
+                    "maxLength": 120,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9_-]+$",
+                    "title": "Operation Id",
+                    "type": "string"
+                  },
+                  "expected_revision": {
+                    "minimum": 0,
+                    "title": "Expected Revision",
+                    "type": "integer"
+                  },
+                  "answers": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "industry": {
+                        "default": "",
+                        "maxLength": 200,
+                        "title": "Industry",
+                        "type": "string"
+                      },
+                      "occupation": {
+                        "default": "",
+                        "maxLength": 200,
+                        "title": "Occupation",
+                        "type": "string"
+                      },
+                      "background": {
+                        "default": "",
+                        "maxLength": 8000,
+                        "title": "Background",
+                        "type": "string"
+                      },
+                      "purpose": {
+                        "default": "",
+                        "maxLength": 16000,
+                        "title": "Purpose",
+                        "type": "string"
+                      },
+                      "material_types": {
+                        "default": "",
+                        "maxLength": 8000,
+                        "title": "Material Types",
+                        "type": "string"
+                      },
+                      "questions": {
+                        "default": "",
+                        "maxLength": 8000,
+                        "title": "Questions",
+                        "type": "string"
+                      },
+                      "warehouse_name": {
+                        "default": "",
+                        "maxLength": 60,
+                        "title": "Warehouse Name",
+                        "type": "string"
+                      },
+                      "flow_step": {
+                        "default": "",
+                        "enum": [
+                          "",
+                          "background",
+                          "purpose",
+                          "confirm"
+                        ],
+                        "title": "Flow Step",
+                        "type": "string"
+                      },
+                      "flow_mode": {
+                        "default": "",
+                        "enum": [
+                          "",
+                          "create",
+                          "profile"
+                        ],
+                        "title": "Flow Mode",
+                        "type": "string"
+                      },
+                      "background_sample": {
+                        "default": "",
+                        "maxLength": 60,
+                        "title": "Background Sample",
+                        "type": "string"
+                      },
+                      "purpose_sample": {
+                        "default": "",
+                        "maxLength": 60,
+                        "title": "Purpose Sample",
+                        "type": "string"
+                      },
+                      "creation_operation": {
+                        "default": "",
+                        "maxLength": 120,
+                        "pattern": "^[A-Za-z0-9_-]*$",
+                        "title": "Creation Operation",
+                        "type": "string"
+                      }
+                    },
+                    "title": "Answers",
+                    "type": "object"
+                  },
+                  "status": {
+                    "default": "in_progress",
+                    "enum": [
+                      "in_progress",
+                      "skipped",
+                      "completed"
+                    ],
+                    "title": "Status",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "operation_id",
+                  "expected_revision",
+                  "answers"
+                ],
+                "title": "SaveOnboarding",
+                "type": "object"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/semantica/modeling/warehouses": {
+      "get": {
+        "tags": [
+          "semantica"
+        ],
+        "summary": "List the current user's knowledge warehouses",
+        "operationId": "handle_api_semantica_modeling_warehouses_get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/semantica/modeling/onboarding/{onboarding_id}/warehouse": {
+      "post": {
+        "tags": [
+          "semantica"
+        ],
+        "summary": "Create a personal warehouse after confirmation",
+        "operationId": "handle_api_semantica_modeling_onboarding__onboarding_id__warehouse_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "path",
+            "name": "onboarding_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "operation_id": {
+                    "maxLength": 120,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9_-]+$",
+                    "title": "Operation Id",
+                    "type": "string"
+                  },
+                  "expected_revision": {
+                    "minimum": 0,
+                    "title": "Expected Revision",
+                    "type": "integer"
+                  },
+                  "name": {
+                    "maxLength": 60,
+                    "minLength": 1,
+                    "title": "Name",
+                    "type": "string"
+                  },
+                  "purpose": {
+                    "default": "",
+                    "maxLength": 16000,
+                    "title": "Purpose",
+                    "type": "string"
+                  },
+                  "warehouse_scope": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "industry": {
+                            "default": "",
+                            "description": "Warehouse industry/business domain",
+                            "maxLength": 200,
+                            "title": "Industry",
+                            "type": "string"
+                          },
+                          "occupation": {
+                            "default": "",
+                            "description": "Warehouse business role; not access control",
+                            "maxLength": 200,
+                            "title": "Occupation",
+                            "type": "string"
+                          },
+                          "background": {
+                            "default": "",
+                            "description": "Warehouse business background",
+                            "maxLength": 8000,
+                            "title": "Background",
+                            "type": "string"
+                          },
+                          "material_types": {
+                            "default": "",
+                            "maxLength": 8000,
+                            "title": "Material Types",
+                            "type": "string"
+                          },
+                          "questions": {
+                            "default": "",
+                            "maxLength": 8000,
+                            "title": "Questions",
+                            "type": "string"
+                          }
+                        },
+                        "title": "WarehouseScope",
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "operation_id",
+                  "expected_revision",
+                  "name"
+                ],
+                "title": "CreateWarehouse",
+                "type": "object"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/semantica/warehouses/{warehouse_id}/modeling/suggestion-context": {
+      "get": {
+        "tags": [
+          "semantica"
+        ],
+        "summary": "Read the selected warehouse's initial suggestion context",
+        "operationId": "handle_api_semantica_warehouses__warehouse_id__modeling_suggestion_context_get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "path",
+            "name": "warehouse_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/semantica/warehouses/{warehouse_id}/modeling/answer-confirmations": {
+      "post": {
+        "tags": [
+          "semantica"
+        ],
+        "summary": "Confirm answers for an initial structure suggestion",
+        "operationId": "handle_api_semantica_warehouses__warehouse_id__modeling_answer_confirmations_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "path",
+            "name": "warehouse_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "operation_id": {
+                    "maxLength": 120,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9_-]+$",
+                    "title": "Operation Id",
+                    "type": "string"
+                  },
+                  "expected_revision": {
+                    "minimum": 0,
+                    "title": "Expected Revision",
+                    "type": "integer"
+                  },
+                  "onboarding_revision": {
+                    "minimum": 0,
+                    "title": "Onboarding Revision",
+                    "type": "integer"
+                  },
+                  "expected_confirmation_id": {
+                    "anyOf": [
+                      {
+                        "maxLength": 120,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Expected Confirmation Id"
+                  },
+                  "answers": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "industry": {
+                        "default": "",
+                        "maxLength": 200,
+                        "title": "Industry",
+                        "type": "string"
+                      },
+                      "occupation": {
+                        "default": "",
+                        "maxLength": 200,
+                        "title": "Occupation",
+                        "type": "string"
+                      },
+                      "background": {
+                        "default": "",
+                        "maxLength": 8000,
+                        "title": "Background",
+                        "type": "string"
+                      },
+                      "purpose": {
+                        "default": "",
+                        "maxLength": 16000,
+                        "title": "Purpose",
+                        "type": "string"
+                      },
+                      "material_types": {
+                        "default": "",
+                        "maxLength": 8000,
+                        "title": "Material Types",
+                        "type": "string"
+                      },
+                      "questions": {
+                        "default": "",
+                        "maxLength": 8000,
+                        "title": "Questions",
+                        "type": "string"
+                      }
+                    },
+                    "title": "ConfirmedAnswers",
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "operation_id",
+                  "expected_revision",
+                  "onboarding_revision",
+                  "answers"
+                ],
+                "title": "ConfirmAnswers",
+                "type": "object"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/semantica/warehouses/{warehouse_id}/modeling/answer-suggestions": {
+      "post": {
+        "tags": [
+          "semantica"
+        ],
+        "summary": "Generate an initial structure suggestion without publishing",
+        "operationId": "handle_api_semantica_warehouses__warehouse_id__modeling_answer_suggestions_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "path",
+            "name": "warehouse_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "operation_id": {
+                    "maxLength": 120,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9_-]+$",
+                    "title": "Operation Id",
+                    "type": "string"
+                  },
+                  "confirmation_id": {
+                    "maxLength": 120,
+                    "minLength": 1,
+                    "title": "Confirmation Id",
+                    "type": "string"
+                  },
+                  "base_ontology_id": {
+                    "maxLength": 120,
+                    "minLength": 1,
+                    "title": "Base Ontology Id",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "operation_id",
+                  "confirmation_id",
+                  "base_ontology_id"
+                ],
+                "title": "GenerateSuggestions",
+                "type": "object"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/semantica/warehouses/{warehouse_id}/modeling/answer-suggestions/{suggestion_id}": {
+      "get": {
+        "tags": [
+          "semantica"
+        ],
+        "summary": "Read an initial structure suggestion receipt",
+        "operationId": "handle_api_semantica_warehouses__warehouse_id__modeling_answer_suggestions__suggestion_id__get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "path",
+            "name": "warehouse_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "suggestion_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/semantica/open/v1/{path}": {
+      "post": {
+        "tags": [
+          "semantica"
+        ],
+        "summary": "Xingtu Open Request",
+        "operationId": "xingtu_open_search",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "get": {
+        "tags": [
+          "semantica"
+        ],
+        "summary": "Xingtu Open Request",
+        "operationId": "xingtu_open_read",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/semantica/warehouses": {
+      "post": {
+        "tags": [
+          "semantica"
+        ],
+        "summary": "Quick-create a warehouse with a published general ontology",
+        "operationId": "handle_api_semantica_warehouses_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "operation_id": {
+                    "maxLength": 120,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9_-]+$",
+                    "title": "Operation Id",
+                    "type": "string"
+                  },
+                  "name": {
+                    "maxLength": 60,
+                    "minLength": 1,
+                    "title": "Name",
+                    "type": "string"
+                  },
+                  "description": {
+                    "default": "",
+                    "maxLength": 500,
+                    "title": "Description",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "operation_id",
+                  "name"
+                ],
+                "title": "QuickWarehouse",
+                "type": "object"
+              }
+            }
+          }
+        },
+        "description": "Uses existing WANX identity and warehouse authorization. Quick creation needs only name, optional description and a stable operation_id. No model call or template selector. The successful receipt contains current_ontology: id, version_number, name, status, template_id, template_version, entity_type_count, relation_type_count. An operation replay returns the original receipt; GET the warehouse to read current rules. Existing warehouses may return current_ontology=null and are never upgraded by reads.",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "get": {
+        "tags": [
+          "semantica"
+        ],
+        "summary": "List owned warehouses with current ontology summaries",
+        "operationId": "handle_api_semantica_warehouses_get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Uses existing WANX identity and warehouse authorization. Quick creation needs only name, optional description and a stable operation_id. No model call or template selector. The successful receipt contains current_ontology: id, version_number, name, status, template_id, template_version, entity_type_count, relation_type_count. An operation replay returns the original receipt; GET the warehouse to read current rules. Existing warehouses may return current_ontology=null and are never upgraded by reads.",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/semantica/warehouses/{warehouse_id}": {
+      "get": {
+        "tags": [
+          "semantica"
+        ],
+        "summary": "Read warehouse status and its current published ontology",
+        "operationId": "handle_api_semantica_warehouses__warehouse_id__get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "path",
+            "name": "warehouse_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Uses existing WANX identity and warehouse authorization. Quick creation needs only name, optional description and a stable operation_id. No model call or template selector. The successful receipt contains current_ontology: id, version_number, name, status, template_id, template_version, entity_type_count, relation_type_count. An operation replay returns the original receipt; GET the warehouse to read current rules. Existing warehouses may return current_ontology=null and are never upgraded by reads.",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "semantica"
+        ],
+        "summary": "Rename the current owner's warehouse",
+        "operationId": "handle_api_semantica_warehouses__warehouse_id__patch",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "path",
+            "name": "warehouse_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "operation_id": {
+                    "maxLength": 120,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9_-]+$",
+                    "title": "Operation Id",
+                    "type": "string"
+                  },
+                  "name": {
+                    "maxLength": 60,
+                    "minLength": 1,
+                    "title": "Name",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "operation_id",
+                  "name"
+                ],
+                "title": "RenameWarehouse",
+                "type": "object"
+              }
+            }
+          }
+        },
+        "description": "Renames only name within current warehouse authorization. Requires a stable operation_id; retries return the original metadata receipt. Description, documents, ontology and warehouse identity remain unchanged. Name is trimmed, 1–60 Unicode codepoints, without control characters.",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/semantica/{path}": {
+      "delete": {
+        "tags": [
+          "semantica"
+        ],
+        "summary": "Delete a document in the selected knowledge warehouse",
+        "operationId": "semantica_delete_document",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "semantica"
+        ],
+        "summary": "Apply an allowed Semantica workspace operation",
+        "operationId": "semantica_patch",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "semantica"
+        ],
+        "summary": "Update your Semantica protection settings",
+        "operationId": "semantica_update",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "semantica"
+        ],
+        "summary": "Import materials or retrieve evidence in your knowledge space",
+        "operationId": "semantica_create_or_search",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "get": {
+        "tags": [
+          "semantica"
+        ],
+        "summary": "Read Semantica materials, jobs, knowledge or evidence",
+        "operationId": "semantica_read",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/semantica/open/v1/warehouse": {
+      "get": {
+        "operationId": "starlinkWarehouse",
+        "summary": "读取 Key 绑定的数据仓概况",
+        "security": [
+          {
+            "hostSession": [],
+            "starlinkWarehouseKey": []
+          }
+        ],
+        "x-wanx-status": "open",
+        "x-wanx-permission": "starlink.warehouse.read",
+        "responses": {
+          "200": {
+            "description": "星图按仓库保护规则交付的 JSON",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "仓库 Key 无效、过期、已撤销，或当前请求未获授权"
+          },
+          "409": {
+            "description": "内容已变化或尚未就绪"
+          },
+          "default": {
+            "description": "星图或 Host 返回的错误，处理方式见星图 API 指南"
+          },
+          "422": {
+            "description": "请求参数无效或包含该接口未声明的字段"
+          }
+        },
+        "x-wanx-warehouse-key-scope": "documents"
+      }
+    },
+    "/api/semantica/open/v1/documents": {
+      "get": {
+        "operationId": "starlinkDocuments",
+        "summary": "列出获授权的材料元信息",
+        "security": [
+          {
+            "hostSession": [],
+            "starlinkWarehouseKey": []
+          }
+        ],
+        "x-wanx-status": "open",
+        "x-wanx-permission": "starlink.warehouse.read",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "星图按仓库保护规则交付的 JSON",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "仓库 Key 无效、过期、已撤销，或当前请求未获授权"
+          },
+          "409": {
+            "description": "内容已变化或尚未就绪"
+          },
+          "default": {
+            "description": "星图或 Host 返回的错误，处理方式见星图 API 指南"
+          },
+          "422": {
+            "description": "请求参数无效或包含该接口未声明的字段"
+          }
+        },
+        "x-wanx-warehouse-key-scope": "documents"
+      }
+    },
+    "/api/semantica/open/v1/graph": {
+      "get": {
+        "operationId": "starlinkGraph",
+        "summary": "读取带来源的图谱节点与关系",
+        "security": [
+          {
+            "hostSession": [],
+            "starlinkWarehouseKey": []
+          }
+        ],
+        "x-wanx-status": "open",
+        "x-wanx-permission": "starlink.warehouse.read",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
+            }
+          },
+          {
+            "name": "entity_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "星图按仓库保护规则交付的 JSON",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "nodes",
+                    "edges"
+                  ],
+                  "properties": {
+                    "nodes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "edges": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "evidence": {
+                            "type": "array",
+                            "items": {
+                              "type": "object"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "仓库 Key 无效、过期、已撤销，或当前请求未获授权"
+          },
+          "409": {
+            "description": "内容已变化或尚未就绪"
+          },
+          "default": {
+            "description": "星图或 Host 返回的错误，处理方式见星图 API 指南"
+          },
+          "422": {
+            "description": "请求参数无效或包含该接口未声明的字段"
+          }
+        },
+        "x-wanx-warehouse-key-scope": "graph"
+      }
+    },
+    "/api/semantica/open/v1/search": {
+      "post": {
+        "operationId": "starlinkSearch",
+        "summary": "检索获授权的证据片段",
+        "security": [
+          {
+            "hostSession": [],
+            "starlinkWarehouseKey": []
+          }
+        ],
+        "x-wanx-status": "open",
+        "x-wanx-permission": "starlink.warehouse.read",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "query"
+                ],
+                "properties": {
+                  "query": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2000
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50
+                  },
+                  "document_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "entity_types": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "星图按仓库保护规则交付的 JSON",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "text": {
+                            "type": "string"
+                          },
+                          "document_id": {
+                            "type": "string"
+                          },
+                          "document_version_id": {
+                            "type": "string"
+                          },
+                          "locator": {},
+                          "channels": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "仓库 Key 无效、过期、已撤销，或当前请求未获授权"
+          },
+          "409": {
+            "description": "内容已变化或尚未就绪"
+          },
+          "default": {
+            "description": "星图或 Host 返回的错误，处理方式见星图 API 指南"
+          },
+          "422": {
+            "description": "请求参数无效或包含该接口未声明的字段"
+          }
+        },
+        "x-wanx-warehouse-key-scope": "search"
+      }
+    },
+    "/api/semantica/open/v1/evidence/{id}": {
+      "get": {
+        "operationId": "starlinkEvidence",
+        "summary": "按 ID 读取证据摘录及位置",
+        "security": [
+          {
+            "hostSession": [],
+            "starlinkWarehouseKey": []
+          }
+        ],
+        "x-wanx-status": "open",
+        "x-wanx-permission": "starlink.warehouse.read",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,128}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "星图按仓库保护规则交付的 JSON",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "text": {
+                      "type": "string"
+                    },
+                    "document_id": {
+                      "type": "string"
+                    },
+                    "document_version_id": {
+                      "type": "string"
+                    },
+                    "locator": {},
+                    "channels": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "仓库 Key 无效、过期、已撤销，或当前请求未获授权"
+          },
+          "409": {
+            "description": "内容已变化或尚未就绪"
+          },
+          "default": {
+            "description": "星图或 Host 返回的错误，处理方式见星图 API 指南"
+          },
+          "422": {
+            "description": "请求参数无效或包含该接口未声明的字段"
+          }
+        },
+        "x-wanx-warehouse-key-scope": "evidence"
+      }
+    },
+    "/api/semantica/open/v1/reasoning/{operation}": {
+      "post": {
+        "operationId": "starlinkReasoning",
+        "summary": "发现方法、准备材料范围并读取推理资料",
+        "description": "各操作的 arguments 字段见 starlink-api.md。prepare 创建准备记录，detect=true 可触发当前对象的检测。",
+        "security": [
+          {
+            "hostSession": [],
+            "starlinkWarehouseKey": []
+          }
+        ],
+        "x-wanx-status": "open",
+        "x-wanx-permission": "starlink.warehouse.reasoning",
+        "x-wanx-warehouse-key-scope": "reasoning",
+        "parameters": [
+          {
+            "name": "operation",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "discover",
+                "prepare",
+                "reference",
+                "scope",
+                "search",
+                "evidence",
+                "read-document",
+                "coverage"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "arguments"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "arguments": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "推理准备、读取或检索结果，字段随 operation 变化",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "仓库 Key 无效、过期、已撤销或缺少 reasoning 权限"
+          },
+          "409": {
+            "description": "内容或准备范围已变化，或资料尚未就绪"
+          },
+          "422": {
+            "description": "请求参数无效"
+          },
+          "default": {
+            "description": "星图或 Host 返回的错误"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    },
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "JWT from `POST /api/auth/login` (`access_token` field)."
+      },
+      "hostSession": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Host SDK 自动发送的本次启动会话令牌。"
+      },
+      "starlinkWarehouseKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Xingtu-Key",
+        "description": "星图签发的单数据仓 Key。"
+      }
+    }
+  },
+  "tags": [],
+  "x-wanx-supplemental-routes": [
+    {
+      "method": "POST",
+      "path": "/internal/starklink/models",
+      "group": "starlink",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/mcp/starlink",
+      "group": "starlink",
+      "type": "Streamable HTTP"
+    },
+    {
+      "method": "POST",
+      "path": "/mcp/starlink",
+      "group": "starlink",
+      "type": "Streamable HTTP"
+    }
+  ],
+  "x-wanx-contract": "wanx-business-api/1",
+  "x-wanx-catalog": "../api-catalog.v1.json",
+  "x-wanx-permissions": "../permissions.v1.json"
+}

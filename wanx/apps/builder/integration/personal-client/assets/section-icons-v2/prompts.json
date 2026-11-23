@@ -63,6 +63,15 @@
         "万象盒子",
         "WanX Box"
       ]
+    },
+    {
+      "key": "memory",
+      "prompt": "Create one production UI section emblem for Memory Agent, matching these two supplied reference icons as siblings in the exact same set. Both input images are style references only. Square composition, a single face-on warm ivory porcelain rounded-square tile about 81% of the full frame, thin champagne-gold metal edge, slight thickness at the bottom, softly rounded corners and genuine transparent surroundings. Center one bold three-dimensional symbol for stored AI memories: two overlapping smooth ivory ceramic memory cards with soft rounded corners; a subtle champagne-gold rim and two short horizontal gold inlays on the front card, with one tiny round inlay. Cards should form a simple coherent silhouette, centered and substantial, occupying about 60% of tile width. Match the reference tile shape, border weight, porcelain textures, subdued amber lighting, and realistic soft contact shadows especially closely. Straight-on low-perspective studio render, detail stays legible at 46 pixels. No text, letters, numerals, brain, robot, folder, gradients in the transparent exterior or background objects. True transparent alpha outside the emblem.",
+      "file": "memory.png",
+      "labels": [
+        "记忆体",
+        "Memory Agent"
+      ]
     }
   ]
 }

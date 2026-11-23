@@ -3,22 +3,29 @@
 
   const panelMarkup = `
     <header class="academy-toolbar">
-      <div id="academy-tabs" class="academy-tabs" role="tablist" aria-label="AI 助手板块">
-        <button id="academy-tab-assistant" role="tab" aria-selected="true" aria-controls="academy-assistant" type="button">小助理</button>
-        <button id="academy-tab-note" role="tab" aria-selected="false" aria-controls="academy-note" tabindex="-1" type="button">便签</button>
-        <button id="academy-tab-academy" role="tab" aria-selected="false" aria-controls="academy-resources" tabindex="-1" type="button">半人马AI学院</button>
+      <div class="academy-title-group">
+        <h2 id="academy-title" tabindex="-1">知君</h2>
+        <span class="academy-title-caption" lang="en">memory agent</span>
       </div>
-      <button id="academy-close" class="academy-icon-button" type="button" aria-label="收起 AI 助手" title="收起 AI 助手">×</button>
+      <div class="academy-tools">
+        <button id="academy-note-tool" class="academy-tool" aria-expanded="false" aria-controls="academy-note" type="button">
+          <svg class="academy-note-tool-icon" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 3.5h11a1 1 0 0 1 1 1v6.9l-4.1 5.1H4.5a1 1 0 0 1-1-1v-11a1 1 0 0 1 1-1Z"/><path d="M11.7 16.4v-4.1a1 1 0 0 1 1-1h3.7M7 7h6M7 10h3"/></svg>
+          <svg class="academy-return-icon" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 5-5 5 5 5M3 10h13"/></svg>
+          <span>便签</span>
+        </button>
+        <button id="academy-resource-tool" class="academy-tool" aria-expanded="false" aria-controls="academy-resources" type="button">学院</button>
+        <button id="academy-close" class="academy-icon-button" type="button" aria-label="收起知君侧栏" title="收起知君侧栏">×</button>
+      </div>
     </header>
-    <section id="academy-assistant" role="tabpanel" aria-labelledby="academy-tab-assistant">
-      <section id="academy-dialogue" aria-label="AI 对话">
+    <section id="academy-assistant" aria-label="知君对话">
+      <section id="academy-dialogue" aria-label="与知君对话">
         <div id="academy-dialogue-host"></div>
       </section>
     </section>
 
-    <section id="academy-note" role="tabpanel" aria-labelledby="academy-tab-note" hidden></section>
+    <section id="academy-note" aria-label="便签" hidden></section>
 
-    <section id="academy-resources" class="content-panel" role="tabpanel" aria-labelledby="academy-tab-academy" tabindex="0" hidden>
+    <section id="academy-resources" class="content-panel" aria-label="半人马AI学院" tabindex="0" hidden>
       <section class="resource-card">
         <h2>学院课程</h2>
         <p>前往学院官网查看公开课程与开课安排。</p>
@@ -79,8 +86,8 @@
     const app = document.getElementById("app");
     const drawer = document.createElement("aside");
     drawer.id = "academy-drawer";
-    drawer.setAttribute("aria-label", "AI 助手");
-    drawer.hidden = true;
+    drawer.setAttribute("aria-label", "知君侧栏");
+    drawer.inert = true;
     drawer.innerHTML = panelMarkup;
     const handle = document.createElement("button");
     handle.id = "academy-edge-handle";
@@ -88,7 +95,7 @@
     handle.hidden = true;
     handle.setAttribute("aria-controls", drawer.id);
     handle.setAttribute("aria-expanded", "false");
-    handle.innerHTML = '<img src="./assets/centaurai-mark.png" width="20" height="20" alt="" aria-hidden="true" />';
+    handle.innerHTML = '<span class="academy-edge-mark"><img src="./assets/centaurai-mark.png" width="17" height="17" alt="" draggable="false" /></span>';
     root.append(drawer, handle);
 
     const $ = id => drawer.querySelector("#academy-" + id);
@@ -198,23 +205,24 @@
     let available = false;
     let blocked = false;
     let section = "assistant";
-    const tabs = $("tabs");
-    if (!request) $("tab-academy").remove();
-    const buttons = [...tabs.querySelectorAll('[role="tab"]')];
-    const tabSection = tab => tab.id.slice("academy-tab-".length);
+    const noteTool = $("note-tool");
+    const resourceTool = $("resource-tool");
+    if (!request) resourceTool.remove();
     const availableNow = () => available && !blocked;
     const visible = () => availableNow() && opened;
-    const currentTab = () => $("tab-" + section);
 
     function selectPanel(nextSection) {
       if (nextSection === section) return;
       section = nextSection;
-      for (const tab of buttons) {
-        const selected = tabSection(tab) === section;
-        tab.setAttribute("aria-selected", String(selected));
-        tab.tabIndex = selected ? 0 : -1;
-        drawer.querySelector("#" + tab.getAttribute("aria-controls")).hidden = !selected;
-      }
+      const notesOpen = section === "note";
+      const resourcesOpen = section === "academy";
+      $("assistant").hidden = section !== "assistant";
+      $("note").hidden = !notesOpen;
+      $("resources").hidden = !resourcesOpen;
+      noteTool.setAttribute("aria-expanded", String(notesOpen));
+      noteTool.querySelector("span").textContent = notesOpen ? "返回对话" : "便签";
+      resourceTool.setAttribute("aria-expanded", String(resourcesOpen));
+      resourceTool.textContent = resourcesOpen ? "返回对话" : "学院";
       onTabChange?.(section);
     }
 
@@ -223,29 +231,19 @@
       else open(next);
     }
 
-    for (const tab of buttons) tab.addEventListener("click", () => requestSection(tabSection(tab)));
-    tabs.addEventListener("keydown", event => {
-      const index = buttons.indexOf(event.target);
-      if (index < 0 || event.altKey || event.ctrlKey || event.metaKey) return;
-      let next;
-      if (event.key === "ArrowLeft") next = buttons[(index + buttons.length - 1) % buttons.length];
-      else if (event.key === "ArrowRight") next = buttons[(index + 1) % buttons.length];
-      else if (event.key === "Home") next = buttons[0];
-      else if (event.key === "End") next = buttons.at(-1);
-      if (!next) return;
-      event.preventDefault();
-      requestSection(tabSection(next));
-    });
+    noteTool.addEventListener("click", () => requestSection(section === "note" ? "assistant" : "note"));
+    if (request) resourceTool.addEventListener("click", () => requestSection(section === "academy" ? "assistant" : "academy"));
 
     function paintVisibility(wasVisible) {
       const shown = visible();
-      drawer.hidden = !shown;
+      if (!availableNow() || shown !== wasVisible) resetPull();
+      drawer.inert = !shown;
       handle.hidden = !availableNow();
       document.body.classList.toggle("academy-drawer-open", shown);
       handle.setAttribute("aria-expanded", String(shown));
-      const label = shown ? "收起 AI 助手" : "打开 AI 助手";
+      const label = shown ? "收起知君侧栏" : "打开知君侧栏";
       handle.setAttribute("aria-label", label);
-      handle.title = label;
+      handle.title = shown ? "向右拖动或点击，收起知君侧栏" : "向左拖动或点击，打开知君侧栏";
       if (shown !== wasVisible) onOpenChange?.(shown);
     }
 
@@ -257,7 +255,8 @@
       selectPanel(nextSection);
       opened = true;
       paintVisibility(wasVisible);
-      if (visible()) currentTab().focus({ preventScroll: true });
+      if (visible()) (section === "note" ? noteTool : section === "academy" ? resourceTool : $("title"))
+        .focus({ preventScroll: true });
     }
 
     function close({ restoreFocus = true } = {}) {
@@ -277,24 +276,90 @@
 
     let gesture;
     let suppressClick = false;
-    handle.addEventListener("pointerdown", event => {
-      if (!event.isPrimary || event.button !== 0) return;
-      suppressClick = false;
-      gesture = { id: event.pointerId, x: event.clientX, y: event.clientY };
-      if (event.isTrusted) handle.setPointerCapture(event.pointerId);
-    });
-    handle.addEventListener("pointerup", event => {
+
+    function resetPull() {
+      gesture = undefined;
+      root.classList.remove("is-pulling");
+      root.style.removeProperty("--academy-reveal");
+    }
+
+    function finishPull(target, velocity) {
+      const distance = target - gesture.position;
+      if (Math.abs(distance) > 1) {
+        const duration = parseFloat(getComputedStyle(root).getPropertyValue("--academy-slide-duration"));
+        // Sample a critically damped spring so the release picks up at the pointer's speed.
+        const damping = 8.4;
+        const slope = Math.max(-3, Math.min(damping, velocity * duration / distance));
+        const points = Array.from({ length: 23 }, (_, i) => {
+          const time = (i + 1) / 24;
+          return (1 + Math.exp(-damping * time) * (-1 + (slope - damping) * time)).toFixed(4);
+        });
+        root.style.setProperty("--academy-release-curve", `linear(0, ${points.join(", ")}, 1)`);
+      }
+      resetPull();
+    }
+
+    function trackPull(event) {
       if (gesture?.id !== event.pointerId) return;
       const dx = event.clientX - gesture.x;
       const dy = event.clientY - gesture.y;
-      gesture = undefined;
-      if (Math.max(Math.abs(dx), Math.abs(dy)) < 14) return;
-      suppressClick = true;
-      if (Math.abs(dx) >= 40 && Math.abs(dx) > Math.abs(dy) && (opened ? dx > 0 : dx < 0)) toggle();
+      if (!gesture.axis && Math.max(Math.abs(dx), Math.abs(dy)) >= 8) {
+        gesture.axis = Math.abs(dx) > Math.abs(dy) ? "horizontal" : "vertical";
+        suppressClick = true;
+      }
+      if (gesture.axis !== "horizontal") return;
+      const pull = gesture.closing ? dx : -dx;
+      const reveal = Math.max(0, Math.min(gesture.width, gesture.reveal - dx));
+      if (reveal !== gesture.position) {
+        const elapsed = Math.max(8, event.timeStamp - gesture.lastMove);
+        gesture.velocity = (reveal - gesture.position) / elapsed;
+        gesture.position = reveal;
+        gesture.lastMove = event.timeStamp;
+      }
+      root.classList.add("is-pulling");
+      root.style.setProperty("--academy-reveal", `${reveal}px`);
+      return pull;
+    }
+
+    handle.addEventListener("pointerdown", event => {
+      if (!event.isPrimary || event.button !== 0) return;
+      suppressClick = false;
+      root.style.removeProperty("--academy-release-curve");
+      const reveal = root.getBoundingClientRect().right - handle.getBoundingClientRect().right;
+      gesture = {
+        id: event.pointerId, x: event.clientX, y: event.clientY, closing: visible(),
+        width: drawer.offsetWidth,
+        reveal, position: reveal, lastMove: event.timeStamp, velocity: 0,
+      };
+      if (event.isTrusted) handle.setPointerCapture(event.pointerId);
     });
-    handle.addEventListener("pointercancel", () => { gesture = undefined; });
+    document.addEventListener("pointermove", event => {
+      if (gesture?.id !== event.pointerId) return;
+      if (event.buttons & 1) trackPull(event);
+      else resetPull();
+    });
+    document.addEventListener("pointerup", event => {
+      if (gesture?.id !== event.pointerId) return;
+      const pull = trackPull(event);
+      const closing = gesture.closing;
+      if (gesture.axis === "horizontal") {
+        const expanded = pull >= 48 ? !closing : closing;
+        const velocity = event.timeStamp - gesture.lastMove <= 48 ? gesture.velocity : 0;
+        finishPull(expanded ? gesture.width : 0, velocity);
+        if (expanded !== closing) requestVisibility(expanded);
+      } else resetPull();
+    });
+    const cancelPull = event => {
+      if (gesture?.id === event.pointerId) resetPull();
+    };
+    document.addEventListener("pointercancel", cancelPull);
+    window.addEventListener("blur", resetPull);
+    handle.addEventListener("transitionend", event => {
+      if (event.propertyName === "transform") root.style.removeProperty("--academy-release-curve");
+    });
     handle.addEventListener("click", event => {
       if (suppressClick && event.detail) { suppressClick = false; return; }
+      root.style.removeProperty("--academy-release-curve");
       toggle();
     });
     $("close").addEventListener("click", () => requestVisibility(false));

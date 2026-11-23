@@ -1,5 +1,6 @@
 """Trusted project intake, fixed capability probes, and versioned handoff."""
 from .foundation import FOUNDATION_PROMPT
+from . import public_capabilities as public
 import asyncio
 from copy import deepcopy
 import json
@@ -13,7 +14,7 @@ from .prd_patch import rows
 from .deployment.project_expert import selected as expert_selected, runtime_capabilities, capability_contracts, instruction as expert_instruction
 
 CONTRACT_VERSION='wanx-app-capabilities/1'
-CATALOG={
+LEGACY_CATALOG={
  'foundation':{'label':'来源应用的万象基础能力','methods':['foundation.invoke'],'limits':'仅保留来源应用已声明的固定能力；可信运行层按当前账号、盒子、应用及环境核验，外部操作另行授权。不开放任意HTTP、Shell、数据库或文件路径；复制不继承原数据、连接或凭据。','example':{'method':'foundation.invoke','params':{'operation':'status','input':{}}}},
  'reports':{'label':'私有报告与管理员汇总','methods':['reports.context','reports.list','reports.get','reports.save','reports.delete'],'limits':'复用 WANX 私有库；普通用户仅本人，管理员可查看本应用及环境全部报告。保存文档而非任意业务表。身份、私有库绑定与环境由服务端决定；不可共享。创建需 operationId，修改/删除需 expectedHash。','example':{'method':'reports.save','params':{'operationId':'每次新建生成唯一ID，重试沿用','title':'工作报告','content':'报告正文'}}},
  'data':{'label':'保存和维护应用数据','methods':['data.list','data.get','data.put','data.delete'],'limits':'只访问当前应用和环境的数据；更新、删除需 expectedRevision。','example':{'method':'data.put','params':{'collection':'items','value':{'title':'合成示例'},'expectedRevision':0}}},
@@ -23,6 +24,8 @@ CATALOG={
  'background.space':{'label':'准备万象空间背景资料','methods':['context.metadata','context.read'],'limits':'仅产品经理使用；客户端只看元数据，交接后才读取正文。'},
  'background.xingtu':{'label':'准备星图背景资料','methods':['context.metadata','context.search','context.read'],'limits':'只读取用户为当前项目选择的资料，不授予生成应用访问权限。'},
 }
+CATALOG = LEGACY_CATALOG  # Historical miniapp compatibility; never standard planning.
+
 class Brief(Input):
  goal:str=''
  scenario:str=''
@@ -44,9 +47,9 @@ class IntakeReply(Input):
  options:list[str]=Field(default_factory=list,max_length=4)
  projectName:str=Field(default='',max_length=40)
 
-INTAKE_PROMPT='''你是万象客户端的轻量产品经理。只依据本次用户对话把任务讲清楚：具体场景、现有做法、最困难之处、期待的改变和已明确边界。围绕用户最新表达深挖，每轮最多一个值得问的主问题；不按字段轮询，不问工程细节，不生成完整 PRD。自然语言为主，涉及真实取舍才提供2—4个短选项，不添加“其他”（界面统一提供）。每个选项用可独立理解的完整表述，避免只写“再加某字段”而省略基础内容。不强迫固定轮数，未知保持为空或待讨论。未经用户采纳的建议不得加入范围。你看不到所选资料，不要索取资料正文。capabilities 只能从 data/model/files/knowledge/reports 选择：持久保存数据=data，用户主动AI生成=model，生成的应用需选择和读取文件=files。应用运行时需要团队知识检索=knowledge；需先由管理员在星图中授权。用户为产品经理选背景资料不代表应用要files权限。只有用户已经明确要求、但尚无运行契约的能力才能列入gaps，每项必须有requirement、reason和逐字引用用户原话的evidence。没有采纳的建议、后置或明确不做的能力绝不能列入gaps。不要提出无关提醒/通知建议，不要发明接口、不宣布检查通过。回答严格JSON，匹配以下结构：'''+json.dumps(IntakeReply.model_json_schema(),ensure_ascii=False)
+INTAKE_PROMPT='''你是万象客户端的轻量产品经理。只依据本次用户对话把任务讲清楚：具体场景、现有做法、最困难之处、期待的改变和已明确边界。围绕用户最新表达深挖，每轮最多一个值得问的主问题；不按字段轮询，不问工程细节，不生成完整 PRD。自然语言为主，涉及真实取舍才提供2—4个短选项，不添加“其他”（界面统一提供）。每个选项用可独立理解的完整表述，避免只写“再加某字段”而省略基础内容。不强迫固定轮数，未知保持为空或待讨论。未经用户采纳的建议不得加入范围。你看不到所选资料，不要索取资料正文。能力依据本项目 availableContracts 判断。只有用户已经明确要求、但尚无运行契约的能力才能列入gaps，每项必须有requirement、reason和逐字引用用户原话的evidence。没有采纳的建议、后置或明确不做的能力绝不能列入gaps。不要提出无关提醒/通知建议，不要发明接口、不宣布检查通过。回答严格JSON，匹配以下结构：'''+json.dumps(IntakeReply.model_json_schema(),ensure_ascii=False)
 
-INTAKE_PROMPT += "\n" + FOUNDATION_PROMPT
+INTAKE_PROMPT += "\n" + public.planning_instruction()
 
 
 def initial(project):
@@ -59,6 +62,7 @@ class Preparation:
   self.pm=ProductManager(self)
  def get(self,owner,pid):
   p=self.svc.store.get(owner,pid)
+  if not p.get('devKit'):raise StudioError('STANDARD_PROJECT_REQUIRED',409)
   if 'preparation' not in p:raise StudioError('INTAKE_REQUIRED',409)
   return p
  def lock(self,owner,pid):return self.locks.setdefault((owner,pid),asyncio.Lock())
@@ -70,7 +74,7 @@ class Preparation:
   def change(p):
    if 'preparation' not in p:
     if self.svc.engines.provider:self.svc.engines.bind(owner,p)
-    p['preparation']=initial(p);p['solution']['capabilities']=[]
+    p['preparation']=initial(p);p['solution']['capabilities']=runtime_capabilities(p,[])
   return self.mutate(owner,pid,'enable-intake',change)
  def state(self,owner,pid):
   p=self.get(owner,pid); result=deepcopy(p['preparation']); result['projectId']=pid
@@ -103,6 +107,7 @@ class Preparation:
    p=self.get(owner,pid);x=p['preparation']; projection={'conversation':[{'role':m['role'],'text':m['text'],'options':m.get('options',[])} for m in x['messages']],'brief':x['brief']}
    try:
     prompt=INTAKE_PROMPT
+    projection["availableContracts"]=self.contracts(p)
     if expert_selected(p):
      projection['expertDeployment']=deepcopy(expert_selected(p));prompt+='\n'+expert_instruction(p)
     result=await self.svc.generate(owner,pid,{'messages':[{'role':'system','content':prompt},{'role':'user','content':json.dumps(projection,ensure_ascii=False)}],'max_tokens':4096})
@@ -111,7 +116,8 @@ class Preparation:
     raw=choice['message']['content'].strip()
     if raw.startswith('```'):raw=raw.split('\n',1)[1].rsplit('```',1)[0]
     reply=IntakeReply.model_validate(json.loads(raw))
-    if not set(reply.capabilities)<={'data','model','files','knowledge','reports',*(['foundation'] if expert_selected(p) else [])}:raise ValueError()
+    if p.get('devKit'):public.validate_declaration(reply.capabilities,self.svc.project_root)
+    elif not set(reply.capabilities)<={'data','model','files','knowledge','reports',*(['foundation'] if expert_selected(p) else [])}:raise ValueError()
    except Exception as error:
     code=error.code if isinstance(error,StudioError) else 'INTAKE_RESPONSE_INVALID'
     self.mutate(owner,pid,'intake-failed',lambda p:self.event(p,'intake.failed',operationId=op,code=code))
@@ -126,7 +132,7 @@ class Preparation:
     if reply.projectName:
      p['autoName']=reply.projectName
      if p.get('nameMode')=='auto':p['name']=reply.projectName
-    self.event(p,'intake.updated',operationId=op)
+    self.event(p,'intake.updated',operationId=op,gapHashes=[digest(g) for g in x['gaps']])
    return self.mutate(owner,pid,'intake-reply',apply)
  def required(self,p,development=False):
   x=p['preparation']; caps=list(x['required'])
@@ -134,16 +140,31 @@ class Preparation:
   caps=runtime_capabilities(p,caps)
   return sorted(set(caps+['background.'+r['kind'] for r in x['references']]))
  def contracts(self,p,capabilities=None):
-  return capability_contracts(p,capabilities if capabilities is not None else CATALOG,CATALOG)
+  if p.get('devKit'):
+   catalog=public.catalog(self.svc.project_root)
+   if expert_selected(p):
+    details=capability_contracts(p,['foundation','data'],LEGACY_CATALOG)
+    if public.EXPERT not in catalog:raise StudioError('EXPERT_CONTRACT_UNAVAILABLE',409)
+    catalog[public.EXPERT].update(details['foundation'])
+    catalog[public.EXPERT]['data']=details['data']
+   catalog.update(deepcopy(public.BACKGROUND))
+   return {k:v for k,v in catalog.items() if capabilities is None or k in capabilities}
+  return capability_contracts(p,capabilities if capabilities is not None else LEGACY_CATALOG,LEGACY_CATALOG)
  def fingerprint(self,owner,p,model_ref=None):
   provider=getattr(self.svc,'context_provider',None)
   model=self.svc.model
   value={'owner':owner,'instance':str(self.svc.store.root.resolve()),'contract':CONTRACT_VERSION,'model':model.fingerprint() if hasattr(model,'fingerprint') else bool(model),'engine':p.get('engine'),'codex':__import__('wanx_studio.codex_config',fromlist=['runtime_config']).runtime_config('wanx_task',self.svc,owner,model_ref),'files':bool(self.svc.files),'background':provider.fingerprint() if provider else None,'references':p['preparation']['references'],'revision':p['preparation']['revision']}
+  if p.get('devKit'):
+   from .devkit import kit_info
+   info=kit_info(self.svc.project_root)
+   if not info['available']:raise StudioError(info['code'],503)
+   value['kitSha256']=info['kitSha256']
+   value['publicContracts']=public.fingerprint(self.svc.project_root)
   if expert_selected(p):value['expertDeployment']=expert_selected(p)
   return digest(value)
  def gaps(self,p):
-  x=p['preparation'];decisions=x.get('gapDecisions',{})
-  return [g for g in x['gaps'] if digest(g) not in decisions]
+  from .capability_gaps import unresolved_capability_gaps
+  return unresolved_capability_gaps(p)
  def defer_gap(self,owner,pid,body):
   p=self.get(owner,pid)
   gap=next((g for g in p['preparation']['gaps'] if digest(g)==body['gapId']),None)
@@ -157,7 +178,14 @@ class Preparation:
   x=p['preparation'];r=x.get('report')
   if x.get('currentProbe',{}).get('state')=='running' or (self.gaps(p) and not allow_gaps) or not r or r['fingerprint']!=self.fingerprint(owner,p,model_ref):return False
   required=self.required(p,development)
-  return set(required)<=set(r['required']) and all(r['results'].get(k,{}).get('status')=='passed' for k in required) and r.get('codex',{}).get('available') is True
+  def ready(cap):
+   result=r['results'].get(cap,{})
+   if result.get('status')=='passed':return True
+   if p.get('devKit') and not development and result.get('code') in {'LEGACY_CAPABILITY_REPLAN_REQUIRED','EXPERT_CONTRACT_REQUIRED','PUBLIC_CONTRACT_ADAPTER_UNAVAILABLE','PUBLIC_CONTRACT_NOT_IMPLEMENTED'}:return True
+   # A drafting mistake must remain discussable. This is not runtime readiness:
+   # deployment, first handoff, failed dependencies and background grants stay gated.
+   return bool(allow_gaps and not development and x['phase']=='acp' and x.get('handoff') and expert_selected(p) and cap=='foundation' and result.get('status')=='failed' and result.get('code')=='EXPERT_CLIENT_CAPABILITY_UNSUPPORTED')
+  return set(required)<=set(r['required']) and all(ready(k) for k in required) and r.get('codex',{}).get('available') is True
  def guard(self,owner,p,development=False,*,planning=False,model_ref=None):
   self.svc.engines.guard(owner,p)
   if 'preparation' not in p:return
@@ -258,6 +286,21 @@ class Preparation:
    if at>=0:results.append({'ref':ref['kind']+':'+ref['id'],'name':ref['name'],'offset':max(0,at-300),'text':text[max(0,at-300):at+1500]})
   return {'items':results}
  async def probe_runtime(self,owner,pid,cap):
+  project=self.svc.store.get(owner,pid)
+  if project.get('devKit'):
+   from .devkit import project_spec
+   errors=public.gaps([cap],backend=project_spec(project)['backend'],project_root=self.svc.project_root)
+   if errors:raise StudioError(errors[0]['reason'],409)
+   entry=self.contracts(project,[cap])[cap]
+   result={'status':'passed','coverage':'公共合同与构建适配器检查；未执行部署实例','methods':entry.get('methods',[]),
+           'contractStatus':entry['status'],'runtimeVerified':False,'at':time.time()}
+   if cap==public.EXPERT:
+    from .deployment.project_expert import ProjectExpert, validate_verification
+    expert=expert_selected(project);manager=ProjectExpert(self.svc)
+    manager.template(manager.profile(owner),expert['template'])
+    validate_verification(expert['verification'])
+    result['expertTemplate']=deepcopy(expert['template'])
+   return result
   token=secrets.token_urlsafe(32);app='__probe__'+uuid4().hex;file_id=uuid4().hex
   session={'owner':owner,'project':pid,'app':app,'artifact':'probe','environment':'preview','manifest':{'capabilities':[cap],'collections':{'items':{'title':'string'}}},'files':{},'expires':time.time()+60,'_probeFiles':{file_id:{'id':file_id,'name':'合成接口测试.txt','text':'WANX_FILE_PROBE'}}}
   self.svc.runtime_sessions[token]=session
@@ -314,7 +357,7 @@ class Preparation:
     else:raise StudioError('PROBE_AUTH_NOT_ENFORCED')
     await self.svc.select_files(owner,token,[file_id])
     assert (await invoke('files.read',{'id':file_id}))['text']=='WANX_FILE_PROBE'
-   return {'status':'passed','coverage':'合成运行时实测','methods':CATALOG[cap]['methods'],'at':time.time()}
+   return {'status':'passed','coverage':'合成运行时实测','methods':LEGACY_CATALOG[cap]['methods'],'at':time.time()}
   finally:
    self.svc.runtime_sessions.pop(token,None)
    with self.svc.store.transaction():self.svc.store.db.execute('DELETE FROM records WHERE owner=? AND app=?',(owner,app))
@@ -347,8 +390,8 @@ class Preparation:
    for cap in required:
     self.mutate(owner,pid,'probe-start',lambda p:self.event(p,'capability.checking',capability=cap,operationId=op))
     try:
-     if cap in {'data','model','files','knowledge','reports','foundation'}:results[cap]=await self.probe_runtime(owner,pid,cap)
-     elif cap in CATALOG:
+     if (p.get('devKit') and cap not in public.BACKGROUND) or cap in {'data','model','files','knowledge','reports','foundation'}:results[cap]=await self.probe_runtime(owner,pid,cap)
+     elif cap in LEGACY_CATALOG:
       refs=[r for r in x['references'] if 'background.'+r['kind']==cap]
       await self.validate_references(owner,refs)
       results[cap]={'status':'passed','coverage':'服务及所选来源元数据权限；正文未读取','at':time.time()}
@@ -358,10 +401,19 @@ class Preparation:
      status='permission_denied' if 'FORBIDDEN' in code or 'DENIED' in code else 'configuration_missing' if code in {'MODEL_NOT_CONFIGURED','FILES_UNAVAILABLE','CONTEXT_UNAVAILABLE','SEMANTICA_NOT_CONFIGURED'} else 'failed'
      results[cap]={'status':status,'code':code,'at':time.time()}
    codex=await self.svc.runner.preflight(fresh=True,owner=owner)
-   report={'version':1,'contractVersion':CONTRACT_VERSION,'operationId':op,'fingerprint':fingerprint,'required':required,'results':results,'codex':codex,'environment':'isolated-probe-runtime','at':time.time()}
+   report={'version':1,'contractVersion':public.VERSION if p.get('devKit') else CONTRACT_VERSION,'operationId':op,'fingerprint':fingerprint,'required':required,'results':results,'codex':codex,'environment':'public-contract-preflight' if p.get('devKit') else 'isolated-probe-runtime','at':time.time()}
+   if expert_selected(p):
+    report.update(preparationRevision=x['revision'],expertContractDigest=digest(expert_selected(p)))
    def change(p):
     if fingerprint!=self.fingerprint(owner,p):raise StudioError('CAPABILITY_SET_CHANGED',409)
     x=p['preparation'];x['report']=report;x['currentProbe']['state']='completed'
+    if p.get('devKit'):
+     from .devkit import kit_info
+     selected=kit_info(self.svc.project_root)
+     if not selected['available']:raise StudioError(selected['code'],503)
+     if p.get('kitSha256')!=selected['kitSha256']:
+      p['confirmation']=None;p['acceptance']=None;x['interview'].pop('prdReview',None)
+      p['kitSha256']=selected['kitSha256']
     for a in x['probeAttempts']:
      if a['operationId']==op:a['state']='completed'
     self.event(p,'capability.checked',results=results,codex=codex.get('available',False))
@@ -369,11 +421,12 @@ class Preparation:
  async def handoff(self,owner,pid,body):
   async with self.lock(owner,pid):
    p=self.get(owner,pid);x=p['preparation']
+   if self.gaps(p):raise StudioError('CAPABILITY_CHECK_REQUIRED',409)
    if x['handoff'] and x['phase']=='acp':
-    await self.guard_async(owner,p)
+    await self.guard_async(owner,p,planning=True)
     if x['handoff']['report']['operationId']==x['report']['operationId']:return self.svc.snapshot(owner,pid)
    if body['expectedRevision']!=x['revision']:raise StudioError('INTAKE_CHANGED',409)
-   if not self.valid_report(owner,p):raise StudioError('CAPABILITY_CHECK_REQUIRED',409)
+   if not self.valid_report(owner,p,allow_gaps=bool(x['handoff'] and x['phase']=='acp')):raise StudioError('CAPABILITY_CHECK_REQUIRED',409)
    await self.validate_references(owner,x['references'])
    def change(p):
     x=p['preparation'];previous=x['handoff']

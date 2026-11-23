@@ -83,9 +83,8 @@ export async function packageWindowsClient({ version, arch = "x64", out, trustFi
   run(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "build:studio"]);
   run(process.execPath, [path.join(root, "tools/build-network.mjs"), `win32-${arch}`]);
   run(process.execPath, [path.join(root, "tools/build-discovery.mjs"), "win32-x64"]);
-  const { build: buildRenderer } = await import("esbuild");
-  await buildRenderer({ absWorkingDir: root, entryPoints: ["local-ui/renderer/device-setup-entry.ts"], bundle: true,
-    format: "iife", platform: "browser", outfile: "local-ui/renderer/device-setup.bundle.js" });
+  run(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "build:renderer"]);
+  run(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "build:maintenance"]);
   const { build: buildElectron, Platform, Arch } = await import("electron-builder");
   try {
     await buildElectron({ projectDir: root, publish: "never", targets: Platform.WINDOWS.createTarget(["nsis"], arch === "arm64" ? Arch.arm64 : Arch.x64), config });

@@ -55,3 +55,9 @@ test('direct PDF uses verified original chunks without Office conversion',async 
   assert.equal(result.type,'application/pdf');
   assert.equal(f.requests.some(r=>r.path.includes('space-previews')),false);
 });
+
+test('unsupported archive formats go straight to the download fallback', async t => {
+  const f = await fixture(t, { name: '记忆备份.sqlite.gz' });
+  await assert.rejects(f.service.preview(item), { code: 'SPACE_PREVIEW_DOWNLOAD' });
+  assert.equal(f.requests.some(r => r.path.includes('/content?') || r.path.includes('/space-previews/')), false);
+});

@@ -8,7 +8,7 @@ const {ZipFile}=createRequire(new URL('../../personal-client/package.json',impor
 const signingKeys=generateKeyPairSync('ed25519'),trustedKeys={test:signingKeys.publicKey.export({type:'spki',format:'pem'})};
 import {createApplicationInstaller as personalInstaller}from'../../personal-client/applications/installer.mjs';
 import {createApplicationInstaller as teamInstaller}from'../../team-client/applications/installer.mjs';
-import {writeMiniappPackage}from'../core/package.mjs';
+import {writeMiniappPackage}from'./fixtures/miniapp-package.mjs';
 import {createDeploymentDelivery,deploymentTicket}from'../integration/personal-client/deployment-delivery.mjs';
 const stable=x=>JSON.stringify(x,(_k,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.keys(v).sort().map(k=>[k,v[k]])):v);
 const hash=x=>'sha256:'+createHash('sha256').update(stable(x)).digest('hex');
@@ -36,12 +36,12 @@ test('managed delivery cannot take over an ordinary slot or publish after scope 
  const controller=new AbortController();controller.abort(Error('scope invalidated'));
  await assert.rejects(installer.installDeployment({sourceDir:dir,binding:binding(p)},{signal:controller.signal}),/scope invalidated/);
 }));
-test('worker prepare does not install; activate ACK follows actual filesystem install and disk verification',()=>fixture(async({root,assets,installer})=>{
+test('miniapp prepare and activate never install or acknowledge success',()=>fixture(async({root,assets,installer})=>{
  const p=payload();let step='prepare_client',acks=[],installs=0;
  const ticket=()=>({id:(step==='activate'?'f':'1').repeat(32),nonce:'nonce-value-123456789',profile:'wanx-miniapp-v1',operationId:p.deployment.operationId,projectId:'2'.repeat(32),baseApplicationId:base,slotApplicationId:slot,generation:1,fence:1,step,artifactHash:p.artifactHash,version:p.version,environment:'dev',boxId:'box-test',payloadDigest:hash(p)});
  const s={assertLive(){},active:{link:{context:()=>({boxId:'box-test'})}},async request(route,method,body){if(route==='/deployment/client-deliveries')return{items:[ticket()]};if(route.endsWith('/claim'))return ticket();if(route.endsWith('/payload'))return p;if(route.endsWith('/ack')){acks.push(body);return{accepted:true}}throw Error('unexpected request')}};
  const worker=createDeploymentDelivery({session:async()=>s,scopeKey:()=> 'owner-box',root:path.join(root,'journal'),assets,applications:{installDeployment:async(...args)=>{installs++;return installer.installDeployment(...args)},listInstalled:()=>installer.list(),launch:async()=>({launched:true})},intervalMs:100000});
- try{await worker.tick();assert.equal(installs,0);assert.equal(acks[0].state,'prepared');step='activate';await worker.tick();assert.equal(installs,1);assert.equal(acks[1].state,'active');assert.equal((await installer.list())[0].deployment.generation,1);await worker.tick();assert.equal((await installer.list()).length,1)}finally{worker.close()}
+ try{await worker.tick();step='activate';await worker.tick();assert.equal(installs,0);assert.deepEqual(await installer.list(),[]);assert.ok(!acks.some(item=>['active','prepared'].includes(item.state)))}finally{worker.close()}
 }));
 test('wrong payload digest reports only failure, never prepared/active or installs',()=>fixture(async({root,assets})=>{
  let calls=0,acks=[];const p=payload(),ticket={id:'1'.repeat(32),nonce:'nonce-value-123456789',profile:'wanx-miniapp-v1',operationId:p.deployment.operationId,projectId:'2'.repeat(32),baseApplicationId:base,slotApplicationId:slot,generation:1,fence:1,step:'activate',artifactHash:p.artifactHash,version:p.version,environment:'dev',boxId:'box-test',payloadDigest:'sha256:'+'0'.repeat(64)};
@@ -49,13 +49,13 @@ test('wrong payload digest reports only failure, never prepared/active or instal
  const w=createDeploymentDelivery({session:async()=>s,scopeKey:()=> 'owner-box',root:path.join(root,'journal'),assets,applications:{installDeployment:()=>{calls++},listInstalled:()=>[]},intervalMs:100000});try{await w.tick();assert.equal(calls,0);assert.equal(acks.length,1);assert.equal(acks[0].state,'failed');assert.equal(acks[0].errorCode,'CLIENT_UNAVAILABLE')}finally{w.close()}
 }));
 
-test('expert profile preserves the external base identity while the trusted worker installs only its managed slot',()=>fixture(async({root,assets,installer})=>{
+test('an expert profile label does not turn a bundle into a standard ZIP',()=>fixture(async({root,assets,installer})=>{
  const p=payload();p.deployment.profile='wanx-expert-app-v1';p.deployment.baseApplicationId='demo.expert.application';p.manifest.capabilities=['foundation','data'];
  const ticket={id:'1'.repeat(32),nonce:'nonce-value-123456789',profile:p.deployment.profile,operationId:p.deployment.operationId,projectId:'2'.repeat(32),baseApplicationId:p.deployment.baseApplicationId,slotApplicationId:slot,generation:1,fence:1,step:'activate',artifactHash:p.artifactHash,version:p.version,environment:'dev',boxId:'box-test',payloadDigest:hash(p)};
  const acks=[];let launched;
  const s={assertLive(){},active:{link:{context:()=>({boxId:'box-test'})}},async request(route,method,body){if(route.endsWith('client-deliveries'))return{items:[ticket]};if(route.endsWith('/claim'))return ticket;if(route.endsWith('/payload'))return p;if(route.endsWith('/ack')){assert.equal((await installer.list())[0].deployment.baseApplicationId,p.deployment.baseApplicationId);acks.push(body);return{accepted:true}}throw Error('unexpected request')}};
  const worker=createDeploymentDelivery({session:async()=>s,scopeKey:()=> 'owner-box',root:path.join(root,'journal'),assets,applications:{installDeployment:(...args)=>installer.installDeployment(...args),listInstalled:()=>installer.list(),launch:async id=>{launched=id}},intervalMs:100000});
- try{await worker.tick();assert.equal(acks.length,1);assert.equal(acks[0].state,'active');assert.equal(launched,slot);const current=await installer.resolveCurrent(slot);assert.equal(current.deployment.profile,'wanx-expert-app-v1');const actual=JSON.parse(await readFile(path.join(current.installPath,'miniapp.runtime.json')));assert.equal(actual.deployment.baseApplicationId,'demo.expert.application');assert.equal(actual.applicationId,slot);}finally{worker.close()}
+ try{await worker.tick();assert.equal(launched,undefined);assert.deepEqual(await installer.list(),[]);assert.ok(!acks.some(item=>item.state==='active'))}finally{worker.close()}
  assert.throws(()=>deploymentTicket({...ticket,profile:'unknown-expert-profile'}),/DEPLOYMENT_TICKET_INVALID/);
  assert.throws(()=>deploymentTicket({...ticket,profile:'wanx-miniapp-v1'}),/DEPLOYMENT_TICKET_INVALID/);
  assert.throws(()=>deploymentTicket({...ticket,baseApplicationId:'../outside'}),/DEPLOYMENT_TICKET_INVALID/);
@@ -94,14 +94,14 @@ test('a reserved managed marker without a committed current pointer also rejects
  assert.deepEqual(await installer.list(),[]);
 }));
 
-test('Studio delivery persists its trusted namespace and refuses a Workshop payload even with a matching digest',()=>fixture(async({root,assets,installer})=>{
+test('neither a Studio nor Workshop namespace authorizes old bundle delivery',()=>fixture(async({root,assets,installer})=>{
  const p=payload();p.runtimeNamespace='studio';p.deployment.profile='wanx-expert-app-v1';
  let payloadNamespace='studio';const acks=[];
  const current=()=>({...p,runtimeNamespace:payloadNamespace});
  const ticket=()=>({id:'1'.repeat(32),nonce:'nonce-value-123456789',profile:p.deployment.profile,operationId:p.deployment.operationId,projectId:'2'.repeat(32),baseApplicationId:base,slotApplicationId:slot,generation:1,fence:1,step:'activate',artifactHash:p.artifactHash,version:p.version,environment:'dev',boxId:'box-test',payloadDigest:hash(current())});
  const s={assertLive(){},active:{link:{context:()=>({boxId:'box-test'})}},async request(route,method,body){if(route.endsWith('client-deliveries'))return{items:[ticket()]};if(route.endsWith('/claim'))return ticket();if(route.endsWith('/payload'))return current();if(route.endsWith('/ack')){acks.push(body);return{accepted:true}}throw Error('unexpected request')}};
  const worker=createDeploymentDelivery({runtimeNamespace:'studio',session:async()=>s,scopeKey:()=> 'owner-box',root:path.join(root,'journal'),assets,applications:{installDeployment:(...args)=>installer.installDeployment(...args),listInstalled:()=>installer.list(),launch:async()=>{}},intervalMs:100000});
- try{await worker.tick();assert.equal(acks.at(-1).state,'active');const installed=await installer.resolveCurrent(slot);const record=JSON.parse(await readFile(path.join(installed.installPath,'miniapp.runtime.json')));assert.equal(record.runtimeNamespace,'studio');payloadNamespace='workshop';await worker.tick();assert.equal(acks.at(-1).state,'failed');}finally{worker.close()}
+ try{await worker.tick();payloadNamespace='workshop';await worker.tick();assert.deepEqual(await installer.list(),[]);assert.ok(!acks.some(item=>item.state==='active'))}finally{worker.close()}
 }));
 test('default Workshop delivery rejects a Studio namespace before installation',()=>fixture(async({root,assets,installer})=>{
  const p=payload();p.runtimeNamespace='studio';let installs=0;const acks=[];

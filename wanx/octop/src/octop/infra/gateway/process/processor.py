@@ -6,7 +6,8 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from octop_gateway.models import (
@@ -67,6 +68,7 @@ from octop.infra.gateway.slash.catalog import spec_for
 from octop.infra.gateway.slash.ctx import SlashCtx, build_slash_ctx
 from octop.infra.gateway.slash.parser import parse_slash
 from octop.infra.gateway.slash.runner import try_handle_slash
+from octop.infra.gateway.threads import ThreadRegistry
 from octop.infra.history.projection import (
     TurnHistoryTracker,
     message_inputs,
@@ -87,7 +89,6 @@ if TYPE_CHECKING:
     from octop.infra.db.repos.connectors import ConnectorRepo
     from octop.infra.db.repos.users import UserRepo
     from octop.infra.gateway.slash.dispatcher import SlashDispatcher
-    from octop.infra.gateway.threads import ThreadRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -129,8 +130,9 @@ class GlobalProcessor:
     """Routes InboundMessages by ``tenant_id`` to the correct HarnessAgent."""
 
     loop_message_interceptor: (
-        Callable[[InboundMessage], Awaitable[str | FileContent | None]] | None
+        Callable[[InboundMessage], Awaitable[str | FileContent | Literal[True] | None]] | None
     ) = None
+    resolve_zhijun_turn_mode: Callable[[int, str], Literal["ask", "craft"]] | None = None
 
     def __init__(
         self,
@@ -601,6 +603,85 @@ class GlobalProcessor:
         )
         return reasoning_request_parameters(capability, mode=mode, effort=effort)
 
+    async def _handle_zhijun_memory_turn(
+        self,
+        msg: InboundMessage,
+        *,
+        agent_id: str,
+        user_id: int,
+        thread_id: str,
+        mode: Literal["ask", "craft"],
+    ) -> str | None:
+        """Record the authorized source, then return the storage receipt verbatim."""
+        if msg.has_media:
+            return None
+        from wanx_bridge.zhijun_turn_memory import apply_memory_intent, parse_memory_intent
+
+        from octop.infra.agents.middleware.local_data import local_data_live_check
+
+        intent = parse_memory_intent(msg.text or "")
+        if intent is None:
+            return None
+        is_dashboard = msg.channel_type == ThreadRegistry.CHANNEL_DASHBOARD
+        event_id = (
+            None if is_dashboard else msg.metadata.get("message_id") or msg.metadata.get("event_id")
+        )
+        operation_id = (
+            uuid5(NAMESPACE_URL, f"wanx:zhijun-turn:{agent_id}:{msg.channel_id}:{event_id}")
+            if event_id
+            else uuid4()
+        )
+        legacy_request_id = (
+            str(uuid5(NAMESPACE_URL, f"wanx:zhijun:{msg.channel_type}:{msg.channel_id}:{event_id}"))
+            if event_id
+            else None
+        )
+        user_message = HumanMessage(
+            content=msg.text,
+            id=f"zhijun:{operation_id}:human",
+            additional_kwargs={"assistant_persona": "zhijun", "zhijun_turn_mode": mode},
+        )
+        failure = "本次记忆操作未确认，请稍后重试。"
+        reply = failure
+        tracker = None
+
+        def apply() -> str:
+            check = local_data_live_check.get()
+            if check is not None:
+                check()
+            result = apply_memory_intent(
+                self._agent_manager.paths.root,
+                user_id,
+                intent,
+                mode=mode,
+                request_id=str(operation_id),
+                thread_id=thread_id,
+                message_id=user_message.id or "",
+                channel=None if is_dashboard else msg.channel_type,
+                legacy_request_id=legacy_request_id,
+            )
+            return cast(str, result.reply)
+
+        try:
+            async with self._agent_manager.thread_invocation(agent_id, thread_id):
+                harness = self._agent_manager.get_agent(agent_id)
+                tracker = await self._begin_history(
+                    agent_id, thread_id, {"messages": [user_message]}
+                )
+                source = await harness.aappend_messages(thread_id, [user_message])
+                reply = await asyncio.to_thread(apply)
+                response = AIMessage(content=reply, id=f"zhijun:{operation_id}:assistant")
+                saved_reply = await harness.aappend_messages(thread_id, [response])
+                tracker.observe({"type": "state_update", "data": [*source, *saved_reply]})
+                await self._finish_history(tracker, completed=True)
+                await self._record_turn_history(thread_id, tracker)
+                self._touch_thread_after_turn(thread_id, msg.text)
+        except Exception:
+            logger.warning("failed to complete the Zhijun memory turn")
+            if tracker is not None:
+                await self._finish_history(tracker, completed=False)
+        return reply
+
     # -- IM channel entry (MessageEvent stream) --------------------------------
 
     async def __call__(self, msg: InboundMessage) -> AsyncIterator[MessageEvent]:
@@ -608,9 +689,12 @@ class GlobalProcessor:
 
         METRICS.inc("messages_total")
 
+        verified_zhijun = False
         if self.loop_message_interceptor is not None:
             intercepted = await self.loop_message_interceptor(msg)
-            if intercepted is not None:
+            if intercepted is True:
+                verified_zhijun = True
+            elif intercepted is not None:
                 if isinstance(intercepted, FileContent):
                     yield MessageEvent(content=[intercepted])
                 else:
@@ -782,6 +866,30 @@ class GlobalProcessor:
             channel_metadata=im_meta,
         )
 
+        zhijun_mode = None
+        if verified_zhijun and agent_row is not None:
+            from octop.infra.agents.assistant_conversations import ConversationError
+
+            if self.resolve_zhijun_turn_mode is None:
+                yield MessageEvent.error_event("知君会话暂不可用。")
+                yield MessageEvent.completed()
+                return
+            try:
+                zhijun_mode = await asyncio.to_thread(
+                    self.resolve_zhijun_turn_mode, user_id, thread_id
+                )
+            except ConversationError:
+                yield MessageEvent.error_event("知君会话暂不可用。")
+                yield MessageEvent.completed()
+                return
+            reply = await self._handle_zhijun_memory_turn(
+                msg, agent_id=agent_id, user_id=user_id, thread_id=thread_id, mode=zhijun_mode
+            )
+            if reply is not None:
+                yield MessageEvent.text(reply)
+                yield MessageEvent.completed()
+                return
+
         invitation_id: str | None = None
         if channel_type == "weixin" and getattr(agent_row, "application_id", "wanx") == "zhijun":
             from octop.infra.agents.understanding_weixin import resolve_weixin_invitation
@@ -816,12 +924,28 @@ class GlobalProcessor:
             agent_id=agent_id,
             user_id=user_id,
             explicit=None,
-            apply_defaults=True,
+            apply_defaults=zhijun_mode is None,
             raise_on_failure=False,
         )
         message_kwargs: dict[str, Any] | None = None
         if invitation_id:
             message_kwargs = {"zhijun_invitation_id": invitation_id}
+        prepared_zhijun = None
+        if zhijun_mode is not None:
+            from octop.infra.agents.conversation_mode import (
+                read_zhijun_context,
+                zhijun_answer_evidence,
+            )
+
+            prepared_zhijun = await asyncio.to_thread(
+                read_zhijun_context, self._agent_manager.paths.root, user_id, msg.text, (), True
+            )
+            message_kwargs = {
+                **(message_kwargs or {}),
+                "assistant_persona": "zhijun",
+                "zhijun_turn_mode": zhijun_mode,
+                "zhijun_evidence": zhijun_answer_evidence(prepared_zhijun),
+            }
         if mcp_servers:
             from octop.infra.gateway.process.message_keys import (  # noqa: PLC0415
                 COMPOSER_CTX_KEY,
@@ -850,6 +974,8 @@ class GlobalProcessor:
             message_kwargs=message_kwargs,
         )
         self.teams.stamp_host_runtime(request, agent_id)
+        if prepared_zhijun is not None:
+            request["zhijun_prepared"] = prepared_zhijun
         self._attach_turn_knowledge_config(
             request,
             user_id=user_id,
@@ -1033,6 +1159,15 @@ class GlobalProcessor:
             )
 
         self._hitl.expire_pending_for_thread(thread_id, agent_id=agent_id, user_id=user_id)
+        zhijun_mode = meta.get("zhijun_turn_mode")
+        if meta.get("assistant_persona") == "zhijun" and zhijun_mode in ("ask", "craft"):
+            reply = await self._handle_zhijun_memory_turn(
+                msg, agent_id=agent_id, user_id=user_id, thread_id=thread_id, mode=zhijun_mode
+            )
+            if reply is not None:
+                yield {"type": "token", "content": reply}
+                yield {"type": "done", "conversation_mode": zhijun_mode}
+                return
         request = await self._build_dashboard_request(
             msg,
             agent_id=agent_id,
@@ -1161,7 +1296,10 @@ class GlobalProcessor:
                 usage=usage_tracker.usage,
             )
             await self._record_turn_history(thread_id, history_tracker)
-        yield _maybe_stamp_team_host(self._done_chunk(thread_id), agent_id, team_host)
+        done = self._done_chunk(thread_id)
+        if meta.get("assistant_persona") == "zhijun":
+            done["conversation_mode"] = request["conversation_mode"]
+        yield _maybe_stamp_team_host(done, agent_id, team_host)
 
     async def iter_hitl_resume_chunks(
         self,
@@ -1172,13 +1310,28 @@ class GlobalProcessor:
         decisions: list[dict[str, Any]],
     ) -> AsyncIterator[dict[str, Any]]:
         """Resume a dashboard HITL turn with the normal history bookkeeping."""
+        from octop.infra.agents.assistant_profile import is_assistant_profile
+        from octop.infra.agents.conversation_mode import latest_zhijun_message, zhijun_message_mode
+
         usage_tracker = UsageTracker()
         history_tracker = await self._begin_history(agent_id, thread_id, {}, resume=True)
         completed = False
         persist_failed_turn = False
         traj_on = self._agent_trajectory_enabled(agent_id)
         team_host = is_team_agent(self._agent_manager.get_row(agent_id))
+        private_assistant = is_assistant_profile(
+            self._agent_manager.get_row(agent_id), self._user_repo
+        )
         try:
+            mode = None
+            if private_assistant:
+                harness = self._agent_manager.get_agent(agent_id)
+                snapshot = await harness.graph.aget_state(
+                    {"configurable": {"thread_id": thread_id}}
+                )
+                latest = latest_zhijun_message(snapshot.values.get("messages") or ())
+                if latest is not None:
+                    mode = zhijun_message_mode(latest)
             async for chunk in self._agent_manager.resume_hitl(
                 agent_id,
                 thread_id,
@@ -1195,7 +1348,11 @@ class GlobalProcessor:
                     chunk=chunk,
                     enabled=traj_on,
                 )
-                yield _maybe_stamp_team_host(chunk, agent_id, team_host)
+                yield _maybe_stamp_team_host(
+                    {**chunk, "conversation_mode": mode} if mode is not None else chunk,
+                    agent_id,
+                    team_host,
+                )
             completed = True
         except Exception as exc:
             await self._record_stream_error(user_id=user_id, agent_id=agent_id, exc=exc)
@@ -1270,6 +1427,28 @@ class GlobalProcessor:
         )
 
         message_kwargs: dict[str, Any] = {}
+        prepared_zhijun = None
+        if meta.get("assistant_persona") == "zhijun":
+            from octop.infra.agents.conversation_mode import (
+                read_zhijun_context,
+                zhijun_answer_evidence,
+            )
+
+            prepared_zhijun = await asyncio.to_thread(
+                read_zhijun_context,
+                self._agent_manager.paths.root,
+                user_id,
+                msg.text,
+                meta.get("zhijun_references", ()),
+                meta.get("zhijun_memory", True),
+            )
+            if meta.get("zhijun_agent_only"):
+                prepared_zhijun = ([], prepared_zhijun[1])
+            message_kwargs["assistant_persona"] = "zhijun"
+            message_kwargs["zhijun_turn_mode"] = (
+                "craft" if meta.get("zhijun_turn_mode") == "craft" else "ask"
+            )
+            message_kwargs["zhijun_evidence"] = zhijun_answer_evidence(prepared_zhijun)
         invitation_id = meta.get("zhijun_invitation_id")
         if invitation_id:
             from octop.infra.agents.knowledge_understanding import resolve_invitation
@@ -1335,6 +1514,8 @@ class GlobalProcessor:
             reasoning_overrides=reasoning_overrides,
         )
         self.teams.stamp_host_runtime(request, agent_id)
+        if prepared_zhijun is not None:
+            request["zhijun_prepared"] = prepared_zhijun
         self._attach_turn_knowledge_config(
             request,
             user_id=user_id,
@@ -1412,18 +1593,24 @@ class GlobalProcessor:
         locale: str,
     ) -> dict[str, Any]:
         from octop.infra.agents.assistant_profile import is_assistant_profile
-        from octop.infra.agents.conversation_mode import execute_user_message, stamp_assistant_ask
+        from octop.infra.agents.conversation_mode import (
+            execute_user_message,
+            latest_zhijun_message,
+            stamp_assistant_mode,
+            zhijun_message_mode,
+        )
 
         thread = self._thread_registry.get_thread(thread_id)
         if thread is not None and is_assistant_profile(
             self._agent_manager.get_row(getattr(thread, "agent_id", "")), self._user_repo
         ):
+            mode = zhijun_message_mode(latest_zhijun_message(request.get("messages") or ()))
             self._thread_registry.update_composer(
-                thread_id, conversation_mode="ask", pending_plan_path=None
+                thread_id, conversation_mode=mode, pending_plan_path=None
             )
             agent = self._agent_manager.get_agent(thread.agent_id)
-            return stamp_assistant_ask(
-                request, mcp_servers, [tool.name for tool in getattr(agent, "_mcp_tools", [])]
+            return stamp_assistant_mode(
+                request, mcp_servers, [tool.name for tool in getattr(agent, "_mcp_tools", [])], mode
             )
 
         mode, execute_path = self._sync_and_resolve_conversation_mode(

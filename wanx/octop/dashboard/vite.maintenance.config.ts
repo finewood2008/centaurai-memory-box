@@ -20,7 +20,7 @@ export default defineConfig({
   build: {
     outDir: path.resolve(
       __dirname,
-      "../../apps/personal-client/local-ui/maintenance",
+      "../../apps/personal-client/build/app/local-ui/maintenance",
     ),
     emptyOutDir: true,
     rollupOptions: {

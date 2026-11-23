@@ -1,4 +1,5 @@
 import{test}from'node:test';import assert from'node:assert/strict';import{readFile}from'node:fs/promises';import{createRequire}from'node:module';import vm from'node:vm';import path from'node:path';
+import{EventEmitter}from'node:events';
 const require=createRequire(import.meta.url);
 test('full PRD repair has time for two bounded calls without expanding application or data timeouts',()=>{
  const{requestTimeout}=require('../shell/request-policy.cjs'),prefix='/api/app-studio/projects/'+'a'.repeat(32);
@@ -13,7 +14,7 @@ test('full PRD repair has time for two bounded calls without expanding applicati
 });
 for(const standalone of [false,true])test((standalone?'installed miniapp':'workbench preview')+' waits for a slow model through its real IPC entrypoint',async()=>{
  const filename=path.resolve('shell/'+(standalone?'runtime-main.cjs':'main.cjs')),handlers=new Map();let window,quit=false;const calls=[];
- class Window{constructor(){window=this;this.webContents={mainFrame:{},session:{setPermissionRequestHandler(){},setPermissionCheckHandler(){}},setWindowOpenHandler(){},on(){},send(){}}}async loadFile(){}on(){}close(){}setBackgroundColor(){}}
+ class Window{constructor(){window=this;this.webContents=Object.assign(new EventEmitter(),{mainFrame:{},session:{setPermissionRequestHandler(){},setPermissionCheckHandler(){}},setWindowOpenHandler(){},send(){}})}async loadFile(){}on(){}close(){}setBackgroundColor(){}}
  const payload={applicationId:'ai.wanx.selfmade.'+'a'.repeat(32),manifest:{},bundle:'',css:'',name:'合成测试'};
  const host={async context(){return{applicationId:payload.applicationId}},onSessionInvalidated(){},close(){},async request(route,options={}){calls.push({route,options});if(options.body?.method==='model.generate'){if((options.timeoutMs??15000)<20000)throw Error('HOST_REQUEST_TIMEOUT');await new Promise(r=>setTimeout(r,20));return{ok:true,json:async()=>({text:'slow-model-completed'})}}return{ok:true,json:async()=>({session:'synthetic-session',manifest:{}})}}};
  const electron={app:{dock:{setIcon(){}},setName(){},setAboutPanelOptions(){},whenReady:()=>Promise.resolve(),on(){},quit(){quit=true}},BrowserWindow:Window,ipcMain:{handle:(key,fn)=>handlers.set(key,fn)},nativeTheme:{shouldUseDarkColors:false},Menu:{buildFromTemplate:value=>value,setApplicationMenu(){}}};

@@ -16,6 +16,7 @@ import threading
 from uuid import uuid4
 
 from ..contracts import StudioError
+from .adapters import public_code
 
 TERMINAL = frozenset({"succeeded", "rejected", "failed_recovered", "failed_degraded", "recovery_required"})
 TARGET_FIELDS = frozenset({"organizationId", "boxId", "applicationId", "environment"})
@@ -121,7 +122,13 @@ class Journal:
         seq = self._db.execute("SELECT COALESCE(MAX(sequence),0)+1 FROM deployment_events WHERE operation_id=?",
                                (op["id"],)).fetchone()[0]
         value = deepcopy(event)
-        value.update(sequence=seq, operationId=op["id"], operationRevision=op["revision"], createdAt=now)
+        value.update(sequence=seq, operationId=op["id"], operationRevision=op["revision"],
+                     createdAt=now, phase=op["phase"])
+        # Snapshot the public reason before a later successful observation clears
+        # the operation's diagnostic. Never persist raw adapter error details here.
+        value.pop("errorCode", None)
+        if op["state"] != "succeeded" and op.get("errorCode") is not None:
+            value["errorCode"] = public_code(op["errorCode"])
         self._db.execute("INSERT INTO deployment_events VALUES (?,?,?)", (op["id"], seq, _json(value)))
 
     def register_release(self, owner, bundle):

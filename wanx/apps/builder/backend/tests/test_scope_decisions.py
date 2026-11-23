@@ -2,7 +2,7 @@ from copy import deepcopy
 
 import pytest
 
-from test_discovery import solution
+from test_discovery import standard_solution
 from test_preparation import env, op
 from wanx_studio.contracts import StudioError, digest, readiness
 from wanx_studio.iterative import proposal
@@ -10,7 +10,7 @@ from wanx_studio.scope_decisions import apply_scope_decisions, scope_state
 
 
 def draft():
-    s = solution()
+    s = standard_solution()
     s['capabilities'] = []
     s['dependencies'] = [{'id': 'external-publishing', 'requirement': '外部平台发布', 'reason': '接口缺失'}]
     return {'solution': s, 'originalGoal': '自动发布并按角色审核', 'decisions': {},

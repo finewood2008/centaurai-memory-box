@@ -70,6 +70,21 @@ test("manual save submits observed revision, explicit empty tags and inheritance
   assert.equal(input.inherit, false); assert.equal(input.reviewed, true);
 });
 
+test("quick edits preserve existing tag boundaries, including when appending a label", async () => {
+  const tags = ["X,Y", "A；B", '标签"引号', "普通"];
+  const h = await ready({ action: action => action === "space.annotation"
+    ? ok({ ...annotation, manual: { tags, description: "old" } }) : undefined });
+  await h.click("annotation", file.id);
+  h.input("space-annotation-description", "new");
+  h.submit(); await tick();
+  const saved = () => Array.from(h.calls.filter(([action]) => action === "space.set-annotation").at(-1)[1].tags);
+  assert.deepEqual(saved(), tags);
+  await h.click("annotation", file.id);
+  h.input("space-annotation-tags", tags.map(tag => JSON.stringify(tag)).join("，") + ";新增");
+  h.submit(); await tick();
+  assert.deepEqual(saved(), [...tags, "新增"]);
+});
+
 test("concurrent and disconnected saves retain drafts and require explicit reload", async () => {
   let fail = "SPACE_ANNOTATION_CONFLICT";
   const h = await ready({ action: action => action === "space.set-annotation" ? { ok: false, code: fail } : undefined });

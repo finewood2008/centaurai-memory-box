@@ -358,11 +358,12 @@ export function createMemoryModelBridge({ client, serviceURL, runtimeFile, prefe
         if (!role && (!published || mode === "custom")) await publish();
       });
       if (mode === "wanx" && !role) await refreshCatalog();
+      const allTextRolesReady = TEXT_ROLES.every(role => roleModel(role));
       return {
         mode,
         ...(text(modelStatus?.model)
           ? { model: modelStatus.model, name: modelStatus.name, provider: modelStatus.provider }
-          : { error: modelError }),
+          : { error: allTextRolesReady ? null : modelError }),
         ...(mode === "wanx" && {
           roles: Object.fromEntries(TEXT_ROLES.map(role => {
             const catalog = modelStatus?.capabilities?.[role];

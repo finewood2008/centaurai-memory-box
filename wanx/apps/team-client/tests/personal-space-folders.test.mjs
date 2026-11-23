@@ -4,7 +4,7 @@ import {mkdtemp,mkdir,writeFile,readFile,rm,open,symlink} from 'node:fs/promises
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {randomUUID,createHash} from 'node:crypto';
-import {createPersonalSpace,MAX_UPLOAD_BYTES} from '../shell/personal-space.mjs';
+import {createPersonalSpace,MAX_UPLOAD_BYTES} from '../build/app/shell/personal-space.mjs';
 import {IMPORT_WINDOW} from '../shell/space-upload-imports.mjs';
 const hash=b=>createHash('sha256').update(b).digest('hex'),uid=()=>randomUUID().replaceAll('-','');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));

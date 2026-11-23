@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, readFile, readdir, rm } from "node:fs/promis
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { createPersonalSpace } from "../shell/personal-space.mjs";
+import { createPersonalSpace } from "../build/app/shell/personal-space.mjs";
 
 const id = letter => letter.repeat(32);
 const digest = data => createHash("sha256").update(data).digest("hex");

@@ -2,15 +2,16 @@
   const panelMode=document.body.dataset.noteSurface==='panel';
   const esc=v=>String(v??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
   const icon=name=>`<svg viewBox="0 0 24 24" aria-hidden="true">${({close:'<path d="m6 6 12 12M6 18 18 6"/>',image:'<rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 5-5 4 4 4-6 5 7"/>',back:'<path d="m14 5-7 7 7 7"/>',more:'<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>'})[name]||''}</svg>`;
-  const messages={CLIPBOARD_IMAGES_ONLY:'这里只接收文字和图片，普通文件请上传到空间。',CLIPBOARD_LIMIT:'一次最多20张图片，单张最大20 MB；本批内容未加入。',CLIPBOARD_NOTE_LIMIT:'便签文字和结构最多1 MB，请精简后继续。',CLIPBOARD_NOTE_BUSY:'请等待当前内容同步完成后再操作。',CLIPBOARD_VIRTUAL_FILE:'请粘贴截图或已保存到本机的图片。',CLIPBOARD_EMPTY:'没有可粘贴的文字或图片。',SPACE_CONTEXT_CHANGED:'账号或盒子已切换，本次操作已停止。',ACCOUNT_LOGIN_REQUIRED:'请先登录并选择盒子。',BOX_CONNECTION_REQUIRED:'请先选择要保存到的盒子。',CLIPBOARD_NOTE_CONFLICT:'其他设备已修改便签，本机草稿已保留。',CLIPBOARD_CACHE_FULL:'本机缓存已满，请先完成图片同步。',SECURE_STORAGE_WRITE_FAILED:'本机草稿保存失败，请保持窗口打开后重试。',CLIPBOARD_QUOTA:'盒子便签空间不足，本机草稿仍保留。'};
+  const messages={CLIPBOARD_IMAGES_ONLY:'这里只接收文字和图片，普通文件请上传到空间。',CLIPBOARD_LIMIT:'一次最多20张图片，单张最大20 MB；本批内容未加入。',CLIPBOARD_NOTE_LIMIT:'便签文字和结构最多1 MB，请精简后继续。',CLIPBOARD_NOTE_BUSY:'请等待当前内容同步完成后再操作。',CLIPBOARD_VIRTUAL_FILE:'请粘贴截图或已保存到本机的图片。',CLIPBOARD_EMPTY:'没有可粘贴的文字或图片。',SPACE_CONTEXT_CHANGED:'账号或盒子已切换，本次操作已停止。',ACCOUNT_LOGIN_REQUIRED:'请先登录并选择盒子。',BOX_CONNECTION_REQUIRED:'请先选择要保存到的盒子。',CLIPBOARD_NOTE_CONFLICT:'其他设备已修改便签，本机草稿已保留。',CLIPBOARD_CACHE_FULL:'本机缓存已满，请先完成图片同步。',SECURE_STORAGE_WRITE_FAILED:'本机草稿保存失败，请保持窗口打开后重试。',CLIPBOARD_QUOTA:'盒子便签空间不足，本机草稿仍保留。',CLIPBOARD_NOTE_COUNT_LIMIT:'便签数量已达上限，请先删除不用的便签。',CLIPBOARD_NOTE_DELETED:'这张便签已在其他设备删除，本机草稿仍保留。'};
   let host=null,state={items:[],tasks:[]},container=null,opened=false,active=false,poll=null,closeTimer=null,writing=Promise.resolve(true),localEdits=0,renderedScope=null,rendered='',composing=null,selection=null,error='',returnFocus=null;
   let requestSidebar=null,sidebarHost=null,viewGeneration=0,resolveComposition=null,saveError='';
+  let changingNote=false;
   const pendingInsertions=new Set();
   const urls=new Map(),imageLoads=new Set();let lastPersist='',modalAction=null,contextGeneration=0,imageDialog=null,imageMenu=null;
   const message=e=>messages[e.code||e.message]||'暂未同步到盒子，本机草稿会保留并自动重试。';
   const editor=()=>container?.querySelector('.clipboard-note-editor');
   const boxName=()=>host?.devices?.find(d=>d.deviceId===state.boxId)?.displayName||host?.connection?.name||'上次连接的盒子';
-  async function call(method,input={}){const scope=state.scope,generation=contextGeneration,r=await window.wanxClient.action('clipboard.'+method,{...input,scope});if(!r.ok)throw Object.assign(Error(r.code),{code:r.code});if(scope!==state.scope||generation!==contextGeneration)throw Object.assign(Error('SPACE_CONTEXT_CHANGED'),{code:'SPACE_CONTEXT_CHANGED'});return r.value;}
+  async function call(method,input={}){const scope=state.scope,generation=contextGeneration,r=await window.wanxClient.action('clipboard.'+method,{...(state.noteId?{noteId:state.noteId}:{}),...input,scope});if(!r.ok)throw Object.assign(Error(r.code),{code:r.code});if(scope!==state.scope||generation!==contextGeneration)throw Object.assign(Error('SPACE_CONTEXT_CHANGED'),{code:'SPACE_CONTEXT_CHANGED'});return r.value;}
   function blocks(){
     const output=[];let text='';
     const flush=()=>{if(text){output.push({type:'text',text});text='';}};
@@ -96,11 +97,16 @@
     if(focused){const r=document.createRange();r.selectNodeContents(e);r.collapse(false);const s=window.getSelection();s.removeAllRanges();s.addRange(r);}
     void loadImages();
   }
-  function update(next){
+  function keepSelected(next){
+    return next.scope===state.scope&&next.noteId!==state.noteId
+      ? {...next,note:state.note,noteId:state.noteId} : next;
+  }
+  function update(next,select=false){
     if(host?.route==='auth'&&next.scope)return;
     if(host?.dataIdentity?.profileId&&(!host.dataOwnerId||next.dataOwnerId!==host.dataOwnerId||next.dataContextId!==host.dataContextId))return;
     if(!host?.dataIdentity?.profileId&&host?.activeDeviceId&&next.boxId&&next.boxId!==host.activeDeviceId)return;
-    if(next.scope!==state.scope){
+    if(!select)next=keepSelected(next);
+    if(next.scope!==state.scope||next.noteId!==state.noteId){
       closeImageUI();finishComposition();for(const u of urls.values())URL.revokeObjectURL(u.url);urls.clear();
       selection=null;renderedScope=null;lastPersist='';saveError='';error='';writing=Promise.resolve(true);editor()?.replaceChildren();
     }
@@ -112,14 +118,30 @@
     if(render)renderNote();
     const n=state.note||{};
     container.querySelector('.clipboard-connection').textContent=boxName()+' · 共享便签';
+    const toolbar=container.querySelector('.clipboard-note-switch');
+    toolbar.hidden=!Array.isArray(state.notes);
+    const picker=toolbar.querySelector('select');
+    const options='<option value="">原共享便签</option>'+ (state.notes||[]).map(item=>'<option value="'+esc(item.id)+'">'+esc(item.title||'未命名便签')+'</option>').join('');
+    if(picker.dataset.options!==options){picker.innerHTML=options;picker.dataset.options=options;}
+    picker.value=state.noteId||'';
+    picker.disabled=changingNote||!state.scope;
+    toolbar.querySelector('button').disabled=picker.disabled;
     container.querySelector('.clipboard-connection').classList.toggle('is-online',!!state.online);
     const status=container.querySelector('.clipboard-note-status');
-    status.textContent=localEdits?'正在保存到本机…':saveError?'本机保存失败，请重试':n.phase==='locked'?'请先登录并选择盒子':n.phase==='conflict'?'本机草稿已保留 · 有版本冲突':n.revision===null&&!n.dirty&&!n.pending?'等待读取盒子便签':n.phase==='offline'?'已保存到本机 · 等待连接':n.phase==='syncing'?n.error?'已保存到本机 · 正在重试同步':'已保存到本机 · 正在同步':state.online?'已同步到盒子':'已保存到本机';
+    status.textContent=changingNote?'正在切换便签…':n.action==='delete'?'正在删除便签…':localEdits?'正在保存到本机…':saveError?'本机保存失败，请重试':n.phase==='locked'?'请先登录并选择盒子':n.phase==='conflict'?'本机草稿已保留 · 有版本冲突':n.revision===null&&!n.dirty&&!n.pending?'等待读取盒子便签':n.phase==='offline'?'已保存到本机 · 等待连接':n.phase==='syncing'?n.error?'已保存到本机 · 正在重试同步':'已保存到本机 · 正在同步':state.online?'已同步到盒子':'已保存到本机';
     const notice=container.querySelector('.clipboard-note-error');notice.textContent=saveError||error||(n.error&&n.error!=='CLIPBOARD_NOTE_CONFLICT'?message({code:n.error}):'');
-    container.querySelector('.clipboard-note-conflict').hidden=!n.conflict;
+    const conflict=container.querySelector('.clipboard-note-conflict');
+    conflict.hidden=!n.conflict;
+    conflict.querySelector('p').textContent=n.conflict?.deleted
+      ? '这张便签已在其他设备删除。你可以先复制本机草稿。'
+      : '其他设备已修改便签。本机草稿已保留，请选择要继续编辑的版本。';
+    conflict.querySelector('[data-clip="remote"]').textContent=n.conflict?.deleted?'舍弃本机草稿':'使用盒子内容';
+    container.querySelector('[data-clip="local"]').hidden=Boolean(n.conflict?.deleted);
     container.querySelector('[data-clip="restore"]').hidden=!n.has_backup;
     container.querySelector('[data-clip="recover-local"]').hidden=!n.recovery;
-    editor().contentEditable=state.scope?'true':'false';
+    container.querySelector('[data-clip="delete"]').hidden=!state.noteId;
+    container.querySelector('[data-note-agent]').hidden=!!state.noteId;
+    editor().contentEditable=state.scope&&(!changingNote||composing||pendingInsertions.size)&&!n.deleted&&n.action!=='delete'?'true':'false';
     container.querySelector('.clipboard-note-transfers').innerHTML=(state.tasks||[]).filter(t=>t.kind==='image').map(t=>`<div class="clipboard-note-transfer"><span title="${esc(t.name)}">${esc(t.name)}</span><small>${t.phase==='paused'?'已暂停':t.phase==='failed'?'同步失败':Math.floor((t.offset||0)/Math.max(1,t.size)*100)+'%'}</small><button data-clip="${['paused','failed'].includes(t.phase)?'resume':'pause'}" data-id="${t.id}">${['paused','failed'].includes(t.phase)?'继续':'暂停'}</button><progress value="${t.offset||0}" max="${t.size||1}"></progress></div>`).join('');
     const hasText=blocks().some(b=>b.type==='text'&&b.text.length);editor().classList.toggle('is-empty',!hasText&&!editor().querySelector('figure'));
   }
@@ -132,7 +154,7 @@
   async function applyInsertion(run){
     rememberSelection();const bound=state.scope,generation=viewGeneration;
     const current=()=>opened&&bound===state.scope&&generation===viewGeneration;
-    try{const r=await run();if(!current()||!r)return;state=r;
+    try{const r=await run();if(!current()||!r)return;state=keepSelected(r);
       if(typeof r.text==='string'){insertText(r.text);return;}
       const images=(r.captured||[]).filter(i=>i.kind==='image');if(!images.length)return;
       placeSelection();document.execCommand('insertHTML',false,images.map(i=>`<figure contenteditable="false" tabindex="0" role="button" aria-label="查看便签图片" data-item="${i.id}"><img data-item="${i.id}" alt="${esc(i.name)}"><span>图片</span></figure>`).join('')+'<br>');const last=editor().querySelector(`figure[data-item="${images.at(-1).id}"]`);if(last){const paragraph=document.createElement('div');paragraph.append(document.createElement('br'));if(last.nextSibling?.nodeName==='BR')last.nextSibling.replaceWith(paragraph);else last.after(paragraph);const range=document.createRange();range.setStart(paragraph,0);range.collapse(true);const selected=window.getSelection();selected.removeAllRanges();selected.addRange(range);}rememberSelection();await persistEditor();
@@ -147,7 +169,31 @@
     // OS-native paste is needed for copied Finder/Explorer images and screenshots.
     return insertImages(()=>call('note-paste'));
   }
-  function confirmAction(action,text){modalAction=action;container.querySelector('.clipboard-note-modal').innerHTML=`<div class="clipboard-modal-shade"><section role="dialog" aria-modal="true"><h3>${text}</h3><p>当前内容会保留，可在更多菜单中恢复。</p><button class="button primary" data-clip="confirm">确定</button><button class="text-button" data-clip="cancel-dialog">取消</button></section></div>`;}
+  function confirmAction(action,text,description='当前内容会保留，可在更多菜单中恢复。'){modalAction=action;container.querySelector('.clipboard-note-modal').innerHTML=`<div class="clipboard-modal-shade"><section role="dialog" aria-modal="true"><h3>${text}</h3><p>${description}</p><button class="button primary" data-clip="confirm">确定</button><button class="text-button" data-clip="cancel-dialog">取消</button></section></div>`;}
+  async function changeNote(operation, id){
+    if(changingNote)return;
+    const generation=viewGeneration,bound=state.scope;
+    const current=()=>generation===viewGeneration&&bound===state.scope;
+    changingNote=true;paint(false);
+    try{
+      do{
+        if(composing)await composing;
+        if(pendingInsertions.size)await Promise.allSettled(pendingInsertions);
+        if(!current())return;
+        const write=persistEditor();
+        if(!await write||!current())return;
+        if(!composing&&!pendingInsertions.size&&write===writing)break;
+      }while(current());
+      let next;
+      if(operation==='select')next=await call('note-refresh',{noteId:id});
+      else next=await call('note-command',{action:operation});
+      if(next.note?.deleted)next=await call('note-refresh',{noteId:null});
+      if(current())update(next,true);
+    }finally{
+      changingNote=false;paint(false);
+      if(current()&&operation!=='delete')editor().focus({preventScroll:true});
+    }
+  }
   async function action(action,button){
     error='';container.querySelector('details').open=false;closeImageMenu();
     if(action==='image-close'){closeImagePreview();return;}
@@ -159,22 +205,30 @@
     }
     if(action==='close')return requestView(false);
     if(action==='choose')return insertImages(()=>call('choose'));
+    if(action==='create')return changeNote('create');
     if(action==='pause'||action==='resume'){update(await call('transfer',{id:button.dataset.id,action}));return;}
     if(action==='clear')return confirmAction('clear','清空这张共享便签？');
+    if(action==='delete')return confirmAction('delete','删除这张便签？','这张便签会从盒子和其他设备的列表中移除。');
     if(action==='local')return confirmAction('local','用本机草稿替换盒子内容？');
     if(action==='cancel-dialog'){container.querySelector('.clipboard-note-modal').replaceChildren();modalAction=null;return;}
     if(action==='confirm'){action=modalAction;modalAction=null;container.querySelector('.clipboard-note-modal').replaceChildren();}
+    if(action==='delete')return changeNote('delete');
     if(['clear','restore','remote','local','recover-local'].includes(action)){
-      await persistEditor();update(await call('note-command',{action}));renderedScope=null;renderNote();
+      if(!await persistEditor())return;
+      const next=await call('note-command',{action});
+      if(next.note?.deleted)update(await call('note-refresh',{noteId:null}),true);
+      else update(next);
+      renderedScope=null;renderNote();
     }
 
   }
   async function refresh(){
-    if(!opened||composing||localEdits||saveError||editor()?.contains(document.activeElement))return;
+    if(!opened||changingNote||composing||localEdits||saveError||editor()?.contains(document.activeElement))return;
     const generation=viewGeneration,previousWrite=writing;
     try{
-      const next=await call('note-refresh');
-      if(generation===viewGeneration&&previousWrite===writing){update(next);error='';paint(false);}
+      let next=await call('note-refresh');
+      if(next.note?.deleted)next=await call('note-refresh',{noteId:null});
+      if(generation===viewGeneration&&previousWrite===writing&&!changingNote){update(next,true);error='';paint(false);}
     }catch(e){if(generation===viewGeneration&&previousWrite===writing){error=message(e);paint(false);}}
   }
   function reflect(){
@@ -186,7 +240,7 @@
   function position(){if(container&&opened&&!panelMode&&!sidebarHost)container.style.setProperty('--space-note-top',`${Math.max(0,document.querySelector('.topbar')?.getBoundingClientRect().bottom||0)}px`);}
   function mount(){
     if(container)return;container=document.createElement('aside');container.id='super-clipboard';container.className='clipboard-drawer clipboard-notepad'+(panelMode?' clipboard-panel-note':'');container.hidden=true;container.inert=true;container.setAttribute('aria-label','共享图文便签');
-    container.innerHTML=`<header class="clipboard-header"><div class="clipboard-title">${panelMode?'<button class="note-back" data-clip="close" aria-label="返回快捷面板">'+icon('back')+'<span>返回</span></button>':''}<div><h2>便签</h2><p class="clipboard-connection"></p></div></div><div class="clipboard-header-actions"><button class="clipboard-icon-button" data-clip="choose" title="插入图片" aria-label="插入图片">${icon('image')}</button><details class="clipboard-note-menu"><summary class="clipboard-icon-button" aria-label="更多便签操作">${icon('more')}</summary><div><button data-clip="clear">清空便签…</button><button data-clip="restore" hidden>恢复清空前内容</button><button data-clip="recover-local" hidden>恢复本机保留稿</button></div></details><button class="clipboard-icon-button" data-clip="close" title="收起 · Esc" aria-label="关闭便签">${icon('close')}</button></div></header><div class="clipboard-note-conflict" hidden><p>其他设备已修改便签。本机草稿已保留，请选择要继续编辑的版本。</p><button data-clip="remote">使用盒子内容</button><button data-clip="local">使用本机草稿…</button></div><div class="clipboard-note-scroll"><div class="clipboard-note-editor is-empty" role="textbox" aria-label="共享图文便签内容" aria-multiline="true" contenteditable="true" spellcheck="false" data-placeholder="在这里写点什么，或粘贴文字、图片…"></div></div><footer class="clipboard-note-footer"><div class="clipboard-note-transfers"></div><p class="clipboard-note-error" role="status"></p><div><span class="clipboard-note-status" aria-live="polite"></span><span title="同账号、同盒子的已审批 Agent 可读取这张共享便签">Agent 可读</span></div></footer><div class="clipboard-note-modal"></div>`;
+    container.innerHTML=`<header class="clipboard-header"><div class="clipboard-title">${panelMode?'<button class="note-back" data-clip="close" aria-label="返回快捷面板">'+icon('back')+'<span>返回</span></button>':''}<div><h2>便签</h2><p class="clipboard-connection"></p></div></div><div class="clipboard-header-actions"><button class="clipboard-icon-button" data-clip="choose" title="插入图片" aria-label="插入图片">${icon('image')}</button><details class="clipboard-note-menu"><summary class="clipboard-icon-button" aria-label="更多便签操作">${icon('more')}</summary><div><button data-clip="clear">清空便签…</button><button data-clip="restore" hidden>恢复清空前内容</button><button data-clip="recover-local" hidden>恢复本机保留稿</button><button data-clip="delete" class="clipboard-note-delete" hidden>删除便签…</button></div></details><button class="clipboard-icon-button" data-clip="close" title="收起 · Esc" aria-label="关闭便签">${icon('close')}</button></div></header><div class="clipboard-note-switch" hidden><select aria-label="选择便签"></select><button type="button" class="clipboard-icon-button" data-clip="create" title="新建便签" aria-label="新建便签">＋</button></div><div class="clipboard-note-conflict" hidden><p>其他设备已修改便签。本机草稿已保留，请选择要继续编辑的版本。</p><button data-clip="remote">使用盒子内容</button><button data-clip="local">使用本机草稿…</button></div><div class="clipboard-note-scroll"><div class="clipboard-note-editor is-empty" role="textbox" aria-label="共享图文便签内容" aria-multiline="true" contenteditable="true" spellcheck="false" data-placeholder="在这里写点什么，或粘贴文字、图片…"></div></div><footer class="clipboard-note-footer"><div class="clipboard-note-transfers"></div><p class="clipboard-note-error" role="status"></p><div><span class="clipboard-note-status" aria-live="polite"></span><span data-note-agent title="同账号、同盒子的已审批 Agent 可读取这张共享便签">Agent 可读</span></div></footer><div class="clipboard-note-modal"></div>`;
     (panelMode?document.querySelector('#panel'):sidebarHost||document.body).append(container);const e=editor();
     e.addEventListener('input',()=>{rememberSelection();if(!composing||panelMode)void persistEditor();paint(false);});
     e.addEventListener('compositionstart',()=>{if(!composing)composing=new Promise(resolve=>{resolveComposition=resolve;});});
@@ -194,6 +248,9 @@
     e.addEventListener('keyup',rememberSelection);e.addEventListener('mouseup',rememberSelection);e.addEventListener('blur',()=>{rememberSelection();if(!composing||panelMode)void persistEditor();});
     e.addEventListener('keydown',event=>{const image=imageTarget(event.target);if(image&&['Enter',' '].includes(event.key)){event.preventDefault();event.stopPropagation();void showImage(image.dataset.item).catch(e=>{error=messages[e.code]||'图片暂时无法打开，请重试。';paint(false);});}});
     e.addEventListener('paste',event=>void paste(event));
+    container.querySelector('.clipboard-note-switch select').addEventListener('change',event=>{
+      void changeNote('select',event.target.value||null).catch(e=>{error=message(e);paint(false);});
+    });
     container.addEventListener('mousedown',event=>{if(event.target.closest('.clipboard-header-actions'))rememberSelection();});
     container.addEventListener('click',event=>{
       const b=event.target.closest('[data-clip]'),image=imageTarget(event.target);if(!b&&!image)return;

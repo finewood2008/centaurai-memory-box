@@ -1392,6 +1392,14 @@ class AgentManager:
         finally:
             self._end_invocation(agent_id)
 
+    @asynccontextmanager
+    async def thread_invocation(self, agent_id: str, thread_id: str) -> AsyncIterator[None]:
+        async with (
+            self._thread_execution_lock(agent_id, thread_id),
+            self._track_invocation(agent_id),
+        ):
+            yield
+
     @metered_stream
     async def stream(self, agent_id: str, request: dict[str, Any]) -> AsyncIterator[Any]:
         """Stream harness chunks (Langfuse tracing handled inside octop-harness)."""
@@ -1399,10 +1407,7 @@ class AgentManager:
             raise self._unavailable_error(agent_id)
 
         thread_id = str(request.get("thread_id") or "")
-        async with (
-            self._thread_execution_lock(agent_id, thread_id),
-            self._track_invocation(agent_id),
-        ):
+        async with self.thread_invocation(agent_id, thread_id):
             self._apply_pending_bootstrap_graph_refresh(agent_id)
             from octop.infra.agents.teams.brainstorm import is_brainstorm_host, service_for
 
@@ -1410,8 +1415,16 @@ class AgentManager:
                 self
             ).prepare_turn(agent_id, request):
                 return
+            from octop.infra.agents.conversation_mode import zhijun_source_scope
+
+            request = dict(request)
+            references, memory = request.pop("zhijun_sources", ((), False))
+            prepared = request.pop("zhijun_prepared", None)
             req = self._prepare_stream_request(agent_id, request)
-            with hitl_thread_scope(thread_id_from_request(req)):
+            with (
+                hitl_thread_scope(thread_id_from_request(req)),
+                zhijun_source_scope(references, memory, prepared),
+            ):
                 async for chunk in self._harness_manager.stream(agent_id, cast(Any, req)):
                     yield chunk
             if is_brainstorm_host(self.get_row(agent_id)):
@@ -1450,10 +1463,7 @@ class AgentManager:
             thread = await asyncio.to_thread(self._repos.thread_repo.get, thread_id)
             if thread is None or thread.user_id != user_id or thread.agent_id != agent_id:
                 raise OctopError.localized(ErrorCode.FORBIDDEN)
-        async with (
-            self._thread_execution_lock(agent_id, thread_id),
-            self._track_invocation(agent_id),
-        ):
+        async with self.thread_invocation(agent_id, thread_id):
             self._apply_pending_bootstrap_graph_refresh(agent_id)
             from octop.infra.agents.middleware.private_storage import resuming_actor
 
@@ -3870,14 +3880,21 @@ class AgentManager:
         from octop.infra.agents.assistant_profile import ASSISTANT_ASK_PROMPT, is_assistant_profile
 
         if is_assistant_profile(row, self._repos.user_repo):
-            from octop.infra.agents.conversation_mode import AssistantAskMiddleware
+            from octop.infra.agents.conversation_mode import AssistantProfileMiddleware
 
             harness_cfg = replace(
                 harness_cfg,
                 system_prompt=ASSISTANT_ASK_PROMPT,
                 bootstrap_enabled=False,
                 ask_user_enabled=True,
-                middleware=[*(harness_cfg.middleware or []), AssistantAskMiddleware()],
+                memory=("AGENTS.md", "SOUL.md"),
+                memory_capture_enabled=False,
+                memory_extract_on_session_end=False,
+                memory_recall_inject_enabled=False,
+                middleware=[
+                    *(harness_cfg.middleware or []),
+                    AssistantProfileMiddleware(self.paths.root, row.user_id),
+                ],
             )
         if "tools_disabled" in _HARNESS_AGENT_CONFIG_FIELDS:
             from octop.infra.agents.settings.tool_catalog import effective_tools_disabled

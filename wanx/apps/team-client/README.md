@@ -23,7 +23,7 @@ npm ci --prefix apps/team-client
 npm run start:studio
 ```
 
-启动前自动从 `../builder/` 生成 Builder、星图和受信桥，并从 Dashboard 构建维护页面，生成目录已加入忽略。首次启动还会构建当前平台的网络引擎和系统助手，后续复用已有网络引擎，系统助手按源码摘要缓存。桌面端连接盒子，无需在本机启动 Octop 服务。个人版入口为 `../personal-client/`。两个客户端具有独立安装标识和配置目录，企业版的更新渠道为 `stable-studio`。
+启动前自动从 `../builder/` 生成 Builder、星图和受信桥，并从 Dashboard 构建维护页面，全部装配到 `build/app/`，开发启动与打包都使用此目录。Builder 集成源码位于 `../builder/integration/`，客户端源码目录不再保存生成副本；`build/` 可删除后重新构建，不要直接编辑其中的文件。首次启动还会构建当前平台的网络引擎和系统助手，后续复用已有网络引擎，系统助手按源码摘要缓存。桌面端连接盒子，无需在本机启动 Octop 服务。个人版入口为 `../personal-client/`。两个客户端具有独立安装标识和配置目录，企业版的更新渠道为 `stable-studio`。
 
 连接诊断默认写入 `userData/logs/connection-timings.jsonl`（macOS 企业版目录为 `~/Library/Application Support/wanx-studio-team-client/`）。`box.connect` 是单次连接总耗时，同次连接用随机 `connectionId` 关联；各阶段及有效租约内沿用地址、实时鉴权、旧地址刷新一次的规则见[连接耗时诊断](../personal-client/README.md#启动耗时诊断)。两个客户端的连接源码独立维护，优化和回归测试须同步验证。
 
@@ -36,6 +36,8 @@ npm run test:team-client
 ```
 
 以上命令均从仓库根目录执行；跨工程测试还需分别准备 `octop/` 与 `server/bridge/` 的 Python 虚拟环境。
+
+开物根据确认的 PRD 和万象 App Kit 构建标准应用包。需求、构建与客户端交付流程见[开物改造计划](../../docs/plans/kaiwu-app-kit-standard-only.md)。
 
 macOS 应用目录：`npm run package:studio:mac`；Windows 安装包：`npm run package:studio:windows`。macOS 正式签名、公证入口统一为：
 

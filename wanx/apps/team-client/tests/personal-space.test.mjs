@@ -4,7 +4,7 @@ import { mkdtemp, writeFile, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { createPersonalSpace } from "../shell/personal-space.mjs";
+import { createPersonalSpace } from "../build/app/shell/personal-space.mjs";
 const hash = b => createHash("sha256").update(b).digest("hex");
 const waitFor = async fn => { for (const deadline = Date.now() + 10_000; Date.now() < deadline;) { if (fn()) return; await new Promise(r => setTimeout(r, 10)); } throw new Error("state timed out"); };
 async function fixture(t, overrides = {}) {

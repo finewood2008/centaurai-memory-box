@@ -7,7 +7,10 @@ import path from "node:path";
 function sourcePaths(root) {
   const canonicalRoot = realpathSync(root);
   const repository = realpathSync(childProcess.execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd: root, encoding: "utf8" }).trim());
-  return [".", ...["../builder", "../team-client/applications/starlink"].filter(relative=>{
+  return [".", ...["../builder", "../starlink", "../team-client/applications/starlink", "../memory",
+    "../../tools/stage-local-memory.mjs", "../../tools/repair-locked-sqlite.mjs",
+    "../../tools/package-windows-preview.mjs", "../../tools/smoke-packaged-memory.mjs",
+    "../../tools/npm-command.mjs"].filter(relative=>{
     const absolute=path.resolve(canonicalRoot,relative), inside=path.relative(repository,absolute);
     return existsSync(absolute) && !inside.startsWith("..") && !path.isAbsolute(inside);
   })];

@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wanx-thread-history/1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "thread_id",
+    "model_ref",
+    "messages",
+    "has_more",
+    "limit",
+    "offset",
+    "next_cursor",
+    "history_loading",
+    "history_status",
+    "history_retry_after_ms",
+    "turn_active",
+    "hitl_pending",
+    "conversation_mode",
+    "pending_plan_path",
+    "hitl_policy"
+  ],
+  "properties": {
+    "thread_id": {
+      "type": "string"
+    },
+    "model_ref": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "messages": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "has_more": {
+      "type": "boolean"
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "offset": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "next_cursor": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "history_loading": {
+      "type": "boolean"
+    },
+    "history_status": {
+      "type": "string"
+    },
+    "history_retry_after_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "turn_active": {
+      "type": "boolean"
+    },
+    "hitl_pending": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "conversation_mode": {
+      "enum": [
+        "ask",
+        "plan",
+        "craft"
+      ]
+    },
+    "pending_plan_path": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "hitl_policy": {
+      "type": [
+        "object",
+        "null"
+      ]
+    }
+  }
+}

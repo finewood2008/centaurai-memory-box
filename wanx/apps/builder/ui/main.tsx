@@ -54,7 +54,8 @@ function App(){
  const editorSession=useRef<{projectId:string;hash:string;solution:Solution}|null>(null),editorDrafts=useRef(new Map<string,Solution>());
  const[sending,setSending]=useState(false);const sendLock=useRef(false),sendIds=useRef(new Map<string,string>());
  const dirtyPreview=useRef({form:false,annotation:false});const[pendingPreview,setPendingPreview]=useState('');
- const current=useRef(project),state=useRef(view),scope=useRef(''),lock=useRef(false),navigation=useRef(0),mounted=useRef(true),creation=useRef<{goal:string;id:string;interviewId:string}|null>(null),launchIds=useRef(new Map<string,{confirm:string;build:string;instruction:string}>());
+ const[creationTarget,setCreationTarget]=useState<'client'|'expert'>('client');
+ const current=useRef(project),state=useRef(view),scope=useRef(''),lock=useRef(false),navigation=useRef(0),mounted=useRef(true),creation=useRef<{goal:string;target:string;id:string;interviewId:string}|null>(null),launchIds=useRef(new Map<string,{confirm:string;build:string;instruction:string}>());
  current.current=project;state.current=view;
  const key=(id:string)=>'wanx-studio-workspace-v2:'+scope.current+':'+id;
  const draftStorage=()=>window.wanxStudio?.workshop?localStorage:sessionStorage;
@@ -97,9 +98,9 @@ function App(){
    let p=current.current;
    if(!p){
     try{creation.current=JSON.parse(sessionStorage.getItem(key('creation'))||'null')}catch{}
-    if(!creation.current||creation.current.goal!==submitted)creation.current={goal:submitted,id:operationId(),interviewId:operationId()};const input=creation.current;
+    if(!creation.current||creation.current.goal!==submitted||creation.current.target!==creationTarget)creation.current={goal:submitted,target:creationTarget,id:operationId(),interviewId:operationId()};const input=creation.current;
     try{sessionStorage.setItem(key('creation'),JSON.stringify(input))}catch{}
-    p=await api<Project>('/projects','POST',{operationId:input.id,name:'待命名项目',goal:submitted,intake:true});if(turn!==navigation.current)return;
+    p=await api<Project>('/projects','POST',{operationId:input.id,name:'待命名项目',goal:submitted,intake:true,target:input.target});if(turn!==navigation.current)return;
     save('new');current.current=p;setProject(p);restore(p);patch({draft:''});
     const result=await api(`/projects/${p.id}/intake`,'POST',{operationId:input.interviewId,text:submitted});if(turn!==navigation.current)return;update(result);creation.current=null;try{sessionStorage.removeItem(key('creation'))}catch{};return;
    }
@@ -171,6 +172,7 @@ function App(){
  return <div className={'studio-window product-workbench iteration-workbench continuous-workbench stage-'+layoutStage+' mobile-'+view.mobilePane}>
  <header className={'studio-top'+(context?.mode==='workshop'?' workshop-top':'')}><div className="builder-brand"><img src={context?.mode==='workshop'?workshopLogo:brandLogo} alt={context?.mode==='workshop'?'万象工坊':'万象·开物'}/><div><strong>{context?.mode==='workshop'?'万象工坊':'万象·开物'}</strong><small>{context?.mode==='workshop'?'应用定制 · 持续迭代':'WanX Builder'}</small></div></div><div className="builder-project"><strong title={project?.name}>{project?.name||'新产品'}</strong><small title="仅基于 WANX 现有接口开发，不修改底座；账号与管理员／普通用户角色由万象提供">{adoptedArtifact?'已采用 v'+adoptedArtifact.version:'基于 WANX 底座 · 继承万象账号与角色'}</small></div><div className="workbench-header-actions"><button onClick={()=>safePreview(()=>void run(async()=>{await open(null);patch({phase:'directory-deployment',mobilePane:'workspace'})}))}><Icon name="box" size={15}/>目录部署</button><button onClick={()=>setDrawer('preparation')}><Icon name="folder" size={15}/>资料与能力</button><button onClick={()=>void returnClient()}>返回万象<Icon name="arrow" size={14}/></button></div></header>
  <div className="workbench-stagebar"><ol aria-label="产品制作进度">{journey.steps.map((label:string,i:number)=><li key={label} className={i===journey.step?'current':i<journey.step?'past':''} aria-current={i===journey.step?'step':undefined}><span>{i<journey.step?'✓':i+1}</span>{label}</li>)}</ol><span className="workbench-stage-status" role="status" title={journey.detail}>{summary.status}</span></div>
+ {!project&&context&&context.mode!=='workshop'&&<label className="workbench-stagebar">应用类型<select value={creationTarget} disabled={sending||busy} onChange={e=>setCreationTarget(e.target.value==='expert'?'expert':'client')}><option value="client">普通客户端应用</option><option value="expert">盒端专家应用</option></select></label>}
  {connectionIssue&&<div className="global-alert info" role="status">连接响应较慢，正在恢复并读取最新进度。<button disabled={busy} onClick={()=>project&&void api(`/projects/${project.id}`).then(update).catch(readError)}>读取最新状态</button></div>}
  {error&&<div className="global-alert error" role="alert">{error}<button onClick={()=>setError('')}>关闭</button></div>}{notice&&<div className="global-alert info" role="status">{notice}<button onClick={()=>setNotice('')}>关闭</button></div>}
  {project?.preparation?.launchConfiguration&&artifact&&!project.preparation.storageReceipts?.[artifact.hash]&&project.preparation.events.some(e=>e.type==='storage.failed'&&e.artifactHash===artifact.hash)&&<div className="global-alert error" role="alert"><span>构建成果尚未归档到「{project.preparation.launchConfiguration.storage.name}」，请检查空间连接后重试。</span><button disabled={busy} onClick={()=>void run(async()=>update(await api(`/_client/launch/${project.id}/archive/${artifact.hash}`,'POST')))}>重试归档</button></div>}

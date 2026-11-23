@@ -91,6 +91,12 @@
       "supplementalRoutes": 0
     },
     {
+      "name": "expert-app",
+      "file": "expert-app.openapi.json",
+      "httpOperations": 2,
+      "supplementalRoutes": 0
+    },
+    {
       "name": "experts",
       "file": "experts.openapi.json",
       "httpOperations": 13,

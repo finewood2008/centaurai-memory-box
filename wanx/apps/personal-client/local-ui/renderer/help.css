@@ -3,7 +3,7 @@
 .faq-heading { display: flex; justify-content: space-between; align-items: center; gap: 20px; margin: 4px 0 24px; }
 .faq-eyebrow { display: block; margin-bottom: 8px; color: #796b5d; font-size: 10px; letter-spacing: .18em; }
 .faq-heading h2 { font-family: inherit; font-size: 25px; color: #302d29; margin-bottom: 8px; }
-.faq-heading .button.primary { background: #5b4636; border-color: #5b4636; color: #fffdf8; }
+.faq-heading .button.primary { background: var(--fn-color-brand); border-color: var(--fn-color-brand); color: #fffdf8; }
 .faq-heading .button.primary:hover:not(:disabled) { background: #49382c; }
 .faq-search { display: flex; align-items: center; gap: 12px; padding: 16px 18px; border: 1px solid #e2d6c6; border-radius: 12px; background: #fffdf8; margin-bottom: 26px; }
 .faq-search label { color: #686159; white-space: nowrap; }

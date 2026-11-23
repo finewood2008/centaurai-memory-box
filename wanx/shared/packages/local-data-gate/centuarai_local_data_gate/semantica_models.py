@@ -18,7 +18,7 @@ from . import protocol as p
 MAX_MODEL_BODY_BYTES = 512 * 1024
 WORKSPACE_NAMESPACE = UUID("8ae54f40-4054-4bba-a2e2-06e1c43d7514")
 TASK_KINDS = frozenset(
-    {"parse", "dialogue", "change", "extraction", "publication", "index", "sensitive"}
+    {"parse", "dialogue", "change", "extraction", "publication", "retraction", "index", "sensitive"}
 )
 MODEL_TASK_PURPOSES = {
     "dialogue": "extraction",
@@ -29,6 +29,7 @@ MODEL_TASK_PURPOSES = {
 SEMANTICA_DERIVATIONS = MappingProxyType(
     {
         "parse": frozenset({"index", "sensitive"}),
+        "extraction": frozenset({"publication"}),
         "publication": frozenset({"index", "sensitive"}),
         "index": frozenset({"sensitive"}),
     }
@@ -65,7 +66,8 @@ def _uuid(value):
 
 def validate_task_transition(parent_kind, child_kind, depth):
     """Allow only bounded automatic work already implied by a parent task."""
-    p.need(type(depth) is int and 1 <= depth <= 2, "LOCAL_DATA_SCOPE_DENIED")
+    p.need(type(depth) is int and (1 <= depth <= 2 or depth == 3 and parent_kind == "index"
+                                 and child_kind == "sensitive"), "LOCAL_DATA_SCOPE_DENIED")
     p.need(
         type(parent_kind) is str
         and type(child_kind) is str

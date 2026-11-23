@@ -10,6 +10,7 @@ export const ANNOTATION_CONTENT_LIMITS = Object.freeze({
 });
 
 const supported = new Set(["txt", "md", "csv", "tsv", "json", "log", "html", "htm", "xml", "pdf", "docx", "xlsx", "pptx"]);
+export const supportsAnnotationContent = name => typeof name === "string" && supported.has(extname(name).slice(1).toLowerCase());
 const images = new Set(["png", "jpg", "jpeg", "gif", "webp", "heic", "tif", "tiff", "bmp", "svg"]);
 const canceled = () => Object.assign(new Error("SPACE_ANNOTATION_CANCELED"), { code: "SPACE_ANNOTATION_CANCELED" });
 const result = (format, mode, reason) => ({ content: "", mode, format, truncated: false, reason });

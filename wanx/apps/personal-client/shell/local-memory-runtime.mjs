@@ -19,8 +19,12 @@ export function resolveManagedMemorySource({ appPath, packaged, resourcesPath, e
   let root;
   if (packaged) {
     root = path.join(resourcesPath, "local-memory");
-  } else if (env.WANX_MEMORY_BOX_ROOT?.trim()) {
-    root = path.resolve(env.WANX_MEMORY_BOX_ROOT.trim());
+  } else {
+    // The prepared runtime has native modules built for this Electron version.
+    // Prefer it over the source checkout's ordinary Node dependencies.
+    const prepared = usableSource(path.resolve(appPath, "../local-memory"));
+    if (prepared) return prepared;
+    if (env.WANX_MEMORY_BOX_ROOT?.trim()) root = path.resolve(env.WANX_MEMORY_BOX_ROOT.trim());
   }
   return root ? usableSource(root) : sourceFromMarker(sourceMarker);
 }

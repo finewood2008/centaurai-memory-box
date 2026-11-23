@@ -496,8 +496,20 @@ class OctopServer:
             trajectory_service=trajectory_service,
             history_archive=history_archive,
         )
+        from octop.infra.agents.assistant_conversations import (
+            AssistantConversations,
+            ConversationError,
+            ZhijunMode,
+        )
         from octop.infra.loops.service import LoopService
 
+        def resolve_zhijun_turn_mode(user_id: int, thread_id: str) -> ZhijunMode:
+            user = user_mgr.get_by_id(user_id)
+            if user is None:
+                raise ConversationError("ASSISTANT_CONVERSATION_NOT_FOUND", 404)
+            return AssistantConversations(self).resolve_turn_mode(user, thread_id)
+
+        gateway.processor.resolve_zhijun_turn_mode = resolve_zhijun_turn_mode
         self.app_runtime.loop_service = LoopService(
             repos=self.services.repos,
             cron_manager=cron_mgr,

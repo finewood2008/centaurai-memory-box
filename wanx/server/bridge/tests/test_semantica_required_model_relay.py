@@ -21,6 +21,7 @@ from test_semantica_model_authority import JOB, native_source, queued_task
 from wanx_bridge import local_data_broker
 from wanx_bridge import local_data_protocol as wire
 from wanx_bridge.local_data_broker import LocalDataBroker
+from wanx_bridge.model_reasoning import verified_reasoning
 from wanx_bridge.semantica.model_relay import ModelRelay
 
 PATH = "/internal/starklink/models"
@@ -74,6 +75,8 @@ async def required_relay(tmp_path, monkeypatch, broker_directory):
         started=asyncio.Event(),
         release=asyncio.Event(),
         counter=80,
+        confirm_mode=True,
+        authorization_mode_override=None,
     )
     provider = {
         "id": 1,
@@ -83,7 +86,8 @@ async def required_relay(tmp_path, monkeypatch, broker_directory):
         "base_url": "http://model/v1",
         "api_key": "synthetic-only",
     }
-    model = {"provider_id": 1, "model": "test-model", "input": ["text"]}
+    model = {"provider_id": 1, "model": "test-model", "input": ["text"],
+             "reasoning_config": verified_reasoning('https://token.qeeshu.com/v1', 'deepseek-flash')}
 
     class Admin:
         async def _admin(self, method, path):
@@ -147,7 +151,9 @@ async def required_relay(tmp_path, monkeypatch, broker_directory):
         await h.service.native_closed(
             {**h.native(child, n=state.counter + 2), "outcome": "completed"}, audience="semantica"
         )
-        return httpx.Response(200, json={"authorized": True})
+        return httpx.Response(200, json={"authorized": True,
+            **({"inference_options": state.authorization_mode_override or body["inference_options"]}
+               if state.confirm_mode and "inference_options" in body else {})})
 
     relay = ModelRelay(
         Admin(), config, tmp_path, gate_config=gate, transport=httpx.MockTransport(upstream)
@@ -228,6 +234,38 @@ async def test_required_inference_uses_real_broker_callback_and_stable_principal
         headers={"content-type": "application/json", "x-centuarai-model-proof": proof},
     )
     assert replay.status_code == 403 and len(state.provider_calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('confirm', [True, False])
+async def test_required_thinking_mode_is_forwarded_and_confirmed(required_relay, confirm):
+    state = required_relay
+    state.confirm_mode = confirm
+    options = {'thinking_mode': 'off'}
+    raw, proof = await request_body(state, inference_options=options)
+    response = await state.client.post(PATH, content=raw,
+        headers={'content-type': 'application/json', 'x-centuarai-model-proof': proof})
+    if confirm:
+        assert response.status_code == 200, response.text
+        assert response.json()['inference_options'] == options
+        payload = json.loads(state.provider_calls[0].content)
+        assert payload['thinking'] == {'type': 'disabled'}
+        assert payload['reasoning_effort'] == 'none'
+        assert all(body['inference_options'] == options for _, body in state.native_calls)
+    else:
+        assert response.status_code == 403, response.text
+        assert not state.provider_calls
+
+
+@pytest.mark.asyncio
+async def test_required_auto_rejects_contradictory_mode_acknowledgment(required_relay):
+    state = required_relay
+    state.authorization_mode_override = {'thinking_mode': 'off'}
+    raw, proof = await request_body(state, inference_options={'thinking_mode': 'auto'})
+    response = await state.client.post(PATH, content=raw,
+        headers={'content-type': 'application/json', 'x-centuarai-model-proof': proof})
+    assert response.status_code == 403
+    assert not state.provider_calls
 
 
 @pytest.mark.asyncio

@@ -1,0 +1,426 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "contract": "wanx-app-errors/1",
+  "version": "0.3.0",
+  "envelope": {
+    "http": {
+      "body": {
+        "detail": {
+          "code": "string",
+          "message": "optional string"
+        }
+      }
+    },
+    "sdk": {
+      "error": {
+        "code": "string"
+      }
+    }
+  },
+  "errors": [
+    {
+      "code": "HOST_SESSION_MISSING",
+      "httpStatus": null,
+      "category": "session",
+      "retryable": false,
+      "action": "重新从万象打开应用"
+    },
+    {
+      "code": "HOST_SESSION_INVALID",
+      "httpStatus": null,
+      "category": "session",
+      "retryable": false,
+      "action": "重新从万象打开应用"
+    },
+    {
+      "code": "HOST_PROTOCOL_UNSUPPORTED",
+      "httpStatus": null,
+      "category": "compatibility",
+      "retryable": false,
+      "action": "升级万象或应用兼容版本"
+    },
+    {
+      "code": "HOST_SESSION_EXPIRED",
+      "httpStatus": 401,
+      "category": "session",
+      "retryable": false,
+      "action": "停止当前操作并重新打开应用"
+    },
+    {
+      "code": "HOST_UNAUTHORIZED",
+      "httpStatus": 401,
+      "category": "session",
+      "retryable": false,
+      "action": "重新建立万象启动会话"
+    },
+    {
+      "code": "HOST_REQUEST_TIMEOUT",
+      "httpStatus": null,
+      "category": "transport",
+      "retryable": true,
+      "action": "按业务幂等规则重试"
+    },
+    {
+      "code": "NETWORK_NOT_READY",
+      "httpStatus": null,
+      "category": "transport",
+      "retryable": true,
+      "action": "等待网络恢复后由业务决定是否重试"
+    },
+    {
+      "code": "APPLICATION_PATH_NOT_ALLOWED",
+      "httpStatus": 400,
+      "category": "parameter",
+      "retryable": false,
+      "action": "只使用合同中的 /api 路径"
+    },
+    {
+      "code": "APPLICATION_RESOURCE_INVALID",
+      "httpStatus": 400,
+      "category": "parameter",
+      "retryable": false,
+      "action": "检查资源类型和不透明资源 ID"
+    },
+    {
+      "code": "APPLICATION_RESOURCE_NOT_BOUND",
+      "httpStatus": 404,
+      "category": "binding",
+      "retryable": false,
+      "action": "检查发行清单和当前账号/盒子绑定"
+    },
+    {
+      "code": "HOST_INVALID_RESPONSE",
+      "httpStatus": null,
+      "category": "compatibility",
+      "retryable": false,
+      "action": "记录版本并停止解析"
+    },
+    {
+      "code": "SPACE_INVALID_ID",
+      "httpStatus": 400,
+      "category": "parameter",
+      "retryable": false,
+      "action": "使用 32 位小写十六进制 ID"
+    },
+    {
+      "code": "SPACE_INVALID_NAME",
+      "httpStatus": 400,
+      "category": "parameter",
+      "retryable": false,
+      "action": "修正名称长度和保留字符"
+    },
+    {
+      "code": "SPACE_INVALID_SIZE",
+      "httpStatus": 400,
+      "category": "parameter",
+      "retryable": false,
+      "action": "检查非负安全整数大小和实际字节数"
+    },
+    {
+      "code": "SPACE_CHUNK_INVALID",
+      "httpStatus": 409,
+      "category": "integrity",
+      "retryable": false,
+      "action": "重新读取当前上传状态后继续"
+    },
+    {
+      "code": "SPACE_CHUNK_TOO_LARGE",
+      "httpStatus": 413,
+      "category": "parameter",
+      "retryable": false,
+      "action": "将分块限制在 4 MiB 以内"
+    },
+    {
+      "code": "SPACE_UPLOAD_OFFSET",
+      "httpStatus": 409,
+      "category": "conflict",
+      "retryable": false,
+      "action": "读取服务端 offset 后恢复上传"
+    },
+    {
+      "code": "SPACE_UPLOAD_INCOMPLETE",
+      "httpStatus": 409,
+      "category": "conflict",
+      "retryable": false,
+      "action": "补齐所有分块后再提交"
+    },
+    {
+      "code": "SPACE_UPLOAD_DAMAGED",
+      "httpStatus": 409,
+      "category": "integrity",
+      "retryable": false,
+      "action": "取消损坏上传并重新开始"
+    },
+    {
+      "code": "SPACE_LOCAL_FILE_CHANGED",
+      "httpStatus": null,
+      "category": "integrity",
+      "retryable": false,
+      "action": "重新读取本地文件后上传"
+    },
+    {
+      "code": "SPACE_REMOTE_FILE_CHANGED",
+      "httpStatus": null,
+      "category": "integrity",
+      "retryable": false,
+      "action": "重新获取文件元数据后读取"
+    },
+    {
+      "code": "SPACE_NOT_FOUND",
+      "httpStatus": 404,
+      "category": "resource",
+      "retryable": false,
+      "action": "刷新当前目录或资源绑定"
+    },
+    {
+      "code": "SPACE_NOT_FILE",
+      "httpStatus": 400,
+      "category": "parameter",
+      "retryable": false,
+      "action": "只对文件执行读取"
+    },
+    {
+      "code": "SPACE_APPLICATION_REQUIRED",
+      "httpStatus": 400,
+      "category": "binding",
+      "retryable": false,
+      "action": "从万象启动并确认 applicationId"
+    },
+    {
+      "code": "SPACE_UPGRADE_REQUIRED",
+      "httpStatus": 404,
+      "category": "compatibility",
+      "retryable": false,
+      "action": "升级盒端空间服务"
+    },
+    {
+      "code": "SPACE_REQUEST_FAILED",
+      "httpStatus": null,
+      "category": "transport",
+      "retryable": false,
+      "action": "保留操作不确定状态并核对空间"
+    },
+    {
+      "code": "FORBIDDEN",
+      "httpStatus": 403,
+      "category": "authorization",
+      "retryable": false,
+      "action": "只访问当前应用和当前账号拥有或授权的资源"
+    },
+    {
+      "code": "NOT_FOUND",
+      "httpStatus": 404,
+      "category": "resource",
+      "retryable": false,
+      "action": "检查资源 ID 和当前绑定"
+    },
+    {
+      "code": "AGENT_NOT_FOUND",
+      "httpStatus": 404,
+      "category": "resource",
+      "retryable": false,
+      "action": "检查 Agent 绑定和所有权"
+    },
+    {
+      "code": "AGENT_BUSY",
+      "httpStatus": 409,
+      "category": "conflict",
+      "retryable": true,
+      "action": "等待维护任务完成后重试"
+    },
+    {
+      "code": "AGENT_NOT_RUNNING",
+      "httpStatus": 409,
+      "category": "state",
+      "retryable": false,
+      "action": "先启动 Agent 或使用可用运行时"
+    },
+    {
+      "code": "AGENT_FAILED",
+      "httpStatus": 500,
+      "category": "runtime",
+      "retryable": false,
+      "action": "读取 Agent 状态并停止重试"
+    },
+    {
+      "code": "MODEL_UNAVAILABLE",
+      "httpStatus": 400,
+      "category": "model",
+      "retryable": false,
+      "action": "从当前账号模型目录选择可用模型"
+    },
+    {
+      "code": "CONTEXT_LIMIT",
+      "httpStatus": 413,
+      "category": "parameter",
+      "retryable": false,
+      "action": "缩短输入或减少上下文"
+    },
+    {
+      "code": "CONCURRENCY_LIMIT",
+      "httpStatus": 429,
+      "category": "quota",
+      "retryable": true,
+      "action": "等待活动请求完成"
+    },
+    {
+      "code": "QUOTA_EXHAUSTED",
+      "httpStatus": 402,
+      "category": "quota",
+      "retryable": false,
+      "action": "等待额度恢复或联系管理员"
+    },
+    {
+      "code": "GATEWAY_NOT_CONFIGURED",
+      "httpStatus": 503,
+      "category": "transport",
+      "retryable": true,
+      "action": "等待平台对话服务配置完成"
+    },
+    {
+      "code": "GATEWAY_UNAVAILABLE",
+      "httpStatus": 503,
+      "category": "transport",
+      "retryable": true,
+      "action": "稍后重试，避免重复派发"
+    },
+    {
+      "code": "UPSTREAM_UNAVAILABLE",
+      "httpStatus": 502,
+      "category": "transport",
+      "retryable": true,
+      "action": "读取会话状态后按幂等规则重试"
+    },
+    {
+      "code": "UPSTREAM_REJECTED",
+      "httpStatus": 502,
+      "category": "upstream",
+      "retryable": false,
+      "action": "检查模型和输入合同"
+    },
+    {
+      "code": "IDEMPOTENCY_CONFLICT",
+      "httpStatus": 409,
+      "category": "conflict",
+      "retryable": false,
+      "action": "使用新的 request_id 或原始请求体"
+    },
+    {
+      "code": "REQUEST_ALREADY_ACCEPTED",
+      "httpStatus": 409,
+      "category": "conflict",
+      "retryable": false,
+      "action": "读取原 request_id 对应的会话状态"
+    },
+    {
+      "code": "SESSION_LIMIT",
+      "httpStatus": 413,
+      "category": "limit",
+      "retryable": false,
+      "action": "减少会话分支或请求记录"
+    },
+    {
+      "code": "MODEL_LIMIT",
+      "httpStatus": 400,
+      "category": "parameter",
+      "retryable": false,
+      "action": "每组最多选择三个不同模型"
+    },
+    {
+      "code": "ANSWER_NOT_COMPLETE",
+      "httpStatus": 409,
+      "category": "state",
+      "retryable": false,
+      "action": "只能继续已完成且有文本的回答"
+    },
+    {
+      "code": "ANSWER_RUNNING",
+      "httpStatus": 409,
+      "category": "state",
+      "retryable": false,
+      "action": "等待回答结束后再重试"
+    },
+    {
+      "code": "EMPTY_PROMPT",
+      "httpStatus": 400,
+      "category": "parameter",
+      "retryable": false,
+      "action": "提供非空问题"
+    },
+    {
+      "code": "OUTPUT_LIMIT",
+      "httpStatus": 502,
+      "category": "limit",
+      "retryable": false,
+      "action": "缩短输出或更换模型"
+    },
+    {
+      "code": "INCOMPLETE_STREAM",
+      "httpStatus": 502,
+      "category": "transport",
+      "retryable": true,
+      "action": "重新读取会话快照"
+    },
+    {
+      "code": "INVALID_UPSTREAM_STREAM",
+      "httpStatus": 502,
+      "category": "compatibility",
+      "retryable": false,
+      "action": "记录合同版本并停止解析"
+    },
+    {
+      "code": "TOOLS_DISABLED",
+      "httpStatus": 502,
+      "category": "compatibility",
+      "retryable": false,
+      "action": "对话 API 只支持文本生成"
+    },
+    {
+      "code": "NOT_FOUND",
+      "httpStatus": 404,
+      "category": "resource",
+      "retryable": false,
+      "action": "检查会话、分组或答案 ID"
+    },
+    {
+      "code": "EXPERT_MARKET_FAILED",
+      "httpStatus": 502,
+      "category": "upstream",
+      "retryable": true,
+      "action": "市场数据不可用时不要重试创建"
+    },
+    {
+      "code": "KNOWLEDGE_FEATURE_DISABLED",
+      "httpStatus": 403,
+      "category": "capability",
+      "retryable": false,
+      "action": "当前应用未获得知识能力"
+    },
+    {
+      "code": "INTERNAL_ERROR",
+      "httpStatus": 500,
+      "category": "internal",
+      "retryable": false,
+      "action": "保留 request_id 并联系平台"
+    },
+    {
+      "code": "ACCESS_KEY_INVALID",
+      "httpStatus": 403,
+      "category": "permission",
+      "retryable": false,
+      "action": "检查星图仓库 Key 是否有效并有相应权限。独立星图 HTTP 可能返回 401。"
+    },
+    {
+      "code": "SEMANTICA_QUERY_NOT_ALLOWED",
+      "httpStatus": 422,
+      "category": "validation",
+      "retryable": false,
+      "action": "移除接口未声明的查询参数或请求正文字段。"
+    }
+  ],
+  "notes": {
+    "dialogue": "对话错误在 HTTP JSON 中返回 {\"code\": string}；SSE 中的 answer.error 使用同一代码。不要把 transient transport 错误当作已成功生成。",
+    "memory": "记忆桥接的底层错误统一映射为 NOT_FOUND、FORBIDDEN、AGENT_BUSY 或 INTERNAL_ERROR；应用不得依赖 JSON-RPC 数字错误码。",
+    "scope": "错误响应不透露其他账号、应用、Agent 或记忆 namespace 的存在。"
+  }
+}

@@ -131,6 +131,7 @@ async def iter_dashboard_hitl_resume_sse(
         channel_type=channel_type,
     )
     disconnected = False
+    done = {"type": "done"}
     # Clear the in-memory pause before the (possibly long) resume stream so
     # history reload cannot reinject the same card while the turn continues.
     if pending is not None:
@@ -151,10 +152,12 @@ async def iter_dashboard_hitl_resume_sse(
                 request_payload = chunk.get("request")
                 if isinstance(request_payload, dict):
                     hitl_coordinator.register_from_request(request_payload, ctx=hitl_ctx)
+            if isinstance(chunk, dict) and chunk.get("conversation_mode") in {"ask", "craft"}:
+                done["conversation_mode"] = chunk["conversation_mode"]
             if not disconnected:
                 yield format_sse("chunk", chunk)
         if not disconnected:
-            yield format_sse("chunk", {"type": "done"})
+            yield format_sse("chunk", done)
     except Exception as exc:
         # Resume failed after we cleared the pause for reinject safety — do not
         # leave the record looking like a successful approve/reject.

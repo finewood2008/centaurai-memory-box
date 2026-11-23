@@ -8,15 +8,13 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import electron from "electron";
 
-test("The personal window shares the right sidebar without losing notes or conversation state", {
-  skip: process.env.WANX_TEST_ELECTRON !== "1",
-  timeout: 65_000,
-}, async t => {
+async function runSidebarFixture(t, notesOnly = false) {
   const profile = await mkdtemp(join(tmpdir(), "wanx-sidebar-"));
   t.after(() => rm(profile, { recursive: true, force: true }));
   const fixture = fileURLToPath(new URL("./support/electron-sidebar.mjs", import.meta.url));
   const env = { ...process.env };
   delete env.ELECTRON_RUN_AS_NODE;
+  if (notesOnly) env.WANX_SIDEBAR_NOTES_ONLY = "1";
   try {
     const { stdout } = await promisify(execFile)(electron, [fixture, `--user-data-dir=${profile}`], {
       env,
@@ -27,4 +25,10 @@ test("The personal window shares the right sidebar without losing notes or conve
     if (error.stderr) t.diagnostic(error.stderr);
     throw error;
   }
-});
+}
+
+const options = { skip: process.env.WANX_TEST_ELECTRON !== "1", timeout: 40_000 };
+test("The personal window shares the right sidebar without losing notes or conversation state",
+  options, t => runSidebarFixture(t));
+test("Shared notes can be created, switched and deleted without changing the original",
+  options, t => runSidebarFixture(t, true));

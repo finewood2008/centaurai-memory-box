@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wanx-chat-ws/1",
+  "description": "WebSocket frames. Unknown provider/tool payload fields are extension fields and must not be interpreted as permissions.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "const": "ping"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "const": "user_turn"
+        },
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "thread_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "default_model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reasoning_mode": {
+          "enum": [
+            "auto",
+            "enabled",
+            "disabled",
+            null
+          ]
+        },
+        "reasoning_effort": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "conversation_mode": {
+          "enum": [
+            "ask",
+            "plan",
+            "craft",
+            null
+          ]
+        },
+        "mcp_servers": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "knowledge_base_ids": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "skills": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "messages": {
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "target_agent_ids": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "pong",
+            "turn_status",
+            "delta",
+            "tool_start",
+            "tool_end",
+            "error",
+            "done"
+          ]
+        }
+      }
+    }
+  ]
+}

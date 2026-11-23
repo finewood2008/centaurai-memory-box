@@ -67,6 +67,36 @@ def test_stamp_ask_clears_skills_and_mcp() -> None:
     assert cfg["skills"] == []
 
 
+def test_zhijun_persona_uses_the_latest_user_turn_without_changing_the_chat() -> None:
+    from langchain.agents.middleware import ModelRequest
+    from langchain_core.language_models.fake_chat_models import FakeListChatModel
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+
+    from octop.infra.agents.assistant_profile import ZHIJUN_PERSONA_PROMPT
+    from octop.infra.agents.conversation_mode import (
+        AssistantProfileMiddleware,
+        latest_zhijun_message,
+    )
+
+    user = HumanMessage(content="今天有点累", additional_kwargs={"assistant_persona": "zhijun"})
+    base = SystemMessage(content=[{"type": "text", "text": "Base Ask instructions"}])
+    request = ModelRequest(
+        model=FakeListChatModel(responses=[""]),
+        messages=[user, AIMessage(content="")],
+        system_message=base,
+    )
+    overridden = AssistantProfileMiddleware._with_persona(request)
+    assert overridden.system_message.content == [
+        *base.content,
+        {"type": "text", "text": ZHIJUN_PERSONA_PROMPT},
+    ]
+    assert overridden.messages[0].content == "今天有点累"
+    assert request.system_message is base
+
+    generic = request.override(messages=[user, HumanMessage(content="Help with a file")])
+    assert latest_zhijun_message(generic.messages) is None
+
+
 def test_ask_keeps_questions_and_selected_reads_without_execution(monkeypatch):
     from types import SimpleNamespace
     from unittest.mock import Mock
@@ -74,11 +104,11 @@ def test_ask_keeps_questions_and_selected_reads_without_execution(monkeypatch):
     from octop_harness.middleware import conversation_mode as mode
     from octop_harness.middleware import runtime
 
-    from octop.infra.agents.conversation_mode import stamp_assistant_ask
+    from octop.infra.agents.conversation_mode import stamp_assistant_mode
 
     server = "wanx_knowledge_" + "a" * 32
     names = ["ask_user_question", server + "_xingtu_search", server + "_delete", "execute"]
-    request = stamp_assistant_ask({"skills": ["build"]}, [server], names)
+    request = stamp_assistant_mode({"skills": ["build"]}, [server], names, "ask")
     assert request["conversation_mode"] == "ask" and request["skills"] == []
     monkeypatch.setattr(runtime, "get_config", lambda: request)
     monkeypatch.setattr(mode, "get_config", lambda: request)
@@ -117,7 +147,7 @@ def test_answer_resume_without_mode_cannot_restore_craft(monkeypatch):
         config = {"configurable": {"thread_id": "t", **initial}}
         for module in [host_mode, harness_mode, runtime]:
             monkeypatch.setattr(module, "get_config", lambda config=config: config)
-        boundary = host_mode.AssistantAskMiddleware()
+        boundary = host_mode.AssistantProfileMiddleware()
         handler = Mock(return_value="answered")
         question = SimpleNamespace(tool_call={"id": "q", "name": "ask_user_question", "args": {}})
         assert boundary.wrap_tool_call(question, handler) == "answered"
@@ -133,3 +163,134 @@ def test_answer_resume_without_mode_cannot_restore_craft(monkeypatch):
             question.tool_call["name"] = name
             assert boundary.wrap_tool_call(question, handler).status == "error"
         assert handler.call_count == 1
+
+
+def test_zhijun_mode_reads_prior_checkpoints_and_prefers_current_metadata():
+    from langchain_core.messages import HumanMessage
+
+    from octop.infra.agents.conversation_mode import zhijun_message_mode
+
+    message = HumanMessage(content="继续", additional_kwargs={"zhijun_conversation_mode": "craft"})
+    assert zhijun_message_mode(message) == "craft"
+    message.additional_kwargs["zhijun_turn_mode"] = "ask"
+    assert zhijun_message_mode(message) == "ask"
+
+
+def test_sidebar_craft_recall_keeps_only_authorized_memory_tools(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from langchain.agents.middleware import ModelRequest
+    from langchain_core.language_models.fake_chat_models import FakeListChatModel
+    from langchain_core.messages import HumanMessage
+    from langchain_core.runnables.config import set_config_context
+    from octop_harness.middleware import conversation_mode as harness
+    from wanx_bridge.zhijun_memory import run_memory
+
+    from octop.infra.agents import conversation_mode as host
+
+    config = {"configurable": {"user": "42"}}
+    monkeypatch.setattr(host, "get_config", lambda: config)
+    monkeypatch.setattr(harness, "runtime_config", lambda _request: config)
+    server = "wanx_knowledge_" + "a" * 32
+    search = server + "_xingtu_search"
+    stamped = host.stamp_assistant_mode(
+        config, [server, "unrelated"], [search, server + "_delete"], "craft"
+    )
+    assert stamped["mcp_servers"] == [server]
+    run_memory(
+        tmp_path,
+        42,
+        {
+            "action": "remember",
+            "requestId": str(uuid4()),
+            "text": "小林下周会搬去苏州",
+        },
+    )
+    middleware = host.AssistantProfileMiddleware(tmp_path, 42)
+    latest = HumanMessage(
+        content="小林近况如何？",
+        additional_kwargs={"assistant_persona": "zhijun", "zhijun_turn_mode": "craft"},
+    )
+    request = ModelRequest(
+        model=FakeListChatModel(responses=[""]),
+        messages=[latest],
+        tools=[
+            {"type": "function", "function": {"name": name}}
+            for name in (search, "execute", server + "_delete")
+        ],
+    )
+
+    def inspect_request(received):
+        assert config["configurable"]["conversation_mode"] == "craft"
+        assert "苏州" in received.system_message.text
+        for token in ("Ask mode", "Plan mode", "Craft mode"):
+            assert token not in received.system_message.text
+        assert [tool["function"]["name"] for tool in received.tools] == [search]
+        return SimpleNamespace(ok=True)
+
+    inherited = harness.ConversationModeMiddleware()
+    with host.zhijun_source_scope([], True):
+        assert middleware.wrap_model_call(
+            request, lambda incoming: inherited.wrap_model_call(incoming, inspect_request)
+        ).ok
+    assert config["configurable"]["conversation_mode"] == "craft"
+
+    refs = [
+        {"source": "space", "title": "交接文件", "text": "周四交接"},
+        {"source": "memmy", "title": "AI 历史", "text": "来自本机"},
+    ]
+    with host.zhijun_source_scope(refs, False):
+        result = middleware.wrap_model_call(request, lambda incoming: incoming.system_message.text)
+        assert "周四交接" in result
+        assert "来自本机" not in result
+        assert "苏州" not in result
+
+    config["configurable"] = {}
+    resumed = SimpleNamespace(
+        state={"messages": [latest]},
+        tool_call={"id": "q", "name": "ask_user_question", "args": {}},
+    )
+    with set_config_context(config) as context:
+        assert (
+            context.run(middleware.wrap_tool_call, resumed, lambda _request: "answered")
+            == "answered"
+        )
+        assert config["configurable"]["conversation_mode"] == "craft"
+        resumed.tool_call["name"] = "execute"
+        assert (
+            context.run(middleware.wrap_tool_call, resumed, lambda _request: "unexpected").status
+            == "error"
+        )
+        resumed.tool_call.update(name="read_file", args={"file_path": "/skills/example.md"})
+        assert (
+            context.run(middleware.wrap_tool_call, resumed, lambda _request: "unexpected").status
+            == "error"
+        )
+
+        # A stale graph config or legacy Plan marker does not upgrade a
+        # restored private assistant turn.
+        for mode in (None, "plan", "ask"):
+            resumed.state["messages"] = [
+                latest.model_copy(
+                    update={
+                        "additional_kwargs": {
+                            "assistant_persona": "zhijun",
+                            "zhijun_turn_mode": mode,
+                        }
+                    }
+                )
+            ]
+            resumed.tool_call.update(name="ask_user_question", args={})
+            assert (
+                context.run(middleware.wrap_tool_call, resumed, lambda _request: "answered")
+                == "answered"
+            )
+            assert config["configurable"]["conversation_mode"] == "ask"
+            resumed.tool_call.update(name="execute")
+            assert (
+                context.run(
+                    middleware.wrap_tool_call, resumed, lambda _request: "unexpected"
+                ).status
+                == "error"
+            )

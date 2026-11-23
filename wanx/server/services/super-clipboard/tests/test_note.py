@@ -56,6 +56,42 @@ def test_one_note_ordered_images_unicode_replay_restart_and_account_isolation(en
     assert len(e.owner.get(P + "/files", params={"parent": app_folder}).json()["items"]) == 2
 
 
+def test_extra_notes_preserve_original_and_shared_images_after_delete(environment, monkeypatch):
+    e = environment
+    image = save(e, b"\x89PNG\r\n\x1a\nimage", kind="image", mime="image/png")
+    image_block = {"type": "image", "item": image["id"]}
+    original = [{"type": "text", "text": "原共享便签"}, image_block]
+    assert put(e, original).status_code == 200
+
+    first, second = uuid.uuid4().hex, uuid.uuid4().hex
+    first_path, second_path = C + "/notes/" + first, C + "/notes/" + second
+    blocks = [{"type": "text", "text": "搁置事项\n第二行"}, image_block]
+    body = {"expected": 0, "operation": uuid.uuid4().hex, "blocks": blocks}
+    assert e.business.put(first_path, json=body).json()["revision"] == 1
+    assert e.business.put(first_path, json=body).json()["revision"] == 1
+    assert e.business.put(second_path, json=body).status_code == 409
+    second_body = body | {"operation": uuid.uuid4().hex, "blocks": [{"type": "text", "text": "出游"}]}
+    assert e.business.put(second_path, json=second_body).status_code == 200
+    listing = e.business.get(C + "/notes").json()["items"]
+    assert {row["id"]: row["title"] for row in listing} == {first: "搁置事项", second: "出游"}
+    assert e.business.get(C + "/notes", headers={"authorization": "Bearer owner-2"}).json() == {
+        "items": []
+    }
+
+    delete = {"expected": 1, "operation": uuid.uuid4().hex, "action": "delete"}
+    for _ in range(2):
+        result = e.business.put(first_path, json=delete)
+        assert result.status_code == 200, result.text
+        assert result.json()["deleted"] is True
+    assert e.business.put(first_path, json=body | {"operation": uuid.uuid4().hex}).status_code == 409
+    assert [row["id"] for row in e.business.get(C + "/notes").json()["items"]] == [second]
+    assert e.business.get(second_path).json()["blocks"] == second_body["blocks"]
+    assert e.business.get(C + "/note").json()["blocks"] == original
+    real_now = service.time.time()
+    monkeypatch.setattr(service.time, "time", lambda: real_now + service.RETENTION * 2)
+    assert e.business.get(C + f"/{image['id']}/content").content.startswith(b"\x89PNG")
+
+
 def test_lost_core_commit_reply_preserves_old_note_and_replays_without_duplicates(environment):
     e = environment
     original = [{"type": "text", "text": "原内容"}]

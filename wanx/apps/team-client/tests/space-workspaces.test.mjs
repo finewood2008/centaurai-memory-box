@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFile} from 'node:fs/promises';
-const source=await readFile(new URL('../local-ui/renderer/space-workspaces.js',import.meta.url),'utf8');
+const source=await readFile(new URL('../build/app/local-ui/renderer/space-workspaces.js',import.meta.url),'utf8');
 function setup(){
  const events={},saved=new Map(),calls=[],positions=[],fileActions=[];let reloads=0;
  const spaces=[{id:'personal',root:'',name:'我的空间',connections:[]},{id:'agent',root:'agent-root',name:'同名 Agent',connections:[],bytes:2},{id:'other',root:'other-root',name:'同名 Agent',connections:[],bytes:3}];

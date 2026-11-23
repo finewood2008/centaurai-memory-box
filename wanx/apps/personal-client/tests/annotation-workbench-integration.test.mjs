@@ -196,6 +196,39 @@ async function apply(f, jobId, selection, edits, extra = {}) {
   return plan;
 }
 
+for (const recursive of [false, true]) test(`reopening a ${recursive ? "recursive" : "single-folder"} scope picks up uploads and keeps the original task`, async t => {
+  const f = await fixture(t, { count: 2 });
+  if (recursive) f.put({ id: nestedId, parent: rootId, kind: "folder", name: "下级目录" });
+  const input = { parent: rootId, recursive };
+  const opened = await f.op("open", input), jobId = opened.job.id;
+  await f.ready(jobId);
+  await apply(f, jobId, { ids: [itemId(0)] }, change(["已确认标签"]));
+  await f.op("draft", { jobId, id: itemId(1), patch: { tags: ["任务原草稿"] } });
+  const parent = recursive ? nestedId : rootId, id = itemId(3);
+  f.put({ id, parent, kind: "file", name: "刚上传的材料.txt" });
+  const listing = await f.service.operation("list", { parent });
+  assert.ok(listing.items.some(row => row.id === id));
+
+  const reopened = await f.op("open", input);
+  assert.equal(reopened.job.id, jobId);
+  assert.ok(reopened.job.lastBatch, "undo history is retained");
+  assert.deepEqual(reopened.items.find(row => row.id === itemId(1)).draft.tags, ["任务原草稿"]);
+  assert.equal(reopened.items.find(row => row.id === id)?.path, recursive ? "下级目录/刚上传的材料.txt" : "刚上传的材料.txt");
+  assert.deepEqual((await f.op("list", { jobId, query: "刚上传的材料" })).items.map(row => row.id), [id]);
+  assert.equal((await f.op("open", input)).items.filter(row => row.id === id).length, 1);
+});
+
+test("reopening an explicit file selection never adds an unselected upload", async t => {
+  const f = await fixture(t, { count: 1 });
+  const input = { parent: rootId, ids: [itemId(0)] };
+  const opened = await f.op("open", input);
+  await f.ready(opened.job.id);
+  f.put({ id: itemId(1), parent: rootId, kind: "file", name: "选择范围外的新增文件.txt" });
+  const reopened = await f.op("open", input);
+  assert.equal(reopened.job.id, opened.job.id);
+  assert.deepEqual(reopened.items.map(row => row.id), input.ids);
+});
+
 test("real preload/control scans 1000 mixed files, distinguishes cross-page targets and applies idempotently in blocks", async t => {
   const f = await fixture(t, { count: 1000 });
   const opened = await f.op("open", { space_id: "personal", parent: rootId, recursive: false });
@@ -515,6 +548,19 @@ test("workbench tasks and reusable schemes remain isolated across account/box ch
   assert.equal((await f.op("schemes")).items.length, 1, "schemes belong to the account rather than a particular box");
 });
 
+test("saved draft tags remain reusable after restart and stay isolated by account and box", async t => {
+  const f = await fixture(t, { count: 2, ai: false });
+  const opened = await f.op("open", { parent: rootId });
+  const page = await f.ready(opened.job.id);
+  await f.op("draft", { jobId: opened.job.id, id: page.items[0].id, patch: { tags: ["历史复用标签"] } });
+  await f.restart();
+  assert.ok((await f.op("schemes")).tags.includes("历史复用标签"));
+  f.switch({ account: { phase: "authenticated", accountId: "synthetic-other" } });
+  assert.equal((await f.op("schemes")).tags.includes("历史复用标签"), false);
+  f.switch({ account: { phase: "authenticated", accountId: "synthetic-owner" }, connection: { deviceId: "other-box" } });
+  assert.equal((await f.op("schemes")).tags.includes("历史复用标签"), false);
+});
+
 test("an account switch during a durable draft save withholds the late response", async t => {
   const f = await fixture(t, { count: 2 });
   const opened = await f.op("open", { parent: rootId }), jobId = opened.job.id;
@@ -632,10 +678,18 @@ test("prepare refuses a preserved draft from an older annotation revision", asyn
   const refreshed = await f.op("refresh-item", { jobId, id: itemId(0), discardDraft: false });
   assert.deepEqual(Array.from(refreshed.items[0].draft.tags), ["旧版本草稿"]);
   assert.notEqual(refreshed.items[0].draftRevision, refreshed.items[0].annotation.revision);
+  for (const expectedRevision of [undefined, current.revision]) {
+    const replay = await f.raw({ op: "draft", jobId, id: itemId(0), patch: { tags: ["旧界面的迟到编辑"] },
+      ...(expectedRevision === undefined ? {} : { expectedRevision }) });
+    assert.equal(replay.code, "SPACE_ANNOTATION_CONFLICT");
+  }
   const prepared = await f.raw({ op: "prepare", jobId, selection: { ids: [itemId(0)] }, change: { tagMode: "keep", descriptionMode: "keep" }, useDrafts: true });
   assert.equal(prepared.ok, false);
   assert.equal(prepared.code, "SPACE_ANNOTATION_CONFLICT");
   assert.deepEqual((await f.service.operation("annotation", { id: itemId(0) })).manual.tags, ["另一窗口已保存"]);
+  const reviewed = await f.op("draft", { jobId, id: itemId(0), patch: { tags: ["核对后重新编辑"] },
+    expectedRevision: refreshed.items[0].annotation.revision });
+  assert.equal(reviewed.items[0].draftRevision, refreshed.items[0].annotation.revision);
 });
 
 test("fallback preview withholds extracted text when an ancestor leaves scope during I/O", async t => {

@@ -3,6 +3,42 @@
 import re
 
 
+def private_search_error(status: int, error: dict) -> str | None:
+    nested = error.get("error")
+    if status == 409 and isinstance(nested, dict):
+        code = nested.get("code")
+        if code in ("INDEX_REQUIRED", "INDEX_STALE", "NO_PARSED_CONTENT", "EMBEDDING_NOT_CONFIGURED"):
+            return f"SEMANTICA_{code}"
+    return None
+
+
+_INVALID_IMPORT_CONTENT = frozenset({
+    "文件类型与 Content-Type 不匹配",
+    "文件内容不是有效的 DOCX",
+    "文件内容不是有效的 PDF",
+    "文件内容不是有效的 XLS",
+    "图片内容与文件扩展名不匹配",
+    "图片内容与 Content-Type 不匹配",
+    "音频内容与文件扩展名不匹配",
+    "音频内容与 Content-Type 不匹配",
+    "Office 文件内容与扩展名不匹配",
+    "Office 文件损坏或不是有效的 ZIP",
+})
+
+
+def private_import_error(status: int, error: dict) -> str | None:
+    # Existing boxes return these known refusals as strings. Only the stable
+    # code crosses the desktop boundary.
+    detail = error.get("detail")
+    if not isinstance(detail, str):
+        return None
+    if status == 415 and detail in _INVALID_IMPORT_CONTENT:
+        return "SEMANTICA_FILE_CONTENT_MISMATCH"
+    if status == 422 and detail == "DOCX 已加密，无法解析":
+        return "SEMANTICA_FILE_ENCRYPTED"
+    return None
+
+
 def operation_timeout(path: str) -> int:
     if (
         path == "/workbench/ontology-suggestions/generate"
@@ -20,7 +56,7 @@ def operation_timeout(path: str) -> int:
         or re.fullmatch(
             r"/workbench/conversations/[A-Za-z0-9_-]{1,128}/instruction-plans(?:/[A-Za-z0-9_-]{1,128}/prepare)?", path
         )
-        or path in {"/processing", "/processing/check"}
+        or path in {"/processing", "/processing/check", "/workbench/sensitive/preview"}
         or path.startswith("/reasoning/")
     ):
         return 285
@@ -61,6 +97,10 @@ OWNER_ERROR_CODES = frozenset(
         "RESTORE_NOTE_INVALID",
         "RESTORE_PREVIEW_STALE",
         "RESTORE_SNAPSHOT_INCOMPLETE",
+        "SENSITIVE_REVISION_CONFLICT",
+        "SENSITIVE_RULE_INVALID",
+        "SENSITIVE_SIMILAR_RULE",
+        "SENSITIVE_PREVIEW_FAILED",
     }
 )
 
@@ -70,3 +110,11 @@ def owner_error(code) -> bool:
         code in OWNER_ERROR_CODES
         or re.fullmatch(r"(?:CORRECTION|INVALID_CORRECTION)_[A-Z_]{1,100}", code) is not None
     )
+
+
+def owner_error_message(code, message) -> str | None:
+    if code == "SENSITIVE_SIMILAR_RULE" and isinstance(message, str) and re.fullmatch(
+        r"规则与 [a-z][a-z0-9_]{0,79} 相似", message
+    ):
+        return message
+    return None

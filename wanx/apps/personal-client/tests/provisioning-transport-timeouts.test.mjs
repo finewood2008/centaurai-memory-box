@@ -6,7 +6,7 @@ import vm from 'node:vm';
 import { COMMAND_UUID, DEVICE_INFO_UUID, fragmentLogicalFrame } from '@nexusaos/local-provisioning-electron-ble';
 import { createProvisioningHost } from '../shell/provisioning-host.cjs';
 
-const bundle = await readFile(new URL('../local-ui/renderer/device-setup.bundle.js', import.meta.url), 'utf8');
+const bundle = await readFile(new URL('../build/app/local-ui/renderer/device-setup.bundle.js', import.meta.url), 'utf8');
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const requestId = '12345678-1234-4234-8234-123456789abc';
 const match = { requestId, responseMessageType: 'pairing.token.result' };

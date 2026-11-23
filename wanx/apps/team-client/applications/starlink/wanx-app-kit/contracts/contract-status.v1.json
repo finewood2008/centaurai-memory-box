@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "contract": "wanx-business-api-status/1",
+  "version": "0.3.0",
+  "catalogFile": "api-catalog.v1.json",
+  "apis": [
+    {
+      "id": "host.session",
+      "status": "open",
+      "transport": "@centaurai/wanx-host-sdk",
+      "contractFiles": [
+        "schemas/host-context.v1.schema.json",
+        "schemas/resource-binding.v1.schema.json"
+      ]
+    },
+    {
+      "id": "space.drive",
+      "status": "ready-for-acceptance",
+      "transport": "HostClient.drive",
+      "contractFiles": [
+        "drive-api.md",
+        "octop-modules/personal-space.openapi.json",
+        "schemas/space.v1.schema.json"
+      ],
+      "reason": "SDK 和 HTTP 入口已实现并提供开发合同，发布验收仍需记录目标盒子的授权和文件回读结果。"
+    },
+    {
+      "id": "agent.thread",
+      "status": "ready-for-acceptance",
+      "requiredBeforeOpen": [
+        "real-box-acceptance",
+        "version-registration",
+        "session-revocation-evidence"
+      ]
+    },
+    {
+      "id": "resource.expert",
+      "status": "ready-for-acceptance",
+      "requiredBeforeOpen": [
+        "real-box-acceptance",
+        "version-registration",
+        "session-revocation-evidence"
+      ]
+    },
+    {
+      "id": "knowledge.retrieval",
+      "status": "contract-only",
+      "requiredBeforeOpen": [
+        "query-schema",
+        "result-schema",
+        "citation-schema",
+        "permission-scope",
+        "error-codes",
+        "quota",
+        "acceptance-evidence"
+      ]
+    },
+    {
+      "id": "starlink.evidence",
+      "status": "open",
+      "transport": "HostClient.request + X-Xingtu-Key",
+      "contractFiles": [
+        "starlink-api.md",
+        "octop-modules/starlink.openapi.json"
+      ]
+    },
+    {
+      "id": "models",
+      "status": "ready-for-acceptance",
+      "contractFiles": [
+        "schemas/model-list.v1.schema.json"
+      ],
+      "requiredBeforeOpen": [
+        "real-box-acceptance",
+        "version-registration",
+        "session-revocation-evidence"
+      ]
+    },
+    {
+      "id": "dialogue.session",
+      "status": "ready-for-acceptance",
+      "contractFiles": [
+        "schemas/dialogue-question.v1.schema.json",
+        "schemas/dialogue-session.v1.schema.json",
+        "schemas/dialogue-event.v1.schema.json",
+        "schemas/dialogue-quota.v1.schema.json"
+      ],
+      "requiredBeforeOpen": [
+        "real-box-acceptance",
+        "version-registration",
+        "session-revocation-evidence"
+      ]
+    },
+    {
+      "id": "memory",
+      "status": "ready-for-acceptance",
+      "contractFiles": [
+        "schemas/memory-page.v1.schema.json",
+        "schemas/memory-item.v1.schema.json",
+        "schemas/memory-mutation.v1.schema.json",
+        "schemas/memory-extract-config.v1.schema.json"
+      ],
+      "requiredBeforeOpen": [
+        "real-box-acceptance",
+        "version-registration",
+        "session-revocation-evidence"
+      ]
+    },
+    {
+      "id": "wanx.expert-app.v1",
+      "version": "1.0.0",
+      "status": "ready-for-acceptance",
+      "contractFiles": [
+        "expert-app-api.md",
+        "octop-modules/expert-app.openapi.json",
+        "schemas/expert-app-context.v1.schema.json",
+        "schemas/expert-app-invoke.v1.schema.json",
+        "schemas/expert-app-result.v1.schema.json"
+      ],
+      "requiredBeforeOpen": [
+        "real-box-acceptance",
+        "version-registration",
+        "session-revocation-evidence",
+        "generation-fencing-evidence"
+      ]
+    }
+  ],
+  "permissionModel": "permissions.v1.json"
+}

@@ -19,10 +19,14 @@
     "start:mini": "npm --prefix apps/personal-client start",
     "start:studio": "npm --prefix apps/team-client start",
     "test:studio": "npm --prefix apps/builder run check",
+    "test:starlink": "npm --prefix apps/starlink test",
+    "build:starlink": "npm --prefix apps/starlink run build",
     "test:team-client": "npm --prefix apps/team-client test",
     "package:mini:mac": "npm --prefix apps/personal-client run package:mac",
     "package:studio:mac": "npm --prefix apps/team-client run package:mac",
     "package:mini:windows": "npm --prefix apps/personal-client run package:windows",
-    "package:studio:windows": "npm --prefix apps/team-client run package:windows"
+    "package:studio:windows": "npm --prefix apps/team-client run package:windows",
+    "build:builder-runtime": "node apps/builder/tools/stage-dev-kit.mjs",
+    "test:builder-runtime": "node --test tools/tests/builder-runtime.test.mjs"
   }
 }

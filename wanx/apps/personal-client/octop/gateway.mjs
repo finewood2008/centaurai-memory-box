@@ -1,4 +1,5 @@
 import http from "node:http";
+import { isStarlinkNativeRequest } from './starlink-native-routes.mjs';
 import { dashboardRoutes } from "./dashboard-routes.mjs";
 import { serveMaintenanceAsset } from "./maintenance-assets.mjs";
 import https from "node:https";
@@ -759,8 +760,7 @@ export async function createDashboardGateway({
       if (!authorized) throw new Error("PLATFORM_SESSION_EXPIRED");
       // Main-owned Host calls have already passed their service-only boundary.
       // Keep browser HTTP forwarding unchanged: its Origin must reach the Bridge.
-      if (["GET", "POST", "PUT", "PATCH"].includes(method) &&
-          /^\/api\/semantica\/warehouses\/[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}\/workbench\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/.test(path.split("?")[0])) {
+      if (isStarlinkNativeRequest(method, path)) {
         delete authorized.headers.origin;
       }
       // Bulk chunks must not reuse a control request's potentially stale tunnel.

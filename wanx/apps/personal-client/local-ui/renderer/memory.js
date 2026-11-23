@@ -1,6 +1,5 @@
 (() => {
   const origin = "wanx-memory://local";
-  const settingsSections = new Set(["models", "budget"]);
   let host, generation = 0;
 
   async function open() {
@@ -27,10 +26,17 @@
       return;
     }
     const url = new URL(`${origin}/wanx-memory.html`);
-    if (section === "my-ai" || settingsSections.has(section)) url.searchParams.set("section", section);
+    if (section === "my-ai") url.searchParams.set("section", section);
+    const source = target.dataset.memoryAgent;
+    if (!section && target.dataset.memoryPage === "backup") {
+      url.searchParams.set("memoryPage", "backup");
+    } else if (!section && source) {
+      url.searchParams.set("memoryPage", "memories");
+      url.searchParams.set("memoryAgent", source);
+    }
     url.hash = new URLSearchParams({ session: connection.token }).toString();
     const frame = document.createElement("iframe");
-    frame.title = section === "my-ai" ? "我的 AI" : url.search ? "记忆配置" : "记忆工作台";
+    frame.title = section === "my-ai" ? "我的 AI" : "智能体记忆";
     frame.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms");
     frame.src = url.href;
     target.replaceChildren(frame);
@@ -38,8 +44,12 @@
 
   window.addEventListener?.("message", event => {
     if (event.origin !== origin || !host?.isConnected || event.source !== host.querySelector("iframe")?.contentWindow) return;
-    if (event.data?.type === "wanx-memory-settings" && settingsSections.has(event.data.section))
-      window.dispatchEvent(new CustomEvent("wanx:memory-settings", { detail: event.data.section }));
+    if (event.data?.type === "wanx-view-agent-memory" && host.dataset.memorySection === "my-ai" &&
+        typeof event.data.source === "string" && /^[a-z0-9_]{1,40}$/.test(event.data.source))
+      window.dispatchEvent(new CustomEvent("wanx:view-agent-memory", { detail: event.data.source }));
+    if (event.data?.type === "wanx-my-ai-destination" && host.dataset.memorySection === "my-ai" &&
+        (event.data.destination === "backup" || event.data.destination === "boxes"))
+      window.dispatchEvent(new CustomEvent("wanx:my-ai-destination", { detail: event.data.destination }));
     if (event.data?.type === "wanx-local-memory-space" && host.dataset.memorySection === "my-ai")
       window.dispatchEvent(new CustomEvent("wanx:local-memory-space"));
   });

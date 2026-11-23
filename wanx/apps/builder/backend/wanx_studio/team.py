@@ -77,6 +77,8 @@ class TeamPublications:
             if not deployment or not deployment['enabled'] or deployment.get('configuration',{}).get('studio_team') != json.loads(row['policy']):
                 continue
             payload=json.loads(row['payload'])
+            if not payload.get('packageBase64') or not payload.get('packageSha256'):
+                continue
             sealed=json.loads(row['policy'])
             if payload['applicationId']!=row['app'] or payload['artifactHash']!=row['artifact'] or sealed['artifactHash']!=row['artifact'] or sealed['projectId']!=row['project']:
                 continue
@@ -114,7 +116,10 @@ class TeamPublications:
             'versioning':{'adoptedHash':a['artifactHash']}, 'messages':[], 'events':[]}
 
     def payload(self, owner, project_id, artifact_hash):
-        return copy.deepcopy(self.resolve(owner, project_id=project_id, artifact_hash=artifact_hash)['payload'])
+        payload = self.resolve(owner, project_id=project_id, artifact_hash=artifact_hash)['payload']
+        if not payload.get('packageBase64') or not payload.get('packageSha256'):
+            raise StudioError('STANDARD_ARTIFACT_REQUIRED',409)
+        return copy.deepcopy(payload)
 
     def assert_session(self, owner, session):
         row = self.resolve(owner, app_id=session['app'], artifact_hash=session['artifact'])

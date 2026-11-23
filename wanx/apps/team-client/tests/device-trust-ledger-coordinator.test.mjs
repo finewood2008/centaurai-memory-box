@@ -14,18 +14,20 @@ import { ledgerFixture, randomId } from './ledger-test-fixture.mjs';
 const passphrase = 'independent ledger passphrase';
 async function fixture(t) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'ledger-coordinator-'));
-  const vault = createIdentityVault({ directory });
+  const timestamp = Date.now();
+  const clock = () => timestamp;
+  const vault = createIdentityVault({ directory, clock });
   let remote;
   const factory = () => ({ request: (...args) => remote.request(...args) });
-  const service = await createDeviceTrustCoordinator({ directory, vault, ledgerTransportFactory: factory });
+  const service = await createDeviceTrustCoordinator({ directory, vault, clock, ledgerTransportFactory: factory });
   await service.createProfile({ passphrase });
-  remote = ledgerFixture(vault.snapshot().profile);
+  remote = ledgerFixture(vault.snapshot().profile, { clock });
   const saved = vault.readState();
   saved.boxes[remote.descriptor.boxId] = { descriptor: remote.descriptor, role: 'manage',
     principalId: remote.own.principalId, bindingId: remote.own.bindingId, checkpoint: structuredClone(remote.context), requests: {} };
   await vault.writeState(saved);
   t.after(async () => { service.close(); await rm(directory, { recursive: true, force: true }); });
-  return { directory, vault, service, remote, factory };
+  return { directory, vault, service, remote, clock };
 }
 
 test('v2 fresh state uses actual principal scope and per-operation passphrase binds immutable revoke effects', async t => {
@@ -98,12 +100,12 @@ test('member private projection and old epoch active records do not authorize ma
 });
 
 for (const action of ['manager', 'member']) test(`independent ${action} target co-signs final review then accepts receipt only after fresh self-binding`, async t => {
-  const { service, remote } = await fixture(t);
+  const { service, remote, clock } = await fixture(t);
   remote.own.capabilities = ['device.approve_manage', 'device.approve_use', 'device.revoke', 'member.invite'];
   const targetDirectory = await mkdtemp(path.join(os.tmpdir(), 'ledger-target-'));
-  let targetVault = createIdentityVault({ directory: targetDirectory });
+  let targetVault = createIdentityVault({ directory: targetDirectory, clock });
   let target = await createDeviceTrustCoordinator({ directory: targetDirectory, vault: targetVault,
-    ledgerTransportFactory: () => ({ request: remote.request }) });
+    clock, ledgerTransportFactory: () => ({ request: remote.request }) });
   t.after(async () => { target.close(); await rm(targetDirectory, { recursive: true, force: true }); });
   await target.createProfile({ passphrase });
   const info = await target.exportTargetInfo();
@@ -116,8 +118,9 @@ for (const action of ['manager', 'member']) test(`independent ${action} target c
   const proofs = await target.confirmTargetApproval({ reviewHandle: targetReview.reviewHandle, passphrase });
   assert.equal(target.snapshot().boxes[0].role, 'pending');
   target.close();
-  targetVault = createIdentityVault({ directory: targetDirectory });
-  target = await createDeviceTrustCoordinator({ directory: targetDirectory, vault: targetVault, ledgerTransportFactory: () => ({ request: remote.request }) });
+  targetVault = createIdentityVault({ directory: targetDirectory, clock });
+  target = await createDeviceTrustCoordinator({ directory: targetDirectory, vault: targetVault, clock,
+    ledgerTransportFactory: () => ({ request: remote.request }) });
   await target.unlock({ passphrase });
   assert.equal(target.snapshot().securityOperations[0].role, 'target');
   assert.equal((await target.resumeTargetApproval({ boxId: remote.descriptor.boxId, requestId: review.requestId })).targetProofs, proofs.targetProofs);

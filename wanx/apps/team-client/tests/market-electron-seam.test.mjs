@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import os from "node:os";
 import { packageApplication } from "../tools/package-application.mjs";
-import { createApplicationManager } from "../applications/manager.mjs";
+import { createApplicationManager } from "../build/app/applications/manager.mjs";
 
 function message(child, type) {
   return new Promise((resolve, reject) => {

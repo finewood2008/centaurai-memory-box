@@ -1,11 +1,11 @@
 import asyncio
 from copy import deepcopy
-import json
 import time
 
 import pytest
+from standard_build_fixture import historical_records, workspace_files
 from test_studio import svc,seeded,op
-from wanx_studio.contracts import StudioError,digest
+from wanx_studio.contracts import StudioError
 from wanx_studio.edits import ACTIVE,STOPPED
 from wanx_studio.versions import verify
 
@@ -33,12 +33,18 @@ def pipeline(svc,monkeypatch):
     async def preflight(**_):return {'available':True}
     async def analyse(owner,pid,eid):
         r=await svc.edits.tool(owner,pid,eid,'read_project',{})
-        await svc.edits.tool(owner,pid,eid,'update_prd',{'expectedHash':r['expectedHash'],'summary':{'outputs':r['solution']['outputs']+' / '+r['request']}})
-        await svc.edits.tool(owner,pid,eid,'finish_edit',{'outcome':'ready','summary':r['request']})
+        saved = await svc.edits.tool(owner, pid, eid, 'update_prd', {
+            'expectedHash': r['expectedHash'], 'summary': {'outputs': r['solution']['outputs']+' / '+r['request']},
+            'upsert': [{'section': 'tests', 'value': {'title': '界面修改', 'given': '打开应用',
+                                                     'when': '查看列表', 'then': r['request']}}],
+        })
+        await svc.edits.tool(owner, pid, eid, 'finish_edit', {
+            'outcome': 'ready', 'summary': r['request'],
+            'runtimeIntent': {'solutionHash': saved['expectedHash'], 'capabilities': [], 'execution': 'host'},
+        })
     async def execute(owner,p,tid,instruction):
-        files=deepcopy(svc.runner.source_files(owner,p,tid));files['src/styles.css']+='\n/* '+instruction+' */\n'
-        task=next(t for t in p['tasks'] if t['id']==tid)
-        m=json.loads(files['miniapp.manifest.json']);m['collections']=task['change']['contract']['collections'];m['capabilities']=task['change']['contract']['capabilities'];files['miniapp.manifest.json']=json.dumps(m)
+        files = workspace_files(svc, owner, p, tid)
+        files['app/host.mjs'] += '\n// ' + instruction.replace('\n', ' ') + '\n'
         await svc.add_artifact(owner,p['id'],tid,files)
     monkeypatch.setattr(svc.preparation,'probe_runtime',probe)
     monkeypatch.setattr(svc.runner,'preflight',preflight)
@@ -78,22 +84,7 @@ async def test_two_messages_during_build_are_serial_and_use_preceding_result(svc
     release.set();r=await wait(svc,p['id']);assert [e['state'] for e in r['items']]==['completed']*3
     q=svc.store.get('alice',p['id']);assert len(q['artifacts'])==4
     assert [a['baseHash'] for a in q['artifacts'][1:]]==[a['hash'] for a in q['artifacts'][:-1]]
-    assert all(text in q['artifacts'][-1]['files']['src/styles.css'] for text in ['第一处修改','第二处修改','第三处修改'])
-
-
-async def test_compatible_new_data_field_is_prepared_without_user_contract_confirmation(svc,pipeline,monkeypatch):
-    p=await seeded(svc);old=svc.store.get('alice',p['id'])['artifacts'][0]['manifest']
-    async def analyse(owner,pid,eid):
-        r=await svc.edits.tool(owner,pid,eid,'read_project',{})
-        patch=await svc.edits.tool(owner,pid,eid,'update_prd',{'expectedHash':r['expectedHash'],'upsert':[{'section':'dataFields','value':{'name':'主题颜色','type':'text'}}]})
-        collections=deepcopy(old['collections']);collections['settings']={'primaryColor':'string'}
-        await svc.edits.tool(owner,pid,eid,'propose_contract',{'expectedHash':patch['expectedHash'],'collections':collections})
-        await svc.edits.tool(owner,pid,eid,'finish_edit',{'outcome':'ready','summary':'支持修改主体颜色'})
-    monkeypatch.setattr(svc.edits,'analyse',analyse)
-    await svc.edits.submit('alice',p['id'],body(p,'支持修改主体颜色'));r=await wait(svc,p['id'])
-    assert r['items'][-1]['state']=='completed',r['items'][-1]
-    q=svc.store.get('alice',p['id']);assert q['artifacts'][-1]['manifest']['collections']['settings']=={'primaryColor':'string'}
-    assert q['artifacts'][-1]['manifest']['collections']['items']==old['collections']['items']
+    assert all(text in q['artifacts'][-1]['files']['app/host.mjs'] for text in ['第一处修改','第二处修改','第三处修改'])
 
 
 async def test_question_and_discussion_stay_in_same_edit_without_initial_prd_flow(svc,pipeline,monkeypatch):
@@ -135,8 +126,8 @@ async def test_scope_stop_and_revocation_reject_late_artifact_without_touching_o
     assert len(r['project']['artifacts'])==1 and r['items'][0]['state']=='cancelled'
 
 async def test_failed_edit_retries_once_and_restoration_keeps_records(svc,pipeline,monkeypatch):
-    p=await seeded(svc);h=p['artifacts'][0]['hash'];session=svc.open_runtime('alice',p['id'],h,'preview')['session']
-    row=await svc.invoke('alice',session,'data.put',{'collection':'items','value':{'title':'保留学员记录'}})
+    p=await seeded(svc);h=p['artifacts'][0]['hash'];scope=historical_records(p)
+    row=svc.data(scope,'data.put',{'collection':'items','value':{'title':'保留学员记录'}})
     execute=pipeline[1];attempts=0
     async def flaky(*args):
         nonlocal attempts
@@ -152,8 +143,8 @@ async def test_failed_edit_retries_once_and_restoration_keeps_records(svc,pipeli
     check=svc.versions.restore_check('alice',p['id'],h)
     restored=svc.versions.restore('alice',p['id'],{'operationId':op(),'artifactHash':h,'expectedRevision':check['expectedRevision'],'checkHash':check['checkHash'],'confirmedByUser':True},trial=True)
     assert restored['versioning']['adoptedHash'] is None
-    new=svc.open_runtime('alice',p['id'],restored['artifacts'][-1]['hash'],'preview')['session']
-    assert (await svc.invoke('alice',new,'data.list',{'collection':'items'}))['items'][0]['_id']==row['_id']
+    assert restored['versioning']['iteration']['baseHash']==h
+    assert (svc.data(scope,'data.list',{'collection':'items'}))['items'][0]['_id']==row['_id']
 
 
 async def test_failed_head_stops_queued_followers_until_explicit_retry(svc,pipeline,monkeypatch):
@@ -184,8 +175,6 @@ async def test_restart_recovers_draft_without_automatically_repeating_build(svc,
     def saved(q):
         e=svc.edits.new_edit(op(),'重启前修改',q['artifacts'][-1]['hash'],None,'qa',False)
         e.update({'id':eid,'state':'preparing','baseHash':q['artifacts'][-1]['hash']});draft=svc.edits.project(q,e);e['draft']=svc.edits.draft(draft)
-        from wanx_studio.iterative import data_intent
-        e['iterative']={'contractDraft':{'dataIntent':data_intent(draft),'contract':{'collections':q['artifacts'][-1]['manifest']['collections'],'capabilities':draft['solution']['capabilities'],'visibility':'application-access'}}}
         q['_edits']['items'].append(e)
     svc.store.mutate('alice',p['id'],op(),{},saved)
     reopened=Store(svc.store.root)
@@ -218,7 +207,7 @@ async def test_older_version_requires_explicit_base_and_new_group(svc,pipeline):
     await svc.edits.submit('alice',p['id'],body(r['project'],'基于旧版改',baseHash=h,explicitBase=True));r=await wait(svc,p['id'])
     q=svc.store.get('alice',p['id']);assert q['artifacts'][-1]['baseHash']==h
     assert q['artifacts'][-1]['iterationId']!=q['artifacts'][-2]['iterationId']
-    assert '最新版本调整' not in q['artifacts'][-1]['files']['src/styles.css']
+    assert '最新版本调整' not in q['artifacts'][-1]['files']['app/host.mjs']
 
 
 async def test_private_planning_blocks_conflicting_manual_prd_and_restore(svc,pipeline,monkeypatch):
@@ -246,15 +235,6 @@ async def test_revoked_admin_cannot_commit_late_compiler_result(svc,pipeline,mon
         await asyncio.sleep(.01)
     assert len(svc.store.get('alice',p['id'])['artifacts'])==1
 
-
-async def test_incompatible_contract_creates_one_choice_instead_of_first_interview(svc,pipeline,monkeypatch):
-    p=await seeded(svc)
-    async def analyse(owner,pid,eid):
-        r=await svc.edits.tool(owner,pid,eid,'read_project',{})
-        result=await svc.edits.tool(owner,pid,eid,'propose_contract',{'expectedHash':r['expectedHash'],'collections':{'items':{'title':'number'}}})
-        assert result['requiresUserDecision']
-    monkeypatch.setattr(svc.edits,'analyse',analyse)
-    await svc.edits.submit('alice',p['id'],body(p,'改变已有字段类型'));r=await wait(svc,p['id']);assert r['items'][0]['state']=='clarifying' and len(r['project']['artifacts'])==1
 
 async def test_private_api_requires_identity_and_keeps_public_project_shape(tmp_path):
     from wanx_studio.local import build_local

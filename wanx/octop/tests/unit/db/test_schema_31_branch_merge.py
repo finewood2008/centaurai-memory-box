@@ -58,7 +58,7 @@ _MERGED_TABLES = {
 
 def _assert_merged_schema(db: SqlitePool) -> None:
     with db.connect() as conn:
-        assert conn.execute("SELECT version FROM _schema_version").fetchone()[0] == 34
+        assert conn.execute("SELECT version FROM _schema_version").fetchone()[0] == 35
         names = {
             row[0]
             for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
@@ -81,7 +81,9 @@ def test_fresh_database_contains_both_branches_and_is_idempotent(tmp_path: Path)
         db.close()
 
 
-@pytest.mark.parametrize("legacy_branch", ["device-v31", "team-v32", "master-v32", "master-v33"])
+@pytest.mark.parametrize(
+    "legacy_branch", ["device-v31", "team-v32", "master-v32", "master-v33", "master-v34"]
+)
 def test_each_existing_branch_upgrades_without_losing_identity_or_assistant_data(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, legacy_branch: str
 ) -> None:
@@ -111,11 +113,21 @@ def test_each_existing_branch_upgrades_without_losing_identity_or_assistant_data
             else:
                 for name in ("031_assistant_knowledge.sql", "032_assistant_conversations.sql"):
                     conn.executescript((original / name).read_text(encoding="utf-8"))
-                if legacy_branch == "master-v33":
+                if legacy_branch in {"master-v33", "master-v34"}:
                     conn.executescript(
                         (original / "033_local_data_principals.sql").read_text(encoding="utf-8")
                     )
-            expected = {"device-v31": 31, "team-v32": 32, "master-v32": 32, "master-v33": 33}
+                if legacy_branch == "master-v34":
+                    conn.executescript(
+                        (original / "034_local_team_resources.sql").read_text(encoding="utf-8")
+                    )
+            expected = {
+                "device-v31": 31,
+                "team-v32": 32,
+                "master-v32": 32,
+                "master-v33": 33,
+                "master-v34": 34,
+            }
             assert (
                 conn.execute("SELECT version FROM _schema_version").fetchone()[0]
                 == expected[legacy_branch]
@@ -192,7 +204,14 @@ def test_each_existing_branch_upgrades_without_losing_identity_or_assistant_data
                 ) == ("existing", "synthetic-hash", "admin", 123)
                 assert user["local_data_marker"] is None
                 for table, rows in before.items():
-                    assert [tuple(row) for row in conn.execute(f"SELECT * FROM {table}")] == rows
+                    expected_rows = (
+                        [(*row, None) for row in rows]
+                        if table == "assistant_conversations"
+                        else rows
+                    )
+                    assert [
+                        tuple(row) for row in conn.execute(f"SELECT * FROM {table}")
+                    ] == expected_rows
             if principal is not None:
                 assert (
                     LocalDataPrincipalRepo(db).resolve("a" * 43, "b" * 43, 1, "owner") == principal
@@ -204,8 +223,8 @@ def test_each_existing_branch_upgrades_without_losing_identity_or_assistant_data
 def test_merged_migration_numbers_are_unique_and_both_dialects_have_the_same_schema() -> None:
     for dialect in ("sqlite", "postgresql"):
         discovered = migrate._discover(dialect)
-        assert [version for version, _ in discovered] == list(range(1, 35))
-        assert discovered[-1][1].name.startswith("034_local_team_resources.")
+        assert [version for version, _ in discovered] == list(range(1, 36))
+        assert discovered[-1][1].name.startswith("035_assistant_conversation_mode.")
     sql = (migrate._MIGRATIONS_DIR / "033_local_data_principals.sql").read_text(encoding="utf-8")
     pg = (migrate._MIGRATIONS_DIR / "033_local_data_principals.pg.sql").read_text(encoding="utf-8")
     assert pg.replace("ADD COLUMN IF NOT EXISTS", "ADD COLUMN") == sql
@@ -224,6 +243,13 @@ def test_merged_migration_numbers_are_unique_and_both_dialects_have_the_same_sch
         == team_pg
     )
     assert "UPDATE _schema_version SET version = 34;" in team
+    modes = (migrate._MIGRATIONS_DIR / "035_assistant_conversation_mode.sql").read_text(
+        encoding="utf-8"
+    )
+    modes_pg = (migrate._MIGRATIONS_DIR / "035_assistant_conversation_mode.pg.sql").read_text(
+        encoding="utf-8"
+    )
+    assert modes_pg.replace("ADD COLUMN IF NOT EXISTS", "ADD COLUMN") == modes
     conversations = (migrate._MIGRATIONS_DIR / "032_assistant_conversations.sql").read_text(
         encoding="utf-8"
     )

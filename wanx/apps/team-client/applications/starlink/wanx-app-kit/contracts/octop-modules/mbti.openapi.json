@@ -1,0 +1,1006 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "WANX Octop · mbti",
+    "description": "**CentaurAI-WANX** is a smarter, self-hosted AI assistant for multiple users and agents. All routes are served under `/api`.\n\n## Authentication\n\nMost endpoints require a JWT bearer token:\n\n1. Complete initial setup via `/api/setup/*` (first install only).\n2. `GET /api/auth/captcha` then `POST /api/auth/login` with `username` and `password`\n   (and `captcha_token` when a strong provider is active), or complete SSO with\n   `/api/auth/oidc/*` or `/api/auth/oauth/*` when a provider is enabled.\n3. Send `Authorization: Bearer <access_token>` on subsequent requests.\n\nAccess tokens use sliding renewal: when less than one-third of\n`access_token_ttl_seconds` remains, authenticated responses may include a fresh\ntoken in the `X-Octop-Access-Token` header. Clients should replace the stored\ntoken when present.\n\nPublic endpoints (no login token): `/api/docs`, `/api/openapi.json`, `/api/health`,\n`/api/setup/*` (wizard authorization applies), `/api/auth/login`, `/api/auth/register`,\n`/api/auth/captcha`, `/api/auth/oidc/status`, `/api/auth/oidc/start`,\n`/api/auth/oidc/callback`, `/api/auth/oidc/exchange`, `/api/auth/oauth/status`,\n`/api/auth/oauth/start`, `/api/auth/oauth/callback`, `/api/auth/oauth/exchange`,\n`/api/auth/invite/validate`,\n`/api/auth/invite/redeem`, `/api/connectors/oauth/callback`,\nand `/api/internal/mcp/*`.\n\n## Agent scope\n\nMany agent-scoped routes use the agent ID in the URL path (`/api/agents/{agent_id}/…`).\nRoutes first check the signed token's application scope; legacy tokens default to WANX.\nResources in another application are treated as not found, including for administrators.\nWithin the same application, each route applies its ownership or shared-resource access\nrules. WANX administrators may bypass ownership where supported; Zhijun personal profiles,\nmemories and uploaded sources require the owner.\n\n## Streaming chat\n\nDashboard live turns use **WebSocket** at `/api/agents/{agent_id}/chat/ws` (pass JWT as\n`?token=` query param). Send `{\"type\":\"user_turn\", ...}` frames; the server replies with JSON\nchunks matching the harness stream format, ending with `{\"type\":\"done\"}` or\n`{\"type\":\"error\",\"message\":\"...\"}`.\n\nText-type dashboard pushes (cron reminders, proactive care) also emit\n`{\"type\":\"dashboard_push\", ...}` on `/api/notifications/ws` (same `?token=` auth) so the\nSPA can show a toast even when the chat socket is not subscribed.\n\nHITL resume still uses `POST /api/agents/{agent_id}/chat/hitl/resume` (SSE).\n\n## Knowledge libraries\n\n`/api/knowledge-bases` uses the signed application scope for creation, visibility,\ndocument access, and citations. Existing libraries remain in WANX. Zhijun libraries\nare private to their owner and use local document parsers, downloaded native ONNX\nembeddings and RapidOCR. Remote WANX embedding/OCR settings do not affect Zhijun;\nmissing local components are reported as unavailable without remote fallback.\n",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/mbti/current": {
+      "get": {
+        "tags": [
+          "mbti",
+          "mbti"
+        ],
+        "summary": "Get Current Mbti",
+        "description": "Read the current MBTI type from the active agent's persisted config.",
+        "operationId": "get_current_mbti_api_mbti_current_get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "X-Octop-Agent-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "X-Octop-Agent-Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentMBTIResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/mbti/types": {
+      "get": {
+        "tags": [
+          "mbti",
+          "mbti"
+        ],
+        "summary": "List Types",
+        "description": "List all 16 MBTI types.",
+        "operationId": "list_types_api_mbti_types_get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MBTITypeResponse"
+                  },
+                  "title": "Response List Types Api Mbti Types Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/mbti/types/{code}": {
+      "get": {
+        "tags": [
+          "mbti",
+          "mbti"
+        ],
+        "summary": "Get Type",
+        "description": "Get details for a single MBTI type.",
+        "operationId": "get_type_api_mbti_types__code__get",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Code"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MBTITypeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/mbti/preview/{code}": {
+      "get": {
+        "tags": [
+          "mbti",
+          "mbti"
+        ],
+        "summary": "Get Persona Preview",
+        "description": "Render a persona markdown preview with the current user substituted.",
+        "operationId": "get_persona_preview_api_mbti_preview__code__get",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Code"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Persona Preview Api Mbti Preview  Code  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/mbti/test/questions": {
+      "get": {
+        "tags": [
+          "mbti",
+          "mbti"
+        ],
+        "summary": "Get Test Questions",
+        "description": "Return all 28 test questions.",
+        "operationId": "get_test_questions_api_mbti_test_questions_get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TestQuestion"
+                  },
+                  "title": "Response Get Test Questions Api Mbti Test Questions Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/mbti/test/submit": {
+      "post": {
+        "tags": [
+          "mbti",
+          "mbti"
+        ],
+        "summary": "Submit Test",
+        "description": "Score test answers and return the MBTI result.\n\nWhen ``auto_apply`` is true, the resulting code is also written to the\nactive agent's ``config_json.persona``. The header is required only in\nthat case; without ``auto_apply`` the endpoint is read-only and works\nwithout an agent context.",
+        "operationId": "submit_test_api_mbti_test_submit_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "X-Octop-Agent-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Octop-Agent-Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestSubmitRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestResultResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/mbti/apply": {
+      "post": {
+        "tags": [
+          "mbti",
+          "mbti"
+        ],
+        "summary": "Apply Type",
+        "description": "Apply a specific MBTI type to the active agent's persona.",
+        "operationId": "apply_type_api_mbti_apply_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "X-Octop-Agent-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "X-Octop-Agent-Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApplyResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ApplyRequest": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "language": {
+            "type": "string",
+            "title": "Language",
+            "default": "zh"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "title": "ApplyRequest"
+      },
+      "ApplyResponse": {
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "title": "Success"
+          },
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "success",
+          "code"
+        ],
+        "title": "ApplyResponse"
+      },
+      "BehaviorResponse": {
+        "properties": {
+          "answer_style": {
+            "type": "string",
+            "title": "Answer Style"
+          },
+          "casual_chat": {
+            "type": "string",
+            "title": "Casual Chat"
+          },
+          "conflict": {
+            "type": "string",
+            "title": "Conflict"
+          },
+          "creativity": {
+            "type": "string",
+            "title": "Creativity"
+          },
+          "emotion": {
+            "type": "string",
+            "title": "Emotion"
+          },
+          "planning": {
+            "type": "string",
+            "title": "Planning"
+          },
+          "answer_style_zh": {
+            "type": "string",
+            "title": "Answer Style Zh",
+            "default": ""
+          },
+          "casual_chat_zh": {
+            "type": "string",
+            "title": "Casual Chat Zh",
+            "default": ""
+          },
+          "conflict_zh": {
+            "type": "string",
+            "title": "Conflict Zh",
+            "default": ""
+          },
+          "creativity_zh": {
+            "type": "string",
+            "title": "Creativity Zh",
+            "default": ""
+          },
+          "emotion_zh": {
+            "type": "string",
+            "title": "Emotion Zh",
+            "default": ""
+          },
+          "planning_zh": {
+            "type": "string",
+            "title": "Planning Zh",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "answer_style",
+          "casual_chat",
+          "conflict",
+          "creativity",
+          "emotion",
+          "planning"
+        ],
+        "title": "BehaviorResponse"
+      },
+      "CurrentMBTIResponse": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code",
+            "default": ""
+          },
+          "configured": {
+            "type": "boolean",
+            "title": "Configured",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "CurrentMBTIResponse"
+      },
+      "DimensionsResponse": {
+        "properties": {
+          "ei": {
+            "items": {},
+            "type": "array",
+            "title": "Ei",
+            "description": "[pole, pct]"
+          },
+          "sn": {
+            "items": {},
+            "type": "array",
+            "title": "Sn",
+            "description": "[pole, pct]"
+          },
+          "tf": {
+            "items": {},
+            "type": "array",
+            "title": "Tf",
+            "description": "[pole, pct]"
+          },
+          "jp": {
+            "items": {},
+            "type": "array",
+            "title": "Jp",
+            "description": "[pole, pct]"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ei",
+          "sn",
+          "tf",
+          "jp"
+        ],
+        "title": "DimensionsResponse"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "MBTITypeResponse": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "name_zh": {
+            "type": "string",
+            "title": "Name Zh"
+          },
+          "name_en": {
+            "type": "string",
+            "title": "Name En"
+          },
+          "nickname_zh": {
+            "type": "string",
+            "title": "Nickname Zh"
+          },
+          "summary_zh": {
+            "type": "string",
+            "title": "Summary Zh"
+          },
+          "summary_en": {
+            "type": "string",
+            "title": "Summary En"
+          },
+          "descriptors_zh": {
+            "type": "string",
+            "title": "Descriptors Zh"
+          },
+          "descriptors_en": {
+            "type": "string",
+            "title": "Descriptors En"
+          },
+          "dimensions": {
+            "$ref": "#/components/schemas/DimensionsResponse"
+          },
+          "behavior": {
+            "$ref": "#/components/schemas/BehaviorResponse"
+          },
+          "color": {
+            "type": "string",
+            "title": "Color"
+          },
+          "symbol": {
+            "type": "string",
+            "title": "Symbol"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "name_zh",
+          "name_en",
+          "nickname_zh",
+          "summary_zh",
+          "summary_en",
+          "descriptors_zh",
+          "descriptors_en",
+          "dimensions",
+          "behavior",
+          "color",
+          "symbol"
+        ],
+        "title": "MBTITypeResponse"
+      },
+      "TestQuestion": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "dimension": {
+            "type": "string",
+            "title": "Dimension"
+          },
+          "a_pole": {
+            "type": "string",
+            "title": "A Pole"
+          },
+          "b_pole": {
+            "type": "string",
+            "title": "B Pole"
+          },
+          "question_zh": {
+            "type": "string",
+            "title": "Question Zh"
+          },
+          "option_a_zh": {
+            "type": "string",
+            "title": "Option A Zh"
+          },
+          "option_b_zh": {
+            "type": "string",
+            "title": "Option B Zh"
+          },
+          "question_en": {
+            "type": "string",
+            "title": "Question En"
+          },
+          "option_a_en": {
+            "type": "string",
+            "title": "Option A En"
+          },
+          "option_b_en": {
+            "type": "string",
+            "title": "Option B En"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "dimension",
+          "a_pole",
+          "b_pole",
+          "question_zh",
+          "option_a_zh",
+          "option_b_zh",
+          "question_en",
+          "option_a_en",
+          "option_b_en"
+        ],
+        "title": "TestQuestion"
+      },
+      "TestResultResponse": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/MBTITypeResponse"
+          },
+          "dimensions": {
+            "$ref": "#/components/schemas/DimensionsResponse"
+          },
+          "applied": {
+            "type": "boolean",
+            "title": "Applied",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "profile",
+          "dimensions"
+        ],
+        "title": "TestResultResponse"
+      },
+      "TestSubmitRequest": {
+        "properties": {
+          "answers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Answers",
+            "description": "Map of question_id (str) -> \"A\" or \"B\""
+          },
+          "auto_apply": {
+            "type": "boolean",
+            "title": "Auto Apply",
+            "default": false
+          },
+          "language": {
+            "type": "string",
+            "title": "Language",
+            "default": "zh"
+          }
+        },
+        "type": "object",
+        "required": [
+          "answers"
+        ],
+        "title": "TestSubmitRequest"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    },
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "JWT from `POST /api/auth/login` (`access_token` field)."
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "mbti",
+      "description": "MBTI persona presets applied to agent personality."
+    }
+  ],
+  "x-wanx-supplemental-routes": []
+}

@@ -16,7 +16,7 @@ npm run check
 
 `npm run dev` 是本机隔离界面环境。连接真实 WANX 时，由同一服务进程挂载 `backend/wanx_studio`，沿用当前账号、模型与空间；不会把背景仓库授权自动转成成品应用权限。
 
-`npm run build` 与 `npm run package` 生成界面和受信运行时。`tools/assemble-client.mjs team` 将生成资源装配到团队客户端，所有输出均已忽略。源码、锁文件、测试与必要静态资源可提交；构建产物、资料、凭据与业务数据不提交。
+`npm run build` 与 `npm run package` 构建开物界面并打包工作台。`tools/assemble-client.mjs team` 将生成资源装配到团队客户端，所有输出均已忽略。源码、锁文件、测试与必要静态资源可提交；构建产物、资料、凭据与业务数据不提交。
 
 产品与部署说明见 [WANX 1.0](../../docs/release/wanx-1.0-release.md)。
 
@@ -24,11 +24,9 @@ npm run check
 
 开物与个人工坊共用 `ui/deployment/`，从已有项目的“部署”页或“部署已采用版本”进入。页面通过现有 `ui/api.ts` 和受信 Host 通道读取真实部署能力、当前应用的近期操作、执行事件、组件结果与回执投递状态；关闭页面不会取消后台任务。
 
-个人工坊现已接入 `wanx-miniapp-v1`：经可信启动配置启用后，使用 data/model/files/knowledge 的应用可从已采用版本部署到当前盒子的独立联调／正式槽位。首次联调从普通 production 冻结记录、模型选择与已选资料引用，首次正式从同版本健康联调复制；后续同槽部署保留当前数据和资源配置。模型选择按环境隔离，文件／知识读取仍实时校验访问权。主进程在提交后真实安装，原生应用成功连接新 runtime 才完成操作，客户端离线保持等待。
+普通应用从已采用版本取得标准 ZIP，在目标客户端校验包摘要并安装。需要盒端专家的项目采用同一份 ZIP，另外绑定专家模板、环境与交付回执。布局预览在隔离环境运行，真实专家调用需要目标客户端和已部署实例。
 
-专家后端、企业开物以及独立代码服务的完整执行仍未就绪，不能据此承诺任意应用自动部署。专家后端优先复用盒端现有专家／gateway，接入方案与边界见[资源与专家后端](../../docs/plans/kaiwu-deployment-resources.md)。继续任务与回执重投分别处理；原“采用并安装”行为保持原样。实测范围见[102 数据部署验收](../../docs/verification/kaiwu-real-deployment-box102-20261113.md)及[资源接入验收](../../docs/verification/kaiwu-deployment-resources-box102-20261113.md)；知识库绑定有集成测试，当前实机应用验证模型与文件。
-
-[部署前端接入计划](../../docs/plans/kaiwu-deployment-ui-integration.md)记录当前范围与验收；[早期交互原型](../../docs/assets/prototypes/kaiwu-box-deployment/README.md)仅作设计归档，不参与正式构建。应用开发套件不再维护平台前端。
+公共合同、构建来源和当前验收范围分别见[开物公共合同](../../docs/applications/kaiwu-public-contracts.md)、[开发套件装配](../../docs/release/kaiwu-builder-runtime.md)和[单轨改造计划](../../docs/plans/kaiwu-app-kit-standard-only.md)。
 
 ## 首次共同设计与后续迭代
 
@@ -47,14 +45,4 @@ npm run check
 - 产品经理依据 `availableContracts`、当前能力检查报告和资源授权判断需求。现有接口不可实现的要求保留为缺口，继续讨论现有能力内的可行范围；用户决定前不承诺实现，也不建议通过修改底座解决。
 - 首次构建和迭代继续执行接口白名单、资源授权、源码路径、依赖与运行沙箱校验；密码及认证令牌存储在数据契约和编译阶段直接拒绝。
 
-当前 `data` 接口仍由应用获准用户共享。需要员工报告保密时，声明 `reports` 能力，复用 WANX 原生私有知识库的文档存储与权限；不能把报告正文再保存到共享 `data`。这项能力不代表任意业务表已有行级授权。其他超出目录的要求继续保留为缺口；业务集合和字段的配置不等于新增后端接口。
-
-## 私有报告
-
-`api.reports.context()` 返回可信的当前用户及 `own/all` 可见范围。`list/get` 对普通用户只返回本人报告，对管理员返回同一应用、同一环境的全部报告。创建使用 `save({operationId,title,content})`，重试沿用操作 ID；修改使用 `save({id,content,expectedHash})`，删除使用 `delete({id,expectedHash})`。管理员在此适配层只查看他人报告，不能冒充作者修改。参考实现位于 `examples/private-reports`。
-
-报告库、作者、应用和试用／正式环境的绑定保存在服务端；调用者不能提交角色或库 ID。角色变更、停用和应用访问撤销会在后续请求重新校验。报告库不能通过原有接口改为共享或直接删除；普通知识库保持原有共享行为。原生知识库功能及其已有模型配置需要就绪，Builder 会检查配置，不通过虚构的探测结果放行。
-
-此改动保持 WANX 公开 API 地址和请求、响应格式不变，新增的仅为 Builder 沙箱 SDK 适配。通用工作区与媒体路径禁止直接读取知识库、数据库和配置；普通用户的工作区文件访问限制在当前工作区，主机终端和智能体任意脚本执行保留给管理员，避免绕过私有数据服务。第三方主机工具、远程 Shell 和操作系统账号仍属于管理员应管理的主机权限边界。
-
-`tests/integration/test_builder_private_reports.py` 使用真实账号、JWT、知识库与 Builder 编译器验证两名普通用户及管理员；固定报告样例不冒充 AI 生成或用户采用结果。
+标准应用按 Kit 中的公共合同 ID 声明需求。专家应用使用 `wanx.expert-app.v1` 的固定状态结构。历史 miniapp 的通用数据集合和私有报告接口不进入新建项目与构建方案。

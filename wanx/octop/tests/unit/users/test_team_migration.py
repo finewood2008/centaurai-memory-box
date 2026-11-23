@@ -138,7 +138,7 @@ class Control:
         self.completed = True
 
 
-@pytest.mark.parametrize("version", [31, 32, 33, 34])
+@pytest.mark.parametrize("version", [31, 32, 33, 34, 35])
 def test_supported_branch_schemas_keep_existing_business_migration(sample, version):
     paths, identity, _ = sample
     with sqlite3.connect(paths.home / "octop.db") as db:
@@ -166,7 +166,7 @@ def test_supported_branch_schemas_keep_existing_business_migration(sample, versi
 
 
 @pytest.mark.parametrize(
-    "version,missing_identity", [(31, True), (32, True), (34, True), (35, False)]
+    "version,missing_identity", [(31, True), (32, True), (34, True), (36, False)]
 )
 def test_unknown_version_or_missing_local_identity_schema_is_rejected(
     sample, version, missing_identity
@@ -201,7 +201,8 @@ def _assistant_state(paths, uid, kind, other):
                 (thread, agent_id, uid, f"{agent_id}:dashboard:{uid}:dm"),
             )
             db.execute(
-                "INSERT INTO assistant_conversations VALUES (?,?,?,?,?,1,1)",
+                "INSERT INTO assistant_conversations(id,user_id,agent_id,active_thread_id,context_json,revision,updated_at) "
+                "VALUES (?,?,?,?,?,1,1)",
                 (conversation, uid, agent_id, thread, '{"space":{"enabled":true}}'),
             )
             db.execute(

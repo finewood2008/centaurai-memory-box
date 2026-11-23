@@ -37,6 +37,7 @@ describe("MemoryPageView", () => {
     expect(computerHistory).toBeGreaterThan(system);
     expect(sources).toBeGreaterThan(computerHistory);
     expect(html).not.toContain("导入导出");
+    expect(html).not.toContain("记忆设置");
     expect(html).toContain("记忆总数");
     expect(html).toContain("memory-page-sidebar");
     expect(html).toContain("memory-page-section-header");
@@ -73,6 +74,20 @@ describe("MemoryPageView", () => {
 
     expect(html).not.toContain("跨Agent接入");
     expect(html).toContain("记忆总数");
+  });
+
+  it("在内嵌记忆页的系统区显示设置，记忆服务出错时仍能访问", () => {
+    const html = renderToString(
+      <I18nProvider language="zh-CN">
+        <MemoryPageView embedded activePage="settings" onActivePageChange={vi.fn()}
+          backupContent={<div>备份内容</div>} settingsContent={<div>记忆模型与预算</div>}
+          libraryStatus={<p>记忆服务暂不可用</p>} />
+      </I18nProvider>
+    );
+
+    expect(html).toMatch(/系统.*备份与恢复.*aria-current="page"[^>]*>.*记忆设置/);
+    expect(html).toContain("记忆模型与预算");
+    expect(html).not.toContain("记忆服务暂不可用");
   });
 
   it("保存合法的记忆子页用于刷新恢复", () => {

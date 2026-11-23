@@ -2003,6 +2003,16 @@ def _apply_sqlite_migration(db: DatabasePool, version: int, path: Path) -> None:
         with db.connect() as conn:
             conn.execute("UPDATE _schema_version SET version = ?", (version,))
         return
+    if version == 35:
+        with db.transaction() as conn:
+            _ensure_column(
+                db,
+                "assistant_conversations",
+                "conversation_mode",
+                "TEXT CHECK (conversation_mode IN ('ask', 'craft', 'plan'))",
+            )
+            conn.execute("UPDATE _schema_version SET version = ?", (version,))
+        return
     sql = path.read_text(encoding="utf-8")
     with db.connect() as conn:
         conn.executescript(sql)

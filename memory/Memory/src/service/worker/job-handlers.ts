@@ -14,6 +14,7 @@ import type {
   Repositories,
   SessionRecord
 } from "../../storage/repositories.js";
+import { episodeIdleTimerKey } from "../../storage/repositories.js";
 import { ModelHttpError } from "../../model/http.js";
 import type { JobType,MemoryRow,RuntimeNamespace } from "../../types.js";
 import { newId,stableHash } from "../../utils/id.js";
@@ -33,6 +34,14 @@ import {
 
 export type ProcessingStage = "summary" | "embedding";
 export const EPISODE_IDLE_TIMEOUT_MS = 2 * 60 * 60 * 1000;
+const EPISODE_IDLE_DEPENDENCY_RECHECK_MS = 60 * 1000;
+
+export class EpisodeIdleCloseDeferred extends Error {
+  constructor(readonly runAfter: string) {
+    super("Episode idle close is not due");
+  }
+}
+
 export type JobChangeOperation = "queued" | "leased" | "succeeded" | "failed" | "dead_letter";
 export type EmbeddingRetryChangeOperation = "queued" | "retry" | "succeeded" | "failed";
 export type ClosedEpisodeTrigger = "topic_boundary" | "session_closed" | "episode_rewarded" | "idle_timeout" | "end_topic" | "capture_decided";
@@ -243,7 +252,8 @@ export async function processJob(
 ): Promise<void> {
   switch (job.jobType) {
     case "episode_idle_close":
-      closeIdleEpisodesForMemoryWrite(deps, job);
+      if (job.payload.idleTimer === true) closeEpisodeAtIdleDeadline(deps, job);
+      else closeIdleEpisodesForMemoryWrite(deps, job);
       return;
     case "trace_summary":
       await deps.processors.import.summarizeCapturedTrace(job);
@@ -351,27 +361,75 @@ export function closeIdleEpisodesForMemoryWrite(
   deps.repos.transaction(() => {
     const episodes = deps.repos.runtime.listIdleEpisodes(triggerEpisodeId, inactiveBefore);
     for (const episode of episodes) {
-      // Keep the original ordering: a missing session prevents the close.
-      const session = deps.requireSession(episode.sessionId);
-      const closed = deps.repos.runtime.closeEpisode(episode.id, {
-        closeReason: "idle_timeout",
-        closedBy: "worker.episode_idle_close",
-        idleTimeoutMs: EPISODE_IDLE_TIMEOUT_MS,
+      if (deps.repos.runtime.hasUnassignedTurns(episode.sessionId, { completedOnly: true })) continue;
+      closeIdleEpisode(deps, episode, closedAt, {
         triggeredAt,
         triggerSource,
         ...(triggerEpisodeId ? { triggerEpisodeId } : {}),
         ...(triggerMemoryId ? { triggerMemoryId } : {})
-      }, closedAt);
-      if (!closed) continue;
-      appendEpisodeChange(deps, closed, {
-        before: episode,
-        session,
-        source: "worker.episode_idle_close",
-        createdAt: closedAt
       });
-      finalizeClosedEpisode(deps, closed, closedAt, "idle_timeout");
+    }
+    if (triggerEpisodeId) {
+      const triggerEpisode = deps.repos.runtime.getEpisode(triggerEpisodeId);
+      if (triggerEpisode) armEpisodeIdleTimer(deps, triggerEpisode, closedAt);
     }
   });
+}
+
+function armEpisodeIdleTimer(deps: WorkerJobHandlerDeps, episode: EpisodeRecord, at: string): void {
+  const dedupeKey = episodeIdleTimerKey(episode.id);
+  if (episode.status === "closed" || deps.repos.runtime.getActiveJobByDedupeKey(dedupeKey)) return;
+  const activityAt = deps.repos.runtime.episodeIdleActivityAt(episode.id);
+  const deadline = Date.parse(activityAt ?? "") + EPISODE_IDLE_TIMEOUT_MS;
+  if (!Number.isFinite(deadline)) return;
+  enqueueJob(deps, {
+    jobType: "episode_idle_close",
+    userId: episode.userId,
+    sessionId: episode.sessionId,
+    episodeId: episode.id,
+    dedupeKey,
+    payload: { idleTimer: true, runAfter: new Date(deadline).toISOString() },
+    createdAt: at
+  });
+}
+
+function closeEpisodeAtIdleDeadline(deps: WorkerJobHandlerDeps, job: EvolutionJobRecord): void {
+  deps.repos.transaction(() => {
+    if (!job.episodeId) throw new Error(`invalid episode idle timer: ${job.id}`);
+    const episode = deps.repos.runtime.getEpisode(job.episodeId);
+    if (!episode || episode.status === "closed") return;
+    const activityAt = deps.repos.runtime.episodeIdleActivityAt(episode.id);
+    if (!activityAt) return;
+    const at = deps.nowIso();
+    const now = Date.parse(at);
+    const deadline = Date.parse(activityAt) + EPISODE_IDLE_TIMEOUT_MS;
+    if (!Number.isFinite(deadline)) throw new Error(`invalid episode activity timestamp: ${episode.id}`);
+    // Re-read durable activity at execution. In particular, a historical write's
+    // source timestamp is never used as the worker's wall clock.
+    if (now < deadline) throw new EpisodeIdleCloseDeferred(new Date(deadline).toISOString());
+    if (deps.repos.runtime.hasUnassignedTurns(episode.sessionId, { completedOnly: true })) {
+      throw new EpisodeIdleCloseDeferred(new Date(now + EPISODE_IDLE_DEPENDENCY_RECHECK_MS).toISOString());
+    }
+    closeIdleEpisode(deps, episode, at, { triggeredAt: at, triggerSource: "episode_idle_timer" });
+  });
+}
+
+function closeIdleEpisode(
+  deps: WorkerJobHandlerDeps,
+  episode: EpisodeRecord,
+  at: string,
+  trigger: Record<string, unknown>
+): void {
+  const session = deps.requireSession(episode.sessionId);
+  const closed = deps.repos.runtime.closeEpisode(episode.id, {
+    closeReason: "idle_timeout",
+    closedBy: "worker.episode_idle_close",
+    idleTimeoutMs: EPISODE_IDLE_TIMEOUT_MS,
+    ...trigger
+  }, at);
+  if (!closed) return;
+  appendEpisodeChange(deps, closed, { before: episode, session, source: "worker.episode_idle_close", createdAt: at });
+  finalizeClosedEpisode(deps, closed, at, "idle_timeout");
 }
 
 export function finalizeClosedEpisode(
@@ -765,6 +823,11 @@ export function createWorkerJobHandlers(deps: WorkerJobHandlerDeps) {
   return {
     processJob: (job: EvolutionJobRecord) => processJob(deps, job),
     closeIdleEpisodesForMemoryWrite: (job: EvolutionJobRecord) => closeIdleEpisodesForMemoryWrite(deps, job),
+    reconcileEpisodeIdleTimers: (limit: number, at: string) => deps.repos.transaction(() => {
+      for (const episode of deps.repos.runtime.listEpisodesWithoutIdleTimer(limit)) {
+        armEpisodeIdleTimer(deps, episode, at);
+      }
+    }),
     appendJobChange: (job: EvolutionJobRecord, op: JobChangeOperation, before?: EvolutionJobRecord) => appendJobChange(deps, job, op, before),
     appendEmbeddingRetryChange: (retry: EmbeddingRetryRecord, op: EmbeddingRetryChangeOperation, before?: EmbeddingRetryRecord, error?: { code: string; message: string }) => appendEmbeddingRetryChange(deps, retry, op, before, error),
     appendEpisodeChange: (episode: EpisodeRecord, input: Parameters<typeof appendEpisodeChange>[2]) => appendEpisodeChange(deps, episode, input),

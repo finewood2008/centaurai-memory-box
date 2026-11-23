@@ -18,32 +18,6 @@ test('copy is stable across rebuilds and preserves protocol namespaces',()=>{
  assert.equal(memoboxCopy('万象·星图 · WanX·Starlink'),'知识星图 · Starlink');
 });
 
-test('bundled template copy has a matching hash and keeps permissions and IDs',async()=>{
- const {memoboxTemplate}=await import('../tools/memobox-branding.mjs');
- const {createHash}=await import('node:crypto');
- const source={allowed:true,applicationId:'centaurai.wanx.template.example',sourceHash:'old',files:{'miniapp.manifest.json':'{"capabilities":["files"],"name":"万象示例"}','src/app.js':'const title="\\u4e07\\u8c61空间";'}};
- const branded=memoboxTemplate(source);
- const canonical=JSON.stringify(branded.files,(_key,value)=>value&&typeof value==='object'&&!Array.isArray(value)?Object.fromEntries(Object.keys(value).sort().map(key=>[key,value[key]])):value);
- assert.equal(branded.sourceHash,createHash('sha256').update(canonical).digest('hex'));
- assert.equal(branded.applicationId,source.applicationId);assert.equal(branded.allowed,true);
- assert.equal(JSON.parse(branded.files['miniapp.manifest.json']).capabilities[0],'files');
- assert.equal(source.sourceHash,'old');assert.match(source.files['miniapp.manifest.json'],/万象/);
- assert.doesNotMatch(branded.files['src/app.js'],/万象/);
-});
-
-test('personal build brands both bundled templates on Windows and POSIX paths',()=>{
- const hooks=[];memoboxBuildPlugin().setup({onLoad(options,load){hooks.push({...options,load});}});
- for(const name of ['knowledge-qa','zhike']) {
-  for(const root of ['/repo/templates/', 'D:\\repo\\templates\\']) {
-   const separator=root.includes('\\')?'\\':'/';
-   assert.equal(hooks.filter(hook=>hook.filter.test(`${root}${name}${separator}wanx.editable.json`)).length,1);
-  }
- }
- for(const filename of ['/repo/templates/custom/wanx.editable.json','D:\\repo\\templates\\custom\\wanx.editable.json']) {
-  assert.equal(hooks.some(hook=>hook.filter.test(filename)),false,'unrelated imported templates stay unchanged');
- }
-});
-
 test('personal build leaves third-party scripts untouched on Windows and POSIX',async()=>{
  const hooks=[];memoboxBuildPlugin().setup({onLoad(options,load){hooks.push({...options,load});}});
  for(const filename of ['/missing/node_modules/vendor/index.js','D:\\missing\\node_modules\\vendor\\index.js']) {

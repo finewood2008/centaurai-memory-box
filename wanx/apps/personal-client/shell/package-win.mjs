@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { preflight, repo, root } from "./preflight-win.mjs";
+import { assertPackagedMemoryTarget, preparePackagedMemory, verifyPackagedMemory } from "../tools/package-client-memory.mjs";
 
 const require = createRequire(import.meta.url);
 const native = path.join(root, "native");
@@ -47,7 +48,7 @@ function sha256(file) {
 }
 
 function maintenanceFiles() {
-  const directory = path.join(root, "local-ui", "maintenance");
+  const directory = path.join(root, "build/app/local-ui", "maintenance");
   const htmlPath = path.join(directory, "maintenance.html");
   if (!existsSync(htmlPath) || statSync(htmlPath).size === 0)
     throw new Error("MAINTENANCE_HTML_MISSING");
@@ -78,7 +79,7 @@ function sourceFingerprint() {
   const files = [];
   function visit(directory) {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      if (["node_modules", "release", "bin"].includes(entry.name)) continue;
+      if (["node_modules", "release", "bin", "build"].includes(entry.name)) continue;
       const full = path.join(directory, entry.name);
       if (entry.isDirectory()) visit(full);
       else if (entry.isFile()) files.push([path.relative(root, full).replaceAll("\\", "/"), sha256(full)]);
@@ -89,6 +90,7 @@ function sourceFingerprint() {
 }
 
 async function main() {
+  assertPackagedMemoryTarget({platform:"win32", arch:"x64"});
   const input = preflight();
   const quickPackage = process.env.WANX_QUICK_PACKAGE === "1";
   const skipTests = process.env.WANX_SKIP_TESTS === "1";
@@ -108,9 +110,10 @@ async function main() {
   const npmCli = process.env.npm_execpath || path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
   if (!existsSync(npmCli)) throw new Error("NPM_CLI_MISSING");
   run(process.execPath, [npmCli, "ci"]);
-  run(process.execPath, [npmCli, "run", "build:maintenance"]);
+  run(process.execPath, [npmCli, "run", "build:studio"]);
   run(process.execPath, [npmCli, "run", "build:renderer"]);
-  const dashboard = path.join(repo, "dashboard");
+  run(process.execPath, [npmCli, "run", "build:maintenance"]);
+  const dashboard = path.join(root, "../../octop/dashboard");
   run(process.execPath, [npmCli, "ci", "--replace-registry-host=never"], dashboard);
   run(process.execPath, [npmCli, "run", "build:maintenance"], dashboard);
   const maintenance = maintenanceFiles();
@@ -153,6 +156,9 @@ async function main() {
   }
   licenseFiles.sort((a, b) => a.file.localeCompare(b.file));
 
+  run(process.execPath, [npmCli, "run", "build:renderer"]);
+  run(process.execPath, [npmCli, "run", "build:maintenance"]);
+  const memory = await preparePackagedMemory({clientRoot:root, platform:"win32", arch:"x64"});
   process.env.CSC_IDENTITY_AUTO_DISCOVERY = "false";
   const { build, Platform, Arch } = require("electron-builder");
   const buildOptions = {
@@ -169,16 +175,17 @@ async function main() {
       asar: true,
       npmRebuild: false,
       nodeGypRebuild: false,
-      directories: { output },
+      directories: { app: "build/app", output },
       files: [
         "client.mjs", "platform.mjs", "account/**", "device-trust/**", "shell/**",
         "local-ui/**", "!local-ui/memory/.wanx-source", "network/**", "octop/**", "app-host/**",
-        "applications/**", "host-sdk/drive.cjs", "updates/**", "resources/**", "package.json", "README.md",
+        "applications/**", "workshop/**", "host-sdk/drive.cjs", "updates/**", "resources/**", "package.json", "README.md",
         "node_modules/ws/**", "node_modules/semver/**", "node_modules/yauzl/**",
         "node_modules/pend/**",
         "node_modules/@nexusaos/**",
       ],
       extraResources: [
+        ...memory.extraResources,
         { from: binary, to: `network/${binaryName}` },
         { from: discovery, to: "network/wanx-discovery-win32-x64.exe" },
         { from: path.join(native, "bin", "NETBIRD-LICENSE"), to: "network/NETBIRD-LICENSE" },
@@ -275,6 +282,10 @@ async function main() {
   for (const file of [installer, path.join(output, "win-unpacked", "WANX.exe")])
     await assertUnsigned(file);
   const packedExecutable = path.join(output, "win-unpacked", "WANX.exe");
+  const memoryRuntime = await verifyPackagedMemory({
+    resourcesPath:path.join(output, "win-unpacked", "resources"), executable:packedExecutable,
+    platform:"win32", arch:"x64",
+  });
   process.env.WANX_PACKAGED_EXECUTABLE = packedExecutable;
   process.env.TMP = testTemp;
   process.env.TEMP = testTemp;
@@ -304,6 +315,7 @@ async function main() {
     engine: { file: binaryName, sha256: engineHash, bytes: statSync(binary).size },
     discovery: { file: "wanx-discovery-win32-x64.exe", sha256: discoveryHash, bytes: statSync(discovery).size },
     licenses: licenseFiles,
+    memoryRuntime,
     installer: { file: filename, sha256: sha256(installer), bytes: statSync(installer).size },
     tests: {
       node: skipTests ? "not-run-user-requested" : quickPackage ? "focused-passed" : "passed", go: skipTests ? "not-run-user-requested" : quickPackage ? "not-run-go-source-unchanged" : "passed", rendererBuild: "passed", engineBuild: "passed", packedResources: "passed", packagedApplicationSeam: skipTests ? "not-run-user-requested" : "passed", installedSmoke: skipInstallSmoke ? "unverified" : "passed",

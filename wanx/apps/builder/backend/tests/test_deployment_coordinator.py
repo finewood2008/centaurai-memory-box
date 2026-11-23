@@ -5,6 +5,7 @@ platform support and never contacts devices or installs application artifacts.
 """
 
 import asyncio
+import os
 from collections import Counter
 from copy import deepcopy
 import json
@@ -168,6 +169,39 @@ async def test_success_requires_real_both_end_and_channel_observations(setup):
     events = coordinator.journal.events(OWNER, operation["id"])["items"]
     assert events[-1]["type"] == "completed"
     assert events[-1]["state"] == "succeeded"
+
+
+@pytest.mark.parametrize("reason", ["DEPENDENCY_UNAVAILABLE", "private-adapter-detail"])
+async def test_wait_reason_survives_success_and_restart_without_replaying_effect(setup, reason):
+    create, clock, adapter = setup
+    adapter.responses["prepare_backend"] = Observation("waiting_box", code=reason)
+    coordinator = create()
+    operation = await submit(coordinator)
+    waiting = await until(coordinator, clock, operation["id"], lambda op: op["state"] == "waiting_box")
+    expected = "DEPENDENCY_UNAVAILABLE" if reason == "DEPENDENCY_UNAVAILABLE" else "ADAPTER_UNCERTAIN"
+    assert waiting["errorCode"] == expected
+    history = coordinator.journal.events(OWNER, operation["id"])["items"]
+    event = history[-1]
+    assert event["state"] == "waiting_box"
+    assert event["phase"] == "prepare_backend"
+    assert event["errorCode"] == expected
+    assert "private-adapter-detail" not in json.dumps(history)
+
+    # Recovery observes the existing effect; it never submits a new operation.
+    adapter.effects[(operation["id"], "prepare_backend")] = Observation("done")
+    done = await terminal(coordinator, clock, operation["id"])
+    assert done["state"] == "succeeded"
+    assert done["errorCode"] is None
+    assert adapter.executions[(operation["id"], "prepare_backend")] == 1
+    assert len(coordinator.operations(OWNER)) == 1
+    await coordinator.close()
+    restarted = create()
+    restored = restarted.journal.events(OWNER, operation["id"])["items"]
+    assert restored[:len(history)] == history
+    assert restored[-1]["phase"] == "verify_active"
+    assert "errorCode" not in restored[-1]
+    assert restarted.operation(OWNER, operation["id"])["errorCode"] is None
+    assert "error" not in restarted.journal.receipt(OWNER, operation["id"])["receipt"]
 
 
 @pytest.mark.parametrize("missing_role", ["client", "channel"])
@@ -550,3 +584,88 @@ async def test_adapter_studio_errors_are_redacted(setup, monkeypatch, method):
         else:
             await coordinator.submit(OWNER, sample('dev.request.json'))
     assert error.value.code == 'DEPLOYMENT_AUTHORITY_UNAVAILABLE'
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Box OTA uses POSIX file locks")
+async def test_ota_exclusive_defers_durable_execution_without_claiming_or_losing_it(setup, tmp_path):
+    from wanx_studio.upgrade_guard import acquire
+
+    create, clock, adapter = setup
+    root = tmp_path / 'guard'
+    root.mkdir()
+    coordinator = create(upgrade_root=root)
+    operation = await submit(coordinator)
+    before = coordinator.operation(OWNER, operation['id'])
+    with acquire(root, exclusive=True):
+        await coordinator.process_once(operation['id'])
+        assert coordinator.operation(OWNER, operation['id']) == before
+        assert not adapter.checks and not adapter.calls
+    assert (await terminal(coordinator, clock, operation['id']))['state'] == 'succeeded'
+    with acquire(root, exclusive=True):
+        pass
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Box OTA uses POSIX file locks")
+async def test_deployment_step_holds_upgrade_lock_and_cancellation_releases_it(setup, tmp_path):
+    from wanx_studio.upgrade_guard import acquire
+
+    create, _, adapter = setup
+    root = tmp_path / 'guard'
+    root.mkdir()
+    coordinator = create(upgrade_root=root)
+    operation = await submit(coordinator)
+    entered = asyncio.Event()
+
+    async def waiting(*_):
+        entered.set()
+        await asyncio.Event().wait()
+
+    adapter.check = waiting
+    task = asyncio.create_task(coordinator.process_once(operation['id']))
+    await entered.wait()
+    with pytest.raises(StudioError, match='BUILDER_UPGRADE_BUSY'):
+        acquire(root, exclusive=True)
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+    with acquire(root, exclusive=True):
+        pass
+    assert coordinator.operation(OWNER, operation['id'])['state'] not in TERMINAL
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Box OTA uses POSIX file locks")
+async def test_waiting_client_preserves_operation_without_holding_idle_upgrade_lock(setup, tmp_path):
+    from wanx_studio.upgrade_guard import acquire
+
+    create, clock, adapter = setup
+    root = tmp_path / 'guard'
+    root.mkdir()
+    coordinator = create(upgrade_root=root)
+    operation = await submit(coordinator)
+    adapter.responses['prepare_client'] = Observation('waiting_client', code='CLIENT_UNAVAILABLE')
+    await until(coordinator, clock, operation['id'], lambda op: op['state'] == 'waiting_client')
+    with acquire(root, exclusive=True):
+        await coordinator.process_once(operation['id'])
+        assert coordinator.operation(OWNER, operation['id'])['state'] == 'waiting_client'
+    adapter.responses.pop('prepare_client')
+    adapter.effects[(operation['id'], 'prepare_client')] = Observation('done')
+    assert (await terminal(coordinator, clock, operation['id']))['state'] == 'succeeded'
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Box OTA uses POSIX file locks")
+async def test_receipt_delivery_is_deferred_during_ota_without_recording_failed_attempt(setup, tmp_path):
+    from wanx_studio.upgrade_guard import acquire
+
+    create, clock, adapter = setup
+    root = tmp_path / 'guard'
+    root.mkdir()
+    coordinator = create(upgrade_root=root)
+    operation = await submit(coordinator)
+    await terminal(coordinator, clock, operation['id'])
+    before = coordinator.journal.outbox_pending(clock())
+    assert before
+    with acquire(root, exclusive=True):
+        await coordinator.deliver_pending()
+        assert not adapter.deliveries
+        assert coordinator.journal.outbox_pending(clock()) == before
+    await coordinator.deliver_pending()
+    assert adapter.deliveries

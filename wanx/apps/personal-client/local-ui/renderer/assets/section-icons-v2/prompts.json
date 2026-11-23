@@ -1,0 +1,62 @@
+{
+  "mode": "built-in imagegen",
+  "created": "2026-11-04",
+  "status": "approved for local personal client headers",
+  "master": "workshop",
+  "assets": [
+    {
+      "key": "chat",
+      "prompt": "Use case: precise-object-edit. This image is the master of the WANX module icon family. Produce ONE new production icon by replacing ONLY the central emblem; preserve the master tile shape, size, corner radius, ivory porcelain grain, thin champagne-brass perimeter bevel, diffuse top-left light, near frontal orthographic view, soft contact shadow, exact overall composition and transparent outside background. Keep ivory #fffdf8 / #f3ede3, warm bronze #8d6a49, brushed champagne #bb9563. The emblem should occupy the same generous central area as the original; clear sculptural shapes with warm bronze inset edges. Use a small number of bold tactile forms that read at 46px and 24px. No text, letters, words, watermarks, scenery, extra icons, blue, purple or terracotta. Remove the existing pen and open-square emblem completely. The replacement emblem is for WanX Chat: two overlapping rounded porcelain speech bubbles with short soft tails; the front bubble is ivory with three small champagne-brass dots across its center, and the back bubble has a restrained brushed-gold inner face. Calm clear conversation silhouette, low relief. No pen.",
+      "file": "chat.png",
+      "labels": [
+        "万象对话",
+        "WanX Chat"
+      ]
+    },
+    {
+      "key": "apps",
+      "prompt": "Use case: precise-object-edit. This image is the master of the WANX module icon family. Produce ONE new production icon by replacing ONLY the central emblem; preserve the master tile shape, size, corner radius, ivory porcelain grain, thin champagne-brass perimeter bevel, diffuse top-left light, near frontal orthographic view, soft contact shadow, exact overall composition and transparent outside background. Keep ivory #fffdf8 / #f3ede3, warm bronze #8d6a49, brushed champagne #bb9563. The emblem should occupy the same generous central area as the original; clear sculptural shapes with warm bronze inset edges. Use a small number of bold tactile forms that read at 46px and 24px. No text, letters, words, watermarks, scenery, extra icons, blue, purple or terracotta. Remove the existing pen and open-square emblem completely. The replacement emblem is for WanX Apps: four soft rounded square application modules in an immaculate compact 2 by 2 grid. Three sculpted ivory porcelain modules with bronze inset edges; the upper-right module is brushed champagne brass. Balanced spacing, bold clean silhouettes, subtle different depths. No tiny interface details, no pen.",
+      "file": "apps.png",
+      "labels": [
+        "万象应用",
+        "WanX Apps"
+      ]
+    },
+    {
+      "key": "workshop",
+      "prompt": "Use case: logo-brand. Create a premium square module icon for WanX Workshop, a personal application-customization studio in a private AI desktop client. This is ONE icon asset, not a sheet or a mockup.\nStyle: refined tactile low-relief industrial design, ivory porcelain, champagne brass, warm paper, understated and elegant. Fixed palette ivory #fffdf8 / #f3ede3, warm bronze #8d6a49, brushed champagne #bb9563. No navy, no blue, no terracotta, no bright colors.\nComposition: 1:1 square. One rounded-square ivory porcelain tile, frontal view, almost orthographic, gently softened corners, slim champagne bevel, very subtle paper/ceramic grain. Tile occupies 84% of canvas centered, balanced generous internal padding. Transparent outside the tile including clean soft contact shadow. Identical top-left diffuse studio lighting; avoid harsh contrast or plastic gloss.\nThe central symbol represents refining an existing application: one small thick ivory rounded-square application panel with an open corner, and a beautifully simplified diagonal champagne-metal stylus / precision editing nib crossing the open corner. A deliberate sculptural emblem with 2-3 bold readable shapes, warm bronze inset edges and one restrained metal highlight. Distinctive and balanced, not a generic crossed wrench/hammer, not a Chinese character, not a letter I. Beautiful at 46px, recognizable at 24px. No tiny details, no hairline-only symbol, no gears.\nNo words, letters, labels, watermarks, scenery, additional icons, app screenshots, captions, or surrounding UI. This is a real production icon candidate matching an ivory ceramic and warm metal desktop design system.",
+      "file": "workshop.png",
+      "labels": [
+        "万象工坊",
+        "WanX Workshop"
+      ]
+    },
+    {
+      "key": "starlink",
+      "prompt": "Use case: precise-object-edit. This image is the master of the WANX module icon family. Produce ONE new production icon by replacing ONLY the central emblem; preserve the master tile shape, size, corner radius, ivory porcelain grain, thin champagne-brass perimeter bevel, diffuse top-left light, near frontal orthographic view, soft contact shadow, exact overall composition and transparent outside background. Keep ivory #fffdf8 / #f3ede3, warm bronze #8d6a49, brushed champagne #bb9563. The emblem should occupy the same generous central area as the original; clear sculptural shapes with warm bronze inset edges. Use a small number of bold tactile forms that read at 46px and 24px. No text, letters, words, watermarks, scenery, extra icons, blue, purple or terracotta. Remove the existing pen and open-square emblem completely. The replacement emblem is for WanX Starlink: one central champagne-brass spherical node linked to four ivory porcelain satellite nodes in a balanced asymmetric constellation. Bronze connections are strong enough to read at small size; five nodes total, large simple rounded forms with depth, deliberate knowledge graph geometry. No decorative sparkles, no pen.",
+      "file": "starlink.png",
+      "labels": [
+        "万象星图",
+        "WanX Starlink"
+      ]
+    },
+    {
+      "key": "space",
+      "prompt": "Use case: precise-object-edit. This image is the master of the WANX module icon family. Produce ONE new production icon by replacing ONLY the central emblem; preserve the master tile shape, size, corner radius, ivory porcelain grain, thin champagne-brass perimeter bevel, diffuse top-left light, near frontal orthographic view, soft contact shadow, exact overall composition and transparent outside background. Keep ivory #fffdf8 / #f3ede3, warm bronze #8d6a49, brushed champagne #bb9563. The emblem should occupy the same generous central area as the original; clear sculptural shapes with warm bronze inset edges. Use a small number of bold tactile forms that read at 46px and 24px. No text, letters, words, watermarks, scenery, extra icons, blue, purple or terracotta. Remove the existing pen and open-square emblem completely. The replacement emblem is for WanX Space: a recognizably shaped ivory porcelain open file folder with a raised folder tab, two soft layers of file sheets inside, a clean brushed-champagne lower spine and a warm bronze inset shadow. Sculptural layered archive, simple and generous. No labels or marks on the sheets, no pen.",
+      "file": "space.png",
+      "labels": [
+        "万象空间",
+        "WanX Space"
+      ]
+    },
+    {
+      "key": "boxes",
+      "prompt": "Use case: precise-object-edit. This image is the master of the WANX module icon family. Produce ONE new production icon by replacing ONLY the central emblem; preserve the master tile shape, size, corner radius, ivory porcelain grain, thin champagne-brass perimeter bevel, diffuse top-left light, near frontal orthographic view, soft contact shadow, exact overall composition and transparent outside background. Keep ivory #fffdf8 / #f3ede3, warm bronze #8d6a49, brushed champagne #bb9563. The emblem should occupy the same generous central area as the original; clear sculptural shapes with warm bronze inset edges. Use a small number of bold tactile forms that read at 46px and 24px. No text, letters, words, watermarks, scenery, extra icons, blue, purple or terracotta. Remove the existing pen and open-square emblem completely. The replacement emblem is for WanX Box: a single compact rounded ivory physical desktop appliance, slightly three-dimensional but front facing. A softly rounded rectangular body with three short bronze ventilation slots, a single small champagne-gold status indicator at lower right, and a slim brushed-gold lower edge. A private AI device, not a screen or computer monitor. Bold clean silhouette, no words, no pen.",
+      "file": "boxes.png",
+      "labels": [
+        "万象盒子",
+        "WanX Box"
+      ]
+    }
+  ]
+}

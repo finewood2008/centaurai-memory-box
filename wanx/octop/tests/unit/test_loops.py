@@ -1826,6 +1826,7 @@ async def test_personal_agent_normal_messages_require_verified_owner(env):
     message.metadata["message_id"] = "synthetic-inbound-1"
     assert await svc.interactions.handle_inbound(message) is None
     assert await svc.interactions.handle_inbound(message) is None
+    assert await svc.interactions.handle_inbound(message, mark_verified=True) is True
     intake = await svc.list_loops(uid)
     assert intake == []
     assert not svc._tasks

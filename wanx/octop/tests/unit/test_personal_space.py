@@ -19,6 +19,48 @@ def upload(space: PersonalSpace, data: bytes, name: str = "hello.txt", parent: s
     return space.upload_complete(item_id, hashlib.sha256(data).hexdigest())
 
 
+def test_text_edit_publishes_a_version_under_the_original_id(tmp_path: Path) -> None:
+    space = PersonalSpace(tmp_path, 1)
+    parent = space.mkdir("", "资料")["id"]
+    original = upload(space, b"old", "example.md", parent)
+    target, edit, another_edit = original["id"], uuid.uuid4().hex, uuid.uuid4().hex
+    data = "修改后的内容\n".encode()
+    digest = hashlib.sha256(data).hexdigest()
+    for operation in (edit, another_edit):
+        space.begin_text_edit(target, 1, operation, len(data), digest)
+        space.upload_chunk(operation, 0, data, digest)
+    assert space.read_chunk(target, 0, 100)[0] == b"old"
+    saved = space.upload_complete(edit, digest)
+    assert saved["id"] == target and saved["parent"] == parent and saved["version"] == 2
+    assert space.listing(parent)["items"] == [saved]
+    assert space.read_chunk(target, 0, 100)[0] == data
+    assert space.begin_text_edit(target, 1, edit, len(data), digest)["state"] == "complete"
+    assert space.upload_complete(edit, digest) == saved
+    with pytest.raises(SpaceError, match="SPACE_VERSION_CONFLICT"):
+        space.upload_complete(another_edit, digest)
+    space.upload_cancel(another_edit)
+    space.restore_version(target, 2)
+    assert space.read_chunk(target, 0, 100)[0] == b"old"
+
+
+def test_text_edit_rejects_non_text_formats_and_invalid_json(tmp_path: Path) -> None:
+    space = PersonalSpace(tmp_path, 1)
+    pdf = upload(space, b"not text", "file.pdf")
+    document = upload(space, b'{"original": true}', "file.json")
+    data = b'{"bad": NaN}'
+    digest = hashlib.sha256(data).hexdigest()
+    edit = uuid.uuid4().hex
+    with pytest.raises(SpaceError, match="SPACE_TEXT_UNSUPPORTED"):
+        space.begin_text_edit(pdf["id"], 1, edit, len(data), digest)
+    space.begin_text_edit(document["id"], 1, edit, len(data), digest)
+    space.upload_chunk(edit, 0, data, digest)
+    with pytest.raises(SpaceError, match="SPACE_TEXT_JSON_INVALID"):
+        space.upload_complete(edit, digest)
+    space.upload_cancel(edit)
+    assert space.metadata(document["id"]) == document
+    assert space.read_chunk(document["id"], 0, 100)[0] == b'{"original": true}'
+
+
 def test_private_space_never_uses_a_user_path(tmp_path: Path) -> None:
     first, second = PersonalSpace(tmp_path, 1), PersonalSpace(tmp_path, 2)
     entry = upload(first, b"secret")

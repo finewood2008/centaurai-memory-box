@@ -10,7 +10,7 @@ import { createApplicationBackend } from "../applications/backend.mjs";
 import { validateCompatibility, evaluateApplicationCompatibility } from "../applications/compatibility.mjs";
 import { validateDescriptor, verifyEnvelope } from "../applications/descriptor.mjs";
 import { createApplicationInstaller } from "../applications/installer.mjs";
-import { createApplicationManager } from "../applications/manager.mjs";
+import { createApplicationManager } from "../build/app/applications/manager.mjs";
 import { createApplicationMarket } from "../applications/market.mjs";
 import { createApplicationSession } from "../app-host/session.mjs";
 import sdk from "../../personal-client/host-sdk/index.cjs";

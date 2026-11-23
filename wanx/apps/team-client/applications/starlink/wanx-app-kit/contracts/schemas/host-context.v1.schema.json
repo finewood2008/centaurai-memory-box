@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wanx-host-context/1",
+  "type": "object",
+  "required": ["boxId", "user", "connection"],
+  "properties": {
+    "protocolVersion": {"type": "integer", "minimum": 1},
+    "accountId": {"type": "string"},
+    "clientId": {"type": "string"},
+    "boxId": {"type": "string", "minLength": 1},
+    "user": {"type": "object", "required": ["id"], "properties": {"id": {"type": "integer", "minimum": 1}}, "additionalProperties": true},
+    "connection": {"enum": ["ready", "recovering"]},
+    "applicationId": {"type": "string"},
+    "artifactId": {"type": "string"},
+    "resourceBindings": {"type": "array", "items": {"$ref": "resource-binding.v1.schema.json"}}
+  },
+  "additionalProperties": false
+}

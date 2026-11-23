@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from uuid import uuid4
 import pytest
-from wanx_studio.contracts import StudioError,digest,readiness,complete_dependencies
+from wanx_studio.contracts import StudioError,readiness,complete_dependencies
 from wanx_studio.prd import ProductRequirement,PRD_REVIEW_SECTIONS
 from wanx_studio.discovery import interview_context
 from wanx_studio.service import StudioService
@@ -24,6 +24,29 @@ async def svc(tmp_path):
 def prepared(svc):
     p=svc.store.create('alice','资料助手','整理长文本',op())
     return svc.update_solution('alice',p['id'],{'operationId':op(),'expectedHash':p['solutionHash'],'solution':solution()})
+
+def standard_solution():
+    value = solution()
+    value['capabilities'] = []
+    value['workflow'] = '手动摘录文本、预览卡片并按标题筛选'
+    value['prd']['features'][0]['title'] = '预览手工摘录'
+    for feature, case, ref in zip(value['prd']['features'], value['prd']['tests'], ('preview', 'filter'), strict=True):
+        case['ref'] = ref
+        feature['implementation'] = {'source': 'frontend', 'caseRefs': [ref], 'contractIds': []}
+    return value
+
+
+def prepared_standard(svc, name='资料助手'):
+    p = svc.create_project('alice', name, '手动整理摘录卡片', op())
+    return svc.update_solution('alice', p['id'], {
+        'operationId': op(), 'expectedHash': p['solutionHash'], 'solution': standard_solution()})
+
+
+def confirmed_standard(svc, name):
+    p = prepared_standard(svc, name)
+    return svc.confirm('alice', p['id'], {
+        'operationId': op(), 'solutionHash': p['solutionHash'], 'reviewedSections': PRD_REVIEW_SECTIONS})
+
 
 def test_new_project_exposes_missing_dimensions_and_cannot_skip_visual_prd(svc):
     p=svc.store.create('alice','新项目','帮助我整理资料',op())
@@ -75,7 +98,7 @@ async def test_multiturn_retains_context_and_dependencies_while_prd_improves(svc
         svc.confirm('alice',p['id'],{'operationId':op(),'solutionHash':p['solutionHash'],'reviewedSections':PRD_REVIEW_SECTIONS})
 
 async def test_only_reviewed_exact_prd_can_confirm_then_explicitly_build(svc,monkeypatch):
-    p=prepared(svc)
+    p=prepared_standard(svc)
     assert p['readiness']['ready']
     with pytest.raises(StudioError,match='CONFIRMATION_REQUIRED'):
         await svc.runner.start('alice',p['id'],{'operationId':op(),'solutionHash':p['solutionHash'],'instruction':''})
@@ -93,8 +116,8 @@ async def test_only_reviewed_exact_prd_can_confirm_then_explicitly_build(svc,mon
     assert seen==[p['solution']['prd']]
 
 def test_page_edit_invalidates_confirmation_and_does_not_allow_old_hash(svc):
-    p=prepared(svc);p=svc.confirm('alice',p['id'],{'operationId':op(),'solutionHash':p['solutionHash'],'reviewedSections':PRD_REVIEW_SECTIONS})
-    old_hash=p['solutionHash'];value=solution();value['prd']['pages'][0]['purpose']='优先查看最新保存的卡片'
+    p=prepared_standard(svc);p=svc.confirm('alice',p['id'],{'operationId':op(),'solutionHash':p['solutionHash'],'reviewedSections':PRD_REVIEW_SECTIONS})
+    old_hash=p['solutionHash'];value=standard_solution();value['prd']['pages'][0]['purpose']='优先查看最新保存的卡片'
     p=svc.update_solution('alice',p['id'],{'operationId':op(),'expectedHash':old_hash,'solution':value})
     assert p['confirmation'] is None and p['solutionHash']!=old_hash
     with pytest.raises(StudioError,match='SOLUTION_CHANGED'):
@@ -109,19 +132,29 @@ async def test_model_cannot_forge_confirmation_or_drop_prd(svc):
         await svc.chat('alice',p['id'],{'operationId':op(),'text':'补充需求'})
     current=svc.store.get('alice',p['id']);assert current['confirmation'] is None and current['messages'][-1]['text']=='补充需求'
 
-async def test_legacy_hash_and_confirmation_survive_read_restart_and_opt_in_upgrade(tmp_path):
-    svc=StudioService(tmp_path,ROOT);svc.runner=Runner(svc)
-    p=svc.store.create('alice','旧项目','整理长文本',op());legacy=svc.store.get('alice',p['id']);legacy['solution']=solution();legacy['solution'].pop('prd');svc.store.save(legacy)
-    p=svc.snapshot('alice',p['id']);p=svc.confirm('alice',p['id'],{'operationId':op(),'solutionHash':p['solutionHash']});old_hash=p['solutionHash'];old_confirmation=p['confirmation']
-    assert digest(complete_dependencies(p['solution'],p['originalGoal'],p['messages']))==old_hash
-    await svc.close()
-    restored=StudioService(tmp_path,ROOT);restored.runner=Runner(restored)
+async def test_reading_archived_project_after_restart_preserves_its_confirmation(tmp_path):
+    service = StudioService(tmp_path, ROOT)
     try:
-        p=restored.snapshot('alice',p['id']);assert p['confirmation']==old_confirmation and p['solutionHash']==old_hash
-        p=await restored.start_discovery('alice',p['id'],{'operationId':op()})
-        assert p['solution'].get('prd') is not None and p['confirmation'] is None
-        assert p['revisions'][-1]['source']=='user-discovery-start'
-    finally:await restored.close()
+        project = service.store.create('alice', '旧项目', '整理长文本', op())
+        archived = service.store.get('alice', project['id'])
+        archived['solution'] = solution()
+        archived['solution'].pop('prd')
+        service.store.save(archived)
+        original_hash = service.snapshot('alice', project['id'])['solutionHash']
+        confirmation = {'hash': original_hash}
+        archived['confirmation'] = confirmation
+        service.store.save(archived)
+    finally:
+        await service.close()
+    restored = StudioService(tmp_path, ROOT)
+    try:
+        snapshot = restored.snapshot('alice', project['id'])
+        assert snapshot['confirmation'] == confirmation
+        assert snapshot['solutionHash'] == original_hash
+        assert 'prd' not in restored.store.get('alice', project['id'])['solution']
+    finally:
+        await restored.close()
+
 
 async def test_project_metadata_preserves_prd_and_owned_restore(svc):
     p=prepared(svc)

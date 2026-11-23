@@ -2,7 +2,7 @@ import { access, cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename,
 import { renameSync } from "node:fs";
 import { verifyEnvelope, marketFailure } from "./descriptor.mjs";
 import { extractApplicationArchive as extractVerifiedArchive, verifyPackageHash } from "./verified-archive.mjs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { setTimeout } from "node:timers/promises";
 import path from "node:path";
 import semver from "semver";
@@ -80,7 +80,53 @@ export function createApplicationInstaller({ rootDir, now = () => Date.now(), co
     selectionRequired: true,
     versions: records.map(({ version, installedAt }) => ({ version, installedAt })),
   });
+  async function removalFor(id) {
+    const file = path.join(appDirectory(id), '.wanx-local-removal.json');
+    try {
+      const info = await lstat(file);
+      if (!info.isFile() || info.isSymbolicLink() || info.size > 65536) throw fail('APPLICATION_DEPLOYMENT_INVALID');
+      const value = JSON.parse(await readFile(file, 'utf8')), binding = value?.binding;
+      if (value.schemaVersion !== 1 || !binding || binding.slotApplicationId !== id ||
+          !Number.isSafeInteger(binding.generation) || binding.generation < 1 || !operationIdValid(binding.operationId))
+        throw fail('APPLICATION_DEPLOYMENT_INVALID');
+      return value;
+    } catch (error) {
+      if (error.code === 'ENOENT') return null;
+      throw fail('APPLICATION_DEPLOYMENT_INVALID');
+    }
+  }
+  async function removalState(id) {
+    const removal = await removalFor(id);
+    if (!removal) return null;
+    let marker;
+    try { marker = JSON.parse(await readFile(path.join(appDirectory(id), '.wanx-managed-deployment.json'), 'utf8')); }
+    catch { throw fail('APPLICATION_DEPLOYMENT_INVALID'); }
+    if (!Number.isSafeInteger(marker.generation) || marker.generation < 1 ||
+        ['profile','baseApplicationId','slotApplicationId','environment','boxId','scopeId'].some(key => marker[key] !== removal.binding[key]))
+      throw fail('APPLICATION_DEPLOYMENT_INVALID');
+    return {removal, pending: marker.generation <= removal.binding.generation};
+  }
+  async function finishLocalRemoval(id, assertSession = () => {}) {
+    if (!(await removalState(id))?.pending) return;
+    const directory = appDirectory(id), info = await lstat(directory);
+    if (!info.isDirectory() || info.isSymbolicLink()) throw fail('APPLICATION_DEPLOYMENT_INVALID');
+    for (const name of await readdir(directory)) {
+      if (['.wanx-managed-deployment.json', '.wanx-local-removal.json'].includes(name)) continue;
+      assertSession();
+      await rm(path.join(directory, name), {recursive:true, force:true});
+    }
+  }
+  async function admitManagedInstall(id, binding, assertSession) {
+    const removal = await removalFor(id);
+    if (!removal) return;
+    if (binding.generation <= removal.binding.generation) throw fail('APPLICATION_DEPLOYMENT_USER_REMOVED');
+    // Complete an interrupted removal before advancing the high-water marker.
+    // All calls share the slot serializer, so cleanup cannot remove a new install.
+    await finishLocalRemoval(id, assertSession);
+    assertSession();
+  }
   async function currentFor(id, records = null) {
+    if ((await removalState(id))?.pending) return null;
     records ||= await recordsFor(id);
     if (!records.length) return null;
     let current;
@@ -174,6 +220,23 @@ export function createApplicationInstaller({ rootDir, now = () => Date.now(), co
 
   async function install({ archivePath, sourceDir, ...options } = {}, { signal } = {}) {
     signal?.throwIfAborted();
+    if (archivePath !== undefined && options.standardArtifactHash !== undefined) {
+      const {standardArtifactHash, manifest: expected, ...extra} = options;
+      if (sourceDir || typeof archivePath !== "string" || Object.keys(extra).length || !/^[a-f0-9]{64}$/.test(standardArtifactHash) || expected?.protocolVersion !== 3) throw fail("APPLICATION_SOURCE_REQUIRED");
+      await mkdir(rootDir, {recursive:true, mode:0o700});
+      const staging = await mkdtemp(path.join(await realpath(rootDir), ".unpacking-"));
+      try {
+        const bytes = await readFile(archivePath);
+        if (createHash("sha256").update(bytes).digest("hex") !== standardArtifactHash) throw fail("APPLICATION_ARTIFACT_INVALID");
+        const frozen = path.join(staging,"application.zip"), destination = path.join(staging,"content");
+        await writeFile(frozen,bytes,{flag:"wx",mode:0o600});
+        await mkdir(destination);
+        const source = await extractApplicationArchive(frozen,destination);
+        const manifest = await readApplicationManifest(path.join(source,"application.manifest.json"));
+        if (JSON.stringify(manifest) !== JSON.stringify(validateApplicationManifest(expected))) throw fail("APPLICATION_MANIFEST_MISMATCH");
+        return await installDirectory({sourceDir:source,manifest},signal,standardArtifactHash);
+      } finally { await rm(staging,{recursive:true,force:true}); }
+    }
     if (archivePath !== undefined) {
       if (typeof archivePath !== "string" || !archivePath || sourceDir || Object.keys(options).length)
         throw fail("APPLICATION_SOURCE_REQUIRED");
@@ -186,7 +249,7 @@ export function createApplicationInstaller({ rootDir, now = () => Date.now(), co
     }
     return installDirectory({ sourceDir, ...options }, signal);
   }
-  async function installDirectory({ sourceDir, manifest: suppliedManifest, manifestPath }, signal) {
+  async function installDirectory({ sourceDir, manifest: suppliedManifest, manifestPath }, signal, packageSha256) {
     if (typeof sourceDir !== "string" || !sourceDir) throw fail("APPLICATION_SOURCE_REQUIRED");
     let source;
     try { source = await stat(sourceDir); } catch { throw fail("APPLICATION_SOURCE_NOT_FOUND"); }
@@ -212,7 +275,7 @@ export function createApplicationInstaller({ rootDir, now = () => Date.now(), co
       catch (error) { if (error.code !== "ENOENT") throw error; }
       const staging = await mkdtemp(path.join(path.dirname(target), ".installing-"));
       const temporary = path.join(staging, "content");
-      const record = { ...manifest, installPath: target, installedAt: now(), installationSource: "local" };
+      const record = { ...manifest, installPath: target, installedAt: now(), installationSource: "local", ...(packageSha256 ? {packageSha256} : {}) };
       let committed = false;
       try {
         await copy(sourceDir, temporary, { recursive: true, errorOnExist: true, force: false, verbatimSymlinks: true });
@@ -261,6 +324,7 @@ export function createApplicationInstaller({ rootDir, now = () => Date.now(), co
         if(stableKeys.some(k=>previous[k]!==binding[k]))throw fail('APPLICATION_DEPLOYMENT_SLOT_OCCUPIED');
         if(binding.generation<previous.generation||binding.generation===previous.generation&&(binding.operationId!==previous.operationId||binding.artifactHash!==previous.artifactHash||binding.fence<previous.fence))throw fail('APPLICATION_DEPLOYMENT_STALE');
       }
+      await admitManagedInstall(manifest.applicationId, binding, check);
       await mkdir(directory,{recursive:true,mode:0o700});check();
       // Persist the high-water mark before any installation; uncertain failures fence older work.
       const temporaryMarker=path.join(directory,`.deployment-${randomUUID()}.tmp`);
@@ -488,6 +552,7 @@ export function createApplicationInstaller({ rootDir, now = () => Date.now(), co
       if (app.name.startsWith(".removed-") || app.name.startsWith(".unpacking-")) {
         await rm(path.join(rootDir, app.name), { recursive: true, force: true });
       } else if (app.isDirectory() && /^[a-z][a-z0-9._-]{1,63}$/.test(app.name)) {
+        await serialize(app.name, () => finishLocalRemoval(app.name));
         let current, pending;
         try { current = await currentFor(app.name); pending = await pendingFor(app.name); } catch { continue; }
         const retainedVersions = current?.selectionRequired ? current.versions.map(item => item.version) : [current?.version, current?.previous?.version];
@@ -497,12 +562,41 @@ export function createApplicationInstaller({ rootDir, now = () => Date.now(), co
         }
         if (pending && pending.artifactId === current?.artifactId) await clearPending(app.name, pending.artifactId);
         for (const item of await readdir(appDirectory(app.name))) {
-          if (item.startsWith(".staging-") || item.startsWith(".installing-") || item.startsWith(".pending-") && item.endsWith(".tmp") ||
+          if (item.startsWith(".staging-") || item.startsWith(".installing-") || item.startsWith(".local-removal-") && item.endsWith(".tmp") || item.startsWith(".pending-") && item.endsWith(".tmp") ||
               (item.startsWith(".current-") || item.startsWith(".wanx-state.json.")) && item.endsWith(".tmp"))
             await rm(path.join(appDirectory(app.name), item), { recursive: true, force: true });
         }
       }
     }
+  }
+  async function uninstallLocal(id, assertSession = () => {}) {
+    appDirectory(id);
+    return serialize(id, async () => {
+      assertSession();
+      if (!await managedSlot(id)) {
+        const removed = path.join(rootDir, `.removed-${randomUUID()}`);
+        assertSession();
+        try { renameSync(appDirectory(id), removed); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+        await rm(removed, {recursive:true, force:true});
+        return {applicationId:id, state:'uninstalled'};
+      }
+      const directory = appDirectory(id), info = await lstat(directory);
+      if (!info.isDirectory() || info.isSymbolicLink()) throw fail('APPLICATION_DEPLOYMENT_INVALID');
+      let binding;
+      try { binding = JSON.parse(await readFile(path.join(directory, '.wanx-managed-deployment.json'), 'utf8')); }
+      catch { throw fail('APPLICATION_DEPLOYMENT_INVALID'); }
+      if (binding.slotApplicationId !== id || !Number.isSafeInteger(binding.generation) || binding.generation < 1 ||
+          !operationIdValid(binding.operationId)) throw fail('APPLICATION_DEPLOYMENT_INVALID');
+      const temporary = path.join(directory, `.local-removal-${randomUUID()}.tmp`);
+      try {
+        await writeFile(temporary, JSON.stringify({schemaVersion:1, binding}), {flag:'wx', mode:0o600});
+        assertSession();
+        renameSync(temporary, path.join(directory, '.wanx-local-removal.json'));
+      } finally { await rm(temporary, {force:true}); }
+      // The tombstone hides the old pointer immediately, including after a crash.
+      await finishLocalRemoval(id, assertSession);
+      return {applicationId:id, state:'uninstalled'};
+    });
   }
   async function uninstall(id, assertSession = () => {}) {
     appDirectory(id);
@@ -584,7 +678,7 @@ export function createApplicationInstaller({ rootDir, now = () => Date.now(), co
       return (await prepareRollback(current, previous)).compatibility;
     });
   }
-  return Object.freeze({ install, installDeployment, installVerifiedPackage, prepareCurrent, list, installedPath, resolveCurrent, selectCurrent, prune, recover, uninstall, rollback, assertRollbackCompatible });
+  return Object.freeze({ install, installDeployment, installVerifiedPackage, prepareCurrent, list, installedPath, resolveCurrent, selectCurrent, prune, recover, uninstall, uninstallLocal, assertUnmanaged, rollback, assertRollbackCompatible });
 }
 
 // Reinstalling the retained previous artifact must not overwrite a usable copy.

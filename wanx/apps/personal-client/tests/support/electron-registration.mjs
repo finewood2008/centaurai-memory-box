@@ -41,9 +41,9 @@ try {
   });
   client = createPlatformClient({ account, readPreference: async () => false });
   await client.initialize();
-  const index = new URL('../../local-ui/renderer/index.html', import.meta.url);
+  const index = new URL('../../build/app/local-ui/renderer/index.html', import.meta.url);
   window = new BrowserWindow({ show: false, width: 1280, height: 900, webPreferences: {
-    preload: fileURLToPath(new URL('../../local-ui/remote-preload.cjs', import.meta.url)),
+    preload: fileURLToPath(new URL('../../build/app/local-ui/remote-preload.cjs', import.meta.url)),
     contextIsolation: true, nodeIntegration: false, sandbox: true,
   } });
   window.webContents.on('console-message', event => { if (event.level === 'error') rendererErrors.push(event.message); });
@@ -57,7 +57,7 @@ try {
     window.check = (condition, message) => { if (!condition) throw Error(message); };
     window.until = async predicate => {
       for (let i = 0; i < 100; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 20)); }
-      throw Error('UI did not reach expected state');
+      throw Error('UI did not reach expected state: ' + predicate);
     };
     window.field = name => document.querySelector('[name="' + name + '"]');
     window.click = action => document.querySelector('[data-action="' + action + '"]').click();
@@ -150,7 +150,7 @@ try {
   }
   await js(`(async () => {
     submit();
-    await until(() => document.body.textContent.includes('我的应用'));
+    await until(() => document.querySelector('.main-nav [data-action="show-memory"]'));
     check(!field('password'), 'credentials remain after success');
     check(!document.body.textContent.includes('test-access'), 'token exposed');
   })()`);

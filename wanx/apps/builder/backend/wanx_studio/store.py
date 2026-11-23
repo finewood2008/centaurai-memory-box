@@ -139,9 +139,9 @@ class Store:
             self.db.execute("INSERT INTO operations VALUES(?,?,?,?)", (owner, key, h, json.dumps(result, ensure_ascii=False)))
             return result
 
-    def create(self, owner: str, name: str, goal: str, operation_id: str, *, dev_kit: bool = False) -> dict:
+    def create(self, owner: str, name: str, goal: str, operation_id: str, *, dev_kit: bool = False, expert_factory=None, kit_sha256=None) -> dict:
         with self.transaction():
-            h = digest({"name": name, "goal": goal})
+            h = digest({"name": name, "goal": goal, "target": "expert" if expert_factory else "client"})
             old = self.db.execute("SELECT hash,result FROM operations WHERE owner=? AND key=?", (owner, operation_id)).fetchone()
             if old:
                 if old[0] != h:
@@ -153,11 +153,18 @@ class Store:
             import re
             slug = re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-') or 'app'
             slug = slug[:40].rstrip('-') or 'app'
-            p = {"id": uuid4().hex, "appId": "dev.wanx." + slug + "." + uuid4().hex[:8], "owner": owner, "name": name,
+            if not slug[0].isalpha():slug = "app-" + slug
+            p = {"id": uuid4().hex, "appId": "dev.wanx." + slug + ".a" + uuid4().hex[:8], "owner": owner, "name": name,
                  "nameMode":"auto", "autoName":None, "originalGoal": goal, "stage": "discovery", "createdAt": time.time(), "updatedAt": time.time(),
                  "messages": [{"id": uuid4().hex,"role":"user","text":goal}],
-                 "solution": {"audience":"","workflow":"","inputs":"","outputs":"","fields":[],"acceptance":[],"capabilities":["data","model"],"dependencies":[],"prd":ProductRequirement().model_dump()},
+                 "solution": {"audience":"","workflow":"","inputs":"","outputs":"","fields":[],"acceptance":[],"capabilities":[] if dev_kit else ["data","model"],"dependencies":[],"prd":ProductRequirement().model_dump()},
                  "revisions": [], "decisions": {}, "confirmation": None, "tasks": [], "artifacts": [], "acceptance": None, "installed": None, "devKit": bool(dev_kit)}
+            if kit_sha256 is not None:
+                p["kitSha256"] = kit_sha256
+            if expert_factory:
+                p['deploymentExpert'] = expert_factory(owner)
+                p['_deploymentExpertRevision'] = 1
+                p['solution']['capabilities'] = ['wanx.expert-app.v1']
             self.save(p)
             result = public(p)
             self.db.execute("INSERT INTO operations VALUES(?,?,?,?)", (owner,operation_id,h,json.dumps(result,ensure_ascii=False)))

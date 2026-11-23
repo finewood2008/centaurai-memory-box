@@ -5,7 +5,7 @@
  --wanx-canvas:#faf7f2;--wanx-porcelain:#fffdf8;--wanx-soft:#f3ede3;
  --wanx-ink:#302d29;--wanx-text:#686159;--wanx-muted:#796b5d;
  --wanx-edge:#e2d6c6;--wanx-brass:#bb9563;--wanx-copper:#a35c43;
- --wanx-action:#5b4636;--wanx-action-hover:#49382c;--wanx-action-pressed:#3e3026;
+ --wanx-action:#a6533f;--wanx-action-hover:#914532;--wanx-action-pressed:#7d3d2e;
  --wanx-radius:16px;--wanx-control-radius:9px;
  --wanx-shadow:inset 0 1px 0 #fff,0 2px 4px #68462105,0 8px 24px #68462108;
  --wanx-shadow-raised:inset 0 1px 0 #fff,0 1px 2px #68462110,0 5px 12px #6846210b;
@@ -22,8 +22,9 @@ body[data-wanx-surface]{background:var(--wanx-canvas);color:var(--wanx-ink)}
 [data-wanx-surface=main] .topbar{background:linear-gradient(180deg,#fdfaf5,var(--wanx-canvas));border-bottom-color:var(--wanx-edge);box-shadow:0 1px 0 #fff}
 .main-nav,.applications-tabs,.workshop-filters,.credits-filters{box-shadow:inset 0 1px 3px #6c4d2910,0 1px 0 #fff;background:#eee7dc}
 .main-nav .nav-item.active,.applications-tab[aria-selected=true],.workshop-filters button[aria-pressed=true]{background:linear-gradient(#fffefb,#fdf8ef);border-color:#dfcbb0;box-shadow:inset 0 1px #fff,0 2px 6px #74522d0e;color:#6e4d32}
-/* Six real generated reliefs, never baked UI text. */
+/* Shared section reliefs, with text rendered by the UI. */
 [data-section=chat],[data-section=my-ai]{--wanx-header-art:url('./assets/material-v1/chat.png')}
+[data-section=memory]{--wanx-header-art:url('./assets/material-v1/memory.png')}
 [data-section=apps]{--wanx-header-art:url('./assets/material-v1/apps.png')}
 [data-section=workshop]{--wanx-header-art:url('./assets/material-v1/workshop.png')}
 [data-section=starlink]{--wanx-header-art:url('./assets/material-v1/starlink.png')}
@@ -46,6 +47,7 @@ body[data-wanx-surface]{background:var(--wanx-canvas);color:var(--wanx-ink)}
 /* Section emblems share the approved porcelain and champagne-metal artwork. */
 .wanx-section-banner[data-section=chat]{--wanx-section-icon:url('./assets/section-icons-v2/chat.png')}
 .wanx-section-banner[data-section=my-ai]{--wanx-section-icon:url('./assets/section-icons-v2/my-ai.png')}
+.wanx-section-banner[data-section=memory]{--wanx-section-icon:url('./assets/section-icons-v2/memory.png')}
 .wanx-section-banner[data-section=apps]{--wanx-section-icon:url('./assets/section-icons-v2/apps.png')}
 .wanx-section-banner[data-section=workshop]{--wanx-section-icon:url('./assets/section-icons-v2/workshop.png')}
 .wanx-section-banner[data-section=starlink]{--wanx-section-icon:url('./assets/section-icons-v2/starlink.png')}
@@ -64,7 +66,7 @@ body[data-wanx-surface]{background:var(--wanx-canvas);color:var(--wanx-ink)}
  border-color:#d9c7b1;background:linear-gradient(180deg,#fffefb,#f8f1e6);color:#74614b;box-shadow:var(--wanx-shadow-raised);border-radius:var(--wanx-control-radius)
 }
 :is(.button,.store-refresh,.ai-history-toggle,.space-icon-button):hover:not(:disabled){background:linear-gradient(#fffdf7,#f1e4d1);border-color:#c6a67d}
-:is(.button.primary,.ai-collapsed-new,.ai-send,.ai-connect,.ai-approval-submit,.ai-space-dialog footer button:last-child){
+:is(.button.primary,.ai-collapsed-new,.ai-send:not(:disabled),.ai-connect,.ai-approval-submit,.ai-space-dialog footer button:last-child){
  color:#fffdf9;background:var(--wanx-action);border:1px solid transparent;box-shadow:none
 }
 :is(.button.primary,.ai-collapsed-new,.ai-send,.ai-connect):hover:not(:disabled){background:var(--wanx-action-hover);border-color:transparent}
@@ -139,7 +141,7 @@ body[data-wanx-surface]{background:var(--wanx-canvas);color:var(--wanx-ink)}
  background:#fffdf9;border-color:#d9cdbc;box-shadow:none;border-radius:9px;font-weight:550
 }
 :is(.button,.store-refresh,.ai-history-toggle):hover:not(:disabled){background:#f4ede2;border-color:#bfa88c;box-shadow:none}
-body[data-wanx-surface] :is(.button.primary,.ai-collapsed-new,.ai-send,.ai-connect,.ai-approval-submit,.ai-space-dialog footer button:last-child){
+body[data-wanx-surface] :is(.button.primary,.ai-collapsed-new,.ai-send:not(:disabled),.ai-connect,.ai-approval-submit,.ai-space-dialog footer button:last-child){
  background:var(--wanx-action);border-color:transparent;color:#fffdf9;box-shadow:none
 }
 body[data-wanx-surface] :is(.button.primary,.ai-collapsed-new,.ai-send,.ai-connect,.ai-approval-submit,.ai-space-dialog footer button:last-child):hover:not(:disabled){background:var(--wanx-action-hover);border-color:transparent;box-shadow:none}
@@ -164,7 +166,7 @@ body[data-wanx-surface] :is(.button.primary,.ai-collapsed-new,.ai-send,.ai-conne
 .space-toolbar>.space-row-actions:first-child{min-width:0;gap:5px}.space-toolbar-title{margin-left:8px}
 .space-pathbar{padding-block:8px;gap:12px}.space-view-tools{gap:9px}.space-search{max-width:240px}
 .space-context-actions{gap:9px}.space-selected-count{font-size:11px;color:#8a7764}
-.space-context-actions>.text-button{padding:5px 7px;color:var(--wanx-action)}
+.space-context-actions>.text-button{padding:5px 7px}
 /* A small shared disclosure replaces rows of secondary buttons. */
 .wanx-action-menu{position:relative;flex-shrink:0;text-align:left}
 .wanx-action-menu>summary{list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;white-space:nowrap}
@@ -255,4 +257,10 @@ body[data-wanx-surface] :is(.button.primary,.ai-collapsed-new,.ai-send,.ai-conne
 }
 @media(max-width:760px){
  .ai-assistant-workbench,.ai-dialogue.history-collapsed .ai-assistant-workbench{grid-template-columns:minmax(0,1fr)}
+}
+.starlink-banner-actions .button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.starlink-banner-project-name { max-width: clamp(60px, 16vw, 205px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.starlink-banner-caret { width: 7px; height: 7px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: translateY(-2px) rotate(45deg); }
+@media (max-width: 680px) {
+  .starlink-banner-actions { flex-wrap: wrap; }
 }

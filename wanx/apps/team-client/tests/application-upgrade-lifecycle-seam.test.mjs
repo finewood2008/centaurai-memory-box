@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm, access } from 'node:fs/promise
 import { setImmediate } from 'node:timers/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { createApplicationManager } from '../applications/manager.mjs';
+import { createApplicationManager } from '../build/app/applications/manager.mjs';
 
 const manifest = { applicationId: 'test.upgrade', name: 'Upgrade', version: '1.0.0', protocolVersion: 1, runtime: 'electron', entrypoint: 'main.cjs' };
 async function fixture(t, { createConnection, automaticReady = true } = {}) {

@@ -32,10 +32,18 @@ TASK_ROUTES = {
         "reextract_document",
         "execute_modeling_rules",
         "retry_modeling_rule_execution",
+        "start_material_processing",
+        "confirm_material_processing",
+        "retry_workbench_job",
     },
-    "publication": {"submit_correction_draft", "retry_correction_publication"},
-    "index": {"build_index"},
+    "publication": {"submit_correction_draft", "retry_correction_publication", "retry_workbench_job"},
+    "retraction": {"correct_document", "retry_workbench_job", "retry_job"},
+    "index": {"build_index", "confirm_material_source", "retry_material_source_index", "start_material_processing", "retry_workbench_job"},
     "sensitive": {
+        "preview_sensitive",
+        "save_sensitive_settings",
+        "retry_job",
+        "retry_workbench_job",
         "search_knowledge",
         "search_workspaces",
         "get_evidence",
@@ -48,6 +56,7 @@ TASK_ROUTES = {
 }
 CATALOG_ROUTES = set().union(*TASK_ROUTES.values()) | {
     "workbench_status",
+    "get_sensitive_settings",
     "read_processing",
     "model_catalog",
     "save_processing",
@@ -146,6 +155,10 @@ class SemanticaModelAuthority:
                     "LOCAL_DATA_SCOPE_DENIED",
                 )
             else:
+                if ancestor["taskKind"] == "extraction" and body["taskKind"] == "publication":
+                    need(parent["route"]["serviceContext"]["operation"] in {
+                        "start_material_processing", "confirm_material_processing", "retry_workbench_job",
+                    }, "LOCAL_DATA_SCOPE_DENIED")
                 validate_task_transition(ancestor["taskKind"], body["taskKind"], depth + 1)
             tasks = [
                 op

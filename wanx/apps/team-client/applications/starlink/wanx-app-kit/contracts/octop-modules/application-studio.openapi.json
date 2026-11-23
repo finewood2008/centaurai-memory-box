@@ -1,0 +1,6406 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "WANX Octop · Application studio",
+    "description": "**CentaurAI-WANX** is a smarter, self-hosted AI assistant for multiple users and agents. All routes are served under `/api`.\n\n## Authentication\n\nMost endpoints require a JWT bearer token:\n\n1. Complete initial setup via `/api/setup/*` (first install only).\n2. `GET /api/auth/captcha` then `POST /api/auth/login` with `username` and `password`\n   (and `captcha_token` when a strong provider is active), or complete SSO with\n   `/api/auth/oidc/*` or `/api/auth/oauth/*` when a provider is enabled.\n3. Send `Authorization: Bearer <access_token>` on subsequent requests.\n\nAccess tokens use sliding renewal: when less than one-third of\n`access_token_ttl_seconds` remains, authenticated responses may include a fresh\ntoken in the `X-Octop-Access-Token` header. Clients should replace the stored\ntoken when present.\n\nPublic endpoints (no login token): `/api/docs`, `/api/openapi.json`, `/api/health`,\n`/api/setup/*` (wizard authorization applies), `/api/auth/login`, `/api/auth/register`,\n`/api/auth/captcha`, `/api/auth/oidc/status`, `/api/auth/oidc/start`,\n`/api/auth/oidc/callback`, `/api/auth/oidc/exchange`, `/api/auth/oauth/status`,\n`/api/auth/oauth/start`, `/api/auth/oauth/callback`, `/api/auth/oauth/exchange`,\n`/api/auth/invite/validate`,\n`/api/auth/invite/redeem`, `/api/connectors/oauth/callback`,\nand `/api/internal/mcp/*`.\n\n## Agent scope\n\nMany agent-scoped routes use the agent ID in the URL path (`/api/agents/{agent_id}/…`).\nRoutes first check the signed token's application scope; legacy tokens default to WANX.\nResources in another application are treated as not found, including for administrators.\nWithin the same application, each route applies its ownership or shared-resource access\nrules. WANX administrators may bypass ownership where supported; Zhijun personal profiles,\nmemories and uploaded sources require the owner.\n\n## Streaming chat\n\nDashboard live turns use **WebSocket** at `/api/agents/{agent_id}/chat/ws` (pass JWT as\n`?token=` query param). Send `{\"type\":\"user_turn\", ...}` frames; the server replies with JSON\nchunks matching the harness stream format, ending with `{\"type\":\"done\"}` or\n`{\"type\":\"error\",\"message\":\"...\"}`.\n\nText-type dashboard pushes (cron reminders, proactive care) also emit\n`{\"type\":\"dashboard_push\", ...}` on `/api/notifications/ws` (same `?token=` auth) so the\nSPA can show a toast even when the chat socket is not subscribed.\n\nHITL resume still uses `POST /api/agents/{agent_id}/chat/hitl/resume` (SSE).\n\n## Knowledge libraries\n\n`/api/knowledge-bases` uses the signed application scope for creation, visibility,\ndocument access, and citations. Existing libraries remain in WANX. Zhijun libraries\nare private to their owner and use local document parsers, downloaded native ONNX\nembeddings and RapidOCR. Remote WANX embedding/OCR settings do not affect Zhijun;\nmissing local components are reported as unavailable without remote fallback.\n",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/app-studio/context": {
+      "get": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Read authenticated studio context and capabilities",
+        "operationId": "context_api_app_studio_context_get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/engines": {
+      "get": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Engines",
+        "operationId": "engines_api_app_studio_engines_get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/engines/default": {
+      "put": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Engine Default",
+        "operationId": "engine_default_api_app_studio_engines_default_put",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EngineSelection"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/engines/check": {
+      "post": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Engine Check",
+        "operationId": "engine_check_api_app_studio_engines_check_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EngineSelection"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/engine": {
+      "put": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Engine Bind",
+        "operationId": "engine_bind_api_app_studio_projects__project_id__engine_put",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EngineBinding"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/preflight": {
+      "get": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Check native Codex app-server connectivity without model calls",
+        "operationId": "preflight_api_app_studio_preflight_get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/capabilities": {
+      "get": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Read the fixed versioned runtime capability catalog",
+        "operationId": "capabilities_api_app_studio_capabilities_get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/context/sources": {
+      "get": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Metadata only; no source content or model call",
+        "operationId": "context_sources_api_app_studio_context_sources_get",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "parent",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Parent"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/intake": {
+      "get": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Intake State",
+        "operationId": "intake_state_api_app_studio_projects__project_id__intake_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Intake Send",
+        "operationId": "intake_send_api_app_studio_projects__project_id__intake_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntakeText"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/context": {
+      "get": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Context State",
+        "operationId": "context_state_api_app_studio_projects__project_id__context_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Select Context",
+        "operationId": "select_context_api_app_studio_projects__project_id__context_put",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContextSelection"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/context/read": {
+      "post": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Read Context",
+        "operationId": "read_context_api_app_studio_projects__project_id__context_read_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContextRead"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/context/search": {
+      "post": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Search Context",
+        "operationId": "search_context_api_app_studio_projects__project_id__context_search_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContextSearch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/capabilities": {
+      "get": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Capability State",
+        "operationId": "capability_state_api_app_studio_projects__project_id__capabilities_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/capabilities/decisions": {
+      "post": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Capability Decision",
+        "operationId": "capability_decision_api_app_studio_projects__project_id__capabilities_decisions_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CapabilityDecision"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/capabilities/check": {
+      "post": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Capability Check",
+        "operationId": "capability_check_api_app_studio_projects__project_id__capabilities_check_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CapabilityCheck"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/intake/handoff": {
+      "post": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Handoff",
+        "operationId": "handoff_api_app_studio_projects__project_id__intake_handoff_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Handoff"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/interview": {
+      "get": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Interview State",
+        "operationId": "interview_state_api_app_studio_projects__project_id__interview_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/interview/turns": {
+      "post": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Interview Turn",
+        "operationId": "interview_turn_api_app_studio_projects__project_id__interview_turns_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InterviewTurn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/intake/events": {
+      "get": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Preparation Events",
+        "operationId": "preparation_events_api_app_studio_projects__project_id__intake_events_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "After"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/interview/events": {
+      "get": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Preparation Events",
+        "operationId": "preparation_events_api_app_studio_projects__project_id__interview_events_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "After"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects": {
+      "get": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "List your development projects",
+        "operationId": "projects_api_app_studio_projects_get",
+        "parameters": [
+          {
+            "name": "includeDeleted",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Includedeleted"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Create a private project idempotently",
+        "operationId": "create_api_app_studio_projects_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Create"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/metadata": {
+      "put": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Rename or reversibly remove an owned project without changing its PRD",
+        "operationId": "metadata_api_app_studio_projects__project_id__metadata_put",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Metadata"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}": {
+      "get": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Restore a project and its version-bound state",
+        "operationId": "get_api_app_studio_projects__project_id__get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/chat": {
+      "post": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Save a user fact and request the next interview turn",
+        "operationId": "chat_api_app_studio_projects__project_id__chat_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Chat"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/interview/start": {
+      "post": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Begin heuristic discovery without duplicating the original user goal",
+        "operationId": "interview_start_api_app_studio_projects__project_id__interview_start_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/wanx_studio__contracts__Operation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/solution": {
+      "put": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Save an explicit user revision; invalidate previous confirmation",
+        "operationId": "solution_api_app_studio_projects__project_id__solution_put",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSolution"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/decisions": {
+      "post": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Record a user decision about one unsupported dependency",
+        "operationId": "decision_api_app_studio_projects__project_id__decisions_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Decision"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/confirm": {
+      "post": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Freeze the current solution after dependency decisions",
+        "operationId": "confirm_api_app_studio_projects__project_id__confirm_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Confirm"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/build": {
+      "post": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Start Codex against the exact confirmed version",
+        "operationId": "build_api_app_studio_projects__project_id__build_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Build"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/tasks/{task_id}/cancel": {
+      "post": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Cancel a task and revoke its proxy",
+        "operationId": "cancel_api_app_studio_projects__project_id__tasks__task_id__cancel_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/wanx_studio__contracts__Operation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/tasks/{task_id}/events": {
+      "get": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Read the complete ordered development history, including earlier pages",
+        "operationId": "task_events_api_app_studio_projects__project_id__tasks__task_id__events_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "After"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/tasks/{task_id}/terminal/{operation}": {
+      "post": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Reject terminal input, paste, keys and other control operations",
+        "operationId": "readonly_terminal_api_app_studio_projects__project_id__tasks__task_id__terminal__operation__post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "operation",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Operation"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/versions": {
+      "get": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Versions",
+        "operationId": "versions_api_app_studio_projects__project_id__versions_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/versions/{artifact_hash}": {
+      "get": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Version",
+        "operationId": "version_api_app_studio_projects__project_id__versions__artifact_hash__get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "artifact_hash",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Artifact Hash"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/feedback": {
+      "put": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Feedback",
+        "operationId": "feedback_api_app_studio_projects__project_id__feedback_put",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Feedback"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/iterations": {
+      "post": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Iteration",
+        "operationId": "iteration_api_app_studio_projects__project_id__iterations_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IterationOperation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/adopt": {
+      "post": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Adopt",
+        "operationId": "adopt_api_app_studio_projects__project_id__adopt_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Adopt"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/versions/{artifact_hash}/restore-check": {
+      "get": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Restore Check",
+        "operationId": "restore_check_api_app_studio_projects__project_id__versions__artifact_hash__restore_check_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "artifact_hash",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Artifact Hash"
+            }
+          },
+          {
+            "name": "comparisonHash",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Comparisonhash"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/restore-version": {
+      "post": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Restore Version",
+        "operationId": "restore_version_api_app_studio_projects__project_id__restore_version_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreVersion"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/accept": {
+      "post": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Record the owner acceptance for every criterion of this artifact",
+        "operationId": "accept_api_app_studio_projects__project_id__accept_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Accept"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/install/{artifact_hash}": {
+      "get": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Obtain an accepted data-free artifact for the trusted Host installer",
+        "operationId": "install_api_app_studio_projects__project_id__install__artifact_hash__get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "artifact_hash",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Artifact Hash"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/installed": {
+      "post": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Commit a matching Host installation receipt",
+        "operationId": "installed_api_app_studio_projects__project_id__installed_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Installed"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/runtime": {
+      "post": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Create a short-lived runtime bound to your app and environment",
+        "operationId": "runtime_api_app_studio_projects__project_id__runtime_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Runtime"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/runtime/{session}/invoke": {
+      "post": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Invoke a declared capability in the bound app namespace",
+        "operationId": "invoke_api_app_studio_runtime__session__invoke_post",
+        "parameters": [
+          {
+            "name": "session",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Invoke"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/apps/{app_id}/runtime": {
+      "post": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Open an installed app by its portable application identity",
+        "operationId": "installed_runtime_api_app_studio_apps__app_id__runtime_post",
+        "parameters": [
+          {
+            "name": "app_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "App Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Runtime"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/apps/{app_id}": {
+      "get": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Read metadata for one currently authorized company application",
+        "operationId": "published_application_api_app_studio_apps__app_id__get",
+        "parameters": [
+          {
+            "name": "app_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "App Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/apps/{app_id}/install": {
+      "get": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Read the sealed package for one authorized company application",
+        "operationId": "published_install_api_app_studio_apps__app_id__install_get",
+        "parameters": [
+          {
+            "name": "app_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "App Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/runtime/{session}/files": {
+      "post": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Explicitly select owner-controlled text files for this runtime",
+        "operationId": "select_api_app_studio_runtime__session__files_post",
+        "parameters": [
+          {
+            "name": "session",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SelectFiles"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/runtime/{session}": {
+      "delete": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Revoke this runtime session",
+        "operationId": "revoke_api_app_studio_runtime__session__delete",
+        "parameters": [
+          {
+            "name": "session",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/projects/{project_id}/events": {
+      "get": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "Subscribe to state changes without replaying model calls",
+        "operationId": "events_api_app_studio_projects__project_id__events_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/app-studio/files": {
+      "get": {
+        "tags": [
+          "Application studio"
+        ],
+        "summary": "List owner file metadata for the trusted text-file picker",
+        "operationId": "list_files_api_app_studio_files_get",
+        "parameters": [
+          {
+            "name": "parent",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Parent"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Accept": {
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 16,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Operationid"
+          },
+          "artifactHash": {
+            "type": "string",
+            "title": "Artifacthash"
+          },
+          "criteria": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Criteria"
+          },
+          "confirmedByUser": {
+            "type": "boolean",
+            "const": true,
+            "title": "Confirmedbyuser"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "operationId",
+          "artifactHash",
+          "criteria",
+          "confirmedByUser"
+        ],
+        "title": "Accept"
+      },
+      "AcceptanceCase": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "given": {
+            "type": "string",
+            "maxLength": 600,
+            "title": "Given",
+            "default": ""
+          },
+          "when": {
+            "type": "string",
+            "maxLength": 600,
+            "title": "When",
+            "default": ""
+          },
+          "then": {
+            "type": "string",
+            "maxLength": 600,
+            "title": "Then",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "title"
+        ],
+        "title": "AcceptanceCase"
+      },
+      "Adopt": {
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 16,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Operationid"
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Expectedrevision"
+          },
+          "artifactHash": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Artifacthash"
+          },
+          "confirmedByUser": {
+            "type": "boolean",
+            "const": true,
+            "title": "Confirmedbyuser"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "operationId",
+          "expectedRevision",
+          "artifactHash",
+          "confirmedByUser"
+        ],
+        "title": "Adopt"
+      },
+      "Build": {
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 16,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Operationid"
+          },
+          "solutionHash": {
+            "type": "string",
+            "title": "Solutionhash"
+          },
+          "instruction": {
+            "type": "string",
+            "maxLength": 8000,
+            "title": "Instruction",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "operationId",
+          "solutionHash"
+        ],
+        "title": "Build"
+      },
+      "CapabilityCheck": {
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 16,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Operationid"
+          },
+          "capabilityIds": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capabilityids"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "operationId"
+        ],
+        "title": "CapabilityCheck"
+      },
+      "CapabilityDecision": {
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 16,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Operationid"
+          },
+          "gapId": {
+            "type": "string",
+            "title": "Gapid"
+          },
+          "detail": {
+            "type": "string",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Detail"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "operationId",
+          "gapId",
+          "detail"
+        ],
+        "title": "CapabilityDecision"
+      },
+      "Chat": {
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 16,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Operationid"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "operationId",
+          "text"
+        ],
+        "title": "Chat"
+      },
+      "Confirm": {
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 16,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Operationid"
+          },
+          "solutionHash": {
+            "type": "string",
+            "title": "Solutionhash"
+          },
+          "reviewedSections": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 7,
+            "title": "Reviewedsections"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "operationId",
+          "solutionHash"
+        ],
+        "title": "Confirm"
+      },
+      "ContextRead": {
+        "properties": {
+          "ref": {
+            "type": "string",
+            "title": "Ref"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset",
+            "default": 0
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit",
+            "default": 12000
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "ref"
+        ],
+        "title": "ContextRead"
+      },
+      "ContextSearch": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Query"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "title": "ContextSearch"
+      },
+      "ContextSelection": {
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 16,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Operationid"
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "title": "Expectedrevision"
+          },
+          "references": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "References"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "operationId",
+          "expectedRevision",
+          "references"
+        ],
+        "title": "ContextSelection"
+      },
+      "Create": {
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 16,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Operationid"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "goal": {
+            "type": "string",
+            "maxLength": 12000,
+            "minLength": 1,
+            "title": "Goal"
+          },
+          "intake": {
+            "type": "boolean",
+            "title": "Intake",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "operationId",
+          "name",
+          "goal"
+        ],
+        "title": "Create"
+      },
+      "DataField": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "text",
+              "longText",
+              "number",
+              "date",
+              "status",
+              "boolean"
+            ],
+            "title": "Type",
+            "default": "text"
+          },
+          "required": {
+            "type": "boolean",
+            "title": "Required",
+            "default": false
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 600,
+            "title": "Description",
+            "default": ""
+          },
+          "example": {
+            "type": "string",
+            "maxLength": 300,
+            "title": "Example",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "DataField"
+      },
+      "Decision": {
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 16,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Operationid"
+          },
+          "solutionHash": {
+            "type": "string",
+            "title": "Solutionhash"
+          },
+          "reviewedSections": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 7,
+            "title": "Reviewedsections"
+          },
+          "dependencyId": {
+            "type": "string",
+            "title": "Dependencyid"
+          },
+          "choice": {
+            "type": "string",
+            "enum": [
+              "manual",
+              "defer",
+              "discuss"
+            ],
+            "title": "Choice"
+          },
+          "detail": {
+            "type": "string",
+            "maxLength": 4000,
+            "title": "Detail",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "operationId",
+          "solutionHash",
+          "dependencyId",
+          "choice"
+        ],
+        "title": "Decision"
+      },
+      "Dependency": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "requirement": {
+            "type": "string",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Requirement"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "requirement",
+          "reason"
+        ],
+        "title": "Dependency"
+      },
+      "EngineBinding": {
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 16,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Operationid"
+          },
+          "engineId": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "title": "Engineid"
+          },
+          "expectedFingerprint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expectedfingerprint"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "operationId",
+          "engineId"
+        ],
+        "title": "EngineBinding"
+      },
+      "EngineSelection": {
+        "properties": {
+          "engineId": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "title": "Engineid"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "engineId"
+        ],
+        "title": "EngineSelection"
+      },
+      "Feature": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 1000,
+            "title": "Description",
+            "default": ""
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "must",
+              "later"
+            ],
+            "title": "Priority",
+            "default": "must"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "title"
+        ],
+        "title": "Feature"
+      },
+      "Feedback": {
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 16,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Operationid"
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Expectedrevision"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 8000,
+            "title": "Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "operationId",
+          "expectedRevision",
+          "text"
+        ],
+        "title": "Feedback"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "Handoff": {
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 16,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Operationid"
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "title": "Expectedrevision"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "operationId",
+          "expectedRevision"
+        ],
+        "title": "Handoff"
+      },
+      "Installed": {
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 16,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Operationid"
+          },
+          "artifactHash": {
+            "type": "string",
+            "title": "Artifacthash"
+          },
+          "applicationId": {
+            "type": "string",
+            "title": "Applicationid"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "operationId",
+          "artifactHash",
+          "applicationId",
+          "version"
+        ],
+        "title": "Installed"
+      },
+      "IntakeText": {
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 16,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Operationid"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 12000,
+            "minLength": 1,
+            "title": "Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "operationId",
+          "text"
+        ],
+        "title": "IntakeText"
+      },
+      "InterviewTurn": {
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 16,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Operationid"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 12000,
+            "title": "Text",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "operationId"
+        ],
+        "title": "InterviewTurn"
+      },
+      "Invoke": {
+        "properties": {
+          "method": {
+            "type": "string",
+            "title": "Method"
+          },
+          "params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "method"
+        ],
+        "title": "Invoke"
+      },
+      "IterationOperation": {
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 16,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Operationid"
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Expectedrevision"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "begin",
+              "abandon"
+            ],
+            "title": "Action"
+          },
+          "baseHash": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Basehash"
+          },
+          "goal": {
+            "type": "string",
+            "maxLength": 8000,
+            "title": "Goal",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "operationId",
+          "expectedRevision",
+          "action"
+        ],
+        "title": "IterationOperation"
+      },
+      "Metadata": {
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 16,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Operationid"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "rename",
+              "auto-name",
+              "delete",
+              "restore"
+            ],
+            "title": "Action"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 80,
+            "title": "Name",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "operationId",
+          "action"
+        ],
+        "title": "Metadata"
+      },
+      "PageBlock": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "list",
+              "form",
+              "summary",
+              "detail",
+              "actions"
+            ],
+            "title": "Kind"
+          },
+          "fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Fields"
+          },
+          "actions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Actions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "title",
+          "kind"
+        ],
+        "title": "PageBlock"
+      },
+      "PagePlan": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "purpose": {
+            "type": "string",
+            "maxLength": 600,
+            "title": "Purpose",
+            "default": ""
+          },
+          "blocks": {
+            "items": {
+              "$ref": "#/components/schemas/PageBlock"
+            },
+            "type": "array",
+            "title": "Blocks"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "PagePlan"
+      },
+      "ProductRequirement": {
+        "properties": {
+          "version": {
+            "type": "integer",
+            "const": 1,
+            "title": "Version",
+            "default": 1
+          },
+          "problem": {
+            "type": "string",
+            "maxLength": 2000,
+            "title": "Problem",
+            "default": ""
+          },
+          "currentApproach": {
+            "type": "string",
+            "maxLength": 2000,
+            "title": "Currentapproach",
+            "default": ""
+          },
+          "successOutcome": {
+            "type": "string",
+            "maxLength": 2000,
+            "title": "Successoutcome",
+            "default": ""
+          },
+          "scenarios": {
+            "items": {
+              "$ref": "#/components/schemas/Scenario"
+            },
+            "type": "array",
+            "title": "Scenarios"
+          },
+          "features": {
+            "items": {
+              "$ref": "#/components/schemas/Feature"
+            },
+            "type": "array",
+            "title": "Features"
+          },
+          "pages": {
+            "items": {
+              "$ref": "#/components/schemas/PagePlan"
+            },
+            "type": "array",
+            "title": "Pages"
+          },
+          "dataFields": {
+            "items": {
+              "$ref": "#/components/schemas/DataField"
+            },
+            "type": "array",
+            "title": "Datafields"
+          },
+          "rules": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Rules"
+          },
+          "exceptions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Exceptions"
+          },
+          "tests": {
+            "items": {
+              "$ref": "#/components/schemas/AcceptanceCase"
+            },
+            "type": "array",
+            "title": "Tests"
+          },
+          "outOfScope": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Outofscope"
+          },
+          "openQuestions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Openquestions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ProductRequirement"
+      },
+      "RestoreVersion": {
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 16,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Operationid"
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Expectedrevision"
+          },
+          "artifactHash": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Artifacthash"
+          },
+          "confirmedByUser": {
+            "type": "boolean",
+            "const": true,
+            "title": "Confirmedbyuser"
+          },
+          "checkHash": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Checkhash"
+          },
+          "comparisonHash": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comparisonhash"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "operationId",
+          "expectedRevision",
+          "artifactHash",
+          "confirmedByUser",
+          "checkHash"
+        ],
+        "title": "RestoreVersion"
+      },
+      "Runtime": {
+        "properties": {
+          "artifactHash": {
+            "type": "string",
+            "title": "Artifacthash"
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "preview",
+              "production"
+            ],
+            "title": "Environment",
+            "default": "preview"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "artifactHash"
+        ],
+        "title": "Runtime"
+      },
+      "Scenario": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "actor": {
+            "type": "string",
+            "maxLength": 300,
+            "title": "Actor",
+            "default": ""
+          },
+          "trigger": {
+            "type": "string",
+            "maxLength": 600,
+            "title": "Trigger",
+            "default": ""
+          },
+          "steps": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Steps"
+          },
+          "outcome": {
+            "type": "string",
+            "maxLength": 600,
+            "title": "Outcome",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "title"
+        ],
+        "title": "Scenario"
+      },
+      "SelectFiles": {
+        "properties": {
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 10,
+            "title": "Ids"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "ids"
+        ],
+        "title": "SelectFiles"
+      },
+      "Solution": {
+        "properties": {
+          "audience": {
+            "type": "string",
+            "maxLength": 2000,
+            "title": "Audience",
+            "default": ""
+          },
+          "workflow": {
+            "type": "string",
+            "maxLength": 8000,
+            "title": "Workflow",
+            "default": ""
+          },
+          "inputs": {
+            "type": "string",
+            "maxLength": 4000,
+            "title": "Inputs",
+            "default": ""
+          },
+          "outputs": {
+            "type": "string",
+            "maxLength": 4000,
+            "title": "Outputs",
+            "default": ""
+          },
+          "fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Fields"
+          },
+          "acceptance": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Acceptance"
+          },
+          "capabilities": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "data",
+                "model",
+                "files",
+                "knowledge",
+                "reports",
+                "foundation",
+                "dialogue"
+              ]
+            },
+            "type": "array",
+            "title": "Capabilities"
+          },
+          "dependencies": {
+            "items": {
+              "$ref": "#/components/schemas/Dependency"
+            },
+            "type": "array",
+            "title": "Dependencies"
+          },
+          "prd": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProductRequirement"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "Solution"
+      },
+      "UpdateSolution": {
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 16,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Operationid"
+          },
+          "expectedHash": {
+            "type": "string",
+            "title": "Expectedhash"
+          },
+          "solution": {
+            "$ref": "#/components/schemas/Solution"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "operationId",
+          "expectedHash",
+          "solution"
+        ],
+        "title": "UpdateSolution"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "wanx_studio__contracts__Operation": {
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 16,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Operationid"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "operationId"
+        ],
+        "title": "Operation"
+      }
+    },
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "JWT from `POST /api/auth/login` (`access_token` field)."
+      }
+    }
+  },
+  "tags": [],
+  "x-wanx-supplemental-routes": [
+    {
+      "method": "GET",
+      "path": "/api/_client/workshop/_builder/context",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/_builder/projects/{pid}/build",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/workshop/_builder/projects/{pid}/edits",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/_builder/projects/{pid}/edits",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/_builder/projects/{pid}/edits/heartbeat",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/_builder/projects/{pid}/edits/stop",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/_builder/projects/{pid}/edits/{eid}/answer",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/_builder/projects/{pid}/edits/{eid}/retry",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/_builder/projects/{pid}/edits/{eid}/stop",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/workshop/_builder/projects/{pid}/proposal",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/_builder/projects/{pid}/restore-version",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/_client/launch/configure",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/workshop/_client/launch/sources",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/_client/launch/suggest",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/_client/launch/{pid}/archive/{artifact_hash}",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/_client/launch/{pid}/start",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/workshop/_client/projects/{project_id}/runtime-model",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/_client/workshop/_client/projects/{project_id}/runtime-model",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/workshop/_management/projects",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/_management/projects/{project_id}",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/workshop/apps/{app_id}",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/workshop/apps/{app_id}/install",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/apps/{app_id}/runtime",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/workshop/capabilities",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/workshop/context",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/workshop/context/sources",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/copies",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/workshop/engines",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/engines/check",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/_client/workshop/engines/default",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/workshop/preflight",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/workshop/projects",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/projects",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/workshop/projects/{project_id}",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/projects/{project_id}/accept",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/projects/{project_id}/adopt",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/projects/{project_id}/build",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/workshop/projects/{project_id}/capabilities",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/projects/{project_id}/capabilities/check",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/projects/{project_id}/capabilities/decisions",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/projects/{project_id}/chat",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/projects/{project_id}/confirm",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/workshop/projects/{project_id}/context",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/_client/workshop/projects/{project_id}/context",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/projects/{project_id}/context/read",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/projects/{project_id}/context/search",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/projects/{project_id}/decisions",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/_client/workshop/projects/{project_id}/engine",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/workshop/projects/{project_id}/events",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/_client/workshop/projects/{project_id}/feedback",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/workshop/projects/{project_id}/install/{artifact_hash}",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/projects/{project_id}/installed",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/workshop/projects/{project_id}/intake",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/projects/{project_id}/intake",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/workshop/projects/{project_id}/intake/events",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/projects/{project_id}/intake/handoff",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/workshop/projects/{project_id}/interview",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/workshop/projects/{project_id}/interview/events",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/projects/{project_id}/interview/start",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/projects/{project_id}/interview/turns",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/projects/{project_id}/iterations",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/_client/workshop/projects/{project_id}/metadata",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/projects/{project_id}/restore-version",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/projects/{project_id}/runtime",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/_client/workshop/projects/{project_id}/solution",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/projects/{project_id}/source-update",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/projects/{project_id}/tasks/{task_id}/cancel",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/workshop/projects/{project_id}/tasks/{task_id}/events",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/projects/{project_id}/tasks/{task_id}/terminal/{operation}",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/workshop/projects/{project_id}/versions",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/workshop/projects/{project_id}/versions/{artifact_hash}",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/workshop/projects/{project_id}/versions/{artifact_hash}/restore-check",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/_client/workshop/runtime/{session}",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/workshop/runtime/{session}/files",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/runtime/{session}/files",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/runtime/{session}/haowen-native",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/runtime/{session}/invoke",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/workshop/runtime/{session}/knowledge",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/_client/workshop/runtime/{session}/knowledge",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/workshop/sources",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/_client/workshop/sources/{project_id}",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/app-studio/_builder/context",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/app-studio/_builder/projects/{pid}/build",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/app-studio/_builder/projects/{pid}/edits",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/app-studio/_builder/projects/{pid}/edits",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/app-studio/_builder/projects/{pid}/edits/heartbeat",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/app-studio/_builder/projects/{pid}/edits/stop",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/app-studio/_builder/projects/{pid}/edits/{eid}/answer",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/app-studio/_builder/projects/{pid}/edits/{eid}/retry",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/app-studio/_builder/projects/{pid}/edits/{eid}/stop",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/app-studio/_builder/projects/{pid}/proposal",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/app-studio/_builder/projects/{pid}/restore-version",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/app-studio/_client/launch/configure",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/app-studio/_client/launch/sources",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/app-studio/_client/launch/suggest",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/app-studio/_client/launch/{pid}/archive/{artifact_hash}",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "POST",
+      "path": "/api/app-studio/_client/launch/{pid}/start",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "GET",
+      "path": "/api/app-studio/_client/projects/{project_id}/runtime-model",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/app-studio/_client/projects/{project_id}/runtime-model",
+      "group": "Application studio",
+      "type": "未纳入 OpenAPI"
+    }
+  ]
+}

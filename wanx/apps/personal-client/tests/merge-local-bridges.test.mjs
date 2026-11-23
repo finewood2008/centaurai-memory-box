@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { createAIDialogue } from '../shell/ai-dialogue.mjs';
-import { createAIDialogue as createCloudAssistant } from '../shell/assistant-service.mjs';
-import { createSpaceLinkBridge } from '../shell/space-links.mjs';
+import { createAIDialogue } from '../build/app/shell/ai-dialogue.mjs';
+import { createAIDialogue as createCloudAssistant } from '../build/app/shell/assistant-service.mjs';
+import { createSpaceLinkBridge } from '../build/app/shell/space-links.mjs';
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };

@@ -28,6 +28,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from .admin_client import AdminClient, BridgeUpstreamError
 from .config import BridgeAuthError
 from .model_provider_catalog import BINDING, ModelProviderCatalog, public_https
+from .model_reasoning import reasoning_metadata, verified_reasoning
 from .oidc import loopback_origin
 
 MAX_BODY = 8 * 1024 * 1024
@@ -130,7 +131,7 @@ def _proxy_credential(
     return prefix + secrets.token_urlsafe(32)
 
 
-def _models(values: Any, secret: str) -> list[dict[str, Any]]:
+def _models(values: Any, secret: str, *, base_url: str = "") -> list[dict[str, Any]]:
     if not isinstance(values, list) or len(values) > 4096:
         raise fail("MODEL_PROVIDER_MODELS_INVALID")
     result: dict[str, dict[str, Any]] = {}
@@ -165,6 +166,23 @@ def _models(values: Any, secret: str) -> list[dict[str, Any]]:
             model["name"] = row["name"]
         if type(row.get("reasoning")) is bool:
             model["reasoning"] = row["reasoning"]
+        try:
+            capability = None
+            if row.get("reasoning_config") is not None:
+                capability = reasoning_metadata(row["reasoning_config"])
+                if any(secret in effort for effort in capability.get("efforts", [])):
+                    raise ValueError("Invalid reasoning capability")
+            elif row.get("reasoning") is False:
+                capability = {"supported": False}
+            elif "reasoning" not in row:
+                capability = verified_reasoning(base_url, ident)
+        except (TypeError, ValueError):
+            raise fail("MODEL_PROVIDER_MODELS_INVALID") from None
+        if capability is not None:
+            model["reasoning_config"] = capability
+            model["reasoning"] = capability["supported"]
+            # Persist provenance to distinguish withdrawn metadata from host inference.
+            model["_wanx_reasoning_owned"] = True
         if isinstance(row.get("input"), list) and all(
             isinstance(x, str) and x in {"text", "image", "audio"} for x in row["input"]
         ):
@@ -242,12 +260,14 @@ class ModelProviderRuntime:
             raise fail("MODEL_PROVIDER_WANX_UPDATE_FAILED") from None
 
     async def _discover(self, provider: dict[str, Any]) -> list[dict[str, Any]]:
+        base_url = public_https(provider["baseUrl"])
+        secret = provider["apiKey"]
         if provider["allowedModels"]:
-            return _models(provider["allowedModels"], provider["apiKey"])
+            return _models(provider["allowedModels"], secret, base_url=base_url)
         request = self.client.build_request(
             "GET",
-            public_https(provider["baseUrl"]) + "/models",
-            headers={"Authorization": "Bearer " + provider["apiKey"], "Accept": "application/json"},
+            base_url + "/models",
+            headers={"Authorization": "Bearer " + secret, "Accept": "application/json"},
         )
         request.headers.pop("cookie", None)
         async with asyncio.timeout(20):
@@ -260,7 +280,7 @@ class ModelProviderRuntime:
                 await response.aclose()
         try:
             data = json.loads(raw)
-            return _models(data["data"], provider["apiKey"])
+            return _models(data["data"], secret, base_url=base_url)
         except (ValueError, KeyError, TypeError):
             raise fail("MODEL_PROVIDER_MODELS_INVALID") from None
 
@@ -366,6 +386,10 @@ class ModelProviderRuntime:
                     actual_models = existing.get("models", [])
                     if len(actual_models) != len(entry["models"]) or any(
                         not isinstance(actual, dict)
+                        or (
+                            actual.get("_wanx_reasoning_owned") is True
+                            and expected.get("_wanx_reasoning_owned") is not True
+                        )
                         or any(actual.get(k) != v for k, v in expected.items())
                         for actual, expected in zip(actual_models, entry["models"])
                     ):
@@ -431,9 +455,20 @@ class ModelProviderRuntime:
             if provider_error is None and snapshot and snapshot.get("schemaVersion") == 3:
                 try:
                     await self.catalog.acknowledge_applied()
-                except BridgeAuthError:
-                    self.entries.clear()
-                    self.catalog.clear()
+                except BridgeAuthError as exc:
+                    try:
+                        if exc.code != "MODEL_PROVIDER_TEMPORARILY_UNAVAILABLE":
+                            raise exc
+                        # ACK reports installation; the validated GET lease is
+                        # the authority. A transient reporting failure must not
+                        # revoke an installed provider or interrupt its streams.
+                        # Never renew a lease here or restore previous entries.
+                        await self._authority(self.catalog.active())
+                        self.catalog.active()  # Authority checks may have awaited.
+                    except BridgeAuthError:
+                        self.entries.clear()
+                        self.catalog.clear()
+                        raise
                     raise
             self.last_error = refresh_error.code if refresh_error else None
             if provider_error is not None:

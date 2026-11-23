@@ -15,10 +15,10 @@ const source = (sourceId: string, displayName: string, status = "not_connected")
   messageCount: 0, lastScannedAt: null,
 });
 
-function Harness({ profile }: { profile: CollectionProfile }) {
+function Harness({ profile, focusedSourceId }: { profile: CollectionProfile; focusedSourceId?: string }) {
   const { setClients } = useApiClients();
   useEffect(() => { setClients(clients); }, [setClients]);
-  return <MemorySourcesContent embedded surface="my-ai" collectionProfile={profile}
+  return <MemorySourcesContent embedded surface="my-ai" collectionProfile={profile} focusedSourceId={focusedSourceId}
     localAgents={[{ id: "codex", name: "Codex" }, { id: "gemini", name: "Gemini CLI" }]} />;
 }
 
@@ -48,8 +48,8 @@ beforeEach(() => {
 });
 afterEach(() => { act(() => root.unmount()); container.remove(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
-async function render(profile: CollectionProfile) {
-  await act(async () => root.render(<AppProviders><Harness profile={profile} /></AppProviders>));
+async function render(profile: CollectionProfile, focusedSourceId?: string) {
+  await act(async () => root.render(<AppProviders><Harness profile={profile} focusedSourceId={focusedSourceId} /></AppProviders>));
 }
 const buttons = (label: string) => [...container.querySelectorAll<HTMLButtonElement>("button")].filter(item => item.textContent?.trim() === label);
 function expectNoIntegrationWrites() {
@@ -96,6 +96,20 @@ it.each([undefined, { id: "legacy", name: "旧版混合库" }])("keeps legacy Ho
   expect(clients.agentSources.installPlugin).toHaveBeenCalledWith("codex", { installType: "manual" });
   expect(container.textContent).toContain("Cursor");
   expect(container.textContent).toContain("发现新 Agent 时自动接入");
+});
+
+it("confirms a Claude Code history scan without letting the focused panel start an all-source scan", async () => {
+  vi.mocked(clients.agentSources.listSources).mockResolvedValue([
+    source("claude_code", "Claude Code", "plugin_installed"), source("codex", "Codex"),
+  ] as never);
+  await render({ id: "legacy", name: "旧版混合库" }, "claude_code");
+  await act(async () => buttons("扫描全部历史...")[0].click());
+  expect(container.textContent).toContain("扫描全部历史？");
+  expect(container.textContent).not.toContain("全部已发现 Agent");
+  expect(clients.agentSources.startScan).not.toHaveBeenCalled();
+  await act(async () => buttons("开始全量扫描")[0].click());
+  expect(clients.agentSources.startScan).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sourceId: "claude_code", mode: "full" }));
+  expectNoIntegrationWrites();
 });
 
 it.each([null, { id: "future-library", name: "未识别库" }])("fails closed for profile %j after previously showing legacy actions", async unresolved => {

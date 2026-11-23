@@ -1,0 +1,10 @@
+{
+  "applicationId": "ai.wanx.studio",
+  "name": "万象·开物",
+  "version": "1.0.12",
+  "protocolVersion": 1,
+  "runtime": "electron",
+  "launchMode": "shared",
+  "entrypoint": "shell/main.cjs",
+  "description": "WanX Builder · 从想法到应用，持续构建、试用和改进。"
+}

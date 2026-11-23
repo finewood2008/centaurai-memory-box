@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Cloud, LoaderCircle, RefreshCw } from "lucide-react";
+import { Cloud, LoaderCircle } from "lucide-react";
 
-interface BackupStatus {
+export interface BackupStatus {
   library?: { id: string; name: string };
   connected: boolean;
   context: string | null;
@@ -29,12 +29,20 @@ interface BackupCatalog {
 type Action = "enable" | "disable" | "backup" | "catalog" | "restore" | "rollback" | "configure";
 type RestoreAction = "restore" | "rollback";
 
+const defaultBackupIntervalMinutes = 60;
+
+export function formatBackupInterval(minutes = defaultBackupIntervalMinutes) {
+  return minutes >= 60 && minutes % 60 === 0 ? (minutes / 60) + " 小时" : minutes + " 分钟";
+}
+
 const snapshotDate = (modified: number) => new Date(modified * 1000).toLocaleString();
 const snapshotLabel = (snapshot: BackupSnapshot) => snapshotDate(snapshot.modified) + " · " + snapshot.id.slice(0, 8);
 
-export function MemorySyncSummary({ sessionToken, count, automatic, children }: {
-  sessionToken: string; count: number; automatic: boolean;
-  children: ReactNode | ((collectionProfile: { id: string; name: string } | null) => ReactNode);
+export function MemorySyncSummary({ sessionToken, children, onRestored, statusOnly = false }: {
+  sessionToken: string;
+  statusOnly?: boolean;
+  onRestored?: () => void;
+  children?: ReactNode | ((collectionProfile: BackupStatus["library"] | null, backup: BackupStatus | null) => ReactNode);
 }) {
   const [status, setStatus] = useState<BackupStatus | null>(null);
   const [profileReady, setProfileReady] = useState(false);
@@ -123,11 +131,15 @@ export function MemorySyncSummary({ sessionToken, count, automatic, children }: 
         ...(action === "configure" ? { intervalMinutes: value } : {}),
         ...(action === "restore" && selectedSnapshot ? { sourceId, id: selectedSnapshot.id, digest: selectedSnapshot.digest } : {}),
       });
+      if (signal.aborted) return;
+      if (action === "restore" || action === "rollback") {
+        closePicker();
+        onRestored?.();
+      }
       epoch.current++;
       const next = await request<BackupStatus>(signal);
       if (signal.aborted) return;
       receive(next);
-      if (action === "restore" || action === "rollback") closePicker();
       if (action === "catalog" && next.context === context) {
         closePicker();
         setCatalog(result);
@@ -142,13 +154,12 @@ export function MemorySyncSummary({ sessionToken, count, automatic, children }: 
     }
   }
 
-  const intervalMinutes = status?.intervalMinutes ?? 5;
-  const intervalLabel = intervalMinutes >= 60 && intervalMinutes % 60 === 0 ? (intervalMinutes / 60) + " 小时" : intervalMinutes + " 分钟";
   const collectionProfile = profileReady ? status?.library ?? null : null;
-  const isolatedCollection = collectionProfile !== null && collectionProfile.id !== "legacy";
-  const collectionScope = collectionProfile === null ? "来源待确认" : isolatedCollection ? collectionProfile.name : count + " 个来源";
-  const collectionMode = collectionProfile === null ? "正在读取采集方式" : isolatedCollection
-    ? automatic ? "自动本机扫描" : "手动本机扫描" : automatic ? "自动采集" : "手动采集";
+  const content = typeof children === "function" ? children(collectionProfile, profileReady ? status : null) : children;
+  if (statusOnly) return content;
+
+  const intervalMinutes = status?.intervalMinutes ?? defaultBackupIntervalMinutes;
+  const intervalLabel = formatBackupInterval(intervalMinutes);
   const backingUp = (status?.busy && status.phase === "backing-up") || pending === "backup";
   const restoring = (status?.busy && status.phase === "restoring") || pending === "restore" || pending === "rollback";
   const blocked = Boolean(pending || status?.busy);
@@ -162,9 +173,11 @@ export function MemorySyncSummary({ sessionToken, count, automatic, children }: 
     !status.connected ? "连接盒子后自动备份" : status.lastBackup ?
     "本机最近备份 " + snapshotDate(status.lastBackup) : "已开启，等待本机首次备份";
 
-  return <section className="my-ai-sync-overview" aria-label="本机记忆与备份">
+  return <>
+    {content}
+    <section id="my-ai-backup" className="my-ai-sync-overview" aria-label="备份与恢复" tabIndex={-1}>
     <div className="my-ai-sync-summary">
-      <div className="my-ai-sync-title"><RefreshCw size={17} aria-hidden="true" /><h2>本机来源采集</h2><span>{collectionScope} · {collectionMode}</span></div>
+      <div className="my-ai-sync-title"><h2>备份与恢复</h2></div>
       <div className="my-ai-backup-control">
         <span id="space-backup-label"><Cloud size={16} aria-hidden="true" />空间自动备份</span>
         <button type="button" role="switch" className="my-ai-backup-switch" aria-labelledby="space-backup-label"
@@ -173,7 +186,6 @@ export function MemorySyncSummary({ sessionToken, count, automatic, children }: 
       </div>
     </div>
     <div className="my-ai-sync-status">
-      <span>统一采集到本机记忆库</span>
       <span id="space-backup-status" role="status">{(backingUp || restoring) && <LoaderCircle size={13} className="animate-spin" aria-hidden="true" />}{hint}</span>
       {status?.enabled && <span>每 {intervalLabel}备份本机记忆库</span>}
       {status?.connected && <button type="button" className="my-ai-button" disabled={blocked} onClick={() => void update("backup")}>立即备份</button>}
@@ -218,7 +230,7 @@ export function MemorySyncSummary({ sessionToken, count, automatic, children }: 
       </div>}
       <button type="button" className="my-ai-button" disabled={Boolean(pending)} onClick={closePicker}>关闭恢复列表</button>
     </div>}
-    <details className="my-ai-sync-details"><summary>采集与备份设置</summary>
+    <details className="my-ai-sync-details"><summary>备份设置</summary>
       <div className="my-ai-backup-schedule">
         <div><label htmlFor="space-backup-interval">空间备份间隔</label><p>连接盒子且客户端运行时生效，修改后自动保存。</p></div>
         <select id="space-backup-interval" value={intervalMinutes} disabled={blocked || !status?.context}
@@ -227,7 +239,7 @@ export function MemorySyncSummary({ sessionToken, count, automatic, children }: 
           {![5, 15, 30, 60, 180, 360, 1440].includes(intervalMinutes) && <option value={intervalMinutes}>{intervalLabel}</option>}
         </select>
       </div>
-      {typeof children === "function" ? children(collectionProfile) : children}
     </details>
-  </section>;
+    </section>
+  </>;
 }

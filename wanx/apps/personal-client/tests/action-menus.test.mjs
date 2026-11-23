@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFile} from 'node:fs/promises';
-const source=await readFile(new URL('../local-ui/renderer/action-menus.js',import.meta.url),'utf8');
+const source=await readFile(new URL('../build/app/local-ui/renderer/action-menus.js',import.meta.url),'utf8');
 function setup(){
  const handlers={},menus=[];
  const document={activeElement:null,querySelectorAll:()=>menus.filter(m=>m.open),addEventListener:(type,fn)=>{handlers[type]=fn;}};

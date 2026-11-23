@@ -1,0 +1,1252 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "WANX Octop · providers",
+    "description": "**CentaurAI-WANX** is a smarter, self-hosted AI assistant for multiple users and agents. All routes are served under `/api`.\n\n## Authentication\n\nMost endpoints require a JWT bearer token:\n\n1. Complete initial setup via `/api/setup/*` (first install only).\n2. `GET /api/auth/captcha` then `POST /api/auth/login` with `username` and `password`\n   (and `captcha_token` when a strong provider is active), or complete SSO with\n   `/api/auth/oidc/*` or `/api/auth/oauth/*` when a provider is enabled.\n3. Send `Authorization: Bearer <access_token>` on subsequent requests.\n\nAccess tokens use sliding renewal: when less than one-third of\n`access_token_ttl_seconds` remains, authenticated responses may include a fresh\ntoken in the `X-Octop-Access-Token` header. Clients should replace the stored\ntoken when present.\n\nPublic endpoints (no login token): `/api/docs`, `/api/openapi.json`, `/api/health`,\n`/api/setup/*` (wizard authorization applies), `/api/auth/login`, `/api/auth/register`,\n`/api/auth/captcha`, `/api/auth/oidc/status`, `/api/auth/oidc/start`,\n`/api/auth/oidc/callback`, `/api/auth/oidc/exchange`, `/api/auth/oauth/status`,\n`/api/auth/oauth/start`, `/api/auth/oauth/callback`, `/api/auth/oauth/exchange`,\n`/api/auth/invite/validate`,\n`/api/auth/invite/redeem`, `/api/connectors/oauth/callback`,\nand `/api/internal/mcp/*`.\n\n## Agent scope\n\nMany agent-scoped routes use the agent ID in the URL path (`/api/agents/{agent_id}/…`).\nRoutes first check the signed token's application scope; legacy tokens default to WANX.\nResources in another application are treated as not found, including for administrators.\nWithin the same application, each route applies its ownership or shared-resource access\nrules. WANX administrators may bypass ownership where supported; Zhijun personal profiles,\nmemories and uploaded sources require the owner.\n\n## Streaming chat\n\nDashboard live turns use **WebSocket** at `/api/agents/{agent_id}/chat/ws` (pass JWT as\n`?token=` query param). Send `{\"type\":\"user_turn\", ...}` frames; the server replies with JSON\nchunks matching the harness stream format, ending with `{\"type\":\"done\"}` or\n`{\"type\":\"error\",\"message\":\"...\"}`.\n\nText-type dashboard pushes (cron reminders, proactive care) also emit\n`{\"type\":\"dashboard_push\", ...}` on `/api/notifications/ws` (same `?token=` auth) so the\nSPA can show a toast even when the chat socket is not subscribed.\n\nHITL resume still uses `POST /api/agents/{agent_id}/chat/hitl/resume` (SSE).\n\n## Knowledge libraries\n\n`/api/knowledge-bases` uses the signed application scope for creation, visibility,\ndocument access, and citations. Existing libraries remain in WANX. Zhijun libraries\nare private to their owner and use local document parsers, downloaded native ONNX\nembeddings and RapidOCR. Remote WANX embedding/OCR settings do not affect Zhijun;\nmissing local components are reported as unavailable without remote fallback.\n",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/providers/presets": {
+      "get": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "List Provider Presets",
+        "description": "Return built-in provider presets from octop-harness.",
+        "operationId": "list_provider_presets_api_providers_presets_get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "title": "Response List Provider Presets Api Providers Presets Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/providers/resolved": {
+      "get": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "List Resolved Models",
+        "description": "Return all enabled models across all providers.\n\nUsed by the Agent model selector to show available candidates.",
+        "operationId": "list_resolved_models_api_providers_resolved_get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "title": "Response List Resolved Models Api Providers Resolved Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/providers/application-defaults": {
+      "get": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "Read Admin defaults for Starlink, dialogue and Kaiwu",
+        "operationId": "application_defaults_api_providers_application_defaults_get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApplicationDefaultsStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/providers/active-model": {
+      "get": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "Get Active Model",
+        "description": "Return the globally preferred model (provider_name + model id).",
+        "operationId": "get_active_model_api_providers_active_model_get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Get Active Model Api Providers Active Model Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "Set Active Model",
+        "description": "Set the globally preferred model used when no agent override applies.",
+        "operationId": "set_active_model_api_providers_active_model_put",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActiveModelBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Set Active Model Api Providers Active Model Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/providers": {
+      "get": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "List Providers",
+        "description": "Return all providers. Read-only for regular users.",
+        "operationId": "list_providers_api_providers_get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "title": "Response List Providers Api Providers Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/admin/media-generation/presets": {
+      "get": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "List built-in media provider presets",
+        "description": "Return supported provider adapters and their default image and video models.",
+        "operationId": "list_media_provider_presets_api_admin_media_generation_presets_get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MediaProviderPresetResponse"
+                  },
+                  "title": "Response List Media Provider Presets Api Admin Media Generation Presets Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/admin/media-generation": {
+      "get": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "Get media generation settings",
+        "description": "Return instance-wide provider instances and default image/video routes. Stored API keys are never returned.",
+        "operationId": "get_media_generation_settings_api_admin_media_generation_get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaGenerationSettingsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "Update media generation settings",
+        "description": "Persist provider instances and deterministic default routes, then reload running agents. API keys are write-only; omit them to retain stored values.",
+        "operationId": "put_media_generation_settings_api_admin_media_generation_put",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MediaGenerationSettingsBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaGenerationSettingsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/admin/media-generation/test": {
+      "post": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "Test a media provider configuration",
+        "description": "Test credentials without generation, or submit a real image/video model request. Model tests may incur provider charges.",
+        "operationId": "test_media_generation_provider_api_admin_media_generation_test_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MediaGenerationTestBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaGenerationTestResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ActiveModelBody": {
+        "properties": {
+          "provider_name": {
+            "type": "string",
+            "title": "Provider Name"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          }
+        },
+        "type": "object",
+        "required": [
+          "provider_name",
+          "model"
+        ],
+        "title": "ActiveModelBody"
+      },
+      "ApplicationDefaultStatus": {
+        "properties": {
+          "provider_name": {
+            "type": "string",
+            "pattern": "^admin-managed-[a-z][a-z0-9-]{0,63}$",
+            "title": "Provider Name"
+          },
+          "model": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$",
+            "title": "Model"
+          },
+          "model_ref": {
+            "type": "string",
+            "title": "Model Ref"
+          },
+          "available": {
+            "type": "boolean",
+            "title": "Available"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "provider_name",
+          "model",
+          "model_ref",
+          "available"
+        ],
+        "title": "ApplicationDefaultStatus"
+      },
+      "ApplicationDefaultsStatus": {
+        "properties": {
+          "managed": {
+            "type": "boolean",
+            "title": "Managed"
+          },
+          "revision": {
+            "type": "string",
+            "title": "Revision"
+          },
+          "defaults": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ApplicationDefaultStatus"
+            },
+            "propertyNames": {
+              "enum": [
+                "starlink",
+                "dialogue",
+                "kaiwu"
+              ]
+            },
+            "type": "object",
+            "title": "Defaults"
+          }
+        },
+        "type": "object",
+        "required": [
+          "managed",
+          "revision",
+          "defaults"
+        ],
+        "title": "ApplicationDefaultsStatus"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "MediaGenerationSettingsBody": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": false
+          },
+          "providers": {
+            "items": {
+              "$ref": "#/components/schemas/MediaProviderBody"
+            },
+            "type": "array",
+            "maxItems": 8,
+            "title": "Providers"
+          },
+          "default_image_provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Image Provider"
+          },
+          "default_video_provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Video Provider"
+          }
+        },
+        "type": "object",
+        "title": "MediaGenerationSettingsBody"
+      },
+      "MediaGenerationSettingsResponse": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "providers": {
+            "items": {
+              "$ref": "#/components/schemas/MediaProviderResponse"
+            },
+            "type": "array",
+            "title": "Providers"
+          },
+          "default_image_provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Image Provider"
+          },
+          "default_video_provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Video Provider"
+          },
+          "configured": {
+            "type": "boolean",
+            "title": "Configured"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled",
+          "providers",
+          "default_image_provider",
+          "default_video_provider",
+          "configured"
+        ],
+        "title": "MediaGenerationSettingsResponse"
+      },
+      "MediaGenerationTestBody": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "credentials",
+              "image",
+              "video"
+            ],
+            "title": "Kind",
+            "default": "credentials"
+          },
+          "provider": {
+            "$ref": "#/components/schemas/MediaProviderBody"
+          }
+        },
+        "type": "object",
+        "required": [
+          "provider"
+        ],
+        "title": "MediaGenerationTestBody"
+      },
+      "MediaGenerationTestResponse": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ok"
+        ],
+        "title": "MediaGenerationTestResponse"
+      },
+      "MediaProviderBody": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "Stable provider-instance routing ID."
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "volcengine",
+              "dashscope",
+              "minimax"
+            ],
+            "title": "Provider"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": true
+          },
+          "base_url": {
+            "type": "string",
+            "title": "Base Url"
+          },
+          "image_enabled": {
+            "type": "boolean",
+            "title": "Image Enabled",
+            "default": true
+          },
+          "video_enabled": {
+            "type": "boolean",
+            "title": "Video Enabled",
+            "default": true
+          },
+          "image_model": {
+            "type": "string",
+            "title": "Image Model"
+          },
+          "video_model": {
+            "type": "string",
+            "title": "Video Model"
+          },
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key",
+            "description": "Write-only API key; omit to keep the stored value."
+          },
+          "clear_api_key": {
+            "type": "boolean",
+            "title": "Clear Api Key",
+            "description": "Delete the stored API key for this provider instance.",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "provider",
+          "display_name",
+          "base_url",
+          "image_model",
+          "video_model"
+        ],
+        "title": "MediaProviderBody"
+      },
+      "MediaProviderPresetResponse": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "volcengine",
+              "dashscope",
+              "minimax"
+            ],
+            "title": "Provider"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          },
+          "base_url": {
+            "type": "string",
+            "title": "Base Url"
+          },
+          "image_models": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Image Models"
+          },
+          "video_models": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Video Models"
+          }
+        },
+        "type": "object",
+        "required": [
+          "provider",
+          "display_name",
+          "base_url",
+          "image_models",
+          "video_models"
+        ],
+        "title": "MediaProviderPresetResponse"
+      },
+      "MediaProviderResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "volcengine",
+              "dashscope",
+              "minimax"
+            ],
+            "title": "Provider"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "base_url": {
+            "type": "string",
+            "title": "Base Url"
+          },
+          "image_enabled": {
+            "type": "boolean",
+            "title": "Image Enabled"
+          },
+          "video_enabled": {
+            "type": "boolean",
+            "title": "Video Enabled"
+          },
+          "image_model": {
+            "type": "string",
+            "title": "Image Model"
+          },
+          "video_model": {
+            "type": "string",
+            "title": "Video Model"
+          },
+          "api_key_set": {
+            "type": "boolean",
+            "title": "Api Key Set"
+          },
+          "configured": {
+            "type": "boolean",
+            "title": "Configured"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "provider",
+          "display_name",
+          "enabled",
+          "base_url",
+          "image_enabled",
+          "video_enabled",
+          "image_model",
+          "video_model",
+          "api_key_set",
+          "configured"
+        ],
+        "title": "MediaProviderResponse"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    },
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "JWT from `POST /api/auth/login` (`access_token` field)."
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "providers",
+      "description": "LLM provider configuration and active model selection."
+    }
+  ],
+  "x-wanx-supplemental-routes": []
+}

@@ -14,6 +14,20 @@ function memoryStore(value = null) {
     value: () => saved, writes: () => count, fail: value => { broken = value; },
   };
 }
+
+test('an import without readable annotations persists only a pending receipt until a real revision is recovered', async () => {
+  const store = memoryStore(), index = await createSpaceAnnotations({store});
+  const warehouseId = '11111111-1111-1111-1111-111111111111';
+  const receipt = {id:fileId, warehouseId, documentId:'doc_pending', digest, annotationRevision:0};
+  await index.stage(scope, receipt);
+  const restarted = await createSpaceAnnotations({store});
+  assert.equal((await restarted.pending(scope, warehouseId))[0].annotationRevision, 0);
+  await assert.rejects(restarted.bind(scope, {...receipt, versionId:'v1'}), {code:'SPACE_ANNOTATION_INVALID'});
+  const snapshot = await restarted.observe(scope, file());
+  await restarted.bind(scope, {...receipt, versionId:'v1', snapshot, annotationRevision:snapshot.revision});
+  assert.deepEqual(await restarted.pending(scope, warehouseId), []);
+  assert.deepEqual((await restarted.imports(scope, warehouseId))[0].snapshot.tags, snapshot.tags);
+});
 test("automatic rules persist without confirmation and survive restart; unchanged listings do not write", async () => {
   const store = memoryStore(), index = await createSpaceAnnotations({ store });
   const result = await index.observe(scope, file());

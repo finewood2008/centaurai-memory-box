@@ -419,7 +419,7 @@ def build_plan(paths: MigrationPaths, identity: MigrationIdentity) -> dict[str, 
     with _connect(paths.home / "octop.db") as db:
         schema = _tables(db)
         _need(
-            db.execute("SELECT version FROM _schema_version").fetchone()[0] in (31, 32, 33, 34)
+            db.execute("SELECT version FROM _schema_version").fetchone()[0] in (31, 32, 33, 34, 35)
             and "local_data_principals" in schema
             and "local_data_marker" in schema.get("users", []),
             "MIGRATION_SCHEMA_UNSUPPORTED",

@@ -62,6 +62,9 @@ async def relay(tmp_path):
         authorize_status=200,
         calls=[],
         application_defaults={"managed": False, "revision": "0", "defaults": {}},
+        application_defaults_status=200,
+        active_model={"provider_name": "Test", "model": "test-model"},
+        active_model_reads=0,
         handler=None,
         output={
             "choices": [{"message": {"content": '{"ok":true}'}}],
@@ -74,11 +77,15 @@ async def relay(tmp_path):
 
         async def _admin(self, method, path):
             assert method == "GET"
+            if path == "/api/providers/application-defaults":
+                return httpx.Response(state.application_defaults_status, json=state.application_defaults)
+            if path == "/api/providers/active-model":
+                state.active_model_reads += 1
+                return httpx.Response(200, json=state.active_model)
             data = {
                 "/api/users": [state.user],
                 "/api/admin/providers": [state.provider],
                 "/api/providers/resolved": [state.model],
-                "/api/providers/application-defaults": state.application_defaults,
             }
             return httpx.Response(200, json=data[path])
 
@@ -162,7 +169,7 @@ async def test_callback_forwards_initialization_output_budget(relay, kind):
         ) == expected
 
 
-@pytest.mark.parametrize("budget", [True, "1024", 0, -1, 8193])
+@pytest.mark.parametrize("budget", [True, "1024", 0, -1, 16385])
 async def test_callback_rejects_invalid_budget_before_model_call(relay, budget):
     response = await call(relay, max_output_tokens=budget)
     assert response.status_code == 422, response.text
@@ -184,6 +191,25 @@ async def test_catalog_redacts_credentials_and_marks_unsupported(relay):
     relay.provider["kind"] = "anthropic"
     item = await selection(relay)
     assert item["available"] is False and item["capabilities"] == []
+
+
+@pytest.mark.parametrize("policy_status", [200, 404])
+async def test_unconfigured_starlink_follows_active_model(relay, policy_status):
+    relay.application_defaults_status = policy_status
+    request = {"action": "catalog", "owner": OWNER}
+    response = await relay.client.post(PATH, **signed(request))
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["default"] == data["items"][0]
+    assert data["default"]["id"] == "local:test-model"
+    assert relay.active_model_reads == 1
+
+    relay.active_model = {"provider_name": "Test", "model": "retired-model"}
+    response = await relay.client.post(PATH, **signed(request))
+    assert response.status_code == 200, response.text
+    assert response.json()["default"] is None
+    assert response.json()["items"] == data["items"]
+    assert relay.calls == []
 
 
 async def test_managed_starlink_default_uses_public_reference_and_external_location(relay):
@@ -214,6 +240,7 @@ async def test_managed_starlink_default_uses_public_reference_and_external_locat
     relay.application_defaults["defaults"]["starlink"]["available"] = False
     response = await relay.client.post(PATH, **signed({"action": "catalog", "owner": OWNER}))
     assert response.json()["default"] is None
+    assert relay.active_model_reads == 0
 
 
 async def test_unsigned_standalone_callback_without_shared_configuration(relay, tmp_path):

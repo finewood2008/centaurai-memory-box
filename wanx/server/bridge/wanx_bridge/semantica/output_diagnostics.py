@@ -1,7 +1,11 @@
 """Versioned, bounded model-output diagnostics; never include instance values."""
 
 # This wire contract is mirrored in Semantica's app/adapters/output_diagnostics.py.
-FIELDS = frozenset("entities relations e r id text label confidence subject_id object_id predicate i n t c s o p a properties name value quote type source target evidence".split())
+FIELDS = frozenset((
+    "entities relations e r id text label confidence subject_id object_id predicate i n t c s o p a properties name value quote type source target evidence "
+    "suggestions analysis_summary observations kind definition reason source_id owner_kind owner_name source_types target_types "
+    "similar_to existing_gap business_need topic scope_ref summary questions explanation outcome field"
+).split())
 VALIDATORS = frozenset("type required additionalProperties minItems maxItems minLength maxLength minimum maximum exclusiveMinimum exclusiveMaximum enum const uniqueItems anyOf oneOf allOf not pattern format schema".split())
 KINDS = frozenset({"schema_validation", "invalid_json", "truncated", "invalid_response", "response_too_large"})
 REASONS = {

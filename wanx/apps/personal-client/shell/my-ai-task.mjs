@@ -1,11 +1,14 @@
 import { constants } from "node:fs";
-import { access, readFile, readdir, realpath, stat } from "node:fs/promises";
+import { access, lstat, readFile, readdir, realpath, stat } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { promisify } from "node:util";
 import path from "node:path";
+import { myAiCliEnvironment } from "./codex-context-config.mjs";
+import { validMemoryAgent } from "./my-ai-access.mjs";
 import { agentCatalog, agentCapabilities, catalogAgent, contextAgent } from "./my-ai-catalog.mjs";
+import { deepseekDesktopMcpFile } from "./my-ai-mcp-config.mjs";
 
 const NEW_CODEX_CHAT = "codex://threads/new";
 const WINDOWS_EXTERNAL_URL_LIMIT = 2081;
@@ -15,13 +18,13 @@ const warehouseId = value => typeof value === "string" && /^[A-Za-z0-9_-]{1,128}
 const inputError = message => Object.assign(new Error(message), { status: 400 });
 const validText = (value, max) => typeof value === "string" && value.trim().length > 0 && value.length <= max && !value.includes("\0");
 
-function retrievalInstructions({ folder, warehouse, memoryEnabled }) {
+function retrievalInstructions({ folder, warehouse, memoryEnabled, memoryAgent }) {
   if (!folder && !warehouse && !memoryEnabled) return "\n\n## 资料检索\n本次未授权空间、星图或历史记忆读取。不要调用这些检索工具。需要用户明确保存的内容可使用 memory_save。";
   return [
     "\n\n## 资料检索",
     folder && `- 空间文件 ${JSON.stringify(folder.name)}。用 space_search 检索子目录、文件名和正文，再用 space_read 读取相关文件。`,
-    warehouse && `- 星图仓库 ${JSON.stringify(warehouse.name)}。用 starlink_search 检索知识，再用 starlink_evidence 读取依据。`,
-    memoryEnabled && "- 已允许读取历史记忆。用 memory_search 检索，再用 memory_read 核对正文；先核实记忆里的路径和环境。",
+    warehouse && `- 星图仓库 ${JSON.stringify(warehouse.name)}。使用 Semantica MCP 的 xingtu_search 检索知识，再用 xingtu_evidence 的 evidence_id 参数读取依据。其他 xingtu_* 工具也只允许操作这个仓库。`,
+    memoryEnabled && `- 历史记忆${memoryAgent === null ? "（全部 Agent）" : memoryAgent ? "（" + JSON.stringify(memoryAgent) + "）" : ""}。用 memory_search 检索，再用 memory_read 核对正文；先核实记忆里的路径和环境。`,
     "先检索所选范围，再执行任务并引用依据。无法读取时说明原因。",
   ].filter(Boolean).join("\n");
 }
@@ -60,21 +63,26 @@ async function versionOfApplication(application) {
 
 export function createMyAiTask({
   protocolRegistered = () => false, applicationForProtocol, openExternal, openApplication, revealApplication,
-  copyText, starlink, polish, boxScope, codexContext, agentAccess, openLongWindowsDraft, windowsCodex,
+  copyText, starlink, polish, assertClientUsable = () => {}, boxScope, codexContext, agentAccess, openLongWindowsDraft, windowsCodex,
   commandInstalled, resolveCommand, findApplication, launcher, installations, integrationUnavailable,
   platform = process.platform, env = process.env, home = homedir(), version = runFile,
 }) {
+  const desktopPaths = platform === "win32" ? path.win32 : path.posix;
+  const cliEnv = myAiCliEnvironment(env, platform, home);
+  const trustedDesktop = (agent, file) => typeof file === "string" && desktopPaths.isAbsolute(file)
+    && !file.includes("\0") && !file.startsWith("\\\\") && !file.startsWith("//")
+    && (platform === "win32" ? agent.windowsExecutables : agent.bundles)?.includes(desktopPaths.basename(file).toLowerCase());
   const commandInfo = async agent => {
     const managed = await installations?.inspect(agent.id);
     if (managed) return { installed: true, ...managed };
     const found = commandInstalled ? await commandInstalled(agent.command) :
-      await (resolveCommand ?? (command => findMyAiCommand(command, { env, platform })))(agent.command);
+      await (resolveCommand ?? (command => findMyAiCommand(command, { env: cliEnv, platform })))(agent.command);
     if (!found) return { installed: false };
     if (typeof found === "object") return { installed: true, channel: "external", ...found };
     if (typeof found !== "string") return { installed: true, channel: "external" };
     let cliVersion;
     try {
-      const result = await version(found, ["--version"], { cwd: home, env, timeout: 5000, maxBuffer: 64 * 1024, windowsHide: true });
+      const result = await version(found, ["--version"], { cwd: home, env: cliEnv, timeout: 5000, maxBuffer: 64 * 1024, windowsHide: true });
       cliVersion = result.stdout?.match(/\d+\.\d+\.\d+[^\s]*/)?.[0];
     } catch { /* An executable can be installed but need setup before use. */ }
     const resolved = await realpath(found).catch(() => found);
@@ -99,8 +107,7 @@ export function createMyAiTask({
       protocol = agent.protocol ? Boolean(await protocolRegistered(agent.protocol)) : false;
       if (protocol && applicationForProtocol) {
         const handler = await applicationForProtocol(agent.protocol).catch(() => null);
-        if (typeof handler?.path === "string" && path.isAbsolute(handler.path) && !handler.path.startsWith("\\\\") &&
-          agent.bundles?.includes(path.basename(handler.path).toLowerCase())) application = handler.path;
+        if (trustedDesktop(agent, handler?.path)) application = handler.path;
         else protocol = false;
       }
       if (!application && platform === "darwin") application = await (findApplication ?? (entry => findMacApplication(entry, home)))(agent) || "";
@@ -111,11 +118,20 @@ export function createMyAiTask({
     const prefill = installed && agent.delivery === "draft" && protocol;
     const launchable = agent.variant === "cli" ? Boolean(installed && executable && launcher && launcher.supported !== false) : prefill || Boolean(application && openApplication);
     const uninstallable = installed;
+    const capabilities = agentCapabilities(agent);
+    const connectionAvailable = installed || capabilities.configuration === "guided" ||
+      (agent.id === "deepseek_harness" && await lstat(deepseekDesktopMcpFile({ env, home })).then(info => info.isFile(), () => false));
     return { application, executable, protocol, public: {
       id: agent.id, name: agent.name, product: agent.product, variant: agent.variant, sourceId: agent.sourceId,
-      installed, prefill, launchable, uninstallable, installable: Boolean(installations?.supported(agent.id)),
-      channel, version: cliVersion, managed, capabilities: agentCapabilities(agent), ...(agent.modes && { modes: agent.modes }),
+      installed, prefill, launchable, connectionAvailable, uninstallable, installable: Boolean(installations?.supported(agent.id)),
+      channel, version: cliVersion, managed, capabilities, ...(agent.modes && { modes: agent.modes }),
     } };
+  }
+
+  async function connectAgent(agent, id, assertScope, options) {
+    if (!(await detect(agent)).public.connectionAvailable) throw inputError("请先安装或启动该 Agent，再重新检测。");
+    assertScope();
+    return options ? agentAccess.connect(id, assertScope, options) : agentAccess.connect(id, assertScope);
   }
 
   function target(input) {
@@ -136,8 +152,9 @@ export function createMyAiTask({
     const selected = input.agentContext !== undefined ? input.agentContext : input.codexContext;
     if (selected !== undefined) {
       if (!selected || typeof selected !== "object" || Array.isArray(selected) ||
-        Object.keys(selected).some(key => !["folderId", "warehouseId", "memoryEnabled"].includes(key)) ||
+        Object.keys(selected).some(key => !["folderId", "warehouseId", "memoryEnabled", "memoryAgent"].includes(key)) ||
         (selected.memoryEnabled !== undefined && typeof selected.memoryEnabled !== "boolean") ||
+        !validMemoryAgent(selected.memoryAgent) || (selected.memoryAgent !== undefined && selected.memoryEnabled !== true) ||
         (selected.folderId != null && !warehouseId(selected.folderId)) ||
         (selected.warehouseId != null && !warehouseId(selected.warehouseId))) throw inputError("任务资料选项无效。");
       if (!context(input)) {
@@ -186,32 +203,50 @@ export function createMyAiTask({
 
   return async function task(action, input = {}, assertScope = () => {}, signal) {
     if (action === "agent-access/status" && agentAccess) return agentAccess.status(assertScope);
-    if (action.startsWith("codex-context/") && codexContext)
-      return codexContext.manage(action.slice("codex-context/".length), input, assertScope);
+    if (action === "agent-access/copy-removal-command") {
+      const agent = target(input);
+      if (contextAgent(agent.id, input.mode) !== "claude_code") throw inputError("此命令仅适用于 Claude Code。");
+      assertScope();
+      copyText("claude mcp remove wanx-memobox --scope user");
+      return { copied: true };
+    }
+    if (action === "agent-access/output" && agentAccess) {
+      const agent = target(input);
+      return agentAccess.outputFolder(contextAgent(agent.id, input.mode), input.folderId, assertScope);
+    }
+    if (action.startsWith("codex-context/") && codexContext) {
+      const operation = action.slice("codex-context/".length);
+      if (agentAccess) {
+        if (operation === "status") return (await agentAccess.status(assertScope)).codex;
+        if (operation === "connect") return agentAccess.connect("codex", assertScope);
+        if (operation === "test") return agentAccess.test("codex", assertScope);
+        if (operation === "disconnect") return agentAccess.disconnect("codex", assertScope);
+      }
+      return codexContext.manage(operation, input, assertScope);
+    }
     if (action.startsWith("agent-context/")) {
-      target(input);
+      const agent = target(input);
       const id = contextAgent(input.agent, input.mode);
       if (!id || !agentAccess?.supports(id)) throw inputError("当前模式暂无可配置的本机资料接口。");
       const operation = action.slice("agent-context/".length);
       if (operation === "selection" || operation === "configure") return agentAccess.selection(id, input.agentContext ?? input.selection, assertScope);
       if (operation === "configuration") return agentAccess.configuration(id, assertScope);
-      if (operation === "connect") {
-        if (!(await detect(target(input))).public.installed) throw inputError("请先安装或启动该 Agent，再重新检测。");
-        assertScope();
-        return agentAccess.connect(id, assertScope);
-      }
+      if (operation === "connect") return connectAgent(agent, id, assertScope);
       if (operation === "disconnect") return agentAccess.disconnect(id, assertScope);
       if (operation === "status") return (await agentAccess.status(assertScope))[id];
-      if (operation === "catalog") return context(input).manage(operation, input, assertScope);
+      if (operation === "catalog") return input.kind === "memory"
+        ? agentAccess.memoryCatalog(assertScope) : context(input).manage(operation, input, assertScope);
       throw inputError("资料接入操作无效。");
     }
-    if (["agent-access/connect", "agent-access/disconnect"].includes(action) && agentAccess) {
+    if (["agent-access/connect", "agent-access/test", "agent-access/disconnect"].includes(action) && agentAccess) {
       const agent = target(input);
       const id = contextAgent(agent.id, input.mode);
       if (!id || !agentAccess.supports(id)) throw inputError("此运行模式暂不支持连接资料。");
-      if (action === "agent-access/connect" && !(await detect(agent)).public.installed) throw inputError("请先安装或启动该 Agent，再重新检测。");
+      if (action === "agent-access/connect") return connectAgent(agent, id, assertScope,
+        input.allPersonalReadOnly === undefined ? undefined : { allPersonalReadOnly: input.allPersonalReadOnly });
       assertScope();
-      return action === "agent-access/disconnect" ? agentAccess.disconnect(id, assertScope) : agentAccess.connect(id, assertScope);
+      if (action === "agent-access/test") return agentAccess.test(id, assertScope);
+      return agentAccess.disconnect(id, assertScope);
     }
     if (action === "status") {
       const catalog = (await Promise.all(agentCatalog.map(detect))).map(item => item.public);
@@ -259,7 +294,7 @@ export function createMyAiTask({
       const prepared = selected !== undefined ? await context(input).prepare(selected, assertScope) : null;
       let prompt = input.text;
       if (prepared) {
-        const instructions = retrievalInstructions({ ...prepared.resources, memoryEnabled: selected.memoryEnabled === true });
+        const instructions = retrievalInstructions({ ...prepared.resources, memoryEnabled: selected.memoryEnabled === true, memoryAgent: selected.memoryAgent });
         if (!prompt.includes(instructions)) prompt += instructions;
         prompt += "\n\nMemoBox MCP task_id: " + prepared.taskId + ". Pass this ID with every MemoBox tool call, including search, read, list and memory_save.";
       }
@@ -309,6 +344,7 @@ export function createMyAiTask({
     if (!scope) throw inputError("请先在“盒子”中连接设备。");
     const check = () => {
       assertScope();
+      if (action === "optimize") assertClientUsable();
       if (boxScope() !== scope) throw inputError("连接的设备已切换，请重新选择资料后重试。");
     };
     const warehouseScope = createHash("sha256").update(scope).digest("hex");
@@ -319,7 +355,7 @@ export function createMyAiTask({
     const selected = await effectiveSelection(input, check);
     if (selected !== undefined && input.warehouseId != null) throw inputError("请使用同一套任务资料选项。");
     const taskSources = selected !== undefined ? await context(input).describe(selected, check) : null;
-    const instructions = taskSources ? retrievalInstructions({ ...taskSources, memoryEnabled: selected.memoryEnabled === true }) : "";
+    const instructions = taskSources ? retrievalInstructions({ ...taskSources, memoryEnabled: selected.memoryEnabled === true, memoryAgent: selected.memoryAgent }) : "";
     const reference = [];
     if (input.warehouseId) {
       if (input.warehouseScope !== warehouseScope) throw inputError("记忆盒子连接已切换，请重新选择星图仓库。");
@@ -345,9 +381,20 @@ export function createMyAiTask({
       }),
     ].filter(Boolean).join("\n\n");
     check();
-    const result = await polish(text, signal, check);
+    let result;
+    try { result = await polish(text, signal, check); }
+    catch (cause) {
+      check(); // Revocation or cancellation takes precedence over model errors.
+      if (cause.code === "APPLICATION_MODEL_UNAVAILABLE") throw cause;
+      const message = cause.status === 402 || cause.code === "MODEL_INSUFFICIENT_BALANCE"
+        ? "模型服务商账户余额不足，无法优化提示词。请补充该服务商余额，或切换到可用的默认模型后重试。"
+        : ["TimeoutError", "AbortError"].includes(cause.name) || cause.code === "ETIMEDOUT"
+          ? "提示词优化超时，请稍后重试或检查默认模型服务。"
+          : "提示词优化服务未成功响应。请检查盒子的默认模型、模型服务商账户余额和服务状态后重试。";
+      throw Object.assign(inputError(message), { code: "MY_AI_OPTIMIZATION_FAILED", cause });
+    }
     check();
-    if (!validText(result?.text, 16000 - instructions.length)) throw new Error("模型未返回有效提示词，请重试。");
+    if (!validText(result?.text, 16000 - instructions.length)) throw inputError("模型未返回有效提示词，请重试。");
     return { text: result.text.trim() + instructions, referenceCount: reference.length };
   };
 }

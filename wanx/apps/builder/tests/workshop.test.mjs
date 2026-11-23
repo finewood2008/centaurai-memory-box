@@ -9,6 +9,32 @@ import vm from 'node:vm';
 import {EventEmitter} from 'node:events';
 import {editablePackage,createPersonalWorkshop} from '../integration/personal-client/workshop-service.mjs';
 
+test('personal delivery waits for deployment capability, backs off and resumes polling', {timeout:10000}, async t=>{
+ const root=await mkdtemp(path.join(tmpdir(),'workshop-poll-'));
+ const calls=[];
+ let now=0,available=false,received;
+ const firstList=new Promise(resolve=>{received=resolve});
+ t.mock.timers.enable({apis:['setInterval']});
+ t.mock.method(performance,'now',()=>now);
+ const link={context:()=>({boxId:'box'}),close(){},async request({path:route}){
+  const action=route.split('/').at(-1);calls.push(action);
+  if(action==='client-deliveries')received();
+  return{status:200,body:JSON.stringify(action==='capabilities'
+    ?{schemaVersion:1,available,operations:available?['deploy']:[]}:{items:[]})};
+ }};
+ const service=createPersonalWorkshop({client:{snapshot:()=>({account:{accountId:'alice'},connection:{deviceId:'box'}}),
+  subscribe:()=>()=>{},applicationConnection:async()=>link},applications:{installDeployment(){}},
+  nativeFoundation:{root:path.join(root,'foundation')},assets:'unused',ipcMain:{handle(){},removeHandler(){}},control:{on(){}}});
+ const advance=async()=>{now+=2500;t.mock.timers.tick(2500);await new Promise(resolve=>setImmediate(resolve))};
+ try{
+  await advance();await advance();
+  assert.deepEqual(calls,['capabilities']);
+  available=true;
+  await advance();await firstList;
+  assert.deepEqual(calls,['capabilities','capabilities','client-deliveries']);
+ }finally{service.close();await rm(root,{recursive:true,force:true})}
+});
+
 test('the actual Workshop 404 settles into an upgrade error under renderer sync reentry, with one explicit retry',async()=>{
  const source=await readFile(new URL('../integration/personal-client/workshop.js',import.meta.url),'utf8');
  let calls=0,available=false,view,html='';
@@ -165,45 +191,30 @@ test('missing project management evidence shows an actionable error without an u
 });
 
 
-test('installed source requires explicit permission, exact identity/version/digest and compatible format',async()=>{
- const root=await mkdtemp(path.join(tmpdir(),'workshop-source-'));
- try{
-  const item={installPath:root,applicationId:'ai.sample.app',version:'1.0.0'};
-  assert.equal((await editablePackage(item)).reason,'WORKSHOP_SOURCE_REQUIRED');
-  const files={'miniapp.manifest.json':JSON.stringify({capabilities:['data']}),'src/app.js':'export function mount(){}'};
-  const value={allowed:true,format:'wanx-miniapp-source-v1',applicationId:item.applicationId,version:item.version,files,sourceHash:createHash('sha256').update(JSON.stringify(files)).digest('hex')};
-  const save=async v=>writeFile(path.join(root,'wanx.editable.json'),JSON.stringify(v));
-  await save(value);assert.deepEqual((await editablePackage(item)).source,value);
-  await save({...value,allowed:false});assert.equal((await editablePackage(item)).reason,'WORKSHOP_MODIFICATION_NOT_ALLOWED');
-  await save({...value,format:'opaque-native'});assert.equal((await editablePackage(item)).reason,'WORKSHOP_FORMAT_UNSUPPORTED');
-  await save({...value,sourceHash:'0'.repeat(64)});assert.equal((await editablePackage(item)).reason,'WORKSHOP_SOURCE_CHANGED');
-  await save(value);assert.equal((await editablePackage({...item,version:'1.0.1'})).reason,'WORKSHOP_SOURCE_CHANGED');
- }finally{await rm(root,{recursive:true,force:true})}
+test('installed miniapp sources are not editable',async()=>{
+ assert.deepEqual(await editablePackage({applicationId:'old',version:'1.0.0'}),{reason:'WORKSHOP_FORMAT_UNSUPPORTED'});
 });
 
-test('copy failure retains one operation, name, source and selection; context switch fences late replies',async()=>{
+test('a project list arriving after an account switch cannot expose the previous account’s projects',async()=>{
  const source=await readFile(new URL('../integration/personal-client/workshop.js',import.meta.url),'utf8');
- const calls=[];let changes=0,copyCount=0,release;
  const window={createStudioProduct:()=>({sync(){},reset(){},pause(){},render:()=>'',mounted(){}})};
- vm.runInNewContext(source,{window,crypto:{randomUUID:()=> 'stable-op'}});
- const view=window.createWanxWorkshop({changed:()=>changes++,request:async(action,input)=>{
-  calls.push({action,input});
-  if(action==='list')return{items:[{id:'copy1',name:'定制应用',latestVersion:'0.1.0',versions:[],workshop:{version:'1.0.0'}}]};
-  if(action==='sources')return{items:[{id:'source1',name:'台账',version:'1.0.0',editable:true}]};
-  if(action==='copy'){if(++copyCount===1)throw Error('TRANSPORT_FAILED');return new Promise(r=>release=r)}
-  return{};
+ vm.runInNewContext(source,{window});
+ let resolveAlice;
+ const aliceList=new Promise(resolve=>{resolveAlice=resolve});
+ const lists=[aliceList, {items:[{id:'bob-project',name:'Bob project',versions:[]}]}];
+ const view=window.createWanxWorkshop({changed(){},request(action){
+  assert.equal(action,'list');
+  return lists.shift();
  }});
- view.sync('alice-box1',true,true);await new Promise(r=>setImmediate(r));
- await view.action('workshop-choose');assert.equal(calls.some(c=>c.action==='sources'),false);
- await view.action('workshop-open-source',{sourceId:'source1'});
- view.field('name','我的副本');await view.action('workshop-copy');
- assert.match(view.render(),/我的副本/);assert.match(view.render(),/操作未完成/);
- const waiting=view.action('workshop-copy');
- view.sync('bob-box2',true,true);release({projectId:'late-copy'});await waiting;
- assert.equal(calls.filter(c=>c.action==='open').length,0);
- assert.deepEqual(calls.filter(c=>c.action==='copy').map(c=>c.input.operationId),['stable-op','stable-op']);
- assert.ok(changes>0);
- view.sync('',false,true);assert.doesNotMatch(view.render(),/定制应用/);assert.match(view.render(),/连接盒子/);
+ view.sync('alice-box',true,true);
+ view.sync('bob-box',true,true);
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.match(view.render(),/Bob project/);
+ resolveAlice({items:[{id:'alice-project',name:'Alice private project',versions:[]}]});
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.match(view.render(),/Bob project/);
+ assert.doesNotMatch(view.render(),/Alice private project/);
+ assert.equal(lists.length,0);
 });
 
 test('project archive/restore/filter and version cleanup preserve failed operation and fence account switches',async()=>{
@@ -322,19 +333,7 @@ test('library verifies installed source permission and identifies box projects s
  const link={context:()=>({}),close(){},async request(){return unavailable?{status:404,body:'{}'}:{status:200,body:JSON.stringify({projects:[{id:projectId,appId:'sample.copy',name:'盒子副本',stage:'installed',artifacts:[],installed:{version:'0.1.0',artifactHash:'a'.repeat(64)}}]})}}};
  const service=createPersonalWorkshop({client:{snapshot:()=>({account:{accountId:'alice'},connection:{deviceId:'box'}}),subscribe:()=>()=>{},applicationConnection:async()=>link},applications:{listInstalled:async()=>[{applicationId:'sample.editable',version:'1.0.0',installPath:dir},{applicationId:'wrong.identity',version:'1.0.0',installPath:dir}]},assets:'unused',ipcMain:{handle(){},removeHandler(){}},control:{on(){}}});
  try{
-  const library=await service.action('library');assert.equal(library.items[0].editable,true);assert.equal(library.items[1].editable,false);assert.equal(library.projects[0].installedVersion,'0.1.0');assert.equal(library.projects[0].appId,'sample.copy');assert.deepEqual(library.workshopApplicationIds,['sample.editable','wrong.identity']);
+  const library=await service.action('library');assert.equal(library.items[0].editable,false);assert.equal(library.items[1].editable,false);assert.equal(library.projects[0].installedVersion,'0.1.0');assert.equal(library.projects[0].appId,'sample.copy');assert.deepEqual(library.workshopApplicationIds,[]);
   unavailable=true;const missing=await service.action('library');assert.equal(missing.unavailable,true);assert.ok(missing.items.every(i=>!i.editable));assert.equal(missing.projects.length,0);
  }finally{service.close();await rm(dir,{recursive:true,force:true})}
-});
-
-test('Workshop accepts only the exact source handed off from My Apps, with no source-picker fallback',async()=>{
- const source=await readFile(new URL('../integration/personal-client/workshop.js',import.meta.url),'utf8');
- const calls=[];const window={createStudioProduct:()=>({sync(){},reset(){},pause(){},render:()=>'',mounted(){}})};
- vm.runInNewContext(source,{window,crypto:{randomUUID:()=> 'copy-op'}});
- const view=window.createWanxWorkshop({changed(){},request:async(action,input)=>{calls.push({action,input});if(action==='list')return{items:[]};if(action==='sources')return{items:[{id:'allowed',name:'允许定制',version:'1',editable:true},{id:'blocked',name:'无许可',editable:false,reason:'WORKSHOP_MODIFICATION_NOT_ALLOWED'}]};throw Error('UNEXPECTED_WRITE');}});
- view.sync('alice-box',true,true);await new Promise(r=>setImmediate(r));
- await view.action('workshop-choose');await view.action('workshop-source',{sourceId:'allowed'});await view.action('workshop-copy');
- assert.deepEqual(calls.map(c=>c.action),['list']);
- await view.action('workshop-open-source',{sourceId:'blocked'});assert.match(view.render(),/未授予修改许可/);assert.doesNotMatch(view.render(),/workshop-source|workshop-copy|允许定制/);
- await view.action('workshop-open-source',{sourceId:'allowed'});assert.match(view.render(),/创建定制副本/);assert.match(view.render(),/允许定制/);assert.doesNotMatch(view.render(),/无许可|workshop-source|workshop-choose/);
 });

@@ -25,6 +25,7 @@ from centuarai_local_data_gate.semantica_models import validate_model_body_bindi
 
 from .desktop import DesktopConfig, DesktopError, strict_json
 from .desktop_routes import bounded_body, live_request
+from .model_options import inference_options
 
 
 def encoded(value):
@@ -227,6 +228,9 @@ class RequiredModelRelay:
             response.status_code != 200
             or not isinstance(authorized, dict)
             or authorized.get("authorized") is not True
+            or (inference_options(authorization)["thinking_mode"] != "auto"
+                or "inference_options" in authorized)
+            and authorized.get("inference_options") != inference_options(authorization)
         ):
             raise DesktopError("MODEL_TASK_REVOKED", 403)
 
@@ -275,6 +279,9 @@ class RequiredModelRelay:
                     raise DesktopError("MODEL_UNAVAILABLE", 409)
                 if selection["revision"] != selected["revision"]:
                     raise DesktopError("MODEL_CONFIG_CHANGED", 409)
+                options = inference_options(body)
+                if options["thinking_mode"] not in selection["inference_options"]["thinking_modes"]:
+                    raise DesktopError("MODEL_THINKING_UNSUPPORTED", 422)
             authorization = None
             if action == "infer":
                 snapshot = claims["modelSnapshot"]
@@ -323,7 +330,7 @@ class RequiredModelRelay:
                     async with asyncio.timeout(1.5):
                         await self._authorize(lease, authorization, config)
                 if action == "catalog":
-                    result = await self.relay.catalog_result(items, fallback_active=True)
+                    result = await self.relay.catalog_result(items)
                     await permitted()
                     outcome = "completed"
                     return result
@@ -367,6 +374,7 @@ class RequiredModelRelay:
                             "purpose": body.get("purpose", "check"),
                             "principal_namespace": principal,
                             "application_id": claims["applicationId"],
+                            "inference_options": options,
                             **(
                                 {"max_output_tokens": body["max_output_tokens"]}
                                 if "max_output_tokens" in body

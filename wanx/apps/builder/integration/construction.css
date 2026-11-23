@@ -32,3 +32,5 @@
 .team-feature-state>div{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:14px}
 .team-feature-status-symbol{font-size:32px;color:#ac7455}
 @media(max-width:700px){.team-feature-status h2{flex-wrap:wrap;font-size:24px}.team-feature-status h2 small{width:100%}.team-feature-state{min-height:300px;padding:28px 12px}}
+
+.kaiwu-layout-notice{grid-column:1/-1;padding:12px 16px;background:#f3f5ef;border-bottom:1px solid #e2e7db;color:#4f624a;font-size:12px;line-height:1.7;overflow-wrap:anywhere}.kaiwu-layout-notice strong{font-weight:600}.kaiwu-layout-notice p{font-size:12px!important;line-height:1.7!important;margin:4px 0 0!important;color:inherit!important}

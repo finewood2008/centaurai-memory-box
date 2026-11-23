@@ -1,0 +1,2651 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "WANX Octop · applications",
+    "description": "**CentaurAI-WANX** is a smarter, self-hosted AI assistant for multiple users and agents. All routes are served under `/api`.\n\n## Authentication\n\nMost endpoints require a JWT bearer token:\n\n1. Complete initial setup via `/api/setup/*` (first install only).\n2. `GET /api/auth/captcha` then `POST /api/auth/login` with `username` and `password`\n   (and `captcha_token` when a strong provider is active), or complete SSO with\n   `/api/auth/oidc/*` or `/api/auth/oauth/*` when a provider is enabled.\n3. Send `Authorization: Bearer <access_token>` on subsequent requests.\n\nAccess tokens use sliding renewal: when less than one-third of\n`access_token_ttl_seconds` remains, authenticated responses may include a fresh\ntoken in the `X-Octop-Access-Token` header. Clients should replace the stored\ntoken when present.\n\nPublic endpoints (no login token): `/api/docs`, `/api/openapi.json`, `/api/health`,\n`/api/setup/*` (wizard authorization applies), `/api/auth/login`, `/api/auth/register`,\n`/api/auth/captcha`, `/api/auth/oidc/status`, `/api/auth/oidc/start`,\n`/api/auth/oidc/callback`, `/api/auth/oidc/exchange`, `/api/auth/oauth/status`,\n`/api/auth/oauth/start`, `/api/auth/oauth/callback`, `/api/auth/oauth/exchange`,\n`/api/auth/invite/validate`,\n`/api/auth/invite/redeem`, `/api/connectors/oauth/callback`,\nand `/api/internal/mcp/*`.\n\n## Agent scope\n\nMany agent-scoped routes use the agent ID in the URL path (`/api/agents/{agent_id}/…`).\nRoutes first check the signed token's application scope; legacy tokens default to WANX.\nResources in another application are treated as not found, including for administrators.\nWithin the same application, each route applies its ownership or shared-resource access\nrules. WANX administrators may bypass ownership where supported; Zhijun personal profiles,\nmemories and uploaded sources require the owner.\n\n## Streaming chat\n\nDashboard live turns use **WebSocket** at `/api/agents/{agent_id}/chat/ws` (pass JWT as\n`?token=` query param). Send `{\"type\":\"user_turn\", ...}` frames; the server replies with JSON\nchunks matching the harness stream format, ending with `{\"type\":\"done\"}` or\n`{\"type\":\"error\",\"message\":\"...\"}`.\n\nText-type dashboard pushes (cron reminders, proactive care) also emit\n`{\"type\":\"dashboard_push\", ...}` on `/api/notifications/ws` (same `?token=` auth) so the\nSPA can show a toast even when the chat socket is not subscribed.\n\nHITL resume still uses `POST /api/agents/{agent_id}/chat/hitl/resume` (SSE).\n\n## Knowledge libraries\n\n`/api/knowledge-bases` uses the signed application scope for creation, visibility,\ndocument access, and citations. Existing libraries remain in WANX. Zhijun libraries\nare private to their owner and use local document parsers, downloaded native ONNX\nembeddings and RapidOCR. Remote WANX embedding/OCR settings do not affect Zhijun;\nmissing local components are reported as unavailable without remote fallback.\n",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/admin/applications": {
+      "get": {
+        "tags": [
+          "applications"
+        ],
+        "summary": "List managed products",
+        "operationId": "list_products_api_admin_applications_get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProductResponse"
+                  },
+                  "title": "Response List Products Api Admin Applications Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "applications"
+        ],
+        "summary": "Register a product",
+        "operationId": "create_product_api_admin_applications_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProductDefinition"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/admin/applications/{application_id}": {
+      "get": {
+        "tags": [
+          "applications"
+        ],
+        "summary": "Product metadata",
+        "operationId": "get_product_api_admin_applications__application_id__get",
+        "parameters": [
+          {
+            "name": "application_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Application Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "applications"
+        ],
+        "summary": "Update product definition",
+        "description": "Template changes apply to newly created user instances, never overwrite existing private profiles.",
+        "operationId": "update_product_api_admin_applications__application_id__patch",
+        "parameters": [
+          {
+            "name": "application_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Application Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProductPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/admin/applications/{application_id}/deployment": {
+      "get": {
+        "tags": [
+          "applications"
+        ],
+        "summary": "Box product deployment",
+        "operationId": "get_deployment_api_admin_applications__application_id__deployment_get",
+        "parameters": [
+          {
+            "name": "application_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Application Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "applications"
+        ],
+        "summary": "Configure or disable product deployment",
+        "description": "Disabling immediately rejects product tokens without deleting user Agents or memory.",
+        "operationId": "put_deployment_api_admin_applications__application_id__deployment_put",
+        "parameters": [
+          {
+            "name": "application_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Application Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeploymentBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/admin/applications/{application_id}/releases": {
+      "get": {
+        "tags": [
+          "applications"
+        ],
+        "summary": "Client release catalog",
+        "operationId": "list_releases_api_admin_applications__application_id__releases_get",
+        "parameters": [
+          {
+            "name": "application_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Application Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ReleaseResponse"
+                  },
+                  "title": "Response List Releases Api Admin Applications  Application Id  Releases Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "applications"
+        ],
+        "summary": "Register externally hosted installer",
+        "operationId": "create_release_api_admin_applications__application_id__releases_post",
+        "parameters": [
+          {
+            "name": "application_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Application Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReleaseBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/admin/applications/{application_id}/releases/{version}/recommend": {
+      "post": {
+        "tags": [
+          "applications"
+        ],
+        "summary": "Set recommended release per OS and architecture",
+        "operationId": "recommend_release_api_admin_applications__application_id__releases__version__recommend_post",
+        "parameters": [
+          {
+            "name": "application_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Application Id"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Version"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecommendBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/admin/applications/{application_id}/access": {
+      "get": {
+        "tags": [
+          "applications"
+        ],
+        "summary": "Product access metadata",
+        "operationId": "list_access_api_admin_applications__application_id__access_get",
+        "parameters": [
+          {
+            "name": "application_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Application Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AccessResponse"
+                  },
+                  "title": "Response List Access Api Admin Applications  Application Id  Access Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "applications"
+        ],
+        "summary": "Grant or revoke product access",
+        "operationId": "put_access_api_admin_applications__application_id__access_put",
+        "parameters": [
+          {
+            "name": "application_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Application Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccessBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/admin/applications/{application_id}/manifest": {
+      "get": {
+        "tags": [
+          "applications"
+        ],
+        "summary": "Export credential-free product manifest",
+        "operationId": "get_manifest_api_admin_applications__application_id__manifest_get",
+        "parameters": [
+          {
+            "name": "application_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Application Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductManifest"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/applications/{application_id}/release": {
+      "get": {
+        "tags": [
+          "applications"
+        ],
+        "summary": "Compatible recommended product client",
+        "operationId": "compatible_release_api_applications__application_id__release_get",
+        "parameters": [
+          {
+            "name": "application_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Application Id"
+            }
+          },
+          {
+            "name": "platform",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "enum": [
+                "macos",
+                "windows"
+              ],
+              "type": "string",
+              "title": "Platform"
+            }
+          },
+          {
+            "name": "arch",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "enum": [
+                "arm64",
+                "x64"
+              ],
+              "type": "string",
+              "title": "Arch"
+            }
+          },
+          {
+            "name": "current_version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "0.0.0",
+              "title": "Current Version"
+            }
+          },
+          {
+            "name": "sdk_version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "0.1.0-alpha.2",
+              "title": "Sdk Version"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompatibleReleaseResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/applications/{application_id}/profile": {
+      "get": {
+        "tags": [
+          "applications"
+        ],
+        "summary": "Own private product instance",
+        "operationId": "get_profile_api_applications__application_id__profile_get",
+        "parameters": [
+          {
+            "name": "application_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Application Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "applications"
+        ],
+        "summary": "Create private Agent from product template",
+        "operationId": "create_profile_api_applications__application_id__profile_post",
+        "parameters": [
+          {
+            "name": "application_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Application Id"
+            }
+          },
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/platform/applications/prepare": {
+      "post": {
+        "tags": [
+          "applications"
+        ],
+        "summary": "Prepare signed resources for the current local principal",
+        "operationId": "prepare_api_platform_applications_prepare_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreparationBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreparationResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/platform/applications/candidates/prepare": {
+      "post": {
+        "tags": [
+          "applications"
+        ],
+        "summary": "Prepare a scoped application candidate",
+        "operationId": "prepare_candidate_api_platform_applications_candidates_prepare_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CandidatePreparationBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreparationResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/platform/applications/readiness": {
+      "post": {
+        "tags": [
+          "applications"
+        ],
+        "summary": "Inspect current local resource bindings without creating resources",
+        "operationId": "readiness_api_platform_applications_readiness_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReadinessBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreparationResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/team/resources": {
+      "get": {
+        "tags": [
+          "applications"
+        ],
+        "summary": "List this team's explicitly published native resources",
+        "operationId": "list_resources_api_team_resources_get",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PublishedResource"
+                  },
+                  "title": "Response List Resources Api Team Resources Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "applications"
+        ],
+        "summary": "Publish one owned object into a team resource scope",
+        "operationId": "publish_resource_api_team_resources_post",
+        "parameters": [
+          {
+            "name": "access_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Token"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishResource"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedResource"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AccessBody": {
+        "properties": {
+          "user_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Id",
+            "description": "Legacy native account only."
+          },
+          "membership_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 43,
+                "minLength": 43,
+                "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Membership Id",
+            "description": "Current box-approved team membership; required for local team requests."
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "only_if_missing": {
+            "type": "boolean",
+            "title": "Only If Missing",
+            "description": "Grant only when no access decision exists; preserve existing grants and revocations.",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "title": "AccessBody"
+      },
+      "AccessResponse": {
+        "properties": {
+          "user_id": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "User Id"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "username": {
+            "type": "string",
+            "title": "Username"
+          },
+          "updated_at": {
+            "type": "integer",
+            "title": "Updated At"
+          },
+          "membership_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Membership Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "user_id",
+          "enabled",
+          "username",
+          "updated_at"
+        ],
+        "title": "AccessResponse"
+      },
+      "CandidatePreparationBody": {
+        "properties": {
+          "schemaVersion": {
+            "type": "integer",
+            "const": 2,
+            "title": "Schemaversion"
+          },
+          "applicationId": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 2,
+            "title": "Applicationid"
+          },
+          "artifactId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$",
+            "title": "Artifactid"
+          },
+          "operationId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$",
+            "title": "Operationid"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "applicationId",
+          "artifactId",
+          "operationId"
+        ],
+        "title": "CandidatePreparationBody"
+      },
+      "CompatibleReleaseResponse": {
+        "properties": {
+          "application_id": {
+            "type": "string",
+            "title": "Application Id"
+          },
+          "current_version": {
+            "type": "string",
+            "title": "Current Version"
+          },
+          "release": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReleaseResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "update_available": {
+            "type": "boolean",
+            "title": "Update Available"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "application_id",
+          "current_version",
+          "release",
+          "update_available"
+        ],
+        "title": "CompatibleReleaseResponse"
+      },
+      "ConnectionIdentity": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "pending",
+            "title": "Status",
+            "default": "pending"
+          },
+          "application_id": {
+            "type": "string",
+            "title": "Application Id"
+          },
+          "remote_enabled": {
+            "type": "boolean",
+            "const": false,
+            "title": "Remote Enabled",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "application_id"
+        ],
+        "title": "ConnectionIdentity"
+      },
+      "DeploymentBody": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": false
+          },
+          "resource_bindings": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Resource Bindings",
+            "description": "Binding slot to server-owned resource reference: provider/model for models, configured names for providers/storage, package or plugin IDs otherwise. References are verified before enabling."
+          },
+          "configuration": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Configuration",
+            "description": "Credential-free deployment configuration; secret values remain in native WANX settings."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "DeploymentBody"
+      },
+      "DeploymentResponse": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": false
+          },
+          "resource_bindings": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Resource Bindings",
+            "description": "Binding slot to server-owned resource reference: provider/model for models, configured names for providers/storage, package or plugin IDs otherwise. References are verified before enabling."
+          },
+          "configuration": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Configuration",
+            "description": "Credential-free deployment configuration; secret values remain in native WANX settings."
+          },
+          "application_id": {
+            "type": "string",
+            "title": "Application Id"
+          },
+          "updated_at": {
+            "type": "integer",
+            "title": "Updated At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "application_id",
+          "updated_at"
+        ],
+        "title": "DeploymentResponse"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "PreparationBody": {
+        "properties": {
+          "schemaVersion": {
+            "type": "integer",
+            "const": 1,
+            "title": "Schemaversion"
+          },
+          "applicationId": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 2,
+            "title": "Applicationid"
+          },
+          "artifactId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$",
+            "title": "Artifactid"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "applicationId",
+          "artifactId"
+        ],
+        "title": "PreparationBody"
+      },
+      "PreparationResult": {
+        "properties": {
+          "schemaVersion": {
+            "type": "integer",
+            "enum": [
+              1,
+              2
+            ],
+            "title": "Schemaversion"
+          },
+          "applicationId": {
+            "type": "string",
+            "title": "Applicationid"
+          },
+          "artifactId": {
+            "type": "string",
+            "title": "Artifactid"
+          },
+          "deviceId": {
+            "type": "string",
+            "title": "Deviceid"
+          },
+          "backendProductId": {
+            "type": "string",
+            "title": "Backendproductid"
+          },
+          "productId": {
+            "type": "string",
+            "title": "Productid"
+          },
+          "status": {
+            "type": "string",
+            "const": "ready",
+            "title": "Status"
+          },
+          "observedAt": {
+            "type": "string",
+            "title": "Observedat"
+          },
+          "readOnly": {
+            "type": "boolean",
+            "title": "Readonly"
+          },
+          "authorization": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Authorization"
+          },
+          "contracts": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Contracts"
+          },
+          "resources": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Resources"
+          },
+          "bindings": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Bindings"
+          },
+          "bindingScope": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Bindingscope"
+          },
+          "bindingSetId": {
+            "type": "string",
+            "title": "Bindingsetid"
+          },
+          "operationId": {
+            "type": "string",
+            "title": "Operationid"
+          },
+          "checks": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Checks"
+          }
+        },
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "applicationId",
+          "artifactId",
+          "deviceId",
+          "backendProductId",
+          "productId",
+          "status",
+          "observedAt",
+          "readOnly",
+          "authorization",
+          "contracts",
+          "resources",
+          "bindings",
+          "bindingScope",
+          "bindingSetId",
+          "operationId",
+          "checks"
+        ],
+        "title": "PreparationResult"
+      },
+      "ProductDefinition": {
+        "properties": {
+          "application_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9.-]*$",
+            "title": "Application Id"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 4000,
+            "title": "Description",
+            "default": ""
+          },
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Capabilities",
+            "description": "Declared native capabilities: chat, memory, knowledge, upload, voice, teams, zhijun_context, brainstorm, model_settings. Model settings still require the account's providers permission."
+          },
+          "agent_template": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Agent Template",
+            "description": "New private instance template. String fields: name, description, default_model, system_prompt, welcome_message. Existing instances are never overwritten."
+          },
+          "resource_requirements": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Resource Requirements",
+            "description": "Logical binding slots, each {kind: model|provider|storage|skill|plugin, required?: boolean}. Private Agent/knowledge resources and credentials are forbidden."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "application_id",
+          "name"
+        ],
+        "title": "ProductDefinition"
+      },
+      "ProductManifest": {
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 1,
+            "title": "Schema Version",
+            "default": 1
+          },
+          "product": {
+            "$ref": "#/components/schemas/ProductDefinition"
+          },
+          "deployment": {
+            "$ref": "#/components/schemas/DeploymentBody"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "product",
+          "deployment"
+        ],
+        "title": "ProductManifest"
+      },
+      "ProductPatch": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "capabilities": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capabilities"
+          },
+          "agent_template": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Template"
+          },
+          "resource_requirements": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resource Requirements"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ProductPatch"
+      },
+      "ProductResponse": {
+        "properties": {
+          "application_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9.-]*$",
+            "title": "Application Id"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 4000,
+            "title": "Description",
+            "default": ""
+          },
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Capabilities",
+            "description": "Declared native capabilities: chat, memory, knowledge, upload, voice, teams, zhijun_context, brainstorm, model_settings. Model settings still require the account's providers permission."
+          },
+          "agent_template": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Agent Template",
+            "description": "New private instance template. String fields: name, description, default_model, system_prompt, welcome_message. Existing instances are never overwritten."
+          },
+          "resource_requirements": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Resource Requirements",
+            "description": "Logical binding slots, each {kind: model|provider|storage|skill|plugin, required?: boolean}. Private Agent/knowledge resources and credentials are forbidden."
+          },
+          "created_by": {
+            "type": "integer",
+            "title": "Created By"
+          },
+          "created_at": {
+            "type": "integer",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "integer",
+            "title": "Updated At"
+          },
+          "connection_identity": {
+            "$ref": "#/components/schemas/ConnectionIdentity"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "application_id",
+          "name",
+          "created_by",
+          "created_at",
+          "updated_at",
+          "connection_identity"
+        ],
+        "title": "ProductResponse"
+      },
+      "ProfileResponse": {
+        "properties": {
+          "application_id": {
+            "type": "string",
+            "title": "Application Id"
+          },
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "application_id",
+          "agent_id"
+        ],
+        "title": "ProfileResponse"
+      },
+      "PublishResource": {
+        "properties": {
+          "resource_id": {
+            "type": "string",
+            "pattern": "^team:(agent|knowledge|space):[A-Za-z0-9][A-Za-z0-9._-]{0,95}$",
+            "title": "Resource Id"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 240,
+            "title": "Name",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "resource_id"
+        ],
+        "title": "PublishResource"
+      },
+      "PublishedResource": {
+        "properties": {
+          "box_id": {
+            "type": "string",
+            "title": "Box Id"
+          },
+          "ownership_epoch": {
+            "type": "integer",
+            "title": "Ownership Epoch"
+          },
+          "resource_id": {
+            "type": "string",
+            "title": "Resource Id"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "object_id": {
+            "type": "string",
+            "title": "Object Id"
+          },
+          "owner_user_id": {
+            "type": "integer",
+            "title": "Owner User Id"
+          },
+          "created_at": {
+            "type": "integer",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "box_id",
+          "ownership_epoch",
+          "resource_id",
+          "kind",
+          "object_id",
+          "owner_user_id",
+          "created_at"
+        ],
+        "title": "PublishedResource"
+      },
+      "ReadinessBody": {
+        "properties": {
+          "schemaVersion": {
+            "type": "integer",
+            "enum": [
+              1,
+              2
+            ],
+            "title": "Schemaversion"
+          },
+          "applicationId": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 2,
+            "title": "Applicationid"
+          },
+          "artifactId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$",
+            "title": "Artifactid"
+          },
+          "compatibility": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Compatibility",
+            "description": "Must exactly match the independently verified installed descriptor"
+          },
+          "bindingSetId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bindingsetid"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "applicationId",
+          "artifactId",
+          "compatibility"
+        ],
+        "title": "ReadinessBody"
+      },
+      "RecommendBody": {
+        "properties": {
+          "platform": {
+            "type": "string",
+            "enum": [
+              "macos",
+              "windows"
+            ],
+            "title": "Platform"
+          },
+          "arch": {
+            "type": "string",
+            "enum": [
+              "arm64",
+              "x64"
+            ],
+            "title": "Arch"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "platform",
+          "arch"
+        ],
+        "title": "RecommendBody"
+      },
+      "ReleaseBody": {
+        "properties": {
+          "version": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Version"
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "macos",
+              "windows"
+            ],
+            "title": "Platform"
+          },
+          "arch": {
+            "type": "string",
+            "enum": [
+              "arm64",
+              "x64"
+            ],
+            "title": "Arch"
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 4096,
+            "title": "Url"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-fA-F0-9]{64}$",
+            "title": "Sha256"
+          },
+          "min_wanx_version": {
+            "type": "string",
+            "title": "Min Wanx Version",
+            "default": "1.0.2b4"
+          },
+          "min_sdk_version": {
+            "type": "string",
+            "title": "Min Sdk Version",
+            "default": "0.1.0-alpha.2"
+          },
+          "recommended": {
+            "type": "boolean",
+            "title": "Recommended",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "version",
+          "platform",
+          "arch",
+          "url",
+          "sha256"
+        ],
+        "title": "ReleaseBody"
+      },
+      "ReleaseResponse": {
+        "properties": {
+          "version": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Version"
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "macos",
+              "windows"
+            ],
+            "title": "Platform"
+          },
+          "arch": {
+            "type": "string",
+            "enum": [
+              "arm64",
+              "x64"
+            ],
+            "title": "Arch"
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 4096,
+            "title": "Url"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-fA-F0-9]{64}$",
+            "title": "Sha256"
+          },
+          "min_wanx_version": {
+            "type": "string",
+            "title": "Min Wanx Version",
+            "default": "1.0.2b4"
+          },
+          "min_sdk_version": {
+            "type": "string",
+            "title": "Min Sdk Version",
+            "default": "0.1.0-alpha.2"
+          },
+          "recommended": {
+            "type": "boolean",
+            "title": "Recommended",
+            "default": false
+          },
+          "created_at": {
+            "type": "integer",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "version",
+          "platform",
+          "arch",
+          "url",
+          "sha256",
+          "created_at"
+        ],
+        "title": "ReleaseResponse"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    },
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "JWT from `POST /api/auth/login` (`access_token` field)."
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "applications",
+      "description": "Product definitions, box deployments, client releases and access metadata; personal memories and conversations are never management resources."
+    }
+  ],
+  "x-wanx-supplemental-routes": []
+}

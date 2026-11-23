@@ -147,6 +147,8 @@ export async function packageWindowsPreview({ version, out, repo = repositoryRoo
     path.join(path.parse(systemRoot).root, 'Program Files', 'WindowsPowerShell', 'Modules'),
   ].join(';') };
   for (const file of [executable, path.join(output, installers[0])]) run('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', path.join(client, 'shell/verify-unsigned.ps1'), '-Path', file], client, verificationEnv);
+  const { verifyPackagedMemoryLayout } = await import(new URL('../../wanx/apps/personal-client/tools/package-client-memory.mjs', import.meta.url));
+  await verifyPackagedMemoryLayout({ resourcesPath: resources, platform: 'win32' });
   const { extractFile } = require('@electron/asar');
   const packed = JSON.parse(extractFile(path.join(resources, 'app.asar'), 'package.json').toString('utf8'));
   if (packed.version !== version || packed.name !== pkg.name || packed.productName !== pkg.productName || packed.wanxBuild?.sourceCommit !== sourceCommit) throw new Error('PACKED_PREVIEW_IDENTITY_MISMATCH');
@@ -161,7 +163,18 @@ export async function packageWindowsPreview({ version, out, repo = repositoryRoo
   await writeFile(verification, JSON.stringify(report, null, 2) + '\n');
   const sums = await Promise.all([installers[0], path.basename(verification)].map(async file => `${await checksum(path.join(output,file))}  ${file}`));
   await writeFile(path.join(output, 'SHA256SUMS.txt'), sums.join('\n') + '\n');
-  await writeFile(path.join(output, 'release-notes.md'), `半人马AI记忆盒子 Windows x64 预览版\n\n- 来源提交：${sourceCommit}\n- 包含已完成的本机混合记忆采集、半人马AI品牌界面和手工批量标注工作台。\n- 安装包未签名；预览版不启用正式自动更新。\n- 原生依赖、本机服务启动与未认证请求拒绝均已在 Windows CI 验证。\n- 本轮未验证真实盒子登录、备份恢复和跨设备行为。\n`);
+  await writeFile(path.join(output, 'release-notes.md'), [
+    '半人马AI记忆盒子 Windows x64 预览版',
+    '',
+    `- 来源提交 \`${sourceCommit}\`。`,
+    '- 「我的 AI」新增 Google，并区分 WorkBuddy 国内版和海外版。国内版首次配置提供 MCP 信任指引。',
+    '- 空间支持编辑可预览的纯文本文件，文件脱敏可通过右键菜单进入。',
+    '- 打包时验证应用内的备份 Drive SDK，防止缺少模块导致客户端启动失败。',
+    '- 安装包未签名，预览版不启用正式自动更新。',
+    '- 安装包内的原生依赖和本机记忆服务已在 Windows CI 验证。',
+    '- 真实盒子登录、备份恢复和跨设备行为待实机联测。',
+    '',
+  ].join('\n'));
   return { output, installer: installers[0], version, sourceCommit };
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

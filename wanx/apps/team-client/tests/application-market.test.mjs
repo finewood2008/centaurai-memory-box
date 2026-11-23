@@ -288,7 +288,7 @@ test("logout while downloading prevents committing an installation", async (t) =
 });
 
 test("manager serializes launch against uninstall and only launches active version", async (t) => {
-  const { createApplicationManager } = await import("../applications/manager.mjs");
+  const { createApplicationManager } = await import("../build/app/applications/manager.mjs");
   const { EventEmitter } = await import("node:events");
   const root = await fixture(t), a = await artifact(root), b = await artifact(root, "1.1.0");
   let child;
@@ -375,7 +375,7 @@ test("market close aborts a stalled download, removes temporary files and reject
 });
 
 test("signed upgrades keep the running process until next open and wait for its exit", async t => {
-  const { createApplicationManager } = await import("../applications/manager.mjs");
+  const { createApplicationManager } = await import("../build/app/applications/manager.mjs");
   const { EventEmitter } = await import("node:events");
   const { setImmediate } = await import("node:timers/promises");
   const root = await fixture(t), a = await artifact(root), b = await artifact(root, "1.1.0");
@@ -420,7 +420,7 @@ test("previous market state remains readable and rollback persists through the u
 });
 
 test("uninstall cancels session preparation and rejects a racing signed installation", async t => {
-  const { createApplicationManager } = await import("../applications/manager.mjs");
+  const { createApplicationManager } = await import("../build/app/applications/manager.mjs");
   const root = await fixture(t), a = await artifact(root), b = await artifact(root, "1.1.0");
   let resolveConnection, entered;
   const preparing = new Promise(resolve => { entered = resolve; });

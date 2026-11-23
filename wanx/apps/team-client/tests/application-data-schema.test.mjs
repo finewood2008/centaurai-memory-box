@@ -4,7 +4,7 @@ import {EventEmitter} from 'node:events';
 import {createHash,generateKeyPairSync,randomUUID,sign} from 'node:crypto';
 import {mkdtemp,mkdir,readFile,writeFile,rm,symlink,link,rename,lstat} from 'node:fs/promises';
 import path from 'node:path';import os from 'node:os';import {ZipFile} from 'yazl';
-import {createApplicationManager} from '../applications/manager.mjs';
+import {createApplicationManager} from '../build/app/applications/manager.mjs';
 import {localApplicationProfile,applicationProfilePath} from '../applications/data-profile.mjs';
 import filesystem from 'node:fs/promises';
 import {syncBuiltinESMExports} from 'node:module';

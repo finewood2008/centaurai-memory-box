@@ -23,10 +23,19 @@ from referencing.exceptions import Unresolvable
 from starlette.requests import ClientDisconnect
 
 from ..admin_client import BridgeUpstreamError
+from ..model_reasoning import reasoning_metadata
 from ..oidc import loopback_origin
-from .desktop import APPS, DesktopConfig, DesktopError, request_json, strict_json
+from .desktop import (
+    APPS,
+    DesktopConfig,
+    DesktopError,
+    parse_model_output,
+    request_json,
+    strict_json,
+)
 from .desktop_routes import bounded_body, live_request
 from .model_budget import InvalidModelOutputLimit, output_budget, truncated
+from .model_options import inference_options, thinking_modes, thinking_overrides
 from .output_diagnostics import (
     diagnostic,
     safe_output_metadata,
@@ -56,6 +65,7 @@ def _log_model_failure(error: Exception, job_id: str | None, nonce: str) -> None
     """Same closed diagnostic schema as core, without importing that wheel."""
     codes = {
         "MODEL_CALL_FAILED",
+        "MODEL_BILLING_REQUIRED",
         "MODEL_INVALID_OUTPUT",
         "MODEL_INVALID_REQUEST",
         "MODEL_CONFIG_INVALID",
@@ -266,6 +276,11 @@ class ModelRelay:
             provider = providers.get(model.get("provider_id"))
             if not provider or not provider.get("enabled") or "text" not in model.get("input", []):
                 continue
+            if model.get("reasoning_config") is not None:
+                try:
+                    model = {**model, "reasoning_config": reasoning_metadata(model["reasoning_config"])}
+                except (ValueError, TypeError):
+                    raise DesktopError("MODEL_CONFIG_INVALID", 409) from None
             base = provider.get("base_url") or (
                 "https://api.openai.com/v1" if provider.get("kind") == "openai" else ""
             )
@@ -287,8 +302,10 @@ class ModelRelay:
                         {key: provider.get(key) for key in ("id", "kind", "api_key")},
                         base,
                         {
-                            key: model.get(key)
-                            for key in ("model", "input", "context_window", "max_output_tokens")
+                            **{key: model.get(key)
+                               for key in ("model", "input", "context_window", "max_output_tokens")},
+                            **({"reasoning_config": model["reasoning_config"]}
+                               if model.get("reasoning_config") is not None else {}),
                         },
                         location,
                     ]
@@ -307,11 +324,13 @@ class ModelRelay:
                     "capabilities": ["text", "json_check_required"] if supported else [],
                     "context_window": model.get("context_window"),
                     "max_output_tokens": model.get("max_output_tokens"),
+                    "reasoning_config": model.get("reasoning_config"),
+                    "inference_options": {"thinking_modes": thinking_modes(provider, model)},
                 }
             )
         return items, providers
 
-    async def catalog_result(self, items, *, fallback_active=False):
+    async def catalog_result(self, items):
         response = await self.admin._admin("GET", "/api/providers/application-defaults")
         if response.status_code == 404:
             policy = {"managed": False, "defaults": {}}
@@ -321,7 +340,7 @@ class ModelRelay:
             raise DesktopError("MODEL_SERVICE_UNAVAILABLE")
         configured = policy.get("defaults", {}).get("starlink")
         reference = configured.get("model_ref") if configured and configured.get("available") else None
-        if configured is None and fallback_active:
+        if configured is None:
             active = await self.admin._admin("GET", "/api/providers/active-model")
             if active.status_code != 200:
                 raise DesktopError("MODEL_SERVICE_UNAVAILABLE")
@@ -348,6 +367,8 @@ class ModelRelay:
             "purpose": body["purpose"],
             "model_id": selection["id"],
             "model_revision": selection["revision"],
+            **({"inference_options": inference_options(body)}
+               if inference_options(body)["thinking_mode"] != "auto" else {}),
         }
         _, value = await request_json(
             self.client,
@@ -357,7 +378,10 @@ class ModelRelay:
             payload=payload,
             timeout=10,
         )
-        if value.get("authorized") is not True:
+        options = inference_options(body)
+        if (value.get("authorized") is not True
+            or (options["thinking_mode"] != "auto" or "inference_options" in value)
+            and value.get("inference_options") != options):
             raise DesktopError("MODEL_TASK_REVOKED", 403)
 
     async def _generate(
@@ -414,6 +438,8 @@ class ModelRelay:
             raise DesktopError("MODEL_CONFIG_INVALID", 409) from exc
         except ValueError as exc:
             raise DesktopError("MODEL_INVALID_REQUEST", 422) from exc
+        options = inference_options(body)
+        overrides = thinking_overrides(provider, selection, options["thinking_mode"])
         if provider["kind"] == "ollama":
             url = base.rstrip("/").removesuffix("/v1") + "/api/chat"
             payload = {
@@ -421,7 +447,7 @@ class ModelRelay:
                 "messages": messages,
                 "format": schema,
                 "stream": False,
-                "think": False,
+                "think": options["thinking_mode"] == "on",
                 "options": {"temperature": 0, "num_predict": limit},
             }
         else:
@@ -437,6 +463,10 @@ class ModelRelay:
                     "json_schema": {"name": "starklink_result", "schema": schema},
                 },
             }
+            payload.update(overrides.get("model_fields", {}))
+            payload.update(overrides.get("extra_body", {}))
+            if options["thinking_mode"] == "on":
+                payload.pop("temperature", None)
         # Use a fresh request, without the shared client's response cookie jar.
         request = httpx.Request(
             "POST",
@@ -449,7 +479,8 @@ class ModelRelay:
             response = await self.client.send(request, stream=True)
             try:
                 if response.status_code != 200:
-                    error = DesktopError("MODEL_CALL_FAILED", 502)
+                    error = (DesktopError("MODEL_BILLING_REQUIRED", 402)
+                             if response.status_code == 402 else DesktopError("MODEL_CALL_FAILED", 502))
                     error._model_upstream_status = response.status_code
                     raise error
                 raw = bytearray()
@@ -502,6 +533,7 @@ class ModelRelay:
                     "purpose": body.get("purpose", "check"),
                     "model_id": selection["id"],
                     "revision": selection["revision"],
+                    "inference_options": options,
                     "usage": usage,
                     "accounting": "reported" if usage else "not_returned",
                 },
@@ -532,7 +564,7 @@ class ModelRelay:
             if content.startswith("```"):
                 content = content.partition("\n")[2].rsplit("```", 1)[0].strip()
             failure_kind = "invalid_json"
-            value = strict_json(content)
+            value = parse_model_output(content)
             failure_kind = "schema_validation"
             # Preserve the callback's object-only contract even for a loose schema.
             if not isinstance(value, dict):
@@ -559,6 +591,7 @@ class ModelRelay:
         return {
             "text": encoded(value),
             "usage": usage,
+            "inference_options": options,
             **({"max_output_tokens": limit} if body.get("max_output_tokens") is not None else {}),
         }
 
@@ -648,6 +681,9 @@ class ModelRelay:
             raise DesktopError("MODEL_UNAVAILABLE", 409)
         if selection["revision"] != selected.get("revision"):
             raise DesktopError("MODEL_CONFIG_CHANGED", 409)
+        options = inference_options(body)
+        if options["thinking_mode"] not in selection["inference_options"]["thinking_modes"]:
+            raise DesktopError("MODEL_THINKING_UNSUPPORTED", 422)
         if action == "check":
             text = '合成连通性测试，请返回 {"ok":true}。不含用户资料。'
             schema = {
@@ -690,6 +726,7 @@ class ModelRelay:
                 audit = {
                     "job_id": body["job_id"] if action == "infer" else None,
                     "purpose": body["purpose"] if action == "infer" else "check",
+                    "inference_options": options,
                     **(
                         {"max_output_tokens": body["max_output_tokens"]}
                         if "max_output_tokens" in body

@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { verifyEnvelope, marketFailure, validApplicationId, matchesApplicationTarget } from "./descriptor.mjs";
 import { validateApplicationManifest } from "./manifest.mjs";
 import { applicationProfilePath, prepareApplicationProfile } from "./data-profile.mjs";
+import {isStandardDeployment,verifyStandardDeploymentInstallation} from './standard-deployment.mjs';
 
 /** Invoked by the shell before acquiring the WANX single-instance lock. */
 export async function runManagedApplication({
@@ -50,7 +51,10 @@ async function bootstrapInstalledApplication({
   const directory = await realpath(installPath);
   if (path.dirname(path.dirname(directory)) !== root) throw invalid();
   const record = JSON.parse(await readFile(path.join(directory, ".wanx-install.json"), "utf8"));
-  const manifest = validateApplicationManifest(record, { allowLegacyVersion: true, signed: Boolean(record.envelope) });
+  const standard=isStandardDeployment(record);
+  const manifest = standard
+    ? {...await verifyStandardDeploymentInstallation(record,{active:true}),applicationId:record.applicationId}
+    : validateApplicationManifest(record, { allowLegacyVersion: true, signed: Boolean(record.envelope) });
   if (manifest.applicationId !== environment.WANX_HOST_CLIENT_APPLICATION_ID || await realpath(record.installPath) !== directory)
     throw invalid();
   if (record.envelope) {
@@ -99,10 +103,10 @@ async function bootstrapInstalledApplication({
     if (message?.type === "wanx:application-activate" && message.launchId === environment.WANX_HOST_LAUNCH_ID) activate();
   });
   let reported = false;
-  const report = type => {
+  const report = (type, diagnostic = {}) => {
     if (reported) return;
     reported = true;
-    send({ type, launchId: environment.WANX_HOST_LAUNCH_ID });
+    send({ type, launchId: environment.WANX_HOST_LAUNCH_ID, ...diagnostic });
   };
   app.on("browser-window-created", (_event, window) => {
     if (revoked) { window.hide(); window.destroy(); return; }
@@ -116,9 +120,8 @@ async function bootstrapInstalledApplication({
     window.webContents.once("did-finish-load", () => report("wanx:application-ready"));
     window.webContents.on("did-fail-load", (_event, code, description, url, mainFrame) => {
       if (mainFrame !== false && code !== -3) {
-        send({ type: "wanx:application-failed", launchId: environment.WANX_HOST_LAUNCH_ID,
+        report("wanx:application-failed", {
           code: "APPLICATION_RENDERER_LOAD_FAILED", detail: `${code}:${description || ""}:${url || ""}` });
-        report("wanx:application-failed");
       }
     });
   });

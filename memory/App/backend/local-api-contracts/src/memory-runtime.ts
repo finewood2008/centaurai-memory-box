@@ -325,6 +325,7 @@ export const MemoryHealthSnapshotSchema = z.object({
   viewerUrl: z.url().optional(),
   version: NonEmptyStringSchema,
   uptimeMs: z.number().nonnegative(),
+  pipelineBlockers: z.array(z.enum(["summary-model", "evolution-model", "model-budget"])).optional(),
   mode: z.enum(["local", "cloud", "dev"]),
   storage: z.object({
     backend: z.enum(["sqlite", "polardb"]),

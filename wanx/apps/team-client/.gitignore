@@ -1,13 +1,4 @@
-# Rebuilt from apps/builder source and the renderer entrypoints.
-/studio/
-/applications/studio-runtime/
-/applications/studio.mjs
-/shell/team-service.mjs
-/shell/team-data-service.mjs
-/shell/wanx-mcp-bridge.mjs
-/local-ui/renderer/data-view.js
-/local-ui/renderer/*.bundle.js
-/local-ui/maintenance/
+# Dependencies and native/release artifacts; application output lives in build/.
 /node_modules/
 /release/
 /native/bin/

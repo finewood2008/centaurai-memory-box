@@ -339,6 +339,68 @@ class ChangeApplied(WireResponse):
     extraction_started: Literal[False]
 
 
+class MaterialDraftState(WireResponse):
+    status: str
+    revision: int
+    source_current: bool
+    has_changes: bool | None = Field(
+        default=None, description="Actual fact or ontology-target differences; opening a draft is not a change. Missing means older owner, not false."
+    )
+    change_count: int | None = Field(default=None, ge=0)
+    ontology_changed: bool | None = None
+
+
+class ExtractionReviewIssue(WireResponse):
+    batch_index: int = Field(ge=0)
+    stage: str
+    reason: str
+    audit_rounds: int = Field(ge=0, le=2)
+    message: str
+
+
+class PublicationBlocker(WireResponse):
+    code: str
+    message: str
+
+
+class MaterialExtractionQuality(WireResponse):
+    coverage_unconfirmed: bool
+    excluded_candidate_count: int = Field(ge=0, strict=True)
+
+
+class MaterialPublication(WireResponse):
+    id: str
+    document_version_id: str
+    status: Literal["published"]
+    published_at: str | None
+    entity_count: int | None = Field(default=None, ge=0)
+    relation_count: int | None = Field(default=None, ge=0)
+    extraction_quality: MaterialExtractionQuality | None = None
+
+
+class MaterialExtractionReview(WireResponse):
+    run_id: str
+    reason_code: str
+    message: str
+    issues: list[ExtractionReviewIssue]
+    next_action: Literal["review_candidates"]
+    entity_count: int | None = Field(default=None, ge=0, description="All entity candidates, including candidates not yet adopted or valid for publication.")
+    relation_count: int | None = Field(default=None, ge=0, description="All relation candidates, including candidates not yet adopted or valid for publication.")
+    adoptable_entity_count: int | None = Field(
+        default=None, ge=0, strict=True,
+        description="Entity candidates eligible to be added to a draft. Missing or null means unknown on older owners, not zero. Not a publication authorization.",
+    )
+    adoptable_relation_count: int | None = Field(
+        default=None, ge=0, strict=True,
+        description="Relation candidates eligible to be added to a draft, including uncertain relations still requiring review. Missing or null means unknown, not zero. Not a publication authorization.",
+    )
+    excluded_candidate_count: int | None = Field(
+        default=None, ge=0, strict=True,
+        description="Candidates excluded from direct adoption by evidence, endpoint or constraint checks. Not necessarily false facts. Missing or null means unknown, not zero.",
+    )
+    publication_blockers: list[PublicationBlocker] | None = Field(default=None, description="Why this automatic run awaits review; not a replacement for draft publication validation.")
+
+
 class MaterialWorkflow(WireResponse):
     preparation: Preparation | None = None
     workflow_revision: int
@@ -352,8 +414,11 @@ class MaterialWorkflow(WireResponse):
     label: str
     tasks: list[dict]
     conversations: list[dict]
-    draft: dict | None
-    publication: dict | None
+    draft: MaterialDraftState | None
+    extraction_review: MaterialExtractionReview | None = Field(
+        default=None, description="Current unfenced automatic candidates awaiting review, independent of draft and publication. Never a publication authorization."
+    )
+    publication: MaterialPublication | None
     actions: dict
     publication_policy: Literal["automatic", "review_required"]
 
@@ -371,6 +436,7 @@ class OnboardingScope(WireResponse):
         description="Warehouse business role; not account identity or access control"
     )
     service_objects: list[str]
+    focus_objects: list[str] = Field(default_factory=list)
     purposes: list[str]
     material_sources: list[str]
     questions_to_answer: list[str]
@@ -473,6 +539,35 @@ class OnboardingState(WireResponse):
     publication_performed: Literal[False]
 
 
+class TrialSource(WireResponse):
+    id: str
+    text: str = Field(min_length=1, max_length=1200)
+
+
+class TrialEntity(WireResponse):
+    name: str
+    type: str
+
+
+class TrialRelation(WireResponse):
+    source: str
+    predicate: str
+    target: str
+
+
+class OnboardingTrial(WireResponse):
+    conversation_id: str
+    draft_digest: str
+    document_id: str
+    document_version_id: str
+    title: str
+    source: TrialSource
+    entities: list[TrialEntity] = Field(max_length=18)
+    relations: list[TrialRelation] = Field(max_length=18)
+    partial_results: bool
+    publication_performed: Literal[False]
+
+
 class OnboardingPreview(Receipt):
     status: Literal["previewed"]
     conversation_id: str
@@ -556,7 +651,6 @@ def response_model(method, path):
     models = {
         ("GET", one + "/ontology-edit"): OntologyEditState,
         ("POST", one + "/ontology-edit/initialize"): OntologyEditReceipt,
-        ("POST", one + "/ontology-edit/draft"): OntologyEditReceipt,
         ("POST", one + "/ontology-edit/turns"): OntologyEditReceipt,
         ("GET", one + "/ontology-edit/turns/{turn_id}"): OntologyEditReceipt,
         ("POST", one + "/ontology-edit/preview"): OntologyEditPreview,
@@ -566,6 +660,7 @@ def response_model(method, path):
         ("POST", one + "/onboarding/turns"): OnboardingTurn,
         ("GET", one + "/onboarding/turns/{turn_id}"): OnboardingTurn,
         ("POST", one + "/onboarding/preview"): OnboardingPreview,
+        ("POST", one + "/onboarding/trial"): OnboardingTrial,
         ("POST", one + "/onboarding/publish"): OnboardingPublication,
         ("GET", c + "/materials"): MaterialWorkflowPage,
         ("GET", c + "/materials/{document_id}"): MaterialWorkflow,

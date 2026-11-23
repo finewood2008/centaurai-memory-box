@@ -17,8 +17,10 @@ npm run dev:web
 
 # 桌面源码开发：Node >= 22.14，Go >= 1.26；macOS 还需 Xcode Command Line Tools
 npm ci --prefix apps/builder
+npm ci --include=dev --prefix apps/starlink/frontend
 npm ci --prefix octop/dashboard
 npm ci --prefix apps/personal-client
+npm ci --prefix apps/memory
 npm run start:mini
 
 # 跨工程测试所需的 Python 环境
@@ -30,6 +32,10 @@ npm --prefix apps/personal-client run test:native
 # 盒端 bridge 与原生 Octop 公共接口合同测试
 npm run test:bridge
 ```
+
+客户端运行目录统一装配到 `build/app/`，开发启动与打包都使用此目录。Builder 集成源码位于 `../builder/integration/`，构建不会再向客户端的 `shell/`、`local-ui/` 等源码目录写入副本。`build/` 可删除后重新构建，不要直接编辑其中的文件。
+
+「星图」面板源码位于 [`../starlink/`](../starlink/README.md)，在主窗口内直接提供建仓、资料导入与自动抽取、图谱、检索和本体管理。`build:studio` 自动构建和装配星图，不依赖外部 Starlink 项目或“打开完整版”。接入边界见[迁移说明](../../docs/applications/starlink-panel-migration.md)。
 
 Builder 与 Dashboard 的依赖供启动前的应用组装和维护页面构建使用；只安装个人版依赖不能完成首次启动。桌面端连接盒子时无需在本机启动 Octop 服务。`npm run start:client` 和 `npm start` 仍是个人版入口。
 
@@ -105,7 +111,7 @@ Dashboard 按需在独立临时 Electron session 中打开，不随连接自动�
 
 应用首页通过在线市场 API 查询候选、授权下载并验证签名安装包。应用包可复用万象运行时（`launchMode: "shared"`，默认），也可自带完整 Electron（`launchMode: "bundled"`，需声明系统/架构并接入 SDK 的 Electron 生命周期 helper）。同一应用只展示一个当前版本，安装更高 SemVer 版本后在下次打开时完成旧进程回收并切换；历史版本无法比较时先选择当前版本。停止和退出会等待应用主进程退出，超时强制终止，回收失败会明确报错。完整包的入口是包内可执行程序；`.dmg`、`.msi` 或安装向导 `.exe` 不能直接导入。本地 ZIP／目录安装保留为默认关闭的开发 IPC 入口，正常页面不展示。包结构与接入示例见 [WANX Host 应用接入](../../docs/applications/wanx-host-app-integration.md)。
 
-Host 和共享运行时应用启动经过 `shell/entry.mjs`：普通启动进入 Host；市场 `--wanx-managed-app` 子进程先验签，开发包 `--wanx-application` 子进程校验本地记录，两者都只加载已安装清单指定的 JS 入口，在 Host 单实例锁和网络初始化之前分流。开发启动会额外传入万象源码目录，打包版直接复用可执行文件，不能依赖只适用于默认 Electron 启动器的 `--app` 参数。独立运行时应用直接启动包内可执行程序，通过 SDK helper 对接相同的启动协议。两种应用均使用独立 Chromium 数据目录，窗口完成首次页面加载后才向父进程报告启动成功；提前退出、加载失败或 30 秒未就绪会撤销该启动会话，并在首页提示重试。业务 API、Host SDK 的传输接口和 Web/LAN 模式不变。
+Host 和共享运行时应用启动经过 `shell/entry.mjs`：普通启动进入 Host；市场 `--wanx-managed-app` 子进程先验签，开发包 `--wanx-application` 子进程校验本地记录，两者都只加载已安装清单指定的 JS 入口，在 Host 单实例锁和网络初始化之前分流。开发启动会额外传入万象的 `build/app/` 运行目录，打包版直接复用可执行文件，不能依赖只适用于默认 Electron 启动器的 `--app` 参数。独立运行时应用直接启动包内可执行程序，通过 SDK helper 对接相同的启动协议。两种应用均使用独立 Chromium 数据目录，窗口完成首次页面加载后才向父进程报告启动成功；提前退出、加载失败或 30 秒未就绪会撤销该启动会话，并在首页提示重试。业务 API、Host SDK 的传输接口和 Web/LAN 模式不变。
 
 发布前可设置 `WANX_PACKAGED_EXECUTABLE` 为打包程序的可执行文件路径，运行 `node --test tests/packaged-application-seam.test.mjs`。该 seam 使用临时用户目录，验证真实打包进程进入 manifest 入口，以及应用异常时返回失败，不会读取真实盒子或账号。
 
@@ -154,7 +160,7 @@ npm --prefix apps/personal-client run build:network:all
 # macOS 名称读取助手，默认当前架构；可追加 darwin-arm64 darwin-x64
 npm --prefix apps/personal-client run build:discovery
 
-# 打包；发布签名/公证使用相应平台的发布环境和证书
+# 在相应平台按当前 Node 架构打包
 npm --prefix apps/personal-client run package:mac
 npm --prefix apps/personal-client run package:windows
 ```
@@ -175,7 +181,9 @@ macOS 正式客户端请从仓库根目录运行独立入口（市场应用使�
 ./package-client.sh --edition all --arch arm64 --formal
 ```
 
-统一入口支持 `--edition personal|team|all`，省略时仍打个人版。`apps/personal-client/package-client.sh` 与 `apps/team-client/package-client.sh` 仍保留为版别入口。企业版默认输出到 `apps/team-client/release/client/<版本>/`；`all` 依次调用两个版本的构建脚本，任一失败即停止。使用 `--out <目录>` 时，单版直接使用该目录，`all` 分别写入 `<目录>/personal/` 和 `<目录>/team/`，目标目录必须尚不存在。个人版、企业版默认更新渠道分别为 `stable`、`stable-studio`；`all` 不接受共用的 `--channel`，需要自定义渠道时请分别打包。首次打包需先安装 `apps/builder/`、`octop/dashboard/` 及所选客户端的依赖；两版脚本都会自动构建所需的 Builder 资源。
+统一入口支持 `--edition personal|team|all`，省略时仍打个人版。`apps/personal-client/package-client.sh` 与 `apps/team-client/package-client.sh` 仍保留为版别入口。企业版默认输出到 `apps/team-client/release/client/<版本>/`；`all` 依次调用两个版本的构建脚本，任一失败即停止。使用 `--out <目录>` 时，单版直接使用该目录，`all` 分别写入 `<目录>/personal/` 和 `<目录>/team/`，目标目录必须尚不存在。个人版、企业版默认更新渠道分别为 `stable`、`stable-studio`；`all` 不接受共用的 `--channel`，需要自定义渠道时请分别打包。首次打包先按[源码开发步骤](#使用与开发)安装各工程依赖。两版脚本都会自动构建所需的 Builder 资源。
+
+个人版打包会装入记忆界面和独立运行时。构建机的 Node、Electron 和安装的原生依赖必须与目标系统及架构一致。发布 arm64 和 x64 时分别构建。正式打包会通过成品的 Electron 验证 SQLite、向量扩展和本地记忆服务，并将结果写进 `verification-client.json` 的 `memoryRuntime`。
 
 脚本生成当前版别的 DMG、更新 ZIP、`.blockmap`、`SHA256SUMS.txt` 和 `verification-client.json`，默认输出到 `apps/personal-client/release/client/<版本>/` 下的新目录。macOS 和 Windows 正式打包默认读取所选客户端 `package.json` 的 `version`。可选 `--version` 只覆盖本次安装包元数据与验证报告，不改源码 `package.json`；`--arch` 可选 `arm64` 或 `x64`。
 
@@ -214,9 +222,29 @@ macOS 正式客户端请从仓库根目录运行独立入口（市场应用使�
 应用提交方还必须随安装包交付图标、Logo、真实产品截图、1–3 张产品介绍海报及资料索引；具体规格与人工审核标准见 [应用上架素材规范](../../docs/applications/wanx-marketplace-submission-assets.md)。当前六款内置介绍页使用产品海报，不再展示本机采集的界面截图。
 ## 私人记忆盒子接入
 
+「我的 AI」的 CLI 任务支持 Windows 与 macOS。Windows 使用独立 PowerShell 窗口展示提示词、工作目录和资料范围，按 Enter 后重新核验当前账号与盒子授权，再启动 CLI；关闭或取消不会执行任务。支持已安装的原生可执行程序，以及 Codex、Gemini、Claude Code 的标准 npm 安装入口。修改启动器后需退出客户端，再运行 `npm run start:mini` 重新组装；运行中的网络引擎会占用 `build/app` 文件，关闭窗口可能只隐藏客户端，应从应用菜单退出。
+
+Windows 终端通过系统 ShellExecute 打开，核对助手写入就绪回执后，页面才显示「终端已准备任务」。窗口未就绪会报错，不会把创建后台进程当作任务已打开。记忆使用万象模型时，Octop 必须注册 `/api/wanx/memory-model` 及 `/complete`；日志返回 404 表示盒端接口尚未加载，需更新并重启对应 Octop 服务。
+
+Windows 核对窗口显式设置控制台输入、输出及 PowerShell 管道为 UTF-8。Electron 在真实控制台中可能仍将标准输入指向 NUL；核对助手会重新打开自身控制台的 `CONIN$`、`CONOUT$`，确认后关闭核对读取器，使用独立输入句柄启动 CLI，避免抢走 CLI 后续按键。npm 安装的 CLI 使用入口旁或 PATH 中的 `node.exe` 执行已验证的包入口；未找到 Node 时提示修复安装。核对助手完成就绪回执后才创建确认输入，输入关闭会清理任务并提示未启动；真实管道和文件输入保留原有语义。Electron 核对进程通过 `Start-Process -NoNewWindow -Wait` 保持终端连接并等待退出。
+
+`WANX_TEST_CONSOLE=1 node --test apps/personal-client/tests/my-ai-launch.test.mjs` 在 Windows 下额外验证隐藏的真实控制台：只向测试控制台注入按键，检查核对、原生及 npm CLI 连续交互、取消；不启动真实 Agent。PowerShell 可先执行 `$env:WANX_TEST_CONSOLE='1'` 再运行测试。该测试需要 .NET Framework C# 编译器及创建控制台权限，使用 Job Object 在结束时清理全部测试子进程。
+
+`wanx-memobox` 的星图部分由盒端原生 Semantica MCP `/mcp/starlink` 提供。客户端通过现有盒子网络通道执行 MCP 初始化、工具发现和调用，按盒端实际清单暴露 `xingtu_*` 工具及其原始参数和结果，包括仓库、材料、图谱、检索、证据及推理工具。对外不再注册 `starlink_warehouses/search/evidence`；侧栏等客户端内部检索保留既有业务接口。空间与记忆工具保持原入口。
+
+`space_read` 读取授权范围内的原文件，并复用隔离提取器处理 HTML/HTM、XML、TSV、PDF、DOCX、XLSX、PPTX。HTML 不执行脚本或加载链接，扫描 PDF 不提供 OCR。文件读取前后校验位置、版本、大小和摘要；解析结束后再次检查任务授权。文档及较大文本支持至 64 MiB，提取正文最多 32,768 字符；返回 `extractedFormat`、`contentTruncated`，每页最多 12,000 字符，通过 `nextStart` 继续读取。128 KiB 以内原有纯文本格式保留直接读取方式。`space_search` 除原有文本扫描外，单次最多提取 4 份不超过 4 MiB 的文档，每份限定 5 秒；超限或提取失败时仍可按文件名匹配，并报告跳过数量。
+
+每个原生星图工具额外接受路由参数 `task_id`、`warehouseId`，转发前移除这两个字段。任务 ID 绑定本次选定的仓库；未指定任务时使用已保存的仓库选择。一次授权全部个人资料且存在多个仓库时，须从工具参数的 `warehouseId.enum` 选择目标仓库。原生 `xingtu_evidence` 使用 `evidence_id`；推理工具的嵌套参数遵循盒端发布的 schema。
+
+原生 MCP 使用内部创建的仓库 Key，仅包含 `documents/evidence/graph/search/reasoning` 权限，有效期一天；同一进程复用各仓库 Key，只保存在主进程内存，不写入外部 Agent 配置或交给页面。退出客户端时撤销；账号、盒子或会话切换后丢弃旧连接并尝试撤销，断网或旧会话失效无法撤销时由到期时间兜底。盒端须支持原生 MCP 和仓库 Key 接口，失败不会降级为旧星图业务接口。源码更新后先退出并重新启动万象，再重新打开外部 Agent，让其加载新的工具清单。
+
+新建调试资料目录使用独立记忆库。概览加载完成但数量全部为 0 时，可在「我的 AI → 采集与备份设置」选择本机来源并执行采集，或在「从备份恢复」恢复已有快照；自动采集按当前设置执行。
+
+Codex 等智能体通过 MCP 连接本机记忆盒子客户端。客户端读取本机记忆，并通过已授权的 P2P 连接查询盒端空间和星图。「测试连接」检查本机 MCP 服务，可以在盒子离线时测试已配置的连接。「等待智能体加载」表示本机 MCP 配置已保存，正在等待智能体加载工具。资料检索还需要当前账号和授权盒子的有效会话。
+
 万象个人版登录后默认打开「记忆」。启动本机的半人马AI私人记忆盒子后，万象会使用它的记忆服务和数据库。「设置 → 记忆」可配置模型、来源扫描及用量预算，并管理本机记忆数据。
 
 源码版启动时会检查本机记忆服务。缺失的进程由客户端拉起。「重新连接记忆服务」会重新检查进程，等服务就绪后继续读取原记忆库。
 
-在记忆盒子源码目录安装依赖，执行 `npm run memory:build` 和 `npm run build -w @memmy/backend`。在客户端目录将 `WANX_MEMORY_BOX_ROOT` 指向该源码目录，再执行 `npm run build:memory`。该构建会记录本机运行组件的源码位置。若设置 `MEMMY_RUNTIME_CONFIG_PATH`，客户端会连接指定的外部管理服务，进程由外部管理。
+默认启动使用仓库内的 `apps/memory`，首次先执行 `npm ci --prefix apps/memory`，之后直接从仓库根目录运行 `npm run start:mini`。启动流程构建记忆前端、Memory 与 backend，并将适配 Electron 的服务准备到 `build/local-memory`；后续按源码摘要复用缓存，`build:studio` 重建应用目录后也会恢复记忆界面。`WANX_MEMORY_BOX_ROOT` 仅用于覆盖为另一份源码。若设置 `MEMMY_RUNTIME_CONFIG_PATH`，客户端会连接指定的外部管理服务，不再准备第二套本机后端。
 

@@ -1,4 +1,5 @@
 from pathlib import Path
+import pytest
 
 from wanx_studio import devkit
 
@@ -25,6 +26,7 @@ def test_kit_info_is_available_and_hash_bound():
     assert info["version"] == "0.3.0"
     assert len(info["kitSha256"]) == 64
     assert len(info["sdk"]["sha256"]) == 64
+    assert info["sdk"]["hashMatches"] is True
     assert info["projectSchemaSha256"]
 
 
@@ -59,7 +61,7 @@ def test_compatibility_report_is_read_only_and_marks_legacy_artifact():
 
 
 def test_dry_run_parses_multiline_generator_json():
-    report = devkit.compatibility_report(project(), ROOT)
+    report = devkit.compatibility_report(project({"solution": {"capabilities": []}}), ROOT)
     assert report["dryRun"]["valid"] is True
     assert report["valid"] is True
 
@@ -72,3 +74,34 @@ def test_project_inventory_rejects_identity_conflicts_and_hash_changes():
     base = project()
     changed = project({"solution": {"capabilities": ["files"]}})
     assert devkit.digest(devkit.project_spec(base)) != devkit.digest(devkit.project_spec(changed))
+
+
+@pytest.mark.parametrize("target",["tree","archive","contract","generator"])
+def test_sdk_tree_or_package_tampering_blocks_kit(tmp_path,monkeypatch,target):
+    import shutil
+    kit=devkit._kit_root(ROOT)
+    for relative in ['package.json','package-lock.json','vendor/wanx-app-kit/0.3.0','contracts/app-builder','templates','tools']:
+        src=kit/relative;dst=tmp_path/relative;dst.parent.mkdir(parents=True,exist_ok=True)
+        if src.is_dir():shutil.copytree(src,dst)
+        else:shutil.copy2(src,dst)
+    monkeypatch.setenv('WANX_APP_DEV_KIT_ROOT',str(tmp_path))
+    assert devkit.kit_info(ROOT)['available']
+    if target=='tree':
+        tree=tmp_path/'vendor/wanx-app-kit/0.3.0/sdk/@centaurai/wanx-host-sdk/index.cjs'
+        tree.write_bytes(tree.read_bytes()+b'\n// changed\n')
+    elif target=='contract':
+        path=tmp_path/'vendor/wanx-app-kit/0.3.0/contracts/contract-status.v1.json'
+        path.write_bytes(path.read_bytes()+b' ')
+        from wanx_studio.public_capabilities import catalog
+        with pytest.raises(devkit.StudioError,match='DEVKIT_CONTRACT_INTEGRITY_FAILED'):
+            catalog(ROOT)
+    elif target=='generator':
+        before=devkit.kit_info(ROOT)
+        path=tmp_path/'tools/app-builder/generate.mjs'
+        path.write_bytes(path.read_bytes()+b'\n')
+        assert devkit.kit_info(ROOT)['kitSha256']!=before['kitSha256']
+        return
+    else:
+        archive=tmp_path/'vendor/wanx-app-kit/0.3.0/centaurai-wanx-host-sdk-0.3.0.tgz'
+        archive.write_bytes(b'changed')
+    assert devkit.kit_info(ROOT)['available'] is False

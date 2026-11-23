@@ -55,10 +55,10 @@ func (s *service) dispatch(ctx context.Context, method string, raw json.RawMessa
 	}
 }
 
-// The SDK Status call includes a management probe (up to 5s), then STUN/TURN
-// probes (up to 1.3s), not just a local recorder read. One sampler owns that I/O;
-// UI status reads stay local. Expiry means unknown health, not a failed data
-// path; never keep advertising old peers as connected.
+// The build adapter makes SDK Status a current local-recorder read and runs
+// remote health probes independently in single-flight. One sampler publishes
+// observations; IPC reads never wait for those probes. Expiry still means
+// unknown health: never keep advertising stale peers as connected.
 const statusSampleInterval = time.Second
 const statusMaxAge = 3 * time.Second
 

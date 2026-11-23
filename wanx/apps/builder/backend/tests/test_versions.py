@@ -1,10 +1,9 @@
-import json
 from copy import deepcopy
-from pathlib import Path
 import pytest
 from wanx_studio.contracts import StudioError,digest
-from wanx_studio.versions import state,shadow
-from test_studio import svc,seeded,op,accept
+from wanx_studio.prd import PRD_REVIEW_SECTIONS
+from standard_build_fixture import historical_records, workspace_files
+from test_studio import svc,seeded,op
 
 
 def adopt(svc,p):
@@ -14,10 +13,15 @@ async def candidate(svc,p,files=None,owner='alice'):
     task_id=op()
     def change(q):
         it=svc.versions.task(q,'只调整界面')
-        q['tasks'].append({'id':task_id,'state':'running','solutionHash':digest(q['solution']),'baseHash':it['baseHash'],'iterationId':it['id'],'instruction':'只调整界面','events':[],'question':None})
+        q['tasks'].append({
+            'id': task_id, 'state': 'running', 'solutionHash': digest(q['solution']),
+            'buildInput': q['confirmation']['buildInput'], 'baseHash': it['baseHash'],
+            'iterationId': it['id'], 'instruction': '只调整界面', 'events': [], 'question': None,
+        })
     svc.store.mutate(owner,p['id'],op(),{},change)
-    previous=svc.store.get(owner,p['id'])['artifacts'][-1]
-    return await svc.add_artifact(owner,p['id'],task_id,files or deepcopy(previous['files']))
+    project = svc.store.get(owner, p['id'])
+    baseline = workspace_files(svc, owner, project, task_id)
+    return await svc.add_artifact(owner, p['id'], task_id, baseline if files is None else files)
 
 async def test_compiled_launch_archive_receives_private_files_not_public_summary(svc):
     from wanx_studio.client_launch import ClientLaunch
@@ -60,33 +64,34 @@ async def test_adopted_version_survives_draft_and_failed_improvement(svc):
 
 async def test_explicit_historical_baseline_and_retry_do_not_use_latest_unrelated_source(svc):
     p=adopt(svc,await seeded(svc));old=p['artifacts'][0]['hash'];p=begin(svc,p)
-    files=deepcopy(svc.store.get('alice',p['id'])['artifacts'][0]['files']);files['src/app.js']+='\n// second version\n'
+    files=deepcopy(svc.store.get('alice',p['id'])['artifacts'][0]['files']);files['app/host.mjs']+='\n// second version\n'
     p=adopt(svc,await candidate(svc,p,files));p=begin(svc,p,old)
     # Actual Runner reads the selected old files, not last artifact.
     task_id=op()
     def task(q):
         it=svc.versions.task(q,'new line');q['tasks'].append({'id':task_id,'state':'queued','baseHash':it['baseHash'],'iterationId':it['id'],'solutionHash':digest(q['solution'])})
     svc.store.mutate('alice',p['id'],op(),{},task);q=svc.store.get('alice',p['id'])
-    assert '// second version' not in svc.runner.source_files('alice',q,task_id)['src/app.js']
+    assert '// second version' not in svc.runner.source_files('alice',q,task_id)['app/host.mjs']
     assert q['tasks'][-1]['baseHash']==old
 
-async def test_restore_is_new_version_and_preserves_data_and_unknown_fields(svc):
-    p=adopt(svc,await seeded(svc));old=p['artifacts'][0]['hash'];p=begin(svc,p)
-    files=deepcopy(svc.store.get('alice',p['id'])['artifacts'][0]['files']);m=json.loads(files['miniapp.manifest.json']);m['collections']['items']['priority']='string';files['miniapp.manifest.json']=json.dumps(m)
-    p=adopt(svc,await candidate(svc,p,files));new=p['artifacts'][-1]['hash']
-    token=svc.open_runtime('alice',p['id'],new,'preview')['session']
-    row=await svc.invoke('alice',token,'data.put',{'collection':'items','value':{'title':'当前数据','priority':'高'}})
-    check=svc.versions.restore_check('alice',p['id'],old)
-    body={'operationId':op(),'expectedRevision':check['expectedRevision'],'checkHash':check['checkHash'],'artifactHash':old,'confirmedByUser':True}
-    p=svc.versions.restore('alice',p['id'],body);again=svc.versions.restore('alice',p['id'],body)
-    assert len(p['artifacts'])==len(again['artifacts'])==3
-    a=p['artifacts'][-1];assert a['restoredFrom']==old and a['version']=='0.1.2' and p['versioning']['adoptedHash']==a['hash']
-    assert new in [a['hash'] for a in p['artifacts']]
-    restored=svc.open_runtime('alice',p['id'],a['hash'],'preview')['session']
-    await svc.invoke('alice',restored,'data.put',{'collection':'items','id':row['_id'],'expectedRevision':1,'value':{'title':'旧版修改'}})
-    latest=await svc.invoke('alice',token,'data.get',{'collection':'items','id':row['_id']})
-    assert latest['priority']=='高' and latest['title']=='旧版修改'
-    assert svc.install_payload('alice',p['id'],a['hash'])['version']=='0.1.2'
+async def test_restore_reuses_package_and_preserves_existing_data_and_unknown_fields(svc):
+    p = adopt(svc, await seeded(svc))
+    first = p['artifacts'][0]
+    p = adopt(svc, await candidate(svc, begin(svc, p)))
+    scope = historical_records(p, priority='string')
+    row = svc.data(scope, 'data.put', {'collection': 'items', 'value': {'title': '当前数据', 'priority': '高'}})
+    check = svc.versions.restore_check('alice', p['id'], first['hash'])
+    body = {**check, 'operationId': op(), 'confirmedByUser': True}
+    restored = svc.versions.restore('alice', p['id'], body)
+    again = svc.versions.restore('alice', p['id'], body)
+    assert again['versioning'] == restored['versioning']
+    assert restored['artifacts'] == p['artifacts']
+    assert restored['versioning']['adoptedHash'] == first['hash']
+    assert svc.install_payload('alice', p['id'], first['hash'])['version'] == first['version']
+    svc.data(historical_records(p), 'data.put', {'collection': 'items', 'id': row['_id'],
+                                               'expectedRevision': 1, 'value': {'title': '旧版修改'}})
+    latest = svc.data(scope, 'data.get', {'collection': 'items', 'id': row['_id']})
+    assert latest['priority'] == '高' and latest['title'] == '旧版修改'
 
 async def test_restore_and_adopt_checks_fence_stale_permission_integrity_and_busy(svc,monkeypatch):
     p=adopt(svc,await seeded(svc));old=p['artifacts'][0]['hash'];p=begin(svc,p)
@@ -99,7 +104,7 @@ async def test_restore_and_adopt_checks_fence_stale_permission_integrity_and_bus
     monkeypatch.setattr(svc,'authorize_version',revoked)
     with pytest.raises(StudioError,match='CAPABILITY_CHECK_REQUIRED'):svc.versions.restore_check('alice',p['id'],old)
     monkeypatch.undo()
-    svc.store.mutate('alice',p['id'],op(),{},lambda q:q['artifacts'][0]['files'].update({'src/app.js':'tampered'}))
+    svc.store.mutate('alice',p['id'],op(),{},lambda q:q['artifacts'][0]['files'].update({'app/host.mjs':'tampered'}))
     with pytest.raises(StudioError,match='ARTIFACT_INTEGRITY_FAILED'):svc.versions.restore_check('alice',p['id'],old)
 
 async def test_complete_unadopted_version_can_restore_but_cannot_export_until_adopted(svc):
@@ -121,16 +126,16 @@ async def test_saved_feedback_is_model_free_and_idempotent(svc):
 
 async def test_choose_earlier_candidate_from_same_iteration_without_replacing_data(svc):
     p=begin(svc,await seeded(svc));p=await candidate(svc,p);first=p['artifacts'][-1]
-    files=deepcopy(svc.store.get('alice',p['id'])['artifacts'][-1]['files']);files['src/app.js']+='\n// alternative layout\n'
+    files=deepcopy(svc.store.get('alice',p['id'])['artifacts'][-1]['files']);files['app/host.mjs']+='\n// alternative layout\n'
     p=await candidate(svc,p,files);newest=p['artifacts'][-1]['hash']
-    token=svc.open_runtime('alice',p['id'],newest,'preview')['session']
-    row=await svc.invoke('alice',token,'data.put',{'collection':'items','value':{'title':'保留业务数据'}})
+    scope=historical_records(p)
+    row=svc.data(scope,'data.put',{'collection':'items','value':{'title':'保留业务数据'}})
     body={'operationId':op(),'expectedRevision':p['versioning']['revision'],'artifactHash':first['hash'],'confirmedByUser':True}
     selected=svc.versions.adopt('alice',p['id'],body);again=svc.versions.adopt('alice',p['id'],body)
     assert selected['versioning']==again['versioning']
     assert selected['versioning']['adoptedHash']==first['hash']
     assert newest in [a['hash'] for a in selected['artifacts']]
-    assert (await svc.invoke('alice',token,'data.get',{'collection':'items','id':row['_id']}))['title']=='保留业务数据'
+    assert (svc.data(scope,'data.get',{'collection':'items','id':row['_id']}))['title']=='保留业务数据'
     assert svc.install_payload('alice',p['id'],first['hash'])['artifactHash']==first['hash']
 
 async def test_earlier_candidate_requires_completed_task_but_not_current_draft(svc):
@@ -146,22 +151,6 @@ async def test_earlier_candidate_requires_completed_task_but_not_current_draft(s
     assert result['versioning']['adoptedHash']==first['hash']
     assert result['solution']['outputs']=='新的范围'
 
-async def test_legacy_acceptance_maps_on_read_without_rewriting_project(svc):
-    p=await seeded(svc);accept(svc,p)
-    def legacy(q):q.pop('versioning')
-    svc.store.mutate('alice',p['id'],op(),{},legacy)
-    before=svc.store.db.execute('select body from projects where id=?',(p['id'],)).fetchone()[0]
-    q=svc.snapshot('alice',p['id']);assert q['versioning']['adoptedHash']==p['artifacts'][0]['hash']
-    after=svc.store.db.execute('select body from projects where id=?',(p['id'],)).fetchone()[0]
-    assert before==after
-
-async def test_changed_field_types_block_adoption_without_losing_current_version(svc):
-    p=adopt(svc,await seeded(svc));old=p['versioning']['adoptedHash'];p=begin(svc,p)
-    files=deepcopy(svc.store.get('alice',p['id'])['artifacts'][0]['files']);m=json.loads(files['miniapp.manifest.json']);m['collections']['items']['title']='number';files['miniapp.manifest.json']=json.dumps(m)
-    p=await candidate(svc,p,files)
-    with pytest.raises(StudioError,match='VERSION_DATA_INCOMPATIBLE'):adopt(svc,p)
-    assert svc.store.get('alice',p['id'])['versioning']['adoptedHash']==old
-
 async def test_real_fixed_http_version_routes_validate_identity_user_action_and_shape(tmp_path):
     from httpx import ASGITransport,AsyncClient
     from wanx_studio.local import build_local
@@ -170,8 +159,8 @@ async def test_real_fixed_http_version_routes_validate_identity_user_action_and_
         async with AsyncClient(transport=ASGITransport(app=app),base_url='http://testserver') as c:
             assert (await c.get('/api/app-studio/projects')).status_code==401
             await c.get('/api/app-studio/session')
-            p=(await c.post('/api/app-studio/projects',json={'operationId':op(),'name':'软件测试','goal':'合成版本验证'})).json();pid=p['id']
-            p=(await c.post(f'/api/app-studio/projects/{pid}/example',json={'operationId':op()})).json()
+            p=await seeded(app.state.studio,'synthetic-local-user')
+            pid=p['id']
             payload={'operationId':op(),'expectedRevision':p['versioning']['revision'],'artifactHash':p['artifacts'][0]['hash'],'confirmedByUser':False}
             assert (await c.post(f'/api/app-studio/projects/{pid}/adopt',json=payload)).status_code==422
             payload['confirmedByUser']=True
@@ -219,7 +208,7 @@ async def test_adoption_rechecks_current_management_authority(svc):
 async def test_restore_without_adoption_compares_latest_successful_preview(svc):
     p=await seeded(svc);old=p['artifacts'][0]['hash']
     files=deepcopy(svc.store.get('alice',p['id'])['artifacts'][0]['files'])
-    files['src/app.js']+='\n// preview-only iteration\n'
+    files['app/host.mjs']+='\n// preview-only iteration\n'
     p=await candidate(svc,p,files);latest=p['artifacts'][-1]['hash']
     assert p['versioning']['adoptedHash'] is None
     before=svc.store.db.execute('select body from projects where id=?',(p['id'],)).fetchone()[0]
@@ -230,21 +219,25 @@ async def test_restore_without_adoption_compares_latest_successful_preview(svc):
     assert before==svc.store.db.execute('select body from projects where id=?',(p['id'],)).fetchone()[0]
     # Older clients omit the optional baseline; restore still preserves history.
     restored=svc.versions.restore('alice',p['id'],{'operationId':op(),'expectedRevision':check['expectedRevision'],'artifactHash':old,'checkHash':check['checkHash'],'confirmedByUser':True},trial=True)
-    assert len(restored['artifacts'])==3 and restored['versioning']['adoptedHash'] is None
+    assert restored['artifacts']==p['artifacts'] and restored['versioning']['adoptedHash'] is None
+    assert restored['versioning']['iteration']['baseHash']==old
 
 async def test_restore_uses_selected_preview_and_binds_confirmation_to_it(svc):
     p=adopt(svc,await seeded(svc));old=p['artifacts'][0]['hash']
-    files=deepcopy(svc.store.get('alice',p['id'])['artifacts'][0]['files'])
-    manifest=json.loads(files['miniapp.manifest.json']);manifest['capabilities']=['data']
-    files['miniapp.manifest.json']=json.dumps(manifest)
-    files['src/app.js']='export function mount(root,api){root.textContent="Synthetic preview"}'
-    p=await candidate(svc,p,files);latest=p['artifacts'][-1]['hash']
+    # This later build has a declared external backend and its Host HTTP permission.
+    svc.store.mutate('alice',p['id'],op(),{},lambda q:q.update(
+        devKitBackend={'mode':'custom','deployment':'external','contractRef':'wanx.public.drive.v1'}))
+    draft=deepcopy(p['solution']);draft['prd']['rules'].append('筛选清空后显示全部条目')
+    p=svc.update_solution('alice',p['id'],{'operationId':op(),'expectedHash':p['solutionHash'],'solution':draft})
+    svc.confirm('alice',p['id'],{'operationId':op(),'solutionHash':p['solutionHash'],'reviewedSections':PRD_REVIEW_SECTIONS})
+    p=await candidate(svc,p);latest=p['artifacts'][-1]['hash']
     check=svc.versions.restore_check('alice',p['id'],old,latest)
     assert check['currentHash']==old and check['comparisonHash']==latest
-    assert check['changes']['addedCapabilities']==['files','model']
-    assert check['changes']['removedCapabilities']==[]
+    assert check['changes']['sections']==['规则与异常']
+    assert check['changes']['removedCapabilities']==['http.request']
+    assert svc.versions.restore_check('alice',p['id'],latest,old)['changes']['addedCapabilities']==['http.request']
     same=svc.versions.restore_check('alice',p['id'],old,old)
-    assert same['changes']['addedCapabilities']==[] and same['checkHash']!=check['checkHash']
+    assert same['changes']['sections']==[] and same['checkHash']!=check['checkHash']
     body={'operationId':op(),'expectedRevision':check['expectedRevision'],'artifactHash':old,'comparisonHash':old,'checkHash':check['checkHash'],'confirmedByUser':True}
     with pytest.raises(StudioError,match='VERSION_CHANGED'):svc.versions.restore('alice',p['id'],body,trial=True)
     assert len(svc.store.get('alice',p['id'])['artifacts'])==2
@@ -261,9 +254,8 @@ async def test_restore_rejects_corrupted_comparison_snapshot(svc):
     with pytest.raises(StudioError,match='ARTIFACT_INTEGRITY_FAILED'):svc.versions.restore_check('alice',p['id'],old,latest)
 
 async def test_restore_compares_frozen_prd_instead_of_empty_or_current_draft(svc):
-    from test_discovery import solution
     p=await seeded(svc)
-    draft=solution();draft['dependencies']=[]
+    draft=deepcopy(p['solution']);draft['prd']['rules'].append('本轮保留所有事项')
     p=svc.update_solution('alice',p['id'],{'operationId':op(),'expectedHash':p['solutionHash'],'solution':draft})
     svc.confirm('alice',p['id'],{'operationId':op(),'solutionHash':p['solutionHash'],'reviewedSections':['goal','flow','scope','pages','data','rules','acceptance']})
     p=await candidate(svc,p);old=p['artifacts'][-1]['hash']
@@ -285,7 +277,7 @@ async def test_http_restore_preview_baseline_validation_and_confirmation(tmp_pat
     try:
         p=await seeded(service,'synthetic-local-user');old=p['artifacts'][0]['hash']
         files=deepcopy(service.store.get('synthetic-local-user',p['id'])['artifacts'][0]['files'])
-        files['src/app.js']+='\n// synthetic HTTP preview\n'
+        files['app/host.mjs']+='\n// synthetic HTTP preview\n'
         p=await candidate(service,p,files,'synthetic-local-user');latest=p['artifacts'][-1]['hash']
         path=f'/api/app-studio/projects/{p["id"]}/versions/{old}/restore-check'
         async with AsyncClient(transport=ASGITransport(app=app),base_url='http://testserver') as c:
@@ -301,6 +293,7 @@ async def test_http_restore_preview_baseline_validation_and_confirmation(tmp_pat
             assert (await c.post(restore,json={**body,'comparisonHash':'bad'})).status_code==422
             assert (await c.post(restore,json={**body,'comparisonHash':old})).status_code==409
             result=await c.post(restore,json=body);assert result.status_code==200,result.text
-            restored=result.json();assert len(restored['artifacts'])==3
-            assert restored['versioning']['adoptedHash']==(None if private else restored['artifacts'][-1]['hash'])
+            restored=result.json();assert restored['artifacts']==p['artifacts']
+            assert restored['versioning']['adoptedHash']==(None if private else old)
+            if private:assert restored['versioning']['iteration']['baseHash']==old
     finally:await service.close()

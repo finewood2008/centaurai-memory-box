@@ -74,6 +74,8 @@ class ClipboardSpace(Workspaces):
     ) -> None:
         scope = self.clipboard_scope
         export_id, target = scope["exportId"], scope["parent"]
+        if name == "begin_text_edit":
+            self._deny()
         if name == "app_folder":
             if args != ("wanx.clipboard", "超级剪贴板"):
                 self._deny()
@@ -164,6 +166,7 @@ class ClipboardSpace(Workspaces):
 
     app_folder = _scoped("app_folder")
     agent_execute = _scoped("agent_execute")
+    begin_text_edit = _scoped("begin_text_edit")
     upload_create = _scoped("upload_create")
     upload_status = _scoped("upload_status")
     upload_chunk = _scoped("upload_chunk")

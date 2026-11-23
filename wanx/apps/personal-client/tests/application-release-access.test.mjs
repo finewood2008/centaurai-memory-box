@@ -4,7 +4,6 @@ import { EventEmitter, once } from "node:events";
 import { generateKeyPairSync } from "node:crypto";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { PassThrough } from "node:stream";
-import { setTimeout as delay } from "node:timers/promises";
 import os from "node:os";
 import path from "node:path";
 import { WebSocket, WebSocketServer } from "ws";
@@ -203,7 +202,9 @@ function shortPermit(ms = 300) {
 const hostOptions = connection => ({ hostApplicationId: "wanx-host", applicationId: appId, installPath: os.tmpdir(), createConnection: () => connection });
 
 for (const renewal of ["denied", "hung"]) test(`release ${renewal} renewal closes SSE, WebSocket and pending HTTP without closing other sessions`, { timeout: 5000 }, async t => {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
   const stream = new PassThrough(), pending = new AbortController();
+  const upstreamStarted = deferred();
   const wsServer = new WebSocketServer({ host: "127.0.0.1", port: 0 }); await once(wsServer, "listening");
   t.after(async () => { for (const ws of wsServer.clients) ws.terminate(); await new Promise(resolve => wsServer.close(resolve)); });
   let calls = 0, upstreamAborted = false;
@@ -211,7 +212,10 @@ for (const renewal of ["denied", "hung"]) test(`release ${renewal} renewal close
     context: () => ({ connection: "ready", boxId: "box-a" }),
     request: async input => {
       if (input.path.endsWith("/events")) { queueMicrotask(() => stream.write("data: first\n\n")); return { status: 200, headers: { "content-type": "text/event-stream" }, body: stream }; }
-      if (input.path.endsWith("/pending")) return new Promise((_resolve, reject) => input.signal.addEventListener("abort", () => { upstreamAborted = true; reject(fail("ABORTED")); }, { once: true }));
+      if (input.path.endsWith("/pending")) return new Promise((_resolve, reject) => {
+        input.signal.addEventListener("abort", () => { upstreamAborted = true; reject(fail("ABORTED")); }, { once: true });
+        upstreamStarted.resolve();
+      });
       return { status: 200, headers: {}, body: Buffer.from("ok") };
     },
     openStream: async () => { const ws = new WebSocket(`ws://127.0.0.1:${wsServer.address().port}`); await once(ws, "open"); return ws; },
@@ -232,6 +236,10 @@ for (const renewal of ["denied", "hung"]) test(`release ${renewal} renewal close
   const requestClosed = assert.rejects(requested);
   const ws = await grayClient.openStream("/api/agents/expert/chat/ws"); await once(ws, "open");
   const wsClosed = once(ws, "close");
+  await upstreamStarted.promise;
+  t.mock.timers.tick(300);
+  await Promise.resolve();
+  if (renewal === "hung") t.mock.timers.tick(300);
   await Promise.all([streamClosed, requestClosed, wsClosed]);
   assert.equal(upstreamAborted, true);
   assert.throws(controlled.assertLive, { code: "HOST_SESSION_EXPIRED" });
@@ -241,13 +249,21 @@ for (const renewal of ["denied", "hung"]) test(`release ${renewal} renewal close
 });
 
 test("renewal may extend a live application but never resurrect an expired one", { timeout: 4000 }, async t => {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
   const late = deferred(); let calls = 0;
   const session = await createApplicationSession({ ...hostOptions({ context: () => ({ connection: "ready" }) }), authorizeRelease: async () => {
     calls++; return calls <= 2 ? shortPermit(180) : late.promise;
   } });
   t.after(() => session.close());
-  await delay(220); assert.equal(session.assertLive().connection, "ready");
-  await delay(100); assert.throws(session.assertLive, { code: "HOST_SESSION_EXPIRED" });
-  late.resolve(shortPermit(1000)); await delay(10);
+  t.mock.timers.tick(90);
+  await Promise.resolve();
+  t.mock.timers.tick(130);
+  assert.equal(calls, 3);
+  assert.equal(session.assertLive().connection, "ready");
+
+  t.mock.timers.tick(50);
+  assert.throws(session.assertLive, { code: "HOST_SESSION_EXPIRED" });
+  late.resolve(shortPermit(1000));
+  await Promise.resolve();
   assert.throws(session.assertLive, { code: "HOST_SESSION_EXPIRED" });
 });

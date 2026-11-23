@@ -163,21 +163,11 @@ def build_app(server: OctopServer) -> FastAPI:
     install_jwt_auth(app, server)
     install_setup_lockdown(app, server)
 
-    from wanx_bridge.memory_models import create_memory_model_router
     from wanx_bridge.semantica.host_routes import create_host_routers
 
     from octop.api.deps import current_user, get_server, require_permission
     from octop.infra.agents.application import application_id
-    from octop.infra.bridge_dependencies import memory_model_host, semantica_model_host
-
-    app.include_router(
-        create_memory_model_router(
-            current_user=current_user,
-            get_server=get_server,
-            application_id=application_id,
-            **memory_model_host(),
-        )
-    )
+    from octop.infra.bridge_dependencies import semantica_model_host
 
     semantica_router, semantica_internal_router = create_host_routers(
         current_user=current_user,

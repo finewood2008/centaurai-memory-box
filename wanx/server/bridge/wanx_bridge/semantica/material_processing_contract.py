@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .modeling_contract import Operation, StrictBody
 
@@ -63,6 +63,19 @@ class ProcessingConfirm(NativeOperation):
     expected_workflow_revision: int = Field(ge=1)
     confirmed: Literal[True]
     replacement_acknowledgement: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+
+
+class ProcessingStart(NativeOperation):
+    expected_document_version_id: str = Field(min_length=1, max_length=120)
+    expected_workflow_revision: int = Field(ge=1)
+    confirmed: Literal[True]
+
+    @field_validator("confirmed", mode="before")
+    @classmethod
+    def check_confirmation(cls, value):
+        if value is not True:
+            raise ValueError("An explicit boolean confirmation is required")
+        return value
 
 
 class Wire(BaseModel):
@@ -132,6 +145,7 @@ class Receipt(Wire):
     intent_id: str | None
     result_reused: bool
     publication_performed: Literal[False]
+    waits_for_source_index: Literal[True] | None = None
     accepted_at: str
 
 
@@ -174,6 +188,13 @@ ROUTES = [
     ),
     (
         "POST",
+        MATERIAL + "/processing-starts",
+        "Confirm the source and queue indexing and extraction",
+        ProcessingStart,
+        {},
+    ),
+    (
+        "POST",
         MATERIAL + "/processing-transitions",
         "Confirm material processing and enqueue",
         ProcessingConfirm,
@@ -190,7 +211,7 @@ ROUTES = [
 RESPONSES = {
     (method, path): response
     for (method, path, *_), response in zip(
-        ROUTES, (PreviewResponse, ConfirmResponse, TransitionResponse)
+        ROUTES, (PreviewResponse, ConfirmResponse, ConfirmResponse, TransitionResponse)
     )
 }
 EXAMPLES = {
@@ -200,6 +221,13 @@ EXAMPLES = {
         "target_mode": "automatic",
         "expected_document_version_id": "version",
         "expected_workflow_revision": 1,
+    },
+    ProcessingStart: {
+        "operation_id": "process",
+        "_native_operation_id": "process",
+        "expected_document_version_id": "version",
+        "expected_workflow_revision": 1,
+        "confirmed": True,
     },
     ProcessingConfirm: {
         "operation_id": "confirm",
