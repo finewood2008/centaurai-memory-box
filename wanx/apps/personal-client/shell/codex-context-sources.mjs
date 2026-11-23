@@ -382,7 +382,7 @@ export function createCodexContextSources({ space, starlink, nativeImage, starli
   async function call(selection, tool, args = {}, check) {
     check();
     if (tool.startsWith("xingtu_")) {
-      if (!starlinkMcp) throw error(503, "Semantica MCP 尚未连接，请更新并重启万象。");
+      if (!starlinkMcp) throw error(503, "Semantica MCP 尚未连接，请更新并重启半人马AI记忆盒子客户端。");
       if (!warehouseId(selection.warehouseId)) throw error(403, "本次任务没有星图仓库权限。");
       if (args.warehouseId !== undefined && args.warehouseId !== selection.warehouseId) throw error(403, "目标不在本次选定的星图仓库内。");
       const { warehouseId: _warehouse, task_id: _task, ...native } = args;

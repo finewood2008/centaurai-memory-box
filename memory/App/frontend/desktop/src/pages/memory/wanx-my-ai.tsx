@@ -805,7 +805,7 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
         ? `请先完成当前任务，退出 ${restartNotice.name} 的当前会话，再从终端重新启动。`
         : `请先完成当前任务，然后完全退出并重新打开 ${restartNotice?.name ?? "智能体客户端"}。`}</p>
       {restartNotice?.id === "codex_cli" && <p className="my-ai-help">输入 <code>/quit</code> 退出，再运行 <code>codex resume --last</code> 继续原会话。</p>}
-      <p className="my-ai-help">{restartNotice?.id === "workbuddy_cn" ? "看到工具已启用后，回到记忆盒子「我的 AI」查看连接状态。" : "保持万象运行并连接盒子。重新打开智能体后，可回到此页查看连接状态。"}</p>
+      <p className="my-ai-help">{restartNotice?.id === "workbuddy_cn" ? "看到工具已启用后，回到记忆盒子「我的 AI」查看连接状态。" : "保持半人马AI记忆盒子客户端运行并连接盒子。重新打开智能体后，可回到此页查看连接状态。"}</p>
     </Modal>
     <Modal open={uninstallTarget !== null} title={"管理卸载 " + (uninstallTarget?.name ?? "")}
       subtitle="卸载程序与解除资料接入分别处理。MemoBox 已采集的历史记忆会保留。"

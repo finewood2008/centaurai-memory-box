@@ -247,7 +247,7 @@ it.each([
     const steps = /专家·技能·连接器.*「连接器」.*自定义连接器.*我的 MCP.*wanx-memobox.*「信任」/;
     expect(notice.textContent).toMatch(steps);
     expect(host.querySelector(".my-ai-connection-result")?.textContent).toMatch(steps);
-  } else expect(notice.textContent).toContain("保持万象运行并连接盒子");
+  } else expect(notice.textContent).toContain("保持半人马AI记忆盒子客户端运行并连接盒子");
   if (id === "codex_cli") {
     expect(notice.textContent).toContain("/quit");
     expect(notice.textContent).toContain("codex resume --last");
