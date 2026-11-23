@@ -57,8 +57,9 @@ test("finds Mac CLI installations with a desktop PATH and uses the same PATH for
   const home = await mkdtemp(join(tmpdir(), "memobox-agent-home-"));
   t.after(() => rm(home, { recursive: true, force: true }));
   const localBin = join(home, ".local", "bin");
-  const executable = join(localBin, "gemini");
+  const executable = join(localBin, "agy");
   await mkdir(localBin, { recursive: true });
+  await writeFile(join(localBin, "gemini"), "#!/bin/sh\n", { mode: 0o700 });
   await writeFile(executable, "#!/bin/sh\n", { mode: 0o700 });
   const pathValue = "/usr/bin:/bin";
   const launches = [];
@@ -69,15 +70,18 @@ test("finds Mac CLI installations with a desktop PATH and uses the same PATH for
       assert.deepEqual(args, ["--version"]);
       assert.equal(env.PATH.split(":").slice(0, 2).join(":"), pathValue);
       assert.ok(env.PATH.split(":").includes(localBin));
-      return { stdout: "gemini 1.2.3" };
+      return { stdout: "1.2.3" };
     },
     launcher: { async launch(input) { launches.push(input.executable); } },
   }));
   const gemini = (await task("status", {}, check)).agents.find(agent => agent.id === "gemini");
-  assert.equal(gemini?.connectionAvailable, true);
+  assert.equal(gemini.name, "Google");
+  assert.equal(gemini.connectionAvailable, true);
   assert.equal(gemini.version, "1.2.3");
   await task("launch", { agent: "gemini" }, check);
   assert.deepEqual(launches, [executable]);
+  await rm(executable);
+  await assert.rejects(task("launch", { agent: "gemini" }, check), /未找到可用 CLI/);
 });
 
 test("connects guided agents and an existing DeepSeek desktop profile without an installed app", async t => {
@@ -114,8 +118,8 @@ test('Windows protocol handlers recognize known executables and reject foreign o
   handler='C:\\Apps\\Claude\\Claude.exe';
   assert.equal((await inspect('claude_desktop')).installed,true);
   handler='C:\\Apps\\WorkBuddy\\WorkBuddy.exe';
-  assert.equal((await inspect('workbuddy')).installed,true);
-  assert.equal((await inspect('workbuddy')).name,'WorkBuddy');
+  assert.equal((await inspect('workbuddy_cn')).installed,true);
+  assert.equal((await inspect('workbuddy_cn')).name,'WorkBuddy（国内版）');
   for (const rejected of ['C:\\Windows\\System32\\cmd.exe','\\\\server\\share\\Codex.exe','//server/share/Codex.exe','Codex.exe']) {
     handler=rejected;
     assert.equal((await inspect('codex')).installed,false,rejected);
@@ -123,26 +127,27 @@ test('Windows protocol handlers recognize known executables and reject foreign o
 });
 
 test("labels and opens the international and mainland WorkBuddy editions on macOS", async () => {
-  for (const [bundle, label] of [["WorkBuddy AI.app", "WorkBuddy（海外版）"], ["WorkBuddy.app", "WorkBuddy（国内版）"]]) {
-    const application = join("/Applications", bundle);
-    const opened = [];
-    const task = createMyAiTask(options({
-      findApplication: async agent => agent.bundles?.includes(bundle.toLowerCase()) ? application : null,
-      async openApplication(file) { opened.push(file); },
-    }));
-    const { agents, apps } = await task("status", {}, check);
-    const workBuddy = agents.find(agent => agent.id === "workbuddy");
-    assert.equal(workBuddy?.name, label);
-    assert.equal(workBuddy.sourceId, "workbuddy");
-    assert.equal(workBuddy.launchable, true);
-    assert.equal(apps.find(agent => agent.id === "workbuddy")?.name, label);
-    assert.deepEqual(await task("launch", { agent: "workbuddy" }, check), { opened: true });
-    assert.deepEqual(opened, [application]);
+  const opened = [];
+  const bundles = { workbuddy: "WorkBuddy AI.app", workbuddy_cn: "WorkBuddy.app" };
+  const task = createMyAiTask(options({
+    findApplication: async agent => {
+      const name = bundles[agent.id];
+      return name && agent.bundles.includes(name.toLowerCase()) ? join("/Applications", name) : null;
+    },
+    async openApplication(file) { opened.push(file); },
+  }));
+  const { agents } = await task("status", {}, check);
+  for (const [id, bundle] of Object.entries(bundles)) {
+    const edition = agents.find(agent => agent.id === id);
+    assert.equal(edition?.name, id === "workbuddy" ? "WorkBuddy（海外版）" : "WorkBuddy（国内版）");
+    assert.equal(edition.sourceId, "workbuddy");
+    await task("launch", { agent: id }, check);
+    assert.equal(opened.at(-1), join("/Applications", bundle));
   }
 });
 
-test("catalog contains exactly eight runtime entries and shares product context identities", async () => {
-  assert.deepEqual(managedAgentIds, ["codex", "codex_cli", "claude_code", "claude_desktop", "gemini", "workbuddy", "qwenwork", "deepseek_harness"]);
+test("catalog contains exactly nine runtime entries and shares product context identities", async () => {
+  assert.deepEqual(managedAgentIds, ["codex", "codex_cli", "claude_code", "claude_desktop", "gemini", "workbuddy", "workbuddy_cn", "qwenwork", "deepseek_harness"]);
   assert.equal(new Set(agentCatalog.map(agent => agent.product)).size, 6);
   assert.equal(contextAgent("codex_cli"), "codex");
   assert.equal(contextAgent("claude_desktop", "code"), "claude_code");
@@ -150,9 +155,9 @@ test("catalog contains exactly eight runtime entries and shares product context 
   const task = createMyAiTask(options({ commandInstalled: async command => command === "codex" }));
   const status = await task("status", {}, check);
   assert.deepEqual(status.agents.map(agent => agent.id), ["codex_cli"]);
-  assert.equal(status.apps.length, 8);
+  assert.equal(status.apps.length, 9);
   assert.equal(status.apps.find(agent => agent.id === "codex").installed, false);
-  assert.equal(status.apps.find(agent => agent.id === "workbuddy").name, "WorkBuddy");
+  assert.equal(status.apps.find(agent => agent.id === "workbuddy").name, "WorkBuddy（海外版）");
   assert.equal(status.apps.find(agent => agent.id === "workbuddy").capabilities.configuration, "guided");
   await assert.rejects(task("download", { agent: "cursor" }, check), /不可用/);
 });
@@ -233,7 +238,7 @@ test("Windows detects the registered Codex package and sends the full draft to t
 test("CLI tasks use resolved executable, preserve arguments literally and delegate review before start", async () => {
   const prepared = [], launched = [];
   const task = createMyAiTask(options({
-    commandInstalled: async command => command === "gemini" ? { executable: "/test/bin/gemini", version: "1.0.0", channel: "external" } : false,
+    commandInstalled: async command => command === "agy" ? { executable: "/test/bin/agy", version: "1.0.0", channel: "external" } : false,
     launcher: { async prepare(input) { prepared.push(input); return { opened: true, prepared: true, delivery: "terminal-confirm" }; },
       async launch(input) { launched.push(input); return { opened: true, prepared: true, delivery: "terminal-confirm" }; } },
   }));
@@ -242,8 +247,9 @@ test("CLI tasks use resolved executable, preserve arguments literally and delega
   assert.deepEqual(prepared[0].args, ["--prompt-interactive=" + text]);
   assert.equal(prepared[0].prompt, text);
   assert.equal(prepared[0].cwd, "/tmp/project");
-  assert.equal(prepared[0].executable, "/test/bin/gemini");
+  assert.equal(prepared[0].executable, "/test/bin/agy");
   await task("launch", { agent: "gemini", workspacePath: "/tmp/project" }, check);
+  assert.equal(launched[0].executable, "/test/bin/agy");
   assert.deepEqual(launched[0].args, []);
 });
 
@@ -282,16 +288,16 @@ test("installation actions distinguish managed lifecycle from official-page guid
   const calls = [], urls = [];
   const task = createMyAiTask(options({ openExternal: async value => { urls.push(value); },
     installations: {
-      inspect: async () => null, supported: id => id === "gemini",
+      inspect: async () => null, supported: id => id === "codex_cli",
       async install(id) { calls.push(id); return { installed: true, message: "verified" }; },
     },
   }));
-  assert.equal((await task("install", { agent: "gemini" }, check)).installed, true);
-  const guided = await task("install", { agent: "workbuddy" }, check);
+  assert.equal((await task("install", { agent: "codex_cli" }, check)).installed, true);
+  const guided = await task("install", { agent: "gemini" }, check);
   assert.equal(guided.guided, true);
   assert.equal(guided.installed, undefined);
-  assert.deepEqual(calls, ["gemini"]);
-  assert.equal(urls.length, 1);
+  assert.deepEqual(calls, ["codex_cli"]);
+  assert.deepEqual(urls, ["https://antigravity.google/docs/cli/tutorial/"]);
 });
 
 test("connected explicit empty scopes create a zero-scope task, while plain disconnected drafts stay usable", async () => {

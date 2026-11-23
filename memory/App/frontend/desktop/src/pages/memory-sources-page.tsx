@@ -934,7 +934,7 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
       <div className={isMyAi ? "my-ai-sync-panel" : undefined} data-tour-anchor={PRODUCT_TOUR_MEMORY_AGENTS_LIST_ANCHOR}>
       {!focusedSourceId && <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-0">
-          <h2 className="text-sm font-semibold text-text-ink/75">{isMyAi && <RefreshCw size={15} aria-hidden="true" />}{t(isMyAi ? "memory.myAiSources" : "memory.sources", { count: visibleSources.length + waitingSources.length })}</h2>
+          <h2 className="text-sm font-semibold text-text-ink/75">{isMyAi && <RefreshCw size={15} aria-hidden="true" />}{t(isMyAi ? "memory.myAiSources" : "memory.sources", { count: visibleSources.length + waitingSources.length + (isMyAi ? 0 : 1) })}</h2>
           {!isMyAi && <p className="mt-1 text-xs text-text-ink/55">{t("memory.sourcesDescription")}</p>}
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
@@ -958,6 +958,9 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
         </div>
       </div>}
       <div className="space-y-2.5">
+        {!isMyAi && !focusedSourceId && <div className="rounded-card border-content-panel bg-background-paper p-4">
+          <strong>配件</strong><p className="mt-1 text-xs text-text-ink/60">在配件工作台选择「保存到记忆」后，可在智能体记忆中按「配件」查看已确认的录音总结。</p>
+        </div>}
         {isMyAi && canChangeIntegrations && !visibleSources.length && !waitingSources.length && !state.agentSources.error && (
           <p className="rounded-card border-content-panel bg-background-paper p-4 text-sm text-text-ink/60" role="status">
             {t(state.agentSources.isLoading ? "common.loading" : "memory.myAiNoSources")}

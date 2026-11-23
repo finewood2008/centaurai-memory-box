@@ -7,12 +7,13 @@ import { Modal } from "../../components/modal.js";
 import { useTranslation } from "../../i18n/use-translation.js";
 import { appActions } from "../../state/app-actions.js";
 import { useAppState } from "../../state/app-state.js";
+import googleLogoUrl from "../../assets/agent-logos/google.svg";
 import { agentSourceDisplayName, agentSourceLogoUrl, normalizeAgentSourceId } from "../agent-source-logos.js";
 import { MemorySourcesContent, visibleAgentSources } from "../memory-sources-page.js";
 
 import { formatBackupInterval, MemorySyncSummary, type BackupStatus } from "./wanx-memory-backup.js";
 import { AgentSources } from "./wanx-agent-sources.js";
-import { connectionProgress, contextAgentId, managedAgentIds, modeCapabilities, type Agent, type AgentAccessStatus, type ConnectionActivity, type ConnectionOperation, type MyAiRequest, type TaskSources } from "./wanx-my-ai-model.js";
+import { connectionProgress, contextAgentId, managedAgentIds, modeCapabilities, workBuddyTrustHint, type Agent, type AgentAccessStatus, type ConnectionActivity, type ConnectionOperation, type MyAiRequest, type TaskSources } from "./wanx-my-ai-model.js";
 
 type AppAction = "launch" | "download" | "install" | "uninstall" | "hide-agent" | "show-agent";
 interface AppFeedback { section: "catalog" | "agent" | "list"; text: string; error?: boolean }
@@ -45,7 +46,7 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
   const [configuration, setConfiguration] = useState<string | null>(null);
   const [connectionDetails, setConnectionDetails] = useState(false);
   const [confirmPersonalRead, setConfirmPersonalRead] = useState(false);
-  const [restartNotice, setRestartNotice] = useState<{ name: string; terminal: boolean; codexCli: boolean } | null>(null);
+  const [restartNotice, setRestartNotice] = useState<{ name: string; terminal: boolean; id: string } | null>(null);
   const [collectionView, setCollectionView] = useState<"agent" | "all" | null>(null);
   const [claudeHistory, setClaudeHistory] = useState<ClaudeHistoryPreview | null>(null);
   const [draft, setDraft] = useState("");
@@ -177,7 +178,11 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
   const sources = new Map(visibleAgentSources(state.agentSources.items).map(source => [normalizeAgentSourceId(source.sourceId), source]));
   for (const [id, source] of sources) {
     if (source.builtin && managedAgentIds.has(id) && !detected.has(id))
-      detected.set(id, chooserApps.get(id) ?? { id, name: source.displayName, prefill: false, installed: false });
+      detected.set(id, chooserApps.get(id) ?? { id, name: id === "gemini" ? "Google" : source.displayName, prefill: false, installed: false });
+  }
+  for (const edition of ["workbuddy", "workbuddy_cn"]) {
+    const entry = chooserApps.get(edition);
+    if (entry && !detected.has(edition)) detected.set(edition, entry);
   }
   const hidden = new Set(hiddenAgents.map(normalizeAgentSourceId));
   const catalog = new Map([...detected].filter(([id]) => !hidden.has(id)));
@@ -186,7 +191,7 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
     if (!managedAgentIds.has(id)) continue;
     if (chooserApps.has(id)) continue;
     const agent = detected.get(id);
-    chooserApps.set(id, { id: agent?.id ?? hiddenId, name: agent?.name ?? agentSourceDisplayName(id), installed: agent?.installed ?? false });
+    chooserApps.set(id, { id: agent?.id ?? hiddenId, name: agent?.name ?? (id === "gemini" ? "Google" : agentSourceDisplayName(id)), installed: agent?.installed ?? false });
   }
   const active = (target && catalog.get(normalizeAgentSourceId(target))) || catalog.get("codex") || catalog.values().next().value;
   const activeContextId = active && contextAgentId(active.id, mode);
@@ -282,7 +287,7 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
         if (tested.connectionTested !== true) throw new Error("尚未收到本机工具的测试回执，请重新测试。");
         setAgentAccess(previous => ({ ...previous, [id]: tested }));
         if (access.configurationChanged && !tested.loaded) setRestartNotice({
-          name: agent.name, terminal: modeCapabilities(agent, mode)?.delivery === "terminal-confirm", codexCli: agent.id === "codex_cli",
+          name: agent.name, terminal: modeCapabilities(agent, mode)?.delivery === "terminal-confirm", id: agent.id,
         });
       } else if (operation === "test" && access.connectionTested !== true) {
         throw new Error("尚未收到本机工具的测试回执，请重新测试。");
@@ -448,7 +453,7 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
     const manualClaudeRepair = activeContextId === "claude_code" && activity?.errorCode === "claude_mcp_manual_repair";
     const repairClaude = activeContextId === "claude_code" && (manualClaudeRepair ||
       (!hasConnection && activeAccess?.authorized === true));
-    const progress = connectionProgress(activeAccess, activity, { hasConnection, boxDisconnected, guided, terminal: delivery === "terminal-confirm" });
+    const progress = connectionProgress(activeAccess, activity, { hasConnection, boxDisconnected, guided, terminal: delivery === "terminal-confirm", agentId: active?.id });
     const connectionBusy = pending || Boolean(appBusy);
     const authorizationBusy = connectionBusy || boxDisconnected;
     return <div className="my-ai-workbench">
@@ -466,10 +471,10 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
           </div>
         </div>
         {installed && catalog.size ? <div className="my-ai-agent-list">{[...catalog.values()].map(agent => {
-          const logo = agentSourceLogoUrl(agent.id);
+          const logo = myAiLogoUrl(agent.id);
           const isActive = active?.id === agent.id;
           const sourceId = isActive ? collectionId : normalizeAgentSourceId(agent.sourceId ?? contextAgentId(agent.id) ?? agent.id);
-          const memoryLabel = collectionLabel(sourceId, collectionProfile);
+          const memoryLabel = (agent.id === "workbuddy_cn" || agent.id === "workbuddy") && !agent.installed ? "尚未安装" : collectionLabel(sourceId, collectionProfile);
           return <div key={agent.id} className="my-ai-agent-row">
             <button type="button" className="my-ai-agent" disabled={pending || Boolean(appBusy)}
               aria-label={agent.name} aria-describedby={"my-ai-source-state-" + agent.id} aria-pressed={isActive} onClick={() => {
@@ -757,7 +762,7 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
       {!installed ? <p className="my-ai-help" role="status">正在读取应用列表…</p>
         : !chooserApps.size ? <p className="my-ai-help" role="status">暂未读取到应用列表。关闭后可以重新检测。</p>
         : <ul className="my-ai-app-catalog">{[...chooserApps.values()].map(entry => {
-          const logo = agentSourceLogoUrl(entry.id);
+          const logo = myAiLogoUrl(entry.id);
           const Icon = entry.downloadLabel === "安装说明" ? BookOpen : Download;
           return <li key={entry.id}>
             <span className="my-ai-agent-logo">{logo ? <img src={logo} alt="" /> : <Bot size={18} aria-hidden="true" />}</span>
@@ -792,15 +797,15 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
           onClick={() => { setConfirmPersonalRead(false); if (active) void updateAgentAccess(active, "connect", true); }}>确认只读授权</button>
       </div>
     </Modal>
-    <Modal open={restartNotice !== null} title={(restartNotice?.terminal ? "请重新启动 " : "请重新打开 ") + (restartNotice?.name ?? "智能体")}
+    <Modal open={restartNotice !== null} title={restartNotice?.id === "workbuddy_cn" ? "首次连接 WorkBuddy：信任记忆盒子" : (restartNotice?.terminal ? "请重新启动 " : "请重新打开 ") + (restartNotice?.name ?? "智能体")}
       subtitle="资料授权与连接配置已保存，等待智能体加载新配置。"
       closeLabel="关闭重新打开提示" onClose={() => setRestartNotice(null)} closeContent={<X size={18} />}
       footer={<button type="button" className="my-ai-button primary" onClick={() => setRestartNotice(null)}>我知道了</button>}>
-      <p className="my-ai-help">{restartNotice?.terminal
+      <p className="my-ai-help">{restartNotice?.id === "workbuddy_cn" ? workBuddyTrustHint : restartNotice?.terminal
         ? `请先完成当前任务，退出 ${restartNotice.name} 的当前会话，再从终端重新启动。`
         : `请先完成当前任务，然后完全退出并重新打开 ${restartNotice?.name ?? "智能体客户端"}。`}</p>
-      {restartNotice?.codexCli && <p className="my-ai-help">输入 <code>/quit</code> 退出，再运行 <code>codex resume --last</code> 继续原会话。</p>}
-      <p className="my-ai-help">保持万象运行并连接盒子。重新打开智能体后，可回到此页查看连接状态。</p>
+      {restartNotice?.id === "codex_cli" && <p className="my-ai-help">输入 <code>/quit</code> 退出，再运行 <code>codex resume --last</code> 继续原会话。</p>}
+      <p className="my-ai-help">{restartNotice?.id === "workbuddy_cn" ? "看到工具已启用后，回到记忆盒子「我的 AI」查看连接状态。" : "保持万象运行并连接盒子。重新打开智能体后，可回到此页查看连接状态。"}</p>
     </Modal>
     <Modal open={uninstallTarget !== null} title={"管理卸载 " + (uninstallTarget?.name ?? "")}
       subtitle="卸载程序与解除资料接入分别处理。MemoBox 已采集的历史记忆会保留。"
@@ -823,8 +828,12 @@ function formatDate(value: string | number, language: string) {
   return new Date(value).toLocaleString(language, { dateStyle: "short", timeStyle: "short" });
 }
 
+function myAiLogoUrl(id: string) {
+  return id === "gemini" ? googleLogoUrl : agentSourceLogoUrl(id);
+}
+
 function AgentMark({ id }: { id: string }) {
-  const logo = agentSourceLogoUrl(id);
+  const logo = myAiLogoUrl(id);
   return logo ? <img src={logo} alt="" /> : <Bot size={20} aria-hidden="true" />;
 }
 

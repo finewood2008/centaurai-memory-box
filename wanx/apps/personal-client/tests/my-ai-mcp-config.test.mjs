@@ -14,12 +14,12 @@ async function fixture(t, env = {}) {
 }
 
 test("the managed catalog advertises only first-release contexts", () => {
-  assert.deepEqual(configurableAgents, ["claude_code", "claude_desktop", "gemini", "workbuddy", "qwenwork", "deepseek_harness"]);
+  assert.deepEqual(configurableAgents, ["claude_code", "claude_desktop", "gemini", "workbuddy", "workbuddy_cn", "qwenwork", "deepseek_harness"]);
 });
 
 test("Gemini merges an MCP entry without changing settings, comments, or tool approval", async t => {
   const options = await fixture(t);
-  const file = path.join(options.home, ".gemini", "settings.json");
+  const file = path.join(options.home, ".gemini", "config", "mcp_config.json");
   await mkdir(path.dirname(file), { recursive: true });
   await writeFile(file, '{\r\n  // personal settings\r\n  "theme": "Dark",\r\n  "mcpServers": {"other": {"command": "existing"}},\r\n}\r\n');
   const adapter = createMyAiMcpConfig("gemini", options);
@@ -42,7 +42,7 @@ test("Gemini merges an MCP entry without changing settings, comments, or tool ap
 test("Gemini repairs the retired macOS development bridge without overwriting active or foreign connections", async t => {
   const options = await fixture(t);
   options.descriptorPath = path.join(options.home, "profile", "my-ai-access", "gemini", "endpoint.json");
-  const file = path.join(options.home, ".gemini", "settings.json");
+  const file = path.join(options.home, ".gemini", "config", "mcp_config.json");
   const bundle = path.join(options.home, "Applications", "半人马AI记忆盒子 开发版.app");
   const checkout = path.join(options.home, "old", "apps", "personal-client");
   const endpoint = path.join(checkout, ".local", "installed-space-annotations", "my-ai-access", "gemini", "endpoint.json");
@@ -270,7 +270,7 @@ test('Windows Claude Desktop falls back to the user roaming directory when APPDA
   assert.ok(JSON.parse(await readFile(file,'utf8')).mcpServers['wanx-memobox']);
 });
 
-test("Gemini respects GEMINI_CLI_HOME as the parent of .gemini", async t => {
+test("Antigravity uses its own MCP file even when legacy Gemini overrides are set", async t => {
   const options = await fixture(t);
   const isolatedHome = path.join(options.home, "gemini-isolated-home");
   const ignoredDirectory = path.join(options.home, "not-a-gemini-variable");
@@ -278,10 +278,10 @@ test("Gemini respects GEMINI_CLI_HOME as the parent of .gemini", async t => {
     GEMINI_CLI_HOME: isolatedHome, GEMINI_CONFIG_DIR: ignoredDirectory,
   } });
   await adapter.ensure();
-  const file = path.join(isolatedHome, ".gemini", "settings.json");
+  const file = path.join(options.home, ".gemini", "config", "mcp_config.json");
   assert.equal(await adapter.isConfigured(), true);
   assert.equal(JSON.parse(await readFile(file, "utf8")).mcpServers["wanx-memobox"].command, process.execPath);
-  assert.equal(await lstat(path.join(options.home, ".gemini")).catch(error => error.code), "ENOENT");
+  assert.equal(await lstat(path.join(options.home, ".gemini", "settings.json")).catch(error => error.code), "ENOENT");
   assert.equal(await lstat(path.join(isolatedHome, "settings.json")).catch(error => error.code), "ENOENT");
   assert.equal(await lstat(ignoredDirectory).catch(error => error.code), "ENOENT");
   await adapter.remove();
@@ -343,7 +343,7 @@ test("DeepSeek Harness changes only the desktop profile and preserves the shared
 
 test("config adapters refuse malformed files, conflicting entries, and symlinks", async t => {
   const options = await fixture(t);
-  const file = path.join(options.home, ".gemini", "settings.json");
+  const file = path.join(options.home, ".gemini", "config", "mcp_config.json");
   await mkdir(path.dirname(file), { recursive: true });
   const adapter = createMyAiMcpConfig("gemini", options);
   await writeFile(file, "not JSON");
@@ -354,10 +354,45 @@ test("config adapters refuse malformed files, conflicting entries, and symlinks"
   await assert.rejects(adapter.ensure(), /MCP_CONFIG_NAME_CONFLICT/);
   await adapter.remove();
   assert.equal(await readFile(file, "utf8"), foreign);
-  const target = path.join(options.home, "symlink-target.json");
-  await writeFile(target, "{}\n");
-  await rm(file);
-  await symlink(target, file);
-  await assert.rejects(adapter.ensure(), /MCP_CONFIG_INVALID/);
-  assert.equal(await readFile(target, "utf8"), "{}\n");
+  await t.test("refuses a linked configuration file and preserves its target", async t => {
+    const target = path.join(options.home, "symlink-target.json");
+    await writeFile(target, "{}\n");
+    await rm(file);
+    try {
+      await symlink(target, file, "file");
+    } catch (error) {
+      if (process.platform === "win32" && ["EPERM", "EACCES"].includes(error.code)) {
+        return t.skip("Windows account cannot create file symbolic links");
+      }
+      throw error;
+    }
+    await assert.rejects(adapter.ensure(), /MCP_CONFIG_INVALID/);
+    assert.equal(await readFile(target, "utf8"), "{}\n");
+  });
+});
+
+test("mainland WorkBuddy repairs its old development entry on connect and preserves other servers", async t => {
+  const options = await fixture(t);
+  const profile = path.join(options.home, "my-ai-access");
+  options.descriptorPath = path.join(profile, "workbuddy_cn", "endpoint.json");
+  const config = createMyAiMcpConfig("workbuddy_cn", options);
+  const file = path.join(options.home, ".workbuddy", "mcp.json");
+  const other = { command: "another-server" };
+  const old = {
+    command: path.join(options.home, "dev", "半人马AI记忆盒子.app", "Contents", "MacOS", "Electron"),
+    args: [path.join(options.home, "app", "shell", "codex-context-stdio.mjs"), options.descriptorPath],
+    env: { ELECTRON_RUN_AS_NODE: "1" },
+  };
+  await mkdir(path.dirname(file), { recursive: true });
+  const write = entry => writeFile(file, JSON.stringify({ mcpServers: { other, "wanx-memobox": entry } }));
+  await write({ ...old, args: [old.args[0], path.join(options.home, "foreign", "endpoint.json")] });
+  await assert.rejects(config.ensure(), /MCP_CONFIG_NAME_CONFLICT/);
+  await write(old);
+  assert.equal(await config.restore(() => {}), false);
+  await config.ensure();
+  assert.equal(await config.isConfigured(), true);
+  const result = JSON.parse(await readFile(file, "utf8"));
+  assert.deepEqual(result.mcpServers, { other, ...config.configuration().mcpServers });
+  await config.remove();
+  assert.deepEqual(JSON.parse(await readFile(file, "utf8")).mcpServers, { other });
 });

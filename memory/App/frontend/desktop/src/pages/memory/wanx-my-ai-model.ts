@@ -1,5 +1,5 @@
 export const managedAgentIds = new Set([
-  "codex", "codex_cli", "claude_code", "claude_desktop", "gemini", "workbuddy", "qwenwork", "deepseek_harness",
+  "codex", "codex_cli", "claude_code", "claude_desktop", "gemini", "workbuddy", "workbuddy_cn", "qwenwork", "deepseek_harness",
 ]);
 
 export interface AgentCapabilities {
@@ -71,9 +71,12 @@ export function modeCapabilities(agent: Agent | undefined, mode: string) {
   };
 }
 
+export const workBuddyTrustHint = "首次连接时，在 WorkBuddy 左侧打开「专家·技能·连接器」，选择「连接器」→「自定义连接器」。在「MCP 服务管理」的「我的 MCP」中找到 wanx-memobox，点击该服务的「信任」。";
+
 export function connectionProgress(status: AgentAccessStatus | undefined, activity: ConnectionActivity | undefined,
-  { hasConnection, boxDisconnected, guided, terminal }: { hasConnection: boolean; boxDisconnected: boolean; guided: boolean; terminal: boolean }) {
-  const waitHint = guided ? "在智能体内添加并信任接入配置，加载后再测试。"
+  { hasConnection, boxDisconnected, guided, terminal, agentId }: { hasConnection: boolean; boxDisconnected: boolean; guided: boolean; terminal: boolean; agentId?: string }) {
+  const waitHint = agentId === "workbuddy_cn" ? workBuddyTrustHint
+    : guided ? "在智能体内添加并信任接入配置，加载后再测试。"
     : terminal ? "请新开一个 CLI 会话，再回来测试连接。"
     : "请打开智能体应用。如果应用已打开，先完全退出再重新打开。";
   if (activity?.error) return { step: hasConnection ? 1 : 0, tone: "error",

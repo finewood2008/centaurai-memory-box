@@ -121,9 +121,8 @@ export function createMyAiTask({
     const capabilities = agentCapabilities(agent);
     const connectionAvailable = installed || capabilities.configuration === "guided" ||
       (agent.id === "deepseek_harness" && await lstat(deepseekDesktopMcpFile({ env, home })).then(info => info.isFile(), () => false));
-    const macBundleDisplayName = platform === "darwin" ? agent.macBundleDisplayNames?.[path.basename(application).toLowerCase()] : undefined;
     return { application, executable, protocol, public: {
-      id: agent.id, name: macBundleDisplayName ?? agent.name, product: agent.product, variant: agent.variant, sourceId: agent.sourceId,
+      id: agent.id, name: agent.name, product: agent.product, variant: agent.variant, sourceId: agent.sourceId,
       installed, prefill, launchable, connectionAvailable, uninstallable, installable: Boolean(installations?.supported(agent.id)),
       channel, version: cliVersion, managed, capabilities, ...(agent.modes && { modes: agent.modes }),
     } };

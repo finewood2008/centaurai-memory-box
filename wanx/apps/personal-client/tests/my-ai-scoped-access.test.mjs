@@ -116,7 +116,7 @@ async function fixture(t, agent = "gemini") {
 
 test("a task can read one Agent's memory or all Agents without changing the save owner", async t => {
   const h = await fixture(t);
-  assert.deepEqual((await h.access.memoryCatalog(h.check)).agents.map(source => source.id), ["claude_code", "gemini"]);
+  assert.deepEqual((await h.access.memoryCatalog(h.check)).agents.map(source => source.id), ["claude_code", "gemini", "accessories"]);
   const chosen = { memoryEnabled: true, memoryAgent: "claude_code" };
   await h.access.selection(h.agent, chosen, h.check);
   assert.deepEqual((await h.access.selection(h.agent, undefined, h.check)).selection, chosen);

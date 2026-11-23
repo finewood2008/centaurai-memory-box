@@ -745,6 +745,8 @@ function MemoryDetailPanel(props: {
             />
           )}
         </div>
+        {readyDetail && memoryDisplaySource(readyDetail.item) === "accessories" &&
+          <AccessoryProjectLink tags={readyDetail.item.tags} />}
         {readyDetail && <MemoryDrawerDeleteAction onDelete={() => props.onDelete(readyDetail.item.id)} />}
       </aside>
     </div>
@@ -757,6 +759,14 @@ function MemoryDetailPanel(props: {
  * @param props.detail The detail data.
  * @returns The detail body node.
  */
+function AccessoryProjectLink({ tags }: { tags: string[] }) {
+  const kind = tags.find(tag => tag === "disk" || tag === "clip");
+  const id = tags.find(tag => /^m-\d{8}-\d{6}-[a-f0-9]{6}$/.test(tag));
+  if (!kind || !id) return null;
+  return <button type="button" className="memory-drawer__close w-auto self-start mx-4" onClick={() =>
+    window.parent.postMessage({type:"wanx-accessory-project", kind, id}, "*")}>打开来源项目</button>;
+}
+
 function MemoryDetailBody(props: {
   detail: MemoryDetailOutput;
   onRetryProcessing?: (id: string) => void | Promise<void>;

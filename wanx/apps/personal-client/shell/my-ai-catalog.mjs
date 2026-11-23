@@ -1,8 +1,3 @@
-const workBuddyMacDisplayNames = {
-  "workbuddy ai.app": "WorkBuddy（海外版）",
-  "workbuddy.app": "WorkBuddy（国内版）",
-};
-
 // Runtime entries are separate from memory source identities. Codex desktop and CLI
 // deliberately share one MCP configuration and one memory source.
 export const agentCatalog = Object.freeze([
@@ -14,8 +9,9 @@ export const agentCatalog = Object.freeze([
     { id: "code", name: "Code", capabilities: { delivery: "draft", configuration: "automatic", autoMemory: "hook", limitations: [] } },
     { id: "cowork", name: "Cowork", capabilities: { delivery: "draft", configuration: "automatic", autoMemory: "unverified", limitations: ["请在 Claude 桌面端选择在本机运行 Cowork。此模式与 Claude Chat 共用客户端连接。"] } },
   ], limitations: [] },
-  { id: "gemini", product: "gemini", name: "Gemini CLI", variant: "cli", sourceId: "gemini", command: "gemini", download: "https://geminicli.com/docs/get-started/installation/", npmPackage: "@google/gemini-cli", delivery: "terminal-confirm", configuration: "automatic", autoMemory: "hook", limitations: [] },
-  { id: "workbuddy", product: "workbuddy", name: "WorkBuddy", variant: "desktop", sourceId: "workbuddy", protocol: "workbuddy://", bundles: Object.keys(workBuddyMacDisplayNames), macBundleDisplayNames: workBuddyMacDisplayNames, windowsExecutables: ["workbuddy.exe"], download: "https://www.workbuddy.ai/docs/workbuddy/From-Beginner-to-Expert-Guide/Installation-Mac-Guide", delivery: "copy-open", configuration: "guided", autoMemory: "scan", limitations: ["请在应用内添加并信任自定义 Connector。", "尚无可靠桌面提示词预填接口，使用复制并打开。"] },
+  { id: "gemini", product: "gemini", name: "Google", variant: "cli", sourceId: "gemini", command: "agy", download: "https://antigravity.google/docs/cli/tutorial/", delivery: "terminal-confirm", configuration: "automatic", autoMemory: "unverified", limitations: [] },
+  { id: "workbuddy", product: "workbuddy", name: "WorkBuddy（海外版）", variant: "desktop", sourceId: "workbuddy", protocol: "workbuddy-ai://", bundles: ["workbuddy ai.app"], windowsExecutables: ["workbuddy ai.exe"], download: "https://www.workbuddy.ai/docs/workbuddy/From-Beginner-to-Expert-Guide/Installation-Mac-Guide", delivery: "copy-open", configuration: "guided", autoMemory: "scan", limitations: ["请在应用内添加并信任自定义 Connector。", "尚无可靠桌面提示词预填接口，使用复制并打开。"] },
+  { id: "workbuddy_cn", product: "workbuddy", name: "WorkBuddy（国内版）", variant: "desktop", sourceId: "workbuddy", protocol: "workbuddy://", bundles: ["workbuddy.app"], windowsExecutables: ["workbuddy.exe"], download: "https://www.codebuddy.cn/work/", delivery: "copy-open", configuration: "automatic", autoMemory: "scan", limitations: ["首次配置需在 WorkBuddy 的「自定义连接器」中手动信任 wanx-memobox。", "尚无可靠桌面提示词预填接口，使用复制并打开。"] },
   { id: "qwenwork", product: "qwenwork", name: "QwenWork", variant: "desktop", sourceId: "qwenwork", bundles: ["qwenwork.app", "qwenworkcn.app", "千问办公.app"], download: "https://qwenwork.cn/download", delivery: "copy-open", configuration: "guided", autoMemory: "unverified", limitations: ["请在连接器中导入配置，需按实际版本验证采集。", "尚无可靠桌面提示词预填接口，使用复制并打开。"] },
   { id: "deepseek_harness", product: "deepseek_harness", name: "DeepSeek Harness", variant: "desktop", sourceId: "deepseek_harness", bundles: ["deepseek harness.app", "deepseek-harness.app", "deepseek.app"], download: "https://www.deepseek.com/en/harness/", delivery: "copy-open", configuration: "automatic", autoMemory: "scan", limitations: ["仅配置所选 Desktop profile；预览版兼容性需验证。", "尚无可靠桌面提示词预填接口，使用复制并打开。"] },
 ]);

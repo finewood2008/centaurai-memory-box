@@ -6,7 +6,7 @@ import jsonc from "jsonc-parser";
 import { parseDocument } from "yaml";
 import { isDeepStrictEqual } from "node:util";
 
-export const configurableAgents = ["claude_code", "claude_desktop", "gemini", "workbuddy", "qwenwork", "deepseek_harness"];
+export const configurableAgents = ["claude_code", "claude_desktop", "gemini", "workbuddy", "workbuddy_cn", "qwenwork", "deepseek_harness"];
 const serverName = "wanx-memobox";
 const mapping = value => value && typeof value === "object" && !Array.isArray(value);
 
@@ -118,6 +118,7 @@ export function createMyAiMcpConfig(agent, { executable = process.execPath, stdi
   const directEntry = { command: executable, args, env: { ELECTRON_RUN_AS_NODE: "1" } };
   const absolute = (candidate, fallback) => candidate && path.isAbsolute(candidate) ? candidate : fallback;
   const underHome = (...parts) => path.join(home, ...parts);
+  const mainlandWorkBuddy = agent === "workbuddy_cn";
   const guided = agent === "workbuddy" || agent === "qwenwork";
   const openCodeDir = path.join(absolute(env.XDG_CONFIG_HOME, underHome(".config")), "opencode");
   const locations = {
@@ -125,7 +126,8 @@ export function createMyAiMcpConfig(agent, { executable = process.execPath, stdi
     claude_desktop: [platform === "win32"
       ? path.join(absolute(env.APPDATA, underHome("AppData", "Roaming")), "Claude", "claude_desktop_config.json")
       : underHome("Library", "Application Support", "Claude", "claude_desktop_config.json"), ["mcpServers"]],
-    gemini: [path.join(absolute(env.GEMINI_CLI_HOME, home), ".gemini", "settings.json"), ["mcpServers"]],
+    gemini: [underHome(".gemini", "config", "mcp_config.json"), ["mcpServers"]],
+    workbuddy_cn: [underHome(".workbuddy", "mcp.json"), ["mcpServers"]],
     cursor: [underHome(".cursor", "mcp.json"), ["mcpServers"]],
     opencode: [path.join(openCodeDir, "opencode.json"), ["mcp"]],
     openclaw: [absolute(env.OPENCLAW_CONFIG_PATH, path.join(absolute(env.OPENCLAW_STATE_DIR, underHome(".openclaw")), "openclaw.json")), ["mcp", "servers"]],
@@ -139,7 +141,7 @@ export function createMyAiMcpConfig(agent, { executable = process.execPath, stdi
   const macGemini = platform === "darwin" && agent === "gemini";
   const managedMacBridge = platform === "darwin" && configurableAgents.includes(agent);
   const legacyDirectEntry = agent === "claude_code" ? { type: "stdio", ...directEntry } : directEntry;
-  const launcher = managedMacBridge && stableLauncher ? createLocalMcpLauncher({ executable, stdioPath, descriptorPath }) : null;
+  const launcher = managedMacBridge && (stableLauncher || mainlandWorkBuddy) ? createLocalMcpLauncher({ executable, stdioPath, descriptorPath }) : null;
   const entry = launcher?.entry ?? directEntry;
 
   // These desktop clients document Connector setup, not a stable writable
@@ -215,6 +217,25 @@ export function createMyAiMcpConfig(agent, { executable = process.execPath, stdi
       (macGemini && await isRetiredGeminiDevBridge(transport, legacyDirectEntry));
   }
 
+  function isPreviousWorkBuddyEntry(current) {
+    if (!mainlandWorkBuddy || platform !== "darwin") return false;
+    const profile = path.dirname(descriptorPath);
+    if (path.basename(profile) !== "workbuddy_cn" || path.basename(path.dirname(profile)) !== "my-ai-access") return false;
+    const previousProfile = path.join(path.dirname(profile), "workbuddy");
+    if (isDeepStrictEqual(current, { command: "/bin/sh", args: [path.join(previousProfile, "stdio-launcher.sh")] })) return true;
+    if (typeof current?.command !== "string" || !path.isAbsolute(current.command) ||
+        !Array.isArray(current.args) || typeof current.args[0] !== "string" || !path.isAbsolute(current.args[0])) return false;
+    const bundle = path.resolve(path.dirname(current.command), "../..");
+    if (path.basename(bundle) !== "半人马AI记忆盒子.app") return false;
+    const [stdio, endpoint] = current.args;
+    if (![descriptorPath, path.join(previousProfile, "endpoint.json")].includes(endpoint)) return false;
+    const dev = current.command === path.join(bundle, "Contents", "MacOS", "Electron") &&
+      stdio.endsWith(path.join(path.sep, "shell", "codex-context-stdio.mjs"));
+    const packaged = current.command === path.join(bundle, "Contents", "MacOS", "半人马AI记忆盒子") &&
+      stdio === path.join(bundle, "Contents", "Resources", "app.asar", "shell", "codex-context-stdio.mjs");
+    return (dev || packaged) && isDeepStrictEqual(current, { ...directEntry, command: current.command, args: [stdio, endpoint] });
+  }
+
   async function write({ file, previous, content, doc, keys }, value, check = () => {}) {
     let updated;
     if (doc) {
@@ -234,7 +255,7 @@ export function createMyAiMcpConfig(agent, { executable = process.execPath, stdi
     const state = await settings();
     const configured = isDeepStrictEqual(state.current, state.expected);
     if (configured && !launcher) return { configurationChanged: false };
-    if (!configured && state.current !== undefined && !await canMigrate(state.current))
+    if (!configured && state.current !== undefined && !await canMigrate(state.current) && !isPreviousWorkBuddyEntry(state.current))
       throw new Error("MCP_CONFIG_NAME_CONFLICT");
     return install(state, configured, check);
   }

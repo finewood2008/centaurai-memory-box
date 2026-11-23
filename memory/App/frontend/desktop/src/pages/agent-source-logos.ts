@@ -13,6 +13,7 @@ import memmyRiceLogoUrl from "../assets/brand/centaurai-mark.png";
 
 export const MEMORY_AGENT_SOURCE_VALUES = [
   "memmy-agent",
+  "accessories",
   "cursor",
   "claude_code",
   "claude_desktop",
@@ -31,6 +32,7 @@ const AGENT_SOURCE_DISPLAY_NAMES: Record<string, string> = {
   memmy: "半人马AI记忆盒子",
   memmy_agent: "半人马AI记忆盒子",
   computer_history: "半人马AI记忆盒子",
+  accessories: "配件",
   cursor: "Cursor",
   claude_code: "Claude Code",
   codex: "Codex",
@@ -42,6 +44,7 @@ const AGENT_SOURCE_DISPLAY_NAMES: Record<string, string> = {
   hermes: "Hermes",
   deepseek_harness: "DeepSeek Harness",
   workbuddy: "WorkBuddy",
+  workbuddy_cn: "WorkBuddy（国内版）",
   pi: "Pi",
   qwenwork: "QwenWork"
 };
@@ -58,6 +61,7 @@ export const AGENT_SOURCE_LOGOS: Partial<Record<string, string>> = {
   hermes: hermesLogoUrl,
   deepseek_harness: deepseekHarnessLogoUrl,
   workbuddy: workbuddyLogoUrl,
+  workbuddy_cn: workbuddyLogoUrl,
   pi: piLogoUrl,
   qwenwork: qwenworkLogoUrl,
   memmy: memmyRiceLogoUrl,

@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import googleLogoUrl from "../../../assets/agent-logos/google.svg";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -106,14 +107,14 @@ it('blocks refresh and optimization until the chosen source scope has finished s
   expect(posts.find(item=>item.action==='optimize')?.body.agentContext).toEqual({memoryEnabled:true,memoryAgent:null});
 });
 
-it("keeps only the approved eight entries and filters retired sources without revoking or deleting them", async () => {
+it("keeps only the approved nine entries and filters retired sources without revoking or deleting them", async () => {
   agents = [agent("codex", "Codex 客户端"), agent("codex_cli", "Codex CLI"), agent("claude_code", "Claude Code CLI"), agent("claude_desktop", "Claude 客户端"),
-    agent("gemini", "Gemini CLI"), agent("workbuddy", "WorkBuddy"), agent("qwenwork", "QwenWork"), agent("deepseek_harness", "DeepSeek Harness"), agent("cursor", "Cursor")];
+    agent("gemini", "Google"), agent("workbuddy", "WorkBuddy（海外版）"), agent("workbuddy_cn", "WorkBuddy（国内版）"), agent("qwenwork", "QwenWork"), agent("deepseek_harness", "DeepSeek Harness"), agent("cursor", "Cursor")];
   mocks.state!.agentSources.items = [
     { sourceId: "cursor", displayName: "Cursor", builtin: true }, { sourceId: "openclaw", displayName: "OpenClaw", builtin: true },
   ] as typeof mocks.state.agentSources.items;
   await render();
-  expect([...host.querySelectorAll(".my-ai-agent-list strong")].map(item => item.textContent)).toEqual(agents.slice(0, 8).map(item => item.name));
+  expect([...host.querySelectorAll(".my-ai-agent-list strong")].map(item => item.textContent)).toEqual(agents.slice(0, 9).map(item => item.name));
   await act(async () => button("添加应用").click());
   const catalog = document.querySelector('[role="dialog"]')!;
   expect(catalog.textContent).not.toContain("Cursor");
@@ -126,14 +127,14 @@ it("keeps only the approved eight entries and filters retired sources without re
 });
 
 it("shows configured separately from verified and uses the selected Claude mode for new tasks", async () => {
-  agents = [agent("claude_desktop", "Claude 客户端"), agent("gemini", "Gemini CLI")];
+  agents = [agent("claude_desktop", "Claude 客户端"), agent("gemini", "Google")];
   agents[0].capabilities!.autoMemory = "explicit";
   agents[0].modes = [{ id: "chat", autoMemory: "explicit" }, { id: "code", autoMemory: "hook" }, { id: "cowork", configuration: "automatic", autoMemory: "unverified" }];
   await render();
   expect(host.textContent).toContain("等待智能体加载");
   const capture = host.querySelector('[aria-label="从智能体到记忆盒子"]')!;
   expect(capture.textContent).toContain("在对话中指定要保存的内容");
-  expect(button("Gemini CLI").textContent).toContain("等待检测到本机会话");
+  expect(button("Google").textContent).toContain("等待检测到本机会话");
   await act(async () => button("历史导入与保存", capture).click());
   const settings = host.querySelector<HTMLElement>("#my-ai-collection-settings")!;
   expect(settings.hidden).toBe(false);
@@ -186,7 +187,7 @@ it("previews a Claude export before sending the opaque approval to import", asyn
 });
 
 it("keeps collection and retrieval actions in the flow without duplicate shortcuts", async () => {
-  agents = [agent("codex", "Codex 客户端"), agent("gemini", "Gemini CLI")];
+  agents = [agent("codex", "Codex 客户端"), agent("gemini", "Google")];
   agents[0].sourceId = "codex";
   respond = async action => {
     if (action === "status") return Response.json({ agents, apps: agents, agentAccess: { codex: { configured: true } } });
@@ -228,6 +229,7 @@ it("keeps collection and retrieval actions in the flow without duplicate shortcu
 it.each([
   { id: "codex", name: "Codex 客户端", delivery: "draft" as const, title: "请重新打开 Codex 客户端" },
   { id: "codex_cli", name: "Codex CLI", delivery: "terminal-confirm" as const, title: "请重新启动 Codex CLI" },
+  { id: "workbuddy_cn", name: "WorkBuddy（国内版）", delivery: "copy-open" as const, title: "首次连接 WorkBuddy：信任记忆盒子" },
 ])("explains how to load changed MCP configuration for $name after authorization", async ({ id, name, delivery, title }) => {
   agents = [agent(id, name, delivery)];
   const ready = { authorized: true, configured: true, boxReady: true, serviceReady: true };
@@ -241,11 +243,15 @@ it.each([
   const notice = document.querySelector('[role="dialog"]')!;
   expect(notice.textContent).toContain(title);
   expect(notice.textContent).toContain("资料授权与连接配置已保存");
-  expect(notice.textContent).toContain("保持万象运行并连接盒子");
+  if (id === "workbuddy_cn") {
+    const steps = /专家·技能·连接器.*「连接器」.*自定义连接器.*我的 MCP.*wanx-memobox.*「信任」/;
+    expect(notice.textContent).toMatch(steps);
+    expect(host.querySelector(".my-ai-connection-result")?.textContent).toMatch(steps);
+  } else expect(notice.textContent).toContain("保持万象运行并连接盒子");
   if (id === "codex_cli") {
     expect(notice.textContent).toContain("/quit");
     expect(notice.textContent).toContain("codex resume --last");
-  } else expect(notice.textContent).toContain("完全退出并重新打开 Codex 客户端");
+  } else if (id === "codex") expect(notice.textContent).toContain("完全退出并重新打开 Codex 客户端");
   expect(posts.map(item => item.action)).not.toContain("launch");
   await act(async () => button("我知道了", notice).click());
   expect(document.querySelector('[role="dialog"]')).toBeNull();
@@ -374,12 +380,14 @@ it("shows connection controls for WorkBuddy and DeepSeek history sources without
     capabilities: { ...capabilities, configuration: "guided" as const } };
   const deepseek = { ...agent("deepseek_harness", "DeepSeek Harness", "copy-open"), installed: false, launchable: false, connectionAvailable: true };
   mocks.state!.agentSources.items = [workbuddy, deepseek].map(app => ({ sourceId: app.id, displayName: app.name, builtin: true })) as typeof mocks.state.agentSources.items;
+  const mainland = { ...workbuddy, id: "workbuddy_cn", name: "WorkBuddy（国内版）", sourceId: "workbuddy" };
   respond = async action => {
-    if (action === "status") return Response.json({ agents: [], apps: [workbuddy, deepseek] });
+    if (action === "status") return Response.json({ agents: [], apps: [workbuddy, mainland, deepseek] });
     if (action === "agent-access/connect") return Response.json({ authorized: true, boxReady: true, serviceReady: true });
     if (action === "agent-access/test") return Response.json({ authorized: true, boxReady: true, serviceReady: true, connectionTested: true });
   };
   await render();
+  expect(button("WorkBuddy（国内版）").textContent).toContain("尚未安装");
   await act(async () => button("连接智能体").click());
   expect(host.textContent).toContain("等待智能体加载");
   expect(button("查看接入配置")).toBeDefined();
@@ -479,7 +487,7 @@ it("keeps task drafting available while an isolated library disables integration
 });
 
 it("prepares Gemini in a terminal without asking for a workspace or claiming the task executed", async () => {
-  agents = [agent("gemini", "Gemini CLI", "terminal-confirm")];
+  agents = [agent("gemini", "Google", "terminal-confirm")];
   respond = async action => action === "handoff" ? Response.json({ opened: true, prepared: true, delivery: "terminal-confirm" }) : undefined;
   await render();
   expect(host.querySelector('[aria-label="工作目录"]')).toBeNull();
@@ -502,7 +510,7 @@ it("reports copy-and-open as a manual paste for WorkBuddy", async () => {
 });
 
 it("persists source selections and leaves the previous value when saving fails", async () => {
-  agents = [agent("gemini", "Gemini CLI", "terminal-confirm")];
+  agents = [agent("gemini", "Google", "terminal-confirm")];
   let saveFails = false;
   respond = async (action, body) => action === "agent-context/selection" && body.selection && saveFails
     ? Response.json({ error: { message: "范围保存失败" } }, { status: 400 }) : undefined;
@@ -520,7 +528,7 @@ it("persists source selections and leaves the previous value when saving fails",
 });
 
 it("ignores the previous agent's delayed selection after the target changes", async () => {
-  agents = [agent("codex", "Codex 客户端"), agent("gemini", "Gemini CLI", "terminal-confirm")];
+  agents = [agent("codex", "Codex 客户端"), agent("gemini", "Google", "terminal-confirm")];
   let finishOld: ((response: Response) => void) | undefined;
   respond = async (action, body) => {
     if (action === "agent-context/selection" && body.agent === "codex") return new Promise<Response>(resolve => { finishOld = resolve; });
@@ -530,7 +538,7 @@ it("ignores the previous agent's delayed selection after the target changes", as
     return undefined;
   };
   await render();
-  await act(async () => button("Gemini CLI", host.querySelector(".my-ai-agent-list")!).click());
+  await act(async () => button("Google", host.querySelector(".my-ai-agent-list")!).click());
   expect(host.textContent).toContain("Gemini 范围");
   await act(async () => finishOld!(Response.json({
     selection: { warehouseId: "old-warehouse", memoryEnabled: true }, resources: { warehouse: { id: "old-warehouse", name: "过期 Codex 范围" } },
@@ -571,17 +579,19 @@ it("requires confirmation to manage uninstall and never labels opening an entry 
 it("uses brand icons for every supported entry and omits the duplicate memory-transfer card", async () => {
   const entries = [
     ["codex", "Codex 客户端"], ["codex_cli", "Codex CLI"], ["claude_code", "Claude Code CLI"],
-    ["claude_desktop", "Claude 客户端"], ["gemini", "Gemini CLI"], ["workbuddy", "WorkBuddy"],
+    ["claude_desktop", "Claude 客户端"], ["gemini", "Google"], ["workbuddy", "WorkBuddy（海外版）"], ["workbuddy_cn", "WorkBuddy（国内版）"],
     ["qwenwork", "QwenWork"], ["deepseek_harness", "DeepSeek Harness"],
   ];
   agents = entries.map(([id, name]) => agent(id!, name!));
   await render();
-  for (const [, name] of entries) {
+  for (const [id, name] of entries) {
     const row = [...host.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")].find(item => item.textContent?.includes(name!));
-    expect(row?.querySelector(".my-ai-agent-logo img"), name).toBeTruthy();
+    const logo = row?.querySelector(".my-ai-agent-logo img");
+    expect(logo, name).toBeTruthy();
+    if (id === "gemini") expect(logo?.getAttribute("src")).toBe(googleLogoUrl);
   }
   await act(async () => button("添加应用").click());
-  expect(document.querySelectorAll(".my-ai-app-catalog .my-ai-agent-logo img")).toHaveLength(8);
+  expect(document.querySelectorAll(".my-ai-app-catalog .my-ai-agent-logo img")).toHaveLength(9);
   expect(host.textContent).not.toContain("统一记忆导入导出");
   expect(host.textContent).not.toContain("记忆包导入导出");
 });

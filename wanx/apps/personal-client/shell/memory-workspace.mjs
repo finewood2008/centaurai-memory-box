@@ -116,13 +116,15 @@ export function createMemoryWorkspace({
       if (hide && !hidden.has(agent) && hidden.size >= 100)
         throw Object.assign(new Error("已达到隐藏应用数量上限，请先恢复一项。"), { status: 400 });
       const source = agent === "claude_desktop" && mode === "code" ? "claude_code" : catalogAgent(agent)?.sourceId ?? agent;
-      if (manageAgentSync && source !== "claude_desktop") {
-        const result = await syncAccess(source, !hide, assertScope);
-        assertScope();
-        if (result?.sourceId !== source || result.syncDisabled !== hide) throw new Error("AGENT_SYNC_ACCESS_FAILED");
-      }
       if (hide) hidden.add(agent);
       else hidden.delete(agent);
+      if (manageAgentSync && source !== "claude_desktop") {
+        // Both WorkBuddy launchers use the same memory collector.
+        const disableSource = source === "workbuddy" ? hidden.has("workbuddy") && hidden.has("workbuddy_cn") : hide;
+        const result = await syncAccess(source, !disableSource, assertScope);
+        assertScope();
+        if (result?.sourceId !== source || result.syncDisabled !== disableSource) throw new Error("AGENT_SYNC_ACCESS_FAILED");
+      }
       const hiddenAgents = [...hidden];
       if (hiddenAgents.length) preferences[key] = hiddenAgents;
       else delete preferences[key];

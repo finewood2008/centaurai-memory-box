@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { catalogAgent } from "./my-ai-catalog.mjs";
 import { readMemoryConnection } from "./local-memory-runtime.mjs";
 
 const failure = message => Object.assign(new Error(message), { status: 400 });
@@ -64,18 +65,20 @@ export function createMyAiMemoryAccess({ runtimeFile, request = fetch }) {
   return {
     async sourceCatalog(check) {
       const validId = id => typeof id === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(id);
+      let agents;
       try {
         const result = await read("/api/v1/agent-sources", undefined, check);
-        return (result.sources ?? []).filter(source => validId(source.sourceId) &&
+        agents = (result.sources ?? []).filter(source => validId(source.sourceId) &&
             (source.available || source.messageCount > 0 || source.lastScannedAt))
           .map(source => ({ id: source.sourceId, name: source.displayName || source.sourceId }));
       } catch (error) {
         if (error.httpStatus !== 404) throw error;
         const { sourceDistribution = [] } = await read("/api/v1/panel/overview", undefined, check);
         const names = { codex: "Codex", claude_code: "Claude Code", claude_desktop: "Claude 客户端", gemini: "Gemini CLI" };
-        return sourceDistribution.filter(row => row.count > 0 && validId(row.source))
+        agents = sourceDistribution.filter(row => row.count > 0 && validId(row.source))
           .map(row => ({ id: row.source, name: Object.hasOwn(names, row.source) ? names[row.source] : row.source }));
       }
+      return [...agents.filter(source => source.id !== "accessories"), {id:"accessories", name:"配件"}];
     },
     searchSource,
     async call(tool, args, check, agent, binding = "", memoryAgent) {
@@ -87,9 +90,10 @@ export function createMyAiMemoryAccess({ runtimeFile, request = fetch }) {
         // The source and idempotency namespace belong to the connected client,
         // never to fields supplied by an agent's tool arguments.
         const requestId = hash(JSON.stringify([binding, agent, args.idempotencyKey ?? [args.content, args.title ?? ""]]));
+        const source = catalogAgent(agent)?.sourceId ?? agent;
         const result = await read("/api/v1/memory/add", {
           content: args.content, ...(args.title !== undefined && { title: args.title }),
-          layer: "L1", source: agent, sourceAgentId: agent, adapterId: "my-ai:" + agent, requestId,
+          layer: "L1", source, sourceAgentId: source, adapterId: "my-ai:" + agent, requestId,
         }, check);
         if (typeof result.id !== "string" || !/^[A-Za-z0-9_.:-]{1,200}$/.test(result.id))
           throw failure("记忆服务未返回已保存的记忆标识，请检查后重试。");

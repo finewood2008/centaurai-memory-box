@@ -122,7 +122,7 @@ describe("MemoriesSubPage", () => {
     expect(html).toContain('id="memory-l1-agent-filter"');
     expect(html).toContain("memory-source-filter__all-icon");
     expect(html.match(/memory-source-filter__all-avatar/g)).toHaveLength(3);
-    expect(html).toContain("memmy-rice.png");
+    expect(html).toContain("centaurai-mark.png");
     expect(html).not.toContain("lucide-bot");
     expect(html).toContain("全部 Agent");
     expect(html).toContain("按来源 Agent 筛选");
@@ -130,12 +130,24 @@ describe("MemoriesSubPage", () => {
     expect(MEMORY_SOURCE_AGENT_EXCLUSIONS).toContain("computer_history");
   });
 
+  it("配件记忆按来源筛选，并从带有项目编号的详情返回工作台", () => {
+    expect(buildPanelItemsInput({ sourceAgent: "accessories" })).toEqual({ layer: "L1", sourceAgent: "accessories", page: 1 });
+    const item = { ...memoryDetailFixture.item, metadata: { source: "accessories" }, tags: ["clip", "m-20261123-123456-abcdef"] };
+    const renderItem = (tags: string[]) => renderMemories({ status: "ready", data: panelItemsOutput([]),
+      detail: { status: "ready", data: { ...memoryDetailFixture, item: { ...item, tags } } } });
+    expect(renderItem(item.tags)).toContain("打开来源项目");
+    expect(renderItem(["clip"])).not.toContain("打开来源项目");
+  });
+
   it("筛选器和详情共用统一的 Agent 名称格式", () => {
     expect(MEMORY_AGENT_SOURCE_VALUES.map(agentSourceDisplayName)).toEqual([
-      "Memmy",
+      "半人马AI记忆盒子",
+      "配件",
       "Cursor",
       "Claude Code",
+      "Claude 客户端",
       "Codex",
+      "Gemini CLI",
       "OpenCode",
       "OpenClaw",
       "Hermes",
@@ -144,8 +156,8 @@ describe("MemoriesSubPage", () => {
       "Pi",
       "QwenWork"
     ]);
-    expect(agentSourceDisplayName("MEMMY_AGENT")).toBe("Memmy");
-    expect(agentSourceDisplayName("computer_history")).toBe("Memmy");
+    expect(agentSourceDisplayName("MEMMY_AGENT")).toBe("半人马AI记忆盒子");
+    expect(agentSourceDisplayName("computer_history")).toBe("半人马AI记忆盒子");
     expect(agentSourceDisplayName("claude-code")).toBe("Claude Code");
     expect(agentSourceDisplayName("OPENCLAW")).toBe("OpenClaw");
   });
@@ -185,7 +197,7 @@ describe("MemoriesSubPage", () => {
     expect(html).not.toContain("memory-pill--source");
   });
 
-  it("电脑历史记忆显示为 Memmy，同时保留真实来源供详情溯源", () => {
+  it("电脑历史记忆使用记忆盒子的名称，同时保留真实来源供详情溯源", () => {
     const item = {
       ...memoryListItemFixture,
       metadata: { source: "computer_history" }
@@ -193,7 +205,7 @@ describe("MemoriesSubPage", () => {
     const html = renderMemories({ status: "ready", data: panelItemsOutput([item]), detail: null });
 
     expect(memoryDisplaySource(item)).toBe("computer_history");
-    expect(html).toContain('aria-label="来源: Memmy"');
+    expect(html).toContain('aria-label="来源: 半人马AI记忆盒子"');
     expect(html).not.toContain('aria-label="来源: 电脑历史"');
   });
 
