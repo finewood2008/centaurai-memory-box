@@ -1,11 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {existsSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {mkdtemp, mkdir, readFile, writeFile, rm, access, rename} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {prepareMemoryRuntime, probeMemoryRuntime} from '../tools/prepare-memory-runtime.mjs';
 
-async function fixture(t, {napiReady = true, vector = true, rebuildFails = false} = {}) {
+const legacyPath = 'Memory/AgentSourceReaders/node_modules/better-sqlite3';
+const nestedLegacyPath = 'node_modules/@memmy/agent-source-readers/node_modules/better-sqlite3';
+const nativeBinary = 'build/Release/better_sqlite3.node';
+
+async function fixture(t, {napiReady = true, vector = true, rebuildFails = false,
+  legacyPaths = [legacyPath], platform = process.platform} = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'prepare-memory-runtime-'));
   t.after(() => rm(root, {recursive:true, force:true}));
   const clientRoot = path.join(root, 'client'), source = path.join(root, 'source');
@@ -20,31 +26,55 @@ async function fixture(t, {napiReady = true, vector = true, rebuildFails = false
   const current = path.join(clientRoot, 'build/local-memory');
   await mkdir(current, {recursive:true});
   await writeFile(path.join(current, 'old-runtime'), 'previous usable runtime');
-  let rebuilt = false;
+  let rebuilt = 0;
   const calls = [];
-  const modules = () => [
+  const modules = runtime => [
     {path:'node_modules/better-sqlite3', version:'13.0.3', ok:napiReady},
-    {path:'Memory/AgentSourceReaders/node_modules/better-sqlite3', version:'12.11.1', ok:rebuilt},
+    ...legacyPaths.map((relative, index) => ({path:relative, version:'12.11.1', ok:platform === 'win32'
+      ? readFileSync(path.join(runtime, relative, nativeBinary), 'utf8') === 'Electron binary'
+      : index < rebuilt})),
   ];
   const run = (executable, args, options) => {
     calls.push({executable, args, options});
     if (executable === 'fixture-electron') {
       assert.equal(options.env.ELECTRON_RUN_AS_NODE, '1');
-      const entries = modules();
+      const entries = modules(args.at(-1));
       return JSON.stringify({arch:'arm64', modules:entries, vector, ok:entries.every(item => item.ok) && vector});
     }
     assert.equal(executable, process.execPath);
     assert.ok(args.includes('--target=37.10.3'));
     assert.ok(args.includes('--arch=arm64'));
-    assert.ok(args.some(value => value.startsWith('--directory=') && value.includes('.memory-runtime-') && value.endsWith(path.join('Memory','AgentSourceReaders','node_modules','better-sqlite3'))));
+    const directory = args.find(value => value.startsWith('--directory=')).slice('--directory='.length);
+    if (platform === 'win32') {
+      assert.equal(path.dirname(directory), os.tmpdir());
+      assert.equal(readFileSync(path.join(directory, 'binding.gyp'), 'utf8'), legacyPaths[rebuilt]);
+      assert.equal(existsSync(path.join(directory, 'build')), false);
+      assert.equal(existsSync(path.join(directory, 'node_modules')), false);
+    } else {
+      assert.ok(directory.includes('.memory-runtime-'));
+      assert.ok(directory.endsWith(path.normalize(legacyPaths[rebuilt])));
+    }
     if (rebuildFails) throw Error('native compilation failed');
-    rebuilt = true;
+    if (platform === 'win32') {
+      const binary = path.join(directory, nativeBinary);
+      mkdirSync(path.dirname(binary), {recursive:true});
+      writeFileSync(binary, 'Electron binary');
+    }
+    rebuilt++;
   };
   const stage = async ({source:input, destination}) => {
     assert.equal(input, source);
     await mkdir(destination);
     await writeFile(path.join(destination, 'new-runtime'), 'compiled payload');
-    return {packages:[], nativeModules:modules().map(item => item.path)};
+    for (const relative of legacyPaths) {
+      const directory = path.join(destination, relative);
+      const binary = path.join(directory, nativeBinary);
+      await mkdir(path.dirname(binary), {recursive:true});
+      await mkdir(path.join(directory, 'node_modules'));
+      await writeFile(path.join(directory, 'binding.gyp'), relative);
+      await writeFile(binary, 'Node binary');
+    }
+    return {packages:[], nativeModules:['node_modules/better-sqlite3', ...legacyPaths]};
   };
   const repair = async ({source:input, temporary}) => {
     assert.equal(input, source);
@@ -54,7 +84,7 @@ async function fixture(t, {napiReady = true, vector = true, rebuildFails = false
     assert.equal(input, source);
     await access(path.join(destination, 'new-runtime'));
   };
-  return {source, clientRoot, current, calls, run, stage, repair, validateLock};
+  return {source, clientRoot, current, calls, run, stage, repair, validateLock, platform};
 }
 
 test('runtime preparation rebuilds only the legacy SQLite copy for Electron and promotes verified payload', async t => {
@@ -65,6 +95,20 @@ test('runtime preparation rebuilds only the legacy SQLite copy for Electron and 
   assert.equal(f.calls.filter(call => call.executable === process.execPath).length, 1);
   assert.equal(await readFile(path.join(f.source, 'original-native-binding'), 'utf8'), 'plain node bytes');
   assert.equal(probeMemoryRuntime({...f, runtime:f.current}).ok, true);
+});
+
+test('Windows builds both nested SQLite copies in short temporary paths before probing the staged binaries', async t => {
+  const f = await fixture(t, {platform:'win32', legacyPaths:[legacyPath, nestedLegacyPath]});
+  assert.equal(await prepareMemoryRuntime(f), f.current);
+  for (const relative of [legacyPath, nestedLegacyPath]) {
+    assert.equal(await readFile(path.join(f.current, relative, nativeBinary), 'utf8'), 'Electron binary');
+  }
+  const builds = f.calls.filter(call => call.executable === process.execPath);
+  assert.equal(builds.length, 2);
+  for (const call of builds) {
+    const work = call.args.find(value => value.startsWith('--directory=')).slice('--directory='.length);
+    await assert.rejects(access(work), {code:'ENOENT'});
+  }
 });
 
 test('missing v13 NAPI prebuild never invokes legacy node-gyp or replaces the current runtime', async t => {
@@ -88,7 +132,7 @@ test('a missing vector extension prevents promotion even when both SQLite copies
 });
 
 test('Windows retries a temporary promotion lock without recompiling or losing the previous runtime', async t => {
-  const f = await fixture(t);
+  const f = await fixture(t, {platform:'win32'});
   let attempts = 0;
   const move = async (from, to) => {
     if (from.endsWith(`${path.sep}next`) && ++attempts < 3) throw Object.assign(Error('temporary native file lock'), {code:'EPERM'});
@@ -101,7 +145,7 @@ test('Windows retries a temporary promotion lock without recompiling or losing t
 });
 
 test('persistent Windows promotion locks stop after bounded retries and restore the previous runtime', async t => {
-  const f = await fixture(t);
+  const f = await fixture(t, {platform:'win32'});
   let attempts = 0;
   const move = async (from, to) => {
     if (from.endsWith(`${path.sep}next`)) { attempts++; throw Object.assign(Error('locked'), {code:'EPERM'}); }

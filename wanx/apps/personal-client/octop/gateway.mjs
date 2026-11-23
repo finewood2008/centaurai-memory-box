@@ -1,3 +1,4 @@
+import { acceptsMediaGrant, isMediaAsrStream } from "../app-host/media-grant.mjs";
 import http from "node:http";
 import { isStarlinkNativeRequest } from './starlink-native-routes.mjs';
 import { dashboardRoutes } from "./dashboard-routes.mjs";
@@ -748,7 +749,7 @@ export async function createDashboardGateway({
         headers: {
           host: localURL.host,
           origin: localURL.origin,
-          ...Object.fromEntries(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]).filter(([key, value]) => ["accept", "accept-language", "content-type", "x-octop-agent-id", "x-wanx-metering-session", "x-content-sha256", "range", "if-none-match", "if-modified-since"].includes(key) || (key === "x-space-link" && ["/api/personal-space/agent-access", "/api/personal-space/connection-access", "/api/clipboard/v1/agent-access"].includes(path.split("?")[0])) || (key === "x-wanx-data-context" && /^\/api\/assistant\/knowledge(?:\/|-)/.test(path.split("?")[0]) && ["team","personal"].includes(value)) || (key === "x-xingtu-key" && /^\/api\/semantica\/open\/v1\//.test(path.split("?")[0])))),
+          ...Object.fromEntries(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]).filter(([key, value]) => ["accept", "accept-language", "content-type", "x-octop-agent-id", "x-wanx-metering-session", "x-content-sha256", "range", "if-none-match", "if-modified-since"].includes(key) || (key === "x-space-link" && ["/api/personal-space/agent-access", "/api/personal-space/connection-access", "/api/clipboard/v1/agent-access"].includes(path.split("?")[0])) || (key === "x-wanx-data-context" && /^\/api\/assistant\/knowledge(?:\/|-)/.test(path.split("?")[0]) && ["team","personal"].includes(value)) || (key === "x-media-grant" && acceptsMediaGrant(path)) || (key === "x-xingtu-key" && /^\/api\/semantica\/open\/v1\//.test(path.split("?")[0])))),
           ...(session ? { authorization: `Bearer ${marker}` } : {}),
         },
       };
@@ -869,7 +870,7 @@ export async function createDashboardGateway({
       const endpoint = new URL(target);
       endpoint.protocol = target.protocol === "https:" ? "wss:" : "ws:";
       const upstreamPath = new URL(authorized.path, target);
-      if (upstreamPath.pathname !== "/api/browser-stream/ws" && authorized.token && !upstreamPath.searchParams.has("token") && !upstreamPath.searchParams.has("access_token"))
+      if (upstreamPath.pathname !== "/api/browser-stream/ws" && !isMediaAsrStream(authorized.path) && authorized.token && !upstreamPath.searchParams.has("token") && !upstreamPath.searchParams.has("access_token"))
         upstreamPath.searchParams.set("token", authorized.token);
       const socket = new WebSocket(endpoint.origin + upstreamPath.pathname + upstreamPath.search, protocols, {
         headers: authorized.headers,

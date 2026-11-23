@@ -2,13 +2,14 @@
 
 本目录是 WANX Host SDK 的唯一源码入口，随同目录内的 `contracts/` 一起由 WANX App Kit 构建。应用开发方应消费 App Kit 产出的 SDK 和合同，不应从 `wanx-team-client` 或应用 `vendor/` 目录读取源码。
 
-供 Electron **主进程**使用，提供 Host 会话、HTTP/WebSocket 传输和空间 Drive SDK。App Kit 的 `contracts/README.md` 链接到 Octop、空间 Drive 与星图的 API 指南。
+供 Electron **主进程**使用，提供 Host 会话、HTTP/WebSocket 传输和空间 Drive SDK。App Kit 的 `contracts/README.md` 链接到各项 API 指南。
 
 | 能力 | SDK 入口 |
 | --- | --- |
 | 万象 Octop | `host.request`、`host.openStream`、`host.requestExpert` |
 | 空间 Drive | `host.drive`，类型从包根导入 |
 | 星图 | `host.request('/api/semantica/open/v1/…', {headers: {'X-Xingtu-Key': key}})` |
+| 盒端 OCR 与 ASR | `host.request`、`host.openStream` 与实例媒体授权，见 App Kit 的 `contracts/media-api.md` |
 
 ```js
 const {fromEnvironment} = require('@centaurai/wanx-host-sdk');
@@ -36,7 +37,7 @@ const response = await host.request('/api/your-upload-endpoint', {
 // 上例适用于接收原始字节的接口；multipart 接口需使用相应编码流。
 ```
 
-流只消费一次。调用 `controller.abort()`、关闭 SDK、会话失效或盒端提前拒绝时，SDK 会销毁 Node 源流或取消 Web 源流，并停止上传，不自动重放请求或跟随重定向。流式上传期间默认 15 秒为连接空闲超时，持续传输不受总上传时长限制；上传完成后默认等待响应头最多 15 秒。收到响应头后，响应流（包括 SSE）不受该期限限制。已有非流请求的响应头超时保持不变。`openStream(path)` 返回连接中的 `ws` 对象，调用方立即订阅 `open/message/close/error`；目前允许 `/api/agents/{id}/chat/ws`。
+流只消费一次。调用 `controller.abort()`、关闭 SDK、会话失效或盒端提前拒绝时，SDK 会销毁 Node 源流或取消 Web 源流，并停止上传，不自动重放请求或跟随重定向。流式上传期间默认 15 秒为连接空闲超时，持续传输不受总上传时长限制；上传完成后默认等待响应头最多 15 秒。收到响应头后，响应流（包括 SSE）不受该期限限制。已有非流请求的响应头超时保持不变。`openStream(path)` 返回连接中的 `ws` 对象，调用方立即订阅 `open/message/close/error`。应用可通过各能力对应的 Host 路由发起流式请求，例如 Agent 对话和已开通的实时 ASR。
 
 Host 注入 `WANX_HOST_TRANSPORT=http-v1`、`WANX_HOST_BASE_URL=http://127.0.0.1:<临时端口>`、`WANX_HOST_TOKEN`。令牌只用于本地网关，每次启动重新生成，只存在主进程内存。不可传给 renderer、持久化、记录日志或拼进 URL。SDK 在存在不完整或旧版 Host 环境时明确报错，不降级到 LAN。
 

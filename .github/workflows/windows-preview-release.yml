@@ -138,6 +138,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Starlink workspace validation failed' }
           node --test --test-name-pattern='^personal' wanx/apps/personal-client/tests/starlink-workbench-gateway.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Starlink validation failed' }
+      - name: Validate recording authorization and packaged backup SDK
+        working-directory: wanx/apps/personal-client
+        run: node --test tests/media-grant.test.mjs tests/package-client-memory.test.mjs
       - name: Validate mixed local collection and per-device backups
         working-directory: wanx/apps/personal-client
         run: |
@@ -165,7 +168,7 @@ jobs:
             if (-not (Test-Path -LiteralPath (Join-Path $artifacts $name) -PathType Leaf)) { throw "Missing verified artifact: $name" }
           }
           $verified = Get-Content -LiteralPath (Join-Path $artifacts 'verification-windows-preview.json') -Raw | ConvertFrom-Json
-          if ($verified.sourceCommit -ne $env:GITHUB_SHA -or $verified.version -ne $env:MEMOBOX_RELEASE_VERSION -or $verified.smoke.ok -ne $true -or $verified.nativeSmoke.nativeModules -lt 1) { throw 'Packaged runtime verification is incomplete' }
+          if ($verified.sourceCommit -ne $env:GITHUB_SHA -or $verified.version -ne $env:MEMOBOX_RELEASE_VERSION -or $verified.smoke.ok -ne $true -or $verified.accessoriesSmoke.ok -ne $true -or $verified.nativeSmoke.nativeModules -lt 1) { throw 'Packaged runtime verification is incomplete' }
       - name: Upload verified build outputs
         uses: actions/upload-artifact@v4
         with:

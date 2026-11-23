@@ -44,6 +44,9 @@
 
   window.addEventListener?.("message", event => {
     if (event.origin !== origin || !host?.isConnected || event.source !== host.querySelector("iframe")?.contentWindow) return;
+    if (event.data?.type === "wanx-accessory-project" && !host.dataset.memorySection &&
+        ["disk","clip"].includes(event.data.kind) && /^m-\d{8}-\d{6}-[a-f0-9]{6}$/.test(event.data.id))
+      window.dispatchEvent(new CustomEvent("wanx:accessory-project", {detail:{kind:event.data.kind, id:event.data.id}}));
     if (event.data?.type === "wanx-view-agent-memory" && host.dataset.memorySection === "my-ai" &&
         typeof event.data.source === "string" && /^[a-z0-9_]{1,40}$/.test(event.data.source))
       window.dispatchEvent(new CustomEvent("wanx:view-agent-memory", { detail: event.data.source }));

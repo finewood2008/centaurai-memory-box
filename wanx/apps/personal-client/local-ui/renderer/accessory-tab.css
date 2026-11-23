@@ -1,0 +1,22 @@
+.accessories-layout {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+}
+.accessories-layout > .topbar {
+  flex-shrink: 0;
+}
+.accessories-tab-host {
+  display: grid;
+  flex: 1;
+  min-height: 0;
+  place-items: center;
+}
+.accessories-tab-feedback {
+  padding: 20px;
+  text-align: center;
+  color: var(--fn-text-secondary);
+}
+.accessories-tab-feedback .button {
+  margin-top: 10px;
+}

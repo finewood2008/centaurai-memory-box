@@ -1,0 +1,31 @@
+{
+  "paraformer": {
+    "source": "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-paraformer-bilingual-zh-en/tree/8e40c43232a1c5c66c82111efc5820d3accca11b",
+    "revision": "8e40c43232a1c5c66c82111efc5820d3accca11b",
+    "license": "Apache-2.0",
+    "files": {
+      "decoder.int8.onnx": {"sizeBytes": 71664561, "sha256": "f3cca9f77bb9d93c8fcbfb63ae617b6b1ee96818df3aa3b151c40658fe38594f"},
+      "encoder.int8.onnx": {"sizeBytes": 165462184, "sha256": "81a70226a8934e6ed92aa1d4fc486b428b5398e2f2619ed4897b7294cab90e9a"},
+      "tokens.txt": {"sizeBytes": 75756, "sha256": "59aba8873a2ed1e122c25fee421e25f283b63290efbde85c1f01a853d83cb6e6"}
+    }
+  },
+  "punctuation": {
+    "source": "https://k2-fsa.github.io/sherpa/onnx/punctuation/pretrained_models.html#sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8",
+    "revision": "sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8",
+    "license": "Apache-2.0",
+    "files": {
+      "model.int8.onnx": {"sizeBytes": 75519198, "sha256": "65a3fb9f5ad7bfb96bf69e0dc4481df97f6ee60513c1d94ce981ba6effd524b1"}
+    }
+  },
+  "whisper": {
+    "source": "https://huggingface.co/Systran/faster-whisper-tiny/tree/d90ca5fe260221311c53c58e660288d3deb8d356",
+    "revision": "d90ca5fe260221311c53c58e660288d3deb8d356",
+    "license": "MIT",
+    "files": {
+      "config.json": {"sizeBytes": 2249, "sha256": "a73a28cdfe1c43ccc7202fa333d1f89c202477271407ae9a7f19afa52039cac8"},
+      "model.bin": {"sizeBytes": 75538270, "sha256": "dcb76c6586fc06cbdac6dd21f14cfd129cc4cdd9dce19bf4ffa62e59cbe6e6d1"},
+      "tokenizer.json": {"sizeBytes": 2203239, "sha256": "fb7b63191e9bb045082c79fd742a3106a12c99513ab30df4a0d47fa6cb6fd0ab"},
+      "vocabulary.txt": {"sizeBytes": 459861, "sha256": "34ce3fe1c5041027b3f8d42912270993f986dbc4bb34cf27f951e34a1e453913"}
+    }
+  }
+}

@@ -74,10 +74,12 @@
       "octop/**",
       "app-host/**",
       "host-sdk/drive.cjs",
+      "host-sdk/index.cjs",
       "applications/**",
       "workshop/**",
       "updates/**",
       "resources/**",
+      "!resources/accessory-preview/**",
       "!resources/installer/**",
       "package.json",
       "README.md",
@@ -86,6 +88,7 @@
       "!**/.local/**"
     ],
     "extraResources": [
+      { "from": "build/app/resources/accessory-preview", "to": "accessory-preview" },
       {
         "from": "native/bin",
         "to": "network",
@@ -120,6 +123,7 @@
         }
       ],
       "extendInfo": {
+        "NSMicrophoneUsageDescription": "录音圆盘智能体需要使用你选择的麦克风录音并生成实时字幕。",
         "NSBluetoothAlwaysUsageDescription": "记忆盒子需要使用蓝牙来发现附近设备并配置 Wi-Fi。",
         "NSBluetoothPeripheralUsageDescription": "记忆盒子使用蓝牙发现附近的盒子并配置 Wi-Fi。"
       }

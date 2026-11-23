@@ -1,0 +1,326 @@
+{
+  "version": 1,
+  "serviceId": "wanx.media",
+  "basePath": "/api/services/wanx.media/v1",
+  "discovery": "GET /capabilities",
+  "authentication": {
+    "transport": "Verified Bridge service:read or service:write delegated JWT",
+    "instanceHeader": "X-Media-Grant",
+    "scope": [
+      "boxId",
+      "userId",
+      "spaceId",
+      "instance",
+      "capability"
+    ],
+    "grantIssuer": "Trusted box installation operator",
+    "authorizationMode": "Read and write checked per operation; durable worker rechecks expiring grant before claim, while running and at result publication."
+  },
+  "streaming": {
+    "capability": "audio.transcribe.streaming",
+    "create": "POST /asr/sessions",
+    "createStatus": 201,
+    "createRequest": "empty body, authenticated through Bridge with X-Media-Grant",
+    "createResponse": "id, streamPath, ticket, ticketExpiresAt (Unix seconds), audio, maxFrameBytes, idleTimeoutSeconds, maxDurationSeconds",
+    "connect": "WebSocket at streamPath on the same trusted Bridge; no query string",
+    "subprotocols": ["wanx.asr.v1", "wanx.asr.ticket.<ticket>"],
+    "negotiatedSubprotocol": "wanx.asr.v1",
+    "ticketTtlSeconds": 30,
+    "ticketUse": "single use, scoped to this session and inherited grant; request a new session after disconnect",
+    "audio": {"encoding": "pcm_s16le", "sampleRate": 16000, "channels": 1},
+    "maxFrameBytes": 6400,
+    "maxConcurrentStreamsPerBox": 1,
+    "idleTimeoutSeconds": 15,
+    "maxDurationSeconds": 3600,
+    "clientMessages": {
+      "audio": "Send even-length nonempty binary PCM frames after ready, paced at capture speed. 100 ms frames contain 3200 bytes.",
+      "end": {"type": "end"}
+    },
+    "serverMessages": {
+      "ready": {"type": "ready"},
+      "partial": {"type": "partial", "segmentId": 0, "text": "replace the current draft for segmentId"},
+      "final": {"type": "final", "segmentId": 0, "text": "commit the completed segment"},
+      "end": {"type": "end", "durationMs": 100},
+      "error": {"type": "error", "code": "STREAM_GRANT_REVOKED"}
+    },
+    "persistence": "The service does not store stream audio or transcripts. File jobs and application archival are independent.",
+    "delegation": "Interactive media grants only; background worker delegations cannot request this capability."
+  },
+  "upload": {
+    "input": "caller-supplied bytes",
+    "chunkBytes": 1048576,
+    "maxInputBytes": 268435456,
+    "integrity": "SHA-256 lower-case hex",
+    "continuation": "GET job.offset; use full chunks except final chunk; re-send identical acknowledged chunk to recover a lost receipt."
+  },
+  "summary": {
+    "capability": "text.summarize",
+    "processingLocation": "cloud",
+    "create": "POST /summaries",
+    "createStatus": 202,
+    "createRequest": {
+      "requestId": "1–128 characters, scoped to the current grant",
+      "text": "Nonblank UTF-8 text authorized for cloud summarization, up to 32768 bytes",
+      "templateId": "Optional; missing or null selects the default for the current instance"
+    },
+    "result": ["model", "templateId", "templateRevision", "text"],
+    "originalDigest": "SHA-256 of the UTF-8 text",
+    "lifecycle": "Existing jobs status, result, retry and cancellation; template snapshot is fixed at creation and replay uses the original job.",
+    "cloudInput": "Submitted text and selected template instructions are sent to the cloud model through the configured device route, with WANX managed cloud routing preferred and direct HTTPS available by operator configuration.",
+    "migration": "Previously completed local results remain readable. Pending or failed local jobs require explicit resubmission with a new requestId (SUMMARY_CLOUD_RESUBMIT_REQUIRED).",
+    "templates": {
+      "scope": ["boxId", "userId", "spaceId", "instance"],
+      "builtIn": "builtin-default",
+      "record": ["id", "name", "instructions", "revision", "isBuiltin"],
+      "maxCustomTemplates": 100,
+      "operations": [
+        ["GET", "/summary-templates", "", "{templates, defaultTemplateId}"],
+        ["POST", "/summary-templates", "{name, instructions}", "201 and template record"],
+        ["GET", "/summary-templates/{id}", "", "template record"],
+        ["PUT", "/summary-templates/{id}", "{name, instructions, expectedRevision}", "updated template record"],
+        ["DELETE", "/summary-templates/{id}?expectedRevision=N", "", "{deleted:true}"],
+        ["GET", "/summary-templates/default", "", "default template record"],
+        ["PUT", "/summary-templates/default", "{templateId}; null restores builtin-default", "default template record"]
+      ]
+    }
+  },
+  "operations": [
+    [
+      "POST",
+      "/jobs",
+      "requestId, capability, size, sha256, options",
+      "job receipt; same grant + requestId + identical input returns same job"
+    ],
+    [
+      "PUT",
+      "/jobs/{id}/input?offset={offset}",
+      "application/octet-stream",
+      "confirmed offset"
+    ],
+    [
+      "POST",
+      "/jobs/{id}/submit",
+      "",
+      "job receipt"
+    ],
+    [
+      "GET",
+      "/jobs/{id}",
+      "",
+      "job receipt"
+    ],
+    [
+      "GET",
+      "/jobs/{id}/result",
+      "",
+      "jobId, capability, inputSha256, result"
+    ],
+    [
+      "POST",
+      "/jobs/{id}/retry",
+      "",
+      "job receipt; failed jobs only, up to three attempts"
+    ],
+    [
+      "DELETE",
+      "/jobs/{id}",
+      "",
+      "cancelled; purges result and uploaded bytes"
+    ],
+    [
+      "DELETE",
+      "/grant/self",
+      "",
+      "{revoked:true}; permanently revokes this presented instance grant and purges its temporary inputs and results."
+    ]
+  ],
+  "states": [
+    "uploading",
+    "queued",
+    "running",
+    "done",
+    "failed",
+    "cancelled",
+    "expired",
+    "revoked"
+  ],
+  "receipt": [
+    "id",
+    "state",
+    "capability",
+    "offset",
+    "size",
+    "expiresAt",
+    "attempts",
+    "error",
+    "cacheHit"
+  ],
+  "capabilities": {
+    "audio.transcribe": {
+      "format": [
+        "WAV",
+        "FLAC",
+        "Ogg",
+        "MP3",
+        "M4A"
+      ],
+      "maxDurationSeconds": 3600,
+      "output": [
+        "model",
+        "modelSha256",
+        "language",
+        "segments[].id",
+        "segments[].startMs",
+        "segments[].endMs",
+        "segments[].text",
+        "text"
+      ]
+    },
+    "image.ocr": {
+      "output": [
+        "model",
+        "width",
+        "height",
+        "exifOrientation",
+        "text",
+        "words[].text",
+        "words[].box",
+        "words[].confidence"
+      ],
+      "coordinates": "unrotated original raster pixels [left,top,width,height]",
+      "access": "operator-enabled; internal test until product access approved"
+    },
+    "image.fingerprint": {
+      "output": [
+        "model",
+        "hash"
+      ],
+      "meaning": "64-bit dHash visual candidate, never a proof of equality"
+    },
+    "image.labels": {
+      "options": {
+        "labels": "2–32 unique input labels"
+      },
+      "output": [
+        "model",
+        "modelSha256",
+        "labels[].label",
+        "labels[].score"
+      ],
+      "score": "softmax over supplied labels; requires dataset calibration before display"
+    },
+    "image.embedding": {
+      "output": [
+        "model",
+        "modelSha256",
+        "vector"
+      ],
+      "space": "L2-normalized Chinese-CLIP image embedding"
+    },
+    "image.match": {
+      "options": {
+        "query": "one phrase, 1–128 characters"
+      },
+      "output": [
+        "model",
+        "modelSha256",
+        "score"
+      ],
+      "score": "cosine similarity with supplied text"
+    },
+    "text.embedding": {
+      "format": "UTF-8 plain text, 1–128 trimmed characters, 1024 bytes maximum",
+      "options": {},
+      "output": [
+        "model",
+        "modelSha256",
+        "vector"
+      ],
+      "space": "L2-normalized Chinese-CLIP text embedding. Compare only to an authorized image.embedding with identical modelSha256 and vector shape."
+    },
+    "text.summarize": {
+      "format": "UTF-8 text supplied in the JSON text field",
+      "maxInputBytes": 32768,
+      "output": ["model", "templateId", "templateRevision", "text"],
+      "processingLocation": "cloud",
+      "access": "Interactive media grant for this application instance. Device installer manages the cloud routing, model, and dedicated credential."
+    }
+  },
+  "imageFormats": [
+    "JPEG",
+    "PNG",
+    "WEBP"
+  ],
+  "maxImagePixels": 32000000,
+  "retention": {
+    "incompleteJobSeconds": 86400,
+    "terminalResultSeconds": 86400,
+    "deleteInput": "done, cancelled, revoked or expired"
+  },
+  "errors": {
+    "401": "invalid/missing Bridge identity",
+    "403": "denied instance grant, capability or scope",
+    "404": "job absent or not visible",
+    "409": "offset, request fingerprint or current state conflicts",
+    "410": "expired",
+    "413": "chunk too large",
+    "422": "invalid input, options or SHA-256",
+    "429": "bounded queue at capacity",
+    "503": "model unavailable",
+    "507": "insufficient disk for outstanding input and worker scratch"
+  },
+  "backgroundDelegation": {
+    "issuer": {
+      "route": "POST /delegations",
+      "authentication": "Original Host JWT + X-Media-Grant",
+      "body": {
+        "capabilities": "Explicit nonempty subset of original capabilities and worker allowlist; audio.transcribe requires explicit opt-in.",
+        "ttlSeconds": "1..604800, clamped to original grant expiry"
+      },
+      "response": [
+        "id",
+        "token",
+        "boxId",
+        "userId",
+        "spaceId",
+        "instance",
+        "capabilities",
+        "expiresAt",
+        "audience"
+      ],
+      "tokenDelivery": "Return once with Cache-Control: no-store. Consumer securely provisions the HomeAI service; never store in renderer, HTTP logs or backup."
+    },
+    "worker": {
+      "home": "http://127.0.0.1:<media-service-port>/internal/media/v1",
+      "audience": "wanx.homeai",
+      "header": "X-Media-Delegation",
+      "context": "GET /context",
+      "operations": "GET /capabilities and all /jobs operations scoped to this delegation only",
+      "allowed": [
+        "image.fingerprint",
+        "image.embedding",
+        "image.labels",
+        "image.ocr",
+        "audio.transcribe"
+      ],
+      "limits": "Interactive Bearer/instance grant, forwarding headers, non-loopback peers and attempts to re-delegate are denied. Do not register this prefix in Bridge or an external proxy. Household service must also recheck each private input and destination owner before upload or archive."
+    },
+    "list": "GET /delegations (interactive parent only; no secrets)",
+    "revoke": "DELETE /delegations/{id} as parent; DELETE /internal/media/v1/delegation/self as delegate; parent expiry/revocation invalidates every child and pending output."
+  },
+  "queryReuse": {
+    "scope": "same live grant, identical verified input digest, local encoder runtime and model bundle stamp",
+    "windowSeconds": 300,
+    "source": "unexpired original completed result",
+    "residency": "Linux text-only warm encoder, idle 45 seconds, RSS guard 1536 MiB; other model work evicts it"
+  },
+  "optionalImageFormats": {
+    "HEIC/HEIF": {
+      "discovery": "Returned in capability formats only if installed libheif has an HEVC decoder",
+      "maxPrimaryFrames": 1,
+      "maxPixels": 32000000,
+      "source": "inputSha256 always hashes the original uploaded container; decoding changes no source bytes",
+      "unsupported": "Multi-frame HEIF sequences; paired videos and unsupported originals remain file-library data."
+    }
+  }
+}

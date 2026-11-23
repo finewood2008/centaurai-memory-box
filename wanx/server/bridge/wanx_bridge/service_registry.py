@@ -21,6 +21,16 @@ SERVICE_ID = "huohua.workbench"
 SERVICE_REGISTRY_ENV = "WANX_BRIDGE_SERVICE_REGISTRY_FILE"
 SERVICE_UPSTREAM = "http://127.0.0.1:8093"
 SERVICE_ROUTE_PREFIX = "/api/huohua/v1"
+MEDIA_SERVICE_ID = "wanx.media"
+MEDIA_REGISTRY_ENV = "WANX_BRIDGE_MEDIA_SERVICE_REGISTRY_FILE"
+MEDIA_ACTIVATION = Path("/var/lib/wanx/services/wanx.media/activation.json")
+MEDIA_PROFILE = {
+    "profileId": "wanx-media-python314-ubuntu2604-x64",
+    "profileVersion": 1,
+    "profileDigest": "3a13f93e511058cbd79d51acd2cf1dd77d4e5cc733bcce929c341eb4f95ce780",
+}
+MEDIA_ASR_SESSIONS = f"/api/services/{MEDIA_SERVICE_ID}/v1/asr/sessions"
+MEDIA_ASR_STREAM = re.compile(re.escape(MEDIA_ASR_SESSIONS) + r"/([a-f0-9]{32})/stream")
 GENERIC_SCOPES = frozenset({"service:read", "service:write"})
 HUOHUA_SCOPES = frozenset({"workbench:read", "workbench:write", "workbench:browser"})
 _SERVICE_ID = re.compile(r"[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*\Z")
@@ -81,11 +91,11 @@ def _route(value: Any, service_id: str) -> dict[str, Any]:
         or len(set(methods)) != len(methods)
     ):
         raise ServiceRegistryError("SERVICE_REGISTRY_ROUTE_INVALID")
-    # Huohua uses HTTP/SSE.  Existing Agent chat WebSockets keep their
-    # existing WANX contract and must not become a service-specific tunnel.
-    if value.get("websocket", False) is not False or type(value.get("sse", False)) is not bool:
+    sse = value.get("sse", False)
+    websocket = value.get("websocket", False)
+    if type(sse) is not bool or type(websocket) is not bool or (websocket and service_id != MEDIA_SERVICE_ID):
         raise ServiceRegistryError("SERVICE_REGISTRY_ROUTE_INVALID")
-    return {"prefix": prefix, "methods": list(methods), "sse": value.get("sse", False), "websocket": False}
+    return {"prefix": prefix, "methods": list(methods), "sse": sse, "websocket": websocket}
 
 
 @dataclass(frozen=True)
@@ -96,7 +106,9 @@ class ServiceRoute:
     websocket: bool
 
     def allows(self, method: str, path: str, *, websocket: bool = False) -> bool:
-        if websocket or method not in self.methods:
+        if websocket:
+            return self.websocket and method == "GET" and MEDIA_ASR_STREAM.fullmatch(path) is not None
+        if method not in self.methods:
             return False
         return path == self.prefix or path.startswith(self.prefix + "/")
 
@@ -157,6 +169,29 @@ class ServiceRegistry:
 
     def get(self, service_id: str) -> ServiceRecord | None:
         return self.services.get(service_id)
+
+    def without_media(self) -> ServiceRegistry:
+        services = dict(self.services)
+        services.pop(MEDIA_SERVICE_ID, None)
+        return ServiceRegistry(services, source=self.source)
+
+    def with_media_ota(self, path: Path) -> ServiceRegistry:
+        """Combine the independent OS projection without replacing another registration."""
+        overlay = self.load(path)
+        media = overlay.get(MEDIA_SERVICE_ID)
+        if (
+            media is None
+            or not media.enabled
+            or len(overlay.services) != 1
+            or MEDIA_SERVICE_ID in self.services
+            or media.upstream != "http://127.0.0.1:19094"
+            or any(item.upstream == media.upstream for item in self.services.values())
+            or media.activation_file != MEDIA_ACTIVATION
+            or media.activation_profiles != (MEDIA_PROFILE,)
+            or not media.routes[0].websocket
+        ):
+            raise ServiceRegistryError("MEDIA_OTA_REGISTRY_INVALID")
+        return ServiceRegistry({**self.services, MEDIA_SERVICE_ID: media}, source=self.source)
 
     @classmethod
     def empty(cls) -> ServiceRegistry:

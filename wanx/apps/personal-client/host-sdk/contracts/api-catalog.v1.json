@@ -22,6 +22,22 @@
   ],
   "surfaces": [
     {
+      "id": "agent.channels",
+      "status": "ready-for-acceptance",
+      "contractFiles": [
+        "octop-modules/channels.openapi.json",
+        "octop-modules/loops.openapi.json"
+      ],
+      "requiredBeforeOpen": [
+        "real-box-acceptance",
+        "session-revocation-evidence"
+      ],
+      "title": "当前助手的消息渠道",
+      "scope": "当前用户、盒子、应用部署绑定与所选平台",
+      "transport": "Host SDK / trusted configuration component",
+      "permission": "Host session and agent channel management authority"
+    },
+    {
       "id": "space.drive",
       "title": "空间 Drive API",
       "status": "ready-for-acceptance",

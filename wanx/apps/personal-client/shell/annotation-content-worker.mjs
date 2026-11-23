@@ -2,7 +2,7 @@ import { parentPort, workerData } from "node:worker_threads";
 import path from "node:path";
 import JSZip from "jszip";
 
-const { format, bytes, limits } = workerData;
+const { format, bytes, limits } = workerData ?? await new Promise(resolve => process.once("message", resolve));
 const utf8 = new TextDecoder("utf-8", { fatal: true });
 const fail = code => Object.assign(new Error(code), { code });
 const output = (mode, content = "", reason, truncated = false) => ({ mode, content, format, truncated, ...(reason ? { reason } : {}) });
@@ -196,17 +196,18 @@ async function pdf(data) {
   } finally { if (document) await document.destroy(); else await loading.destroy(); }
 }
 
+let result;
 try {
-  let result;
   if (format === "pdf") result = await pdf(bytes);
   else if (["docx", "xlsx", "pptx"].includes(format)) result = await office(bytes);
   else {
     const text = decode(bytes);
     result = cut(["html", "htm", "xml"].includes(format) ? markupText(text, format !== "xml") : text);
   }
-  parentPort.postMessage(result);
 } catch (error) {
   const reason = error?.name === "PasswordException" ? "SPACE_ANNOTATION_CONTENT_ENCRYPTED"
     : /^SPACE_ANNOTATION_[A-Z0-9_]+$/.test(error?.code || "") ? error.code : "SPACE_ANNOTATION_EXTRACTION_FAILED";
-  parentPort.postMessage(output("unsupported", "", reason));
+  result = output("unsupported", "", reason);
 }
+if (parentPort) parentPort.postMessage(result);
+else process.send(result, () => process.disconnect());

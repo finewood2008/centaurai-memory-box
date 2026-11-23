@@ -9,7 +9,7 @@ Bridge 从 `WANX_BRIDGE_SERVICE_REGISTRY_FILE` 读取可信安装器维护的 JS
 - `serviceId` 最多 128 字符，以小写字母开头，由小写字母、数字及分隔各段的 `.` 或 `-` 构成，例如 `example.notes`。
 - 每个服务声明一个路由前缀：`/api/services/<serviceId>/v1`，原样转发到该服务。前缀本身和其子路径均可访问。禁止占用其他服务、Octop 或 Bridge 的命名空间。
 - upstream 必须为 `http://127.0.0.1:<1–65535端口>`，服务进程由安装器独立管理。禁止主机名、远程地址、凭据、查询参数和附加路径。
-- `methods` 是显式 HTTP 方法白名单。支持 HTTP 和可选 SSE；`sse: false` 时服务返回事件流会被拒绝。WebSocket 暂不支持，不能回退进入 Octop 代理。
+- `methods` 是显式 HTTP 方法白名单。支持 HTTP 和可选 SSE；`sse: false` 时服务返回事件流会被拒绝。仅 `wanx.media` 可设置 `websocket: true`，且只开放 `/api/services/wanx.media/v1/asr/sessions/{id}/stream`。Bridge 将一次性握手票据绑定到创建会话的 Host 授权。其他独立服务的 WebSocket 请求会被拒绝。
 - 用户调用代理和状态接口需要现有 Host session。Bridge 根据该会话生成带 `serviceId`、`userId`、`spaceId` 的短期服务 JWT；Host/Octop 原始凭据和 Cookie 不转发，调用方的 `x-wanx-*` 头被移除。
 - 通用服务仅获得 `service:read`、`service:write`。服务必须验证 Bridge 签名、issuer、audience、有效期，以及 **serviceId 等于自身身份**，并按用户和空间隔离数据。只有安装证明的令牌没有用户上下文，不能作为用户业务授权。
 - 未注册或禁用的服务不能代理；未知 `/api/services/*` 路径不会回退到 Octop。
@@ -80,6 +80,7 @@ Bridge 检查 liveness、readiness、协议版本和最低 WANX 版本。`/ready
 | `GET /api/bridge/v1/services/<serviceId>/status` | Host session；查询就绪状态，不暴露 upstream 或公钥路径 |
 | `POST /api/bridge/v1/services/<serviceId>/session` | 服务安装密钥签名证明；取得无用户上下文的服务令牌 |
 | 注册前缀及其子路径 | Host session；按注册方法白名单代理 HTTP/SSE |
+| `WS /api/services/wanx.media/v1/asr/sessions/{id}/stream` | 实时 ASR 专用。凭会话创建返回的单次票据连接，持续检查原 Host 授权 |
 
 安装证明请求包含 `serviceId`、`protocolVersion`、`nonce`、`signature`，可选 `boxId`；签名字节为 `wanx-service-session-v1\n<serviceId>\n<protocolVersion>\n<nonce>`，Ed25519 签名采用 URL-safe Base64。重复 nonce、错误签名、未知或禁用服务会被拒绝。此接口只认证已登记的服务，不会创建注册记录。
 

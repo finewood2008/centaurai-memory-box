@@ -10,6 +10,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from wanx_bridge import service_activation
+from wanx_bridge import service_registry
 from wanx_bridge.config import BridgeAuthError
 from wanx_bridge.server import _allowed, create_app
 from wanx_bridge.service_health import service_status
@@ -175,6 +176,41 @@ def test_generic_ota_requires_installer_pinned_profile(tmp_path):
     raw["services"][SERVICE].pop("activation")
     with pytest.raises(ServiceRegistryError, match="SERVICE_REGISTRY_ACTIVATION_INVALID"):
         ServiceRegistry.from_mapping(raw)
+
+
+def test_media_ota_projection_preserves_existing_services(tmp_path):
+    raw, _ = configuration(tmp_path)
+    registry = ServiceRegistry.from_mapping(raw)
+    media = copy.deepcopy(raw["services"][SERVICE])
+    media.update(
+        upstream="http://127.0.0.1:19094",
+        routes=[{"prefix": "/api/services/wanx.media/v1", "methods": ["GET", "POST"], "websocket": True}],
+        activation={
+            "mode": "ota",
+            "path": str(service_registry.MEDIA_ACTIVATION),
+            "profiles": [service_registry.MEDIA_PROFILE],
+        },
+    )
+    overlay = tmp_path / "media-registry.json"
+
+    def save(value):
+        overlay.write_text(json.dumps({"schemaVersion": 1, "services": value}))
+        overlay.chmod(0o600)
+
+    save({"wanx.media": media})
+    merged = registry.with_media_ota(overlay)
+    assert merged.without_media().as_dict() == registry.as_dict()
+    assert merged.get("wanx.media").allows(
+        "GET", f"/api/services/wanx.media/v1/asr/sessions/{'a' * 32}/stream", websocket=True,
+    )
+    with pytest.raises(ServiceRegistryError, match="MEDIA_OTA_REGISTRY_INVALID"):
+        merged.with_media_ota(overlay)
+    save({"wanx.media": {**media, "activation": {"mode": "legacy"}}})
+    with pytest.raises(ServiceRegistryError, match="MEDIA_OTA_REGISTRY_INVALID"):
+        registry.with_media_ota(overlay)
+    save({"wanx.media": media, SERVICE: raw["services"][SERVICE]})
+    with pytest.raises(ServiceRegistryError, match="MEDIA_OTA_REGISTRY_INVALID"):
+        registry.with_media_ota(overlay)
 
 
 @pytest.mark.parametrize("path", [PREFIX, PREFIX + "/ws", "/api/services/missing/v1/ws", "/api/huohua/v1/ws"])

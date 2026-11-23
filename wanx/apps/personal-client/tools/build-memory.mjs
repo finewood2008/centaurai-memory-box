@@ -78,6 +78,7 @@ export async function buildMemoryWorkspace({clientRoot = client, env = process.e
       const npm = (args) => env.npm_execpath
         ? run(process.execPath, [env.npm_execpath, ...args], options)
         : run(process.platform === 'win32' ? 'npm.cmd' : 'npm', args, {...options, shell:process.platform === 'win32'});
+      const compileStarted = performance.now();
       if (managed) {
         npm(['run', 'memory:build']);
         npm(['run', 'build', '-w', '@memmy/backend']);
@@ -87,6 +88,7 @@ export async function buildMemoryWorkspace({clientRoot = client, env = process.e
         {...options, cwd:renderer});
       const frontend = (await treeFiles(nextUI)).sort();
       if (!await validFrontend(nextUI, frontend)) throw new Error('MEMORY_FRONTEND_BUILD_MISSING');
+      console.log('记忆盒前端与运行时 JS 构建：' + ((performance.now() - compileStarted) / 1000).toFixed(1) + ' 秒');
       if (managed) await prepareRuntime({source, clientRoot, env, run});
       await rm(cachedUI, {recursive:true, force:true});
       await rename(nextUI, cachedUI);

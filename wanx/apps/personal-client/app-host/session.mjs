@@ -1,3 +1,4 @@
+import { acceptsMediaGrant, isMediaAsrStream } from "./media-grant.mjs";
 import http from "node:http";
 import { randomBytes, randomUUID } from "node:crypto";
 import { pipeline } from "node:stream/promises";
@@ -11,7 +12,7 @@ const REQUEST_HEADERS = new Set(["accept", "accept-language", "content-type", "x
 
 // Own the launch's credentials and local resources, but borrow its fixed box connection.
 export async function createApplicationSession({
-  hostApplicationId, applicationId, installPath, createConnection, authorizeRelease, capabilities, backendContracts = [], signal, openWorkshop,
+  hostApplicationId, applicationId, installPath, createConnection, authorizeRelease, capabilities, backendContracts = [], signal, openWorkshop, mediaGrant,
 } = {}) {
   signal?.throwIfAborted();
   const launchId = randomBytes(32).toString("base64url"), token = randomUUID() + randomUUID();
@@ -100,10 +101,18 @@ export async function createApplicationSession({
       /^\/api\/agents\/[A-Za-z0-9_-]{1,128}\/terminal\/ws$/.test(decoded) &&
       [...endpoint.searchParams.keys()].every(key => ["cols", "rows"].includes(key)) &&
       [...endpoint.searchParams.values()].every(value => /^\d{1,3}$/.test(value));
-    if (websocket && decoded !== "/api/browser-stream/ws" && !/^\/api\/agents\/[A-Za-z0-9_-]{1,128}\/chat\/ws$/.test(decoded) && !contractTerminal) throw fail("APPLICATION_PATH_NOT_ALLOWED", 400);
+    if (websocket && decoded !== "/api/browser-stream/ws" && !/^\/api\/agents\/[A-Za-z0-9_-]{1,128}\/chat\/ws$/.test(decoded) && !contractTerminal && !isMediaAsrStream(raw)) throw fail("APPLICATION_PATH_NOT_ALLOWED", 400);
     return raw;
   }
-  const headersFor = req => Object.fromEntries(Object.entries(req.headers).filter(([name]) => REQUEST_HEADERS.has(name) || (name === "x-xingtu-key" && /^\/api\/semantica\/open\/v1\//.test(req.url.split("?")[0]))));
+  function headersFor(req) {
+    const headers = Object.fromEntries(Object.entries(req.headers).filter(([name]) => REQUEST_HEADERS.has(name) || (name === "x-media-grant" && acceptsMediaGrant(req.url)) || (name === "x-xingtu-key" && /^\/api\/semantica\/open\/v1\//.test(req.url.split("?")[0]))));
+    if (mediaGrant && acceptsMediaGrant(req.url)) {
+      const grant = mediaGrant();
+      if (!grant) throw fail("MEDIA_GRANT_REQUIRED", 403);
+      headers['x-media-grant'] = grant;
+    }
+    return headers;
+  }
   function errorResponse(res, error) {
     if (res.destroyed) return;
     if (res.headersSent) return res.destroy();

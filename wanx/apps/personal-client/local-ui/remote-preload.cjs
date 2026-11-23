@@ -85,6 +85,7 @@ async function rawState() {
 }
 
 const actions = {
+  "accessories-preview": input => ipcRenderer.invoke("wanx-client:accessories-preview", input),
   starlink: input => ipcRenderer.invoke('wanx-client:starlink', input),
   "help.faq": input => ipcRenderer.invoke("wanx-client:help-faq", { etag: input?.etag }),
   "help.feedback": async input => {

@@ -1,6 +1,8 @@
 import {execFileSync} from 'node:child_process';
+import {createHash, randomUUID} from 'node:crypto';
 import {createRequire} from 'node:module';
-import {lstat, mkdir, mkdtemp, rename, rm} from 'node:fs/promises';
+import {copyFile, cp, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
 import {setTimeout as delay} from 'node:timers/promises';
 import path from 'node:path';
 import {stageLocalMemory} from '../../../tools/stage-local-memory.mjs';
@@ -32,6 +34,80 @@ console.log(JSON.stringify({platform:process.platform,arch:process.arch,abi:proc
 function clientTools(clientRoot) {
   const require = createRequire(path.join(clientRoot, 'package.json'));
   return {require, executable:require('electron'), version:require('electron/package.json').version};
+}
+
+const sqliteBinary = path.join('build', 'Release', 'better_sqlite3.node');
+const digest = bytes => createHash('sha256').update(bytes).digest('hex');
+const sqliteBuildInputs = file => !['build', 'node_modules'].includes(file.split(path.sep)[0]);
+
+async function sqliteCacheFile({directory, source, env, platform, version, abi, arch, gypVersion}) {
+  if (platform !== 'win32' || !env.WANX_SQLITE_CACHE || !env.WANX_SQLITE_TOOLCHAIN_KEY) return null;
+  const lock = digest(await readFile(path.join(source, 'package-lock.json')));
+  const hash = createHash('sha256').update(JSON.stringify({
+    schema:1, lock, platform, version, abi, arch, gypVersion, toolchain:env.WANX_SQLITE_TOOLCHAIN_KEY,
+  }));
+  async function visit(prefix = '') {
+    for (const name of (await readdir(path.join(directory, prefix))).sort()) {
+      const relative = path.join(prefix, name);
+      if (!sqliteBuildInputs(relative)) continue;
+      const file = path.join(directory, relative);
+      const info = await lstat(file);
+      if (info.isDirectory()) await visit(relative);
+      else if (info.isFile()) hash.update(JSON.stringify([relative, digest(await readFile(file))]));
+      else throw new Error('MEMORY_SQLITE_CACHE_INPUT_NOT_FILE:' + relative);
+    }
+  }
+  await visit();
+  return path.join(env.WANX_SQLITE_CACHE, hash.digest('hex') + '.json');
+}
+
+async function restoreSqliteCache(file, binary) {
+  if (!file) return false;
+  try {
+    if (!(await lstat(file)).isFile()) return false;
+    const entry = JSON.parse(await readFile(file, 'utf8'));
+    const bytes = Buffer.from(entry.data, 'base64');
+    if (bytes.length < 1024 || bytes.toString('ascii', 0, 2) !== 'MZ' || digest(bytes) !== entry.sha256) return false;
+    await mkdir(path.dirname(binary), {recursive:true});
+    await writeFile(binary, bytes);
+    return true;
+  } catch { return false; }
+}
+
+async function saveSqliteCache(file, binary) {
+  if (!file) return;
+  const temp = file + '.' + randomUUID() + '.tmp';
+  try {
+    const bytes = await readFile(binary);
+    await mkdir(path.dirname(file), {recursive:true});
+    await writeFile(temp, JSON.stringify({sha256:digest(bytes), data:bytes.toString('base64')}), {flag:'wx', mode:0o600});
+    await rename(temp, file);
+  } catch (error) { console.warn('SQLite 缓存写入失败：' + error.code); }
+  finally { await rm(temp, {force:true}).catch(() => {}); }
+}
+
+async function rebuildLegacySqlite({directory, clientRoot, gyp, version, arch, env, run, platform}) {
+  const rebuild = target => run(process.execPath, [gyp, 'rebuild', `--directory=${target}`,
+    `--target=${version}`, `--arch=${arch}`, '--dist-url=https://electronjs.org/headers'], {
+    cwd:clientRoot, env, stdio:'inherit', windowsHide:true,
+  });
+  if (platform !== 'win32') return rebuild(directory);
+
+  // MSBuild appends intermediate filenames below the addon directory. Both
+  // runtime dependency locations can be too deep, even in a short worktree.
+  const work = await mkdtemp(path.join(tmpdir(), 'wx-sql-'));
+  const binary = sqliteBinary;
+  try {
+    await cp(directory, work, {
+      recursive:true,
+      filter: file => sqliteBuildInputs(path.relative(directory, file)),
+    });
+    rebuild(work);
+    await mkdir(path.dirname(path.join(directory, binary)), {recursive:true});
+    await copyFile(path.join(work, binary), path.join(directory, binary));
+  } finally {
+    await rm(work, {recursive:true, force:true, maxRetries:10, retryDelay:200});
+  }
 }
 
 // Probe in the actual Electron Node runtime, never the build host's Node ABI.
@@ -80,16 +156,40 @@ export async function prepareMemoryRuntime({
     let result = probeMemoryRuntime({runtime:next, clientRoot, env, run});
     if (!Array.isArray(result.modules) || !result.modules.length) throw Error('MEMORY_SQLITE_NATIVE_MODULE_MISSING');
     const tools = clientTools(clientRoot);
+    const loadsInElectron = relative => {
+      try {
+        const probe = probeMemoryRuntime({runtime:next, clientRoot, env, run});
+        return probe.abi === result.abi && probe.arch === result.arch &&
+          probe.modules.find(item => item.path === relative)?.ok === true;
+      } catch { return false; }
+    };
     for (const entry of result.modules.filter(item => !item.ok)) {
       // v13 ships N-API prebuilds and must not be rebuilt using the legacy gyp path.
       if (Number(entry.version.split('.')[0]) >= 13) throw Error('MEMORY_SQLITE_PREBUILD_UNAVAILABLE:' + entry.path);
       const directory = path.resolve(next, entry.path);
       if (!directory.startsWith(next + path.sep)) throw Error('MEMORY_NATIVE_PATH_INVALID');
-      run(process.execPath, [tools.require.resolve('node-gyp/bin/node-gyp.js'), 'rebuild',
-        `--directory=${directory}`, `--target=${tools.version}`, `--arch=${result.arch}`,
-        '--dist-url=https://electronjs.org/headers'], {
-        cwd:clientRoot, env, stdio:'inherit', windowsHide:true,
+      const binary = path.join(directory, sqliteBinary);
+      let cacheFile;
+      try {
+        if (platform === 'win32' && env.WANX_SQLITE_CACHE && env.WANX_SQLITE_TOOLCHAIN_KEY)
+          cacheFile = await sqliteCacheFile({directory, source, env, version:tools.version,
+            abi:result.abi, arch:result.arch, platform, gypVersion:tools.require('node-gyp/package.json').version});
+      } catch (error) { console.warn('SQLite 缓存输入检查失败：' + (error.code || error.message)); }
+      if (await restoreSqliteCache(cacheFile, binary)) {
+        if (loadsInElectron(entry.path)) {
+          console.log('SQLite 原生编译缓存命中：' + entry.path);
+          continue;
+        }
+        await rm(binary, {force:true});
+        console.warn('SQLite 缓存加载探针失败，重新编译：' + entry.path);
+      }
+      const compileStart = performance.now();
+      await rebuildLegacySqlite({
+        directory, clientRoot, gyp:tools.require.resolve('node-gyp/bin/node-gyp.js'),
+        version:tools.version, arch:result.arch, env, run, platform,
       });
+      console.log('SQLite 原生编译：' + entry.path + ' ' + ((performance.now() - compileStart) / 1000).toFixed(1) + ' 秒');
+      if (cacheFile && loadsInElectron(entry.path)) await saveSqliteCache(cacheFile, binary);
     }
     result = probeMemoryRuntime({runtime:next, clientRoot, env, run});
     if (!result.ok) throw Error('MEMORY_RUNTIME_NATIVE_SMOKE_FAILED');

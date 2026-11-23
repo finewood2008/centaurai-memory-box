@@ -46,7 +46,11 @@ import("context";"sync";"sync/atomic";"testing";"time")
  `;
   await writeFile(path.join(directory, "go.mod"), "module statusfixture\ngo 1.26\n");
   await writeFile(path.join(directory, "status_test.go"), patchStatusSource(source).replaceAll("peer.FullStatus", "fullStatus"));
-  const result=await run("go",["test","-race","-timeout=15s","."],{cwd:directory});
+  const options = {cwd:directory};
+  const {stdout: cgo} = await run("go", ["env", "CGO_ENABLED"], options);
+  // Always test the blocked-probe behavior; use the race detector where Go has a C toolchain.
+  const flags = cgo.trim() === "1" ? ["-race"] : [];
+  const result=await run("go",["test","-trimpath",...flags,"-timeout=15s","."],options);
   assert.match(result.stdout,/ok/);
  } finally {await rm(directory,{recursive:true,force:true});}
 });

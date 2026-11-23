@@ -34,14 +34,27 @@ from websockets.exceptions import ConnectionClosed, InvalidHandshake
 from .assets import DashboardAssets, installed_dashboard
 from .browser_expert import BrowserExpertPreparer
 from .config import BridgeAuthError
+from .homeai_space_output import FOLDERS_ROUTE as HOMEAI_FOLDERS_ROUTE
+from .homeai_space_output import (
+    HOMEAI_SERVICE,
+    INBOX_ROUTE,
+    INBOX_TOKEN,
+    INBOX_TOKEN_PREFIX,
+    OUTPUT_ROUTE,
+    SpaceOutput,
+    SpaceOutputBroker,
+    inbox_payload,
+    is_inbox_upload,
+)
 from .huohua import HuohuaCapabilityGateway
 from .managed_resource_guard import ManagedResourceGuard
+from .media_stream import MediaStreamGateway
 from .readiness import diagnose_application
 from .semantica import DEFAULT_URL as SEMANTICA_URL
 from .semantica import create_router as semantica_router
 from .semantica.desktop_routes import create_desktop_router
 from .service_health import service_status
-from .service_registry import SERVICE_ID, ServiceRegistry
+from .service_registry import MEDIA_ASR_SESSIONS, MEDIA_SERVICE_ID, SERVICE_ID, ServiceRegistry
 from .service_sessions import ServiceSessionVerifier
 from .upstream import BridgeUpstreamError
 from .version import bridge_build_metadata, version_snapshot
@@ -236,6 +249,7 @@ def create_app(
     resources: Any = None,
     service_registry: ServiceRegistry | None = None,
     service_session_verifier: ServiceSessionVerifier | None = None,
+    homeai_output_target: FastAPI | None = None,
 ) -> FastAPI:
     from centuarai_local_data_gate import load_required_policy
 
@@ -397,6 +411,32 @@ def create_app(
             await client.aclose()
 
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+
+    homeai_output = None
+    if HOMEAI_SERVICE in service_registry.services and hasattr(auth, "assert_service_task_binding"):
+        homeai_output = SpaceOutputBroker(
+            platform_root.parent / "homeai-space-output" / "leases.enc",
+            service_session_verifier.signing_key.private_bytes_raw(),
+            client, origin, auth.assert_service_task_binding,
+        )
+        output_app = homeai_output_target if homeai_output_target is not None else app
+
+        # The standalone box puts these routes on its existing private loopback listener.
+        # That listener has a different auth exception handler, so translate these errors locally.
+        async def internal_output(request: Request, asset: str):
+            operation = (
+                "complete" if request.url.path.endswith("/complete")
+                else "begin" if request.method == "POST" else "chunk"
+            )
+            try:
+                output = await homeai_output.transfer(request, asset, operation)
+            except BridgeAuthError as exc:
+                return JSONResponse({"code": exc.code}, status_code=exc.status,
+                                    headers={"cache-control": "no-store"})
+            return JSONResponse(output, headers={"cache-control": "no-store"})
+
+        output_app.add_api_route(OUTPUT_ROUTE + "/{asset}", internal_output, methods=["POST", "PUT"])
+        output_app.add_api_route(OUTPUT_ROUTE + "/{asset}/complete", internal_output, methods=["POST"])
     app.state.platform_sessions = platform_sessions
     from .semantica.maintenance import SemanticaMaintenanceMiddleware
 
@@ -692,6 +732,7 @@ def create_app(
         filter_request_headers: Callable[[list[tuple[str, str]]], list[tuple[str, str]]]
         | None = None,
         filter_response_headers: Callable[[dict[str, str]], dict[str, str]] | None = None,
+        buffered_body: bytes | None = None,
     ) -> Response:
         guard = asyncio.create_task(watch(session)) if session else None
         upstream = None
@@ -699,6 +740,11 @@ def create_app(
         request_complete = asyncio.Event()
 
         async def request_chunks() -> AsyncIterator[bytes]:
+            if buffered_body is not None:
+                if buffered_body:
+                    yield buffered_body
+                request_complete.set()
+                return
             size = 0
             async for chunk in request.stream():
                 size += len(chunk)
@@ -984,8 +1030,45 @@ def create_app(
             raise _error(code, 503 if status["status"] != "incompatible" else 409)
         return record
 
+    async def forward_homeai_inbox(request: Request, path: str, marker: str) -> Response:
+        if (
+            not INBOX_TOKEN.fullmatch(marker)
+            or len(request.headers.getlist("authorization")) != 1
+            or any(name.lower() in _TOKEN_PARAMS for name in request.query_params)
+        ):
+            raise _error("HOMEAI_INBOX_HEADER_REQUIRED")
+        if not is_inbox_upload(request.method, path):
+            raise _error("SERVICE_ROUTE_FORBIDDEN", 403)
+        record = await service_record_or_error(HOMEAI_SERVICE)
+        if not record.allows(request.method, path):
+            raise _error("SERVICE_ROUTE_FORBIDDEN", 403)
+        try:
+            # The loopback HomeAI service validates grant ownership, expiry, and
+            # upload identity. No account session or service token is minted here.
+            return await forward(
+                request,
+                path=path,
+                target_origin=record.upstream,
+                session=None,
+                token=marker,
+                guard_resources=False,
+                body_limit=2 * 1024 * 1024 if request.method == "PUT" else 8192,
+                filter_request_headers=lambda values: [
+                    (key, value)
+                    for key, value in values
+                    if key.lower() in {"authorization", "content-type"}
+                ],
+                filter_response_headers=lambda headers: {**headers, "cache-control": "no-store"},
+            )
+        except httpx.HTTPError as exc:
+            raise _error("SERVICE_UPSTREAM_UNAVAILABLE", 503) from exc
+
+    media_stream = MediaStreamGateway()
+
     async def registered_service_proxy(request: Request, service_id: str, path: str) -> Response:
         marker = _credentials(request.headers, request.query_params, required=True)
+        if service_id == HOMEAI_SERVICE and marker.startswith(INBOX_TOKEN_PREFIX):
+            return await forward_homeai_inbox(request, path, marker)
         session = await _call(auth.authorize, marker)
         record = await service_record_or_error(service_id)
         decoded_path = path
@@ -1001,6 +1084,14 @@ def create_app(
         path = decoded_path
         if not record.allows(request.method, path):
             raise _error("SERVICE_ROUTE_FORBIDDEN", 403)
+        media_session = (
+            service_id == MEDIA_SERVICE_ID and path == MEDIA_ASR_SESSIONS and request.method == "POST"
+        )
+        if media_session:
+            if not record.routes[0].websocket:
+                raise _error("SERVICE_ROUTE_FORBIDDEN", 403)
+            if request.scope["query_string"] or len(request.headers.getlist("authorization")) != 1:
+                raise _error("ASR_AUTH_HEADER_REQUIRED")
         # Personal-space is the default WANX scope. Bind it into the delegated
         # service token even when Host did not send an optional space header;
         # otherwise huohua-boxd cannot prove that its explicit `space_id=personal`
@@ -1008,26 +1099,72 @@ def create_app(
         user_id, space_id, box_id = service_context(
             session, request.headers.get("x-wanx-space-id") or "personal"
         )
-        token = service_session_verifier.issue_delegated(
-            service_id,
-            protocol_version=record.protocol_version,
-            box_id=box_id,
-            user_id=user_id,
-            space_id=space_id,
-            scope=record.allowed_scopes,
-            upstream_token=session.upstream_token if service_id == SERVICE_ID else None,
-            upstream_expires_at=session.upstream_expires_at,
-            authority=auth.service_task_binding(session) if hasattr(auth, "service_task_binding") else None,
-        )
+        buffered_body = None
+        output_lease = None
+        acknowledged_destination = None
+        revoked_space_lease = None
+        token_extras = {}
+        if service_id == HOMEAI_SERVICE:
+            if path == HOMEAI_FOLDERS_ROUTE and request.method == "GET":
+                if space_id != "personal":
+                    raise _error("HOMEAI_SPACE_ACCESS_DENIED", 403)
+                await _call(auth.assert_live, session)
+                output = SpaceOutput(client, origin, _field(session, "upstream_token"))
+                folders = await output.folders(request.query_params.get("parent", ""))
+                await _call(auth.assert_live, session)
+                return JSONResponse(folders, headers={"cache-control": "no-store"})
+            if path == INBOX_ROUTE and request.method == "POST":
+                if any(name.lower() in _TOKEN_PARAMS for name in request.query_params):
+                    raise _error("HOMEAI_INBOX_HEADER_REQUIRED", 400)
+                buffered_body, target = await inbox_payload(request)
+                if target is not None:
+                    if space_id != "personal":
+                        raise _error("HOMEAI_SPACE_ACCESS_DENIED", 403)
+                    await _call(auth.assert_live, session)
+                    if homeai_output is None:
+                        raise _error("HOMEAI_SPACE_OUTPUT_UNAVAILABLE", 503)
+                    proof = await homeai_output.bind(
+                        target, user_id, box_id, _field(session, "upstream_token"),
+                        _field(session, "upstream_expires_at"),
+                        await _call(auth.service_task_binding, session),
+                    )
+                    output_lease = proof["leaseId"]
+                    token_extras["homeai_space_destination"] = proof
 
         def service_response_headers(headers: dict[str, str]) -> dict[str, str]:
+            nonlocal acknowledged_destination, revoked_space_lease
+            acknowledged_destination = headers.pop("x-wanx-homeai-space-destination", None)
+            revoked_space_lease = headers.pop("x-wanx-homeai-revoke-space-lease", None)
             if (not record.routes[0].sse
                     and headers.get("content-type", "").lower().startswith("text/event-stream")):
                 raise _error("SERVICE_SSE_FORBIDDEN", 502)
             return headers
 
+        def service_request_headers(values: list[tuple[str, str]]) -> list[tuple[str, str]]:
+            headers = [
+                (key, value)
+                for key, value in values
+                if not key.lower().startswith("x-wanx-")
+                and not (media_session and key.lower() == "accept-encoding")
+            ]
+            if media_session:
+                headers.append(("accept-encoding", "identity"))
+            return headers
+
         try:
-            return await forward(
+            token = service_session_verifier.issue_delegated(
+                service_id,
+                protocol_version=record.protocol_version,
+                box_id=box_id,
+                user_id=user_id,
+                space_id=space_id,
+                scope=record.allowed_scopes,
+                upstream_token=session.upstream_token if service_id == SERVICE_ID else None,
+                upstream_expires_at=session.upstream_expires_at,
+                authority=auth.service_task_binding(session) if hasattr(auth, "service_task_binding") else None,
+                **token_extras,
+            )
+            response = await forward(
                 request,
                 path=path,
                 target_origin=record.upstream,
@@ -1036,14 +1173,42 @@ def create_app(
                 guard_resources=False,
                 filter_response_headers=service_response_headers,
                 body_limit=2 * 1024 * 1024,
-                filter_request_headers=lambda values: [
-                    (key, value)
-                    for key, value in values
-                    if not key.lower().startswith("x-wanx-")
-                ],
+                filter_request_headers=service_request_headers,
+                buffered_body=buffered_body,
             )
-        except httpx.HTTPError as exc:
-            raise _error("SERVICE_UPSTREAM_UNAVAILABLE", 503) from exc
+            if media_session:
+                return await media_stream.bind(response, session)
+            if output_lease:
+                if response.status_code >= 400:
+                    await homeai_output.revoke(output_lease, user_id, box_id)
+                elif acknowledged_destination != target:
+                    if isinstance(response, StreamingResponse):
+                        # Closing the iterator starts its finally block only after the first iteration.
+                        # Consume and discard the bounded grant response to release the upstream.
+                        with contextlib.suppress(TimeoutError):
+                            async with asyncio.timeout(3):
+                                async for _chunk in response.body_iterator:
+                                    break
+                        await response.body_iterator.aclose()
+                    raise _error("HOMEAI_SPACE_BINDING_NOT_CONFIRMED", 409)
+            if (
+                revoked_space_lease
+                and homeai_output is not None
+                and service_id == HOMEAI_SERVICE
+                and space_id == "personal"
+                and request.method == "DELETE"
+                and re.fullmatch(re.escape(INBOX_ROUTE) + r"/[a-f0-9]{32}", path)
+                and response.status_code == 200
+            ):
+                await homeai_output.revoke(revoked_space_lease, user_id, box_id)
+            return response
+        except BaseException as exc:
+            if output_lease:
+                with anyio.CancelScope(shield=True):
+                    await homeai_output.revoke(output_lease, user_id, box_id)
+            if isinstance(exc, httpx.HTTPError):
+                raise _error("SERVICE_UPSTREAM_UNAVAILABLE", 503) from exc
+            raise
 
     def mount_service(service_id: str, prefix: str) -> None:
         async def root_endpoint(request: Request) -> Response:
@@ -1203,6 +1368,15 @@ def create_app(
             if value:
                 platform_sessions.connections.get(value["sessionId"], set()).discard(websocket)
                 await platform_sessions.disconnected(value)
+
+    @app.websocket(MEDIA_ASR_SESSIONS + "/{session_id}/stream")
+    async def media_asr_socket(websocket: WebSocket) -> None:
+        async def assert_live(session: Any) -> None:
+            await _call(auth.assert_live, session)
+
+        await media_stream.proxy(
+            websocket, service_registry.get(MEDIA_SERVICE_ID), assert_live, watch, service_record_or_error
+        )
 
     @app.websocket("/{path:path}")
     async def websocket_proxy(websocket: WebSocket, path: str) -> None:

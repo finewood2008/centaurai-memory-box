@@ -1,12 +1,13 @@
 import {execFile} from 'node:child_process';
 import {readFile,mkdir,writeFile} from 'node:fs/promises';
-import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
 import path from 'node:path';
+import {nativeBinaryDirectory} from './native-binaries.mjs';
 
 export function createSystemClipboard({clipboard,nativeImage,app,directory,platform=process.platform,arch=process.arch}){
-  const installed=app.isPackaged||['app','app.asar'].some(n=>path.resolve(app.getAppPath())===path.resolve(process.resourcesPath,n));
-  const helper=installed?path.join(process.resourcesPath,'network',`wanx-clipboard-darwin-${arch}`):fileURLToPath(new URL(`../native/bin/wanx-clipboard-darwin-${arch}`,import.meta.url));
+  const nativeDirectory = nativeBinaryDirectory({ appPath: app.getAppPath(),
+    resourcesPath: process.resourcesPath, packaged: app.isPackaged });
+  const helper = path.join(nativeDirectory, `wanx-clipboard-darwin-${arch}`);
   async function files(action,paths){
     let binary=helper,args=[action];
     if(platform==='win32'){

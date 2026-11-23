@@ -14,6 +14,8 @@ function syncWalletCountdown() {
   walletCountdownTimer = setInterval(tick, 1000);
 }
 let currentState;
+const accessoryPreview = window.createAccessoriesPreview?.(input => window.wanxClient.action("accessories-preview", input));
+let accessoryPageVisible = false;
 const dataView=window.createStarlinkPanelView({request:async(name,input)=>{const result=await window.wanxClient.action(name,input);if(!result.ok)throw Object.assign(Error(result.code),{code:result.code});return result.value;},changed:()=>{if(currentState)render(currentState);}});
 const spaceRedactionSettings = window.createSpaceRedactionSettings?.({
   escapeHTML: value => escapeHTML(value),
@@ -382,6 +384,7 @@ function syncAcademyContents() {
     academyDialogueMounted = true;
   }
   aiDialogueView?.visible(visible);
+  syncAccessoriesPreview();
 }
 
 function openAcademyDialogue(handoff) {
@@ -817,9 +820,22 @@ function shellHeader(title) {
   return `<header class="topbar">
     <button class="brand brand-button" data-action="desktop-about" aria-label="关于${clientBrand}"><img class="brand-mark" src="./assets/centaurai-mark.png" alt="" />${clientBrandCopy}</button>
     <h1 class="sr-only">${title}</h1>
-    <nav class="main-nav" aria-label="管理导航">${[["my-ai", "我的 AI"], ["memory", "记忆"], ["data", "星图"], ["space", "空间"], ["boxes", "盒子"]].map(([destination, label]) => `<button class="nav-item ${activePage === destination ? "active" : ""}" data-action="show-${destination}" ${activePage === destination ? 'aria-current="page"' : ""} ${page === "provisioning" ? "disabled" : ""}>${label}</button>`).join("")}</nav>
+    <nav class="main-nav" aria-label="管理导航">${[["my-ai", "我的 AI"], ["memory", "记忆"], ["data", "星图"], ["space", "空间"], ["boxes", "盒子"], ["accessories", "配件"]].map(([destination, label]) => `<button class="nav-item ${activePage === destination ? "active" : ""}" data-action="show-${destination}" ${activePage === destination ? 'aria-current="page"' : ""} ${page === "provisioning" ? "disabled" : ""}>${label}</button>`).join("")}</nav>
     <div class="header-personal"><button class="notification-trigger ${page === "notifications" ? "active" : ""}" data-action="show-notifications" aria-label="通知中心，${currentState.notifications?.unreadCount || 0} 条未读" title="通知中心" ${page === "provisioning" ? "disabled" : ""}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 9v6h4l8 4V5L7 9H3Z" stroke-linejoin="round"/><path d="m7 15 1 5h3l-1-4M18 8c2 2 2 6 0 8" stroke-linecap="round" stroke-linejoin="round"/></svg>${currentState.notifications?.unreadCount > 0 ? `<span class="notification-badge" aria-hidden="true">${currentState.notifications.unreadCount > 99 ? "99+" : currentState.notifications.unreadCount}</span>` : ""}</button><div class="account-menu"><button class="avatar-trigger" data-action="profile-menu" aria-label="个人资料与设置" aria-expanded="${profileMenuOpen}" aria-controls="profile-menu" ${page === "provisioning" ? "disabled" : ""}>${profileAvatar()}<span aria-hidden="true">⌄</span></button>
     ${profileMenuOpen ? `<div class="profile-menu" id="profile-menu"><div class="profile-menu-identity"><strong>${escapeHTML(name)}</strong><small>${escapeHTML(currentState.account?.maskedPhone || "云账号")}</small></div>${currentState.account?.phase === "authenticated" ? `<button data-action="show-profile">个人资料<span>›</span></button>` : `<button data-action="cloud-login">登录云账号<span>›</span></button>`}<button data-action="show-credits">积分<span class="profile-credit-balance">${escapeHTML(creditsView.label())} ›</span></button><button data-action="show-settings">设置<span>›</span></button><button data-action="show-help">问题与反馈<span>›</span></button><div class="profile-menu-divider"></div><button data-action="logout" class="${busyFor("auth.logout") ? "activity-button" : ""}" aria-busy="${busyFor("auth.logout")}" ${busy ? "disabled" : ""}>${busyFor("auth.logout") ? activityLabel("正在退出…") : currentState.account?.phase === "authenticated" ? "退出云账号" : "未登录云账号"}</button></div>` : ""}</div></div></header>${clientUpdateRequired() && page !== "client-update" ? clientUpdateRequirementNotice() : ""}`;
+}
+function accessoriesView() {
+  return `<div class="app-layout accessories-layout">${shellHeader("配件")}
+    <section class="accessories-tab-host" aria-label="配件工作台">
+      <div class="accessories-tab-feedback" data-accessories-feedback>
+        <p role="status">正在打开配件工作台…</p>
+        <button type="button" class="button small" data-action="accessories-preview-retry" hidden>重试</button>
+      </div>
+    </section></div>`;
+}
+function syncAccessoriesPreview() {
+  const visible = accessoryPageVisible && !profileMenuOpen && !marketConfirmation && !helpDrawer && !academyDrawer?.isOpen?.();
+  accessoryPreview?.mount(visible ? app.querySelector(".accessories-tab-host") : null);
 }
 function profileView() {
   const account = currentState.account || {}, profile = account.profile || {};
@@ -1241,6 +1257,12 @@ function memoryView(section) {
     <div class="memory-host" data-memory-section="${section}" data-memory-agent="${page === "memory" ? escapeHTML(memoryAgent) : ""}" data-memory-page="${page === "memory" ? memoryPage : ""}"></div></div>`;
 }
 
+window.addEventListener?.("wanx:accessory-project", event => {
+  if (!currentState || page !== "memory") return;
+  accessoryPreview?.openProject(event.detail);
+  page = "accessories";
+  render(currentState);
+});
 window.addEventListener?.("wanx:view-agent-memory", event => {
   if (!currentState || page !== "my-ai") return;
   memoryAgent = event.detail;
@@ -2078,6 +2100,8 @@ function render(state) {
   if (updateRequired && marketConfirmation && !marketConfirmation.updateReleaseId) marketConfirmation = null;
   if (state.account?.phase === "authenticated") cloudAuthOpen = false;
   const auth = cloudAuthOpen || state.route === "auth" || state.phase === "signed_out" || state.phase === "authenticating";
+  accessoryPageVisible = !auth && page === "accessories";
+  if (!accessoryPageVisible) accessoryPreview?.mount(null);
   helpView?.visible(page === "help" || Boolean(helpDrawer));
   const previousAuth = app.querySelector?.('[data-form="auth"]');
   if (auth && previousAuth?.elements) authUsername = previousAuth.elements.username.value.trim();
@@ -2127,6 +2151,7 @@ function render(state) {
     : page === "dialogue-models" ? `<div class="app-layout">${shellHeader("助理模型")}<div class="page-content dialogue-model-settings-page"><div id="dialogue-model-settings-host"></div></div></div>`
     : page === "data" ? `<div class="app-layout starlink-layout">${shellHeader("星图")}<header class="wanx-section-banner starlink-banner" data-section="starlink">${personalModuleHeading("starlink", "本体星图", "在图谱中探索个人本体的实体与关系，沿着关联追溯原文。")}</header><div class="page-content data-page-content">${dataView.render()}</div></div>`
     : page === "space" ? spaceView()
+    : page === "accessories" ? accessoriesView()
     : page === "notifications" ? notificationView() : page === "profile" ? profileView() : page === "credits" ? `<div class="app-layout"><div ${creditsView.isOpen() ? "inert" : ""}>${shellHeader("积分")}</div>${creditsView.render()}</div>` : page === "boxes" ? boxesView() : page === "settings" ? settingsView() : memoryView("my-ai");
   if (markup === renderedMarkup) {
     if (!auth && page === 'data') dataView.mount();
@@ -2174,9 +2199,14 @@ function render(state) {
   const redactionSettingsHost = viewingRedactionSettings ? app.querySelector?.("#space-redaction-settings-host") : null;
   const redactionSettingsFocus = redactionSettingsHost?.contains(document.activeElement) ? document.activeElement : null;
   const memoryHost = app.querySelector?.(".memory-host");
+  const accessoriesHost = !auth && page === "accessories" && app.querySelector?.(".accessories-tab-host");
   if (memoryHost && desiredMemorySection !== null && memoryHost.dataset.memorySection === desiredMemorySection &&
     (memoryHost.dataset.memoryAgent ?? "") === (page === "memory" ? memoryAgent : "") &&
     (memoryHost.dataset.memoryPage ?? "") === (page === "memory" ? memoryPage : "")) {
+    const template = document.createElement("template");
+    template.innerHTML = markup;
+    app.querySelector(".topbar").replaceWith(template.content.querySelector(".topbar"));
+  } else if (accessoriesHost) {
     const template = document.createElement("template");
     template.innerHTML = markup;
     app.querySelector(".topbar").replaceWith(template.content.querySelector(".topbar"));
@@ -2758,7 +2788,8 @@ app.addEventListener("click", async (event) => {
   if (action === "local-return") { cloudAuthOpen = false; render(currentState); return; }
   if (action === "logout") { await run("auth.logout"); return; }
   if (action === "show-ai-dialogue") { openAcademyDialogue(); return; }
-  if (["show-data", "show-memory", "show-my-ai", "show-space", "show-boxes", "show-maintenance", "show-settings", "show-credits", "show-profile", "show-notifications", "show-dialogue-models"].includes(action)) {
+  if (action === "accessories-preview-retry") { accessoryPreview?.retry(); return; }
+  if (["show-data", "show-memory", "show-my-ai", "show-space", "show-boxes", "show-accessories", "show-maintenance", "show-settings", "show-credits", "show-profile", "show-notifications", "show-dialogue-models"].includes(action)) {
     if (page === "provisioning") return;
     const previousPage = page;
     if (action === "show-memory") {
@@ -3298,7 +3329,7 @@ window.wanxClient.onAIDialogue?.(value => {
 window.wanxClient.onNavigate?.((destination) => {
   if (destination === "ai-dialogue") { openAcademyDialogue(); return; }
   if (!currentState || currentState.route === "auth" || page === "provisioning") return;
-  if (![homePage, "memory", "data", "space", "boxes", "settings", "credits", "profile", "notifications"].includes(destination)) return;
+  if (![homePage, "memory", "data", "space", "boxes", "accessories", "settings", "credits", "profile", "notifications"].includes(destination)) return;
   profileMenuOpen = false;
   if (destination === "memory") {
     memoryAgent = "";

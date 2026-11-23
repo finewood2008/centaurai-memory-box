@@ -5,6 +5,18 @@
   "catalogFile": "api-catalog.v1.json",
   "apis": [
     {
+      "id": "agent.channels",
+      "status": "ready-for-acceptance",
+      "contractFiles": [
+        "octop-modules/channels.openapi.json",
+        "octop-modules/loops.openapi.json"
+      ],
+      "requiredBeforeOpen": [
+        "real-box-acceptance",
+        "session-revocation-evidence"
+      ]
+    },
+    {
       "id": "host.session",
       "status": "open",
       "transport": "@centaurai/wanx-host-sdk",
