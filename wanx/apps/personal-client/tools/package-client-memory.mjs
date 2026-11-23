@@ -74,6 +74,11 @@ export async function verifyPackagedMemoryLayout({ resourcesPath, platform = pro
   } catch {
     throw new Error("CLIENT_MEMORY_WORKER_MISSING");
   }
+  try {
+    if (!extractFile(archive, path.join("host-sdk", "drive.cjs")).length) throw new Error();
+  } catch {
+    throw new Error("CLIENT_MEMORY_BACKUP_SDK_MISSING:host-sdk/drive.cjs");
+  }
   const runtime = path.join(resourcesPath, "local-memory");
   const manifestName = "runtime-manifest.json";
   const files = ["package.json", manifestName, ...requiredRuntimeFiles];

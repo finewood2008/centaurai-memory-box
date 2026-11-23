@@ -58,7 +58,7 @@ test("a runtime prepared with the wrong Electron architecture cannot be packaged
   }), /CLIENT_MEMORY_NATIVE_SMOKE_FAILED/);
 });
 
-async function fixture(t, { css = true, native = true, acl = true, sqlitePath = true, worker = true } = {}) {
+async function fixture(t, { css = true, native = true, acl = true, sqlitePath = true, worker = true, drive = true } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "wanx-memory-package-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const resourcesPath = path.join(root, "resources");
@@ -78,6 +78,8 @@ async function fixture(t, { css = true, native = true, acl = true, sqlitePath = 
   await put(frontend, "assets/entry.js");
   if (css) await put(frontend, "assets/page.css");
   if (worker) await put(app, "shell/local-memory-worker.mjs");
+  if (drive) await put(app, "host-sdk/drive.cjs");
+  else await put(resourcesPath, "accessory-host/drive.cjs");
   for (const name of ["package.json", ...requiredRuntimeFiles]) await put(runtime, name);
   await put(runtime, "runtime-manifest.json", JSON.stringify({
     schemaVersion: 1, nativeModules: sqlitePath ? nativeModules : ["../better-sqlite3"],
@@ -98,6 +100,7 @@ test("packaging rejects missing assets, worker, native packages and Windows priv
   for (const [options, error] of [
     [{ css: false }, /CLIENT_MEMORY_FRONTEND_MISSING/],
     [{ worker: false }, /CLIENT_MEMORY_WORKER_MISSING/],
+    [{ drive: false }, /CLIENT_MEMORY_BACKUP_SDK_MISSING:host-sdk\/drive\.cjs/],
     [{ native: false }, /CLIENT_MEMORY_RESOURCE_MISSING:node_modules\/better-sqlite3\/package.json/],
     [{ acl: false }, /CLIENT_MEMORY_RESOURCE_MISSING:security\/windows-private-acl.ps1/],
     [{ sqlitePath: false }, /CLIENT_MEMORY_NATIVE_MANIFEST_INVALID/],

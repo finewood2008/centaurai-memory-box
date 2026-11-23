@@ -147,6 +147,8 @@ export async function packageWindowsPreview({ version, out, repo = repositoryRoo
     path.join(path.parse(systemRoot).root, 'Program Files', 'WindowsPowerShell', 'Modules'),
   ].join(';') };
   for (const file of [executable, path.join(output, installers[0])]) run('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', path.join(client, 'shell/verify-unsigned.ps1'), '-Path', file], client, verificationEnv);
+  const { verifyPackagedMemoryLayout } = await import(new URL('../../wanx/apps/personal-client/tools/package-client-memory.mjs', import.meta.url));
+  await verifyPackagedMemoryLayout({ resourcesPath: resources, platform: 'win32' });
   const { extractFile } = require('@electron/asar');
   const packed = JSON.parse(extractFile(path.join(resources, 'app.asar'), 'package.json').toString('utf8'));
   if (packed.version !== version || packed.name !== pkg.name || packed.productName !== pkg.productName || packed.wanxBuild?.sourceCommit !== sourceCommit) throw new Error('PACKED_PREVIEW_IDENTITY_MISMATCH');
@@ -165,9 +167,9 @@ export async function packageWindowsPreview({ version, out, repo = repositoryRoo
     '半人马AI记忆盒子 Windows x64 预览版',
     '',
     `- 来源提交 \`${sourceCommit}\`。`,
-    '- Codeup Memobox 源码提交 `363effe73dc597e1a6a5d864237ca43eafafe4ea`。',
-    '- 个人星图可从 3D 连线打开引用版本并定位原文。资料库默认进入阅读台，待核对时展开知识栏。',
-    '- 规则调整向导支持直接编辑和发布业务范围，沿用现行规则。范围发布需要匹配的盒端组件。',
+    '- 「我的 AI」新增 Google，并区分 WorkBuddy 国内版和海外版。国内版首次配置提供 MCP 信任指引。',
+    '- 空间支持编辑可预览的纯文本文件，文件脱敏可通过右键菜单进入。',
+    '- 打包时验证应用内的备份 Drive SDK，防止缺少模块导致客户端启动失败。',
     '- 安装包未签名，预览版不启用正式自动更新。',
     '- 安装包内的原生依赖和本机记忆服务已在 Windows CI 验证。',
     '- 真实盒子登录、备份恢复和跨设备行为待实机联测。',
