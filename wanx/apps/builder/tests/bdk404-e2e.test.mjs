@@ -4,6 +4,7 @@ import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
 import { createApplicationSession } from '../../team-client/app-host/session.mjs';
 import { fromEnvironment } from '../../personal-client/host-sdk/index.cjs';
@@ -50,7 +51,7 @@ test('BDK-404 standard install, Host session, box read/write/refresh, errors and
   const studioConnection = {
     context: () => context,
     request: async ({ path: requestPath, method = 'GET', body }) => {
-      if (requestPath.startsWith('/api/app-studio/projects/' + 'b'.repeat(32) + '/install/')) return { status: 200, body: Buffer.from(JSON.stringify({ taskId: 'task', applicationId: 'dev.wanx.acceptance.12345678', version: '0.1.0', artifactHash: 'a'.repeat(64), packageBase64 })) };
+      if (requestPath.startsWith('/api/app-studio/projects/' + 'b'.repeat(32) + '/install/')) return { status: 200, body: Buffer.from(JSON.stringify({ taskId: 'task', applicationId: 'dev.wanx.acceptance.12345678', version: '0.1.0', artifactHash: 'a'.repeat(64), manifest:{protocolVersion:3}, packageSha256:createHash('sha256').update(Buffer.from(packageBase64,'base64')).digest('hex'), packageBase64 })) };
       if (requestPath === '/api/app-studio/projects/' + 'b'.repeat(32) + '/installed' && method === 'POST') { installReceipts.push(JSON.parse(body.toString())); return { status: 200, body: Buffer.from('{}') }; }
       return { status: 404, body: Buffer.from('{}') };
     },

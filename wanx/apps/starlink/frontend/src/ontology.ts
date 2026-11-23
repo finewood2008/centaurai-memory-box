@@ -3,6 +3,10 @@ export type EntityDefinition = { name: string; label: string; properties: Ontolo
 export type RelationDefinition = EntityDefinition & { source_types: string[]; target_types: string[] };
 export type OntologyDefinition = { entity_types: EntityDefinition[]; relation_types: RelationDefinition[] };
 
+export function ontologyDraftName(name: string): string {
+  return name.replace(/(?:（修订）\s*)+$/u, '').trim().slice(0, 120) || '业务本体';
+}
+
 export function sameOntologyType(left?: EntityDefinition, right?: EntityDefinition): boolean {
   function ordered(value: unknown): unknown {
     if (Array.isArray(value)) return value.map(ordered);

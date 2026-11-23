@@ -118,6 +118,23 @@ test('lost warehouse creation using an existing record retains its operation and
   assert.equal(f.calls.some(c=>c.action==='onboarding-save'),false);
 });
 
+test('the new creation flow can recover an old warehouse request without starting the retired chat', async () => {
+  for (const action of ['onboarding-save', 'onboarding-create']) {
+    const f = setup();
+    f.db.lose = action;
+    const previous = await create(f);
+    const original = structuredClone(previous.saved.pending.input);
+    previous.dispose();
+    const model = f.model();
+    model.restore();
+    const warehouse = await model.recoverWarehouseCreation();
+    assert.equal(warehouse.name, '当前协议验收仓');
+    assert.equal(f.db.warehouses.length, 1);
+    assert.deepEqual(f.calls.filter(call => call.action === action).map(call => call.input), [original, original]);
+    assert.equal(f.calls.some(call => call.action.startsWith('conversation-')), false);
+  }
+});
+
 test('a nonempty record revision without an ID is rejected rather than overwritten',async()=>{
   const f=setup();f.db.root={revision:4,answers:{background:'保留'}};const m=await create(f);
   assert.equal(m.state.errorCode,'SEMANTICA_INVALID_RESPONSE');

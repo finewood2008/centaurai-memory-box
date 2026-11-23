@@ -21,9 +21,9 @@ function fixture() {
     set files(files) { this.importFiles[this.importContext] = files; },
   };
   const context = vm.createContext({ state, bridge: null, $, CSS: {escape: String}, crypto: { randomUUID }, document: { querySelectorAll: () => [] },
-    currentWarehouse: () => ({ state: 'active' }), onboarding: { visible: false }, basicMaterialWarehouse: null,
+    currentSetup:()=>null, currentWarehouse: () => ({ state: 'active' }), onboarding: { visible: false }, basicMaterialWarehouse: null,
     esc: value => String(value ?? ''), highlight: value => value, icon: () => '', locator: () => '', bytes: () => '', actualModel: () => '', doc: () => null,
-    pendingAnnotationHTML,
+    pendingAnnotationHTML, syncStarxiaotu() {},
     errorText: error => error.message, toast: text => notices.push(text), refresh: async () => {},
     call: (action, input) => { const pending = deferred(); calls.push({ action, input, ...pending }); return pending.promise; },
   });
@@ -285,32 +285,76 @@ test('source close events preserve a reopened dialog and cancel cannot interrupt
   events.cancel({ preventDefault() { canceled = true; } }); assert.equal(canceled, true);
   h.$('#source-dialog').open = false; events.close(); assert.equal(h.state.source, null);
 });
-test('changing model scope blocks saves until its configuration is loaded and uses the matching catalog', async () => {
-  const h = fixture(); h.state.modelConfig = { revision: 1 }; h.state.modelCatalog = [];
-  h.$('#model-scope').value = 'default'; h.$('#model-mode').value = 'automatic';
-  vm.runInContext(section('async function loadModels()', 'function renderModelEditor()') + section('async function saveModels()', 'const reprocessPlans ='), h.context);
-  h.context.updateModelControls = () => {}; h.context.renderModelEditor = () => {};
+function modelRequestFixture() {
+  const h = fixture();
+  h.state.identity = {boxId: 'fixture-box'};
+  h.state.modelConfig = {revision: 1};
+  h.state.modelCatalog = [];
+  h.context.bridge = {call: h.context.call};
+  vm.runInContext(section('async function call(', 'function canCreateWarehouse(') +
+    section('async function loadModels()', 'function renderModelEditor()') +
+    section('async function saveModels()', 'const reprocessPlans ='), h.context);
+  h.context.updateModelControls = () => {};
+  h.context.renderModelEditor = () => {};
+  return h;
+}
+
+test('the shared configuration and catalog load without a project, and a failed read blocks saving', async () => {
+  const h = modelRequestFixture();
+  h.state.warehouseId = null;
   const loading = h.context.loadModels();
-  assert.equal(h.state.modelConfig, null, 'the previous scope cannot remain writable');
+  assert.equal(h.state.modelConfig, null, 'an earlier shared configuration cannot remain writable during refresh');
   await h.context.saveModels();
-  assert.deepEqual(h.calls.map(call => call.action), ['processing', 'model-catalog']);
-  assert.equal(h.calls[1].input.scope, 'default');
-  h.calls[0].reject(Error('scope read failed')); h.calls[1].resolve({ items: [] }); await loading;
+  assert.deepEqual(h.calls.map(({action, input}) => [action, input.scope, input.warehouseId]), [
+    ['processing', 'default', null], ['model-catalog', 'default', null],
+  ]);
+  h.calls[0].reject(Error('profile read failed')); h.calls[1].resolve({ items: [] }); await loading;
   assert.equal(h.state.modelConfig, null, 'failed reads must keep saves blocked');
 });
 
-test('model recovery displays the budget and return action only for the interrupted warehouse', () => {
+test('project selection leaves an in-flight shared configuration request valid', async () => {
+  const h = modelRequestFixture();
+  const loading = h.context.loadModels();
+  h.state.generation++;
+  h.state.warehouseId = 'different-project';
+  const configuration = {revision: 5, effective: {}};
+  const model = {id: 'shared-model'};
+  h.calls[0].resolve(configuration); h.calls[1].resolve({items: [model], default: model});
+  await loading;
+  assert.equal(h.state.modelConfig, configuration);
+  assert.equal(h.state.modelDefault, model);
+});
+
+test('a stale shared configuration reply cannot replace the connected box profile', async () => {
+  const h = modelRequestFixture();
+  const stale = h.context.loadModels();
+  h.state.invalid = true;
+  h.state.generation++;
+  h.state.modelRequest++;
+  h.state.identity = {boxId: 'different-box'};
+  h.state.invalid = false;
+  const replacement = h.context.loadModels();
+  const nextConfig = {revision: 2, effective: {}};
+  const nextModel = {id: 'different-box-model'};
+  h.calls[2].resolve(nextConfig); h.calls[3].resolve({items: [nextModel], default: nextModel});
+  await replacement;
+  h.calls[0].resolve({revision: 5}); h.calls[1].resolve({items: [{id: 'stale-model'}]});
+  await stale;
+  assert.equal(h.state.modelConfig, nextConfig);
+  assert.equal(h.state.modelDefault, nextModel);
+});
+
+test('model controls stay available without a return to the retired creation flow', () => {
   const h = fixture();
   h.context.renderThinkingOptions = () => {};
   vm.runInContext(section('function updateModelControls()', 'async function saveModels()'), h.context);
-  h.state.modelOnboarding = {warehouseId:h.state.warehouseId,required:9159};
+  h.state.warehouseId = null;
+  h.$('#model-mode').value = 'manual';
+  h.state.modelConfig = {revision: 1};
   h.context.updateModelControls();
-  assert.equal(h.$('#model-onboarding').hidden,false);
-  assert.match(h.$('#model-onboarding-budget').textContent,/9159 个 token/);
+  assert.equal(h.$('#model-mode').disabled,false);
+  assert.equal(h.$('#model-selectors').hidden,false);
   h.state.modelSaving = true;
   h.context.updateModelControls();
-  assert.equal(h.$('#model-onboarding-return').disabled,true);
-  h.state.warehouseId = 'different-warehouse';
-  h.context.updateModelControls();
-  assert.equal(h.$('#model-onboarding').hidden,true);
+  assert.equal(h.$('#model-mode').disabled,true);
 });

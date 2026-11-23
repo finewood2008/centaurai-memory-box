@@ -515,8 +515,7 @@ def configure(svc, services, target_path, *, server=None, source=None):
     expected='workshop' if getattr(svc,'workshop',False) else 'studio'
     source=source or expected
     if source!=expected:raise ValueError('Deployment source does not match service')
-    target=load_target(target_path)
-    if source!='workshop' or svc.local_authority.required():target=None
+    target=None
     def authority(owner):
         (authorize_sso_admin if source=='studio' else authorize_sso_owner)(services,owner)
     registry=None

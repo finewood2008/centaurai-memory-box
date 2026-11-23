@@ -22,7 +22,8 @@ def project():
 
 
 def test_workspace_pipeline_generates_standard_package(tmp_path):
-    workspace = devkit_build.create_workspace(project(), ROOT, tmp_path)
+    value = {**project(), "name": "定制服装销售跟进助手"}
+    workspace = devkit_build.create_workspace(value, ROOT, tmp_path)
     root = Path(workspace["root"])
     assert (root / "project-spec.json").is_file()
     assert (root / "generation-manifest.json").is_file()
@@ -31,6 +32,8 @@ def test_workspace_pipeline_generates_standard_package(tmp_path):
     assert result["packageName"].endswith(".zip")
     assert len(result["packageSha256"]) == 64
     assert result["manifest"]["protocolVersion"] == 3
+    assert result["manifest"]["name"] == value["name"]
+    assert result["manifest"]["applicationId"] == value["appId"]
     assert len(base64.b64decode(result["packageBase64"])) > 100
 
 
@@ -51,7 +54,7 @@ def test_capability_mapping_and_backend_expert_declarations(tmp_path):
     from wanx_studio.capability_mapping import resolve
     mapping = resolve(value["solution"]["capabilities"], expert=True, backend=value["devKitBackend"])
     assert mapping["gaps"] == [
-        {"id": cap, "reason": "NO_PUBLIC_HOST_CONTRACT"} for cap in ["data", "knowledge", "reports"]
+        {"id": cap, "reason": "LEGACY_CAPABILITY_REPLAN_REQUIRED"} for cap in ["data", "files", "knowledge", "reports"]
     ]
     with pytest.raises(StudioError, match="STANDARD_RUNTIME_CONTRACT_REQUIRED"):
         devkit_build.create_workspace(value, ROOT, tmp_path)
@@ -130,7 +133,7 @@ def test_workspace_refuses_existing_output_and_leaks_no_absolute_path(tmp_path):
 
 
 def test_managed_expert_is_projected_to_fixed_public_contract(tmp_path):
-    value=project();value['solution']['capabilities']=['data','foundation']
+    value=project();value['solution']['capabilities']=['wanx.expert-app.v1']
     value['deploymentExpert']={'schemaVersion':1,'profile':'wanx-expert-app-v1','revision':1}
     spec=devkit_build.devkit.project_spec(value)
     assert spec['expert']=={'enabled':True,'definitionRef':'wanx.expert-app.v1'}

@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { requestJson } from '../request';
 import { startVisiblePolling } from '../polling';
-import type { SuggestionPreview } from '../ontologySuggestions';
+import { materialCoverageText, type MaterialCoverage, type SuggestionPreview } from '../ontologySuggestions';
 
-export type MaterialOntologyStatus = { document_id: string; task_id?: string; status: string; count: number; handled?: boolean; message?: string };
+export type MaterialOntologyStatus = { document_id: string; task_id?: string; status: string; count: number; handled?: boolean; can_rescan?: boolean; coverage?: MaterialCoverage; message?: string };
 
 export function useMaterialOntology(workspace: string, enabled: boolean) {
   const [items, setItems] = useState<Record<string, MaterialOntologyStatus>>({});
@@ -48,9 +48,9 @@ export default function MaterialOntologyNotice({workspace, documentId, status, e
   const [busy,setBusy]=useState(false),[failure,setFailure]=useState('');
   const alive=useRef(true), pending=useRef(false);
   const interaction=useRef(0);
-  useEffect(()=>{interaction.current++;},[disabled,workspace,documentId]);
+  useEffect(()=>{interaction.current++;},[disabled,workspace,documentId,status?.status,status?.task_id]);
   useEffect(()=>{alive.current=true;return()=>{alive.current=false;};},[]);
-  async function action(kind:'schedule'|'review'|'dismiss') {
+  async function action(kind:'review'|'dismiss') {
     if(pending.current || disabled) return;
     pending.current=true;setBusy(true);setFailure('');
     const started=interaction.current;
@@ -71,14 +71,15 @@ export default function MaterialOntologyNotice({workspace, documentId, status, e
   return <section className="ontology-notice material-ontology-notice" aria-label="材料本体建议">
     <strong>本体规则建议</strong>
     <p>{error || (waiting?'正文已就绪，本体建议正在后台处理，不影响原有检索流程。':completed?
-      status.handled?'本批建议已核对。':status.count?`有 ${status.count} 条建议待核对，自动显示在下方核对区。`:'本次没有产生可采纳扩展，可能已有规则能够覆盖；也可能受模型或取样范围限制。':
-      status?.message || '新解析的材料会自动分析本体建议；已有材料也可以手动生成。')}</p>
+      status.handled?'本批建议已核对。':status.count?`有 ${status.count} 条建议待核对，自动显示在下方核对区。`:'本次分析没有提出可采纳的本体扩展。':
+      status?.message || '新导入的资料解析后会自动分析本体建议。')}</p>
+    {completed&&status.coverage&&<p>{materialCoverageText(status.coverage)}</p>}
+    {completed&&status.message&&<p role="status">{status.message}</p>}
     <p>在本页核对类型、实体和关系，保存后统一确认应用。未确认的修改不会进入检索。</p>
     {failure&&<p role="alert">{failure}</p>}
     <div className="ontology-table-actions">
       {completed&&<button type="button" disabled={busy||disabled} onClick={()=>void action('review')}>查看并确认建议</button>}
       {completed&&!status.handled&&status.count>0&&<button type="button" disabled={busy||disabled} onClick={()=>void action('dismiss')}>无需调整，标记已核对</button>}
-      {!waiting&&!completed&&<button type="button" disabled={busy||disabled||!!error} onClick={()=>void action('schedule')}>{status?.status==='failed'?'重试本体建议':status?.status==='stale'?'重新生成本体建议':'生成本体建议'}</button>}
       {error&&<button type="button" disabled={busy} onClick={()=>void refresh().catch(()=>{})}>刷新状态</button>}
     </div>
   </section>;

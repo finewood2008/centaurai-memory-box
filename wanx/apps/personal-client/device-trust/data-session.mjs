@@ -103,15 +103,21 @@ function boundedJson(value, limit) {
   walk(value); return JSON.stringify(value);
 }
 
-function routeLimit(applicationId, rawTarget, method, transport, backendContracts = [], dynamicApplication = false) {
+function routeLimit(applicationId, rawTarget, method, transport, backendContracts, allowedCapabilities) {
   validateRawTarget(rawTarget);
-  requireValue(Object.hasOwn(APP_FAMILIES, applicationId) || /^ai\.wanx\.selfmade\.[a-f0-9]{32}$/.test(applicationId) || dynamicApplication && APPLICATION_ID.test(applicationId), 'FORBIDDEN');
+  requireValue(Object.hasOwn(APP_FAMILIES, applicationId) || /^ai\.wanx\.selfmade\.[a-f0-9]{32}$/.test(applicationId) || allowedCapabilities && APPLICATION_ID.test(applicationId), 'FORBIDDEN');
   requireValue(typeof rawTarget === 'string' && /^\/(?!\/)[\x21-\x7e]*$/.test(rawTarget)
     && rawTarget.length <= 8192 && !/[\\#]/.test(rawTarget));
   const url = new URL(rawTarget, 'https://local.invalid');
   requireValue(!['token', 'access_token'].some((key) => url.searchParams.has(key)), 'FORBIDDEN');
   requireValue(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'].includes(method));
   const pathname = rawTarget.split('?')[0];
+  if (pathname.startsWith('/api/wanx-expert-app')) {
+    requireValue(allowedCapabilities?.has('http.request') && /^ai\.wanx\.selfmade\.[a-f0-9]{32}$/.test(applicationId) && transport === 'http' && rawTarget === pathname
+      && (method === 'GET' && pathname === '/api/wanx-expert-app/v1/context'
+        || method === 'POST' && pathname === '/api/wanx-expert-app/v1/invoke'), 'FORBIDDEN');
+    return method === 'GET' ? 0 : MIB;
+  }
   const family = /^\/api\/([^/?]+)/.exec(pathname)?.[1];
   const contractFamilies = new Set(backendContracts.flatMap(contract => CONTRACT_FAMILIES[contract?.id] || []));
   const profile = /^\/api\/auth\/me(?:\/avatar)?$/.test(pathname) && ['GET', 'PATCH', 'POST', 'DELETE'].includes(method);
@@ -426,7 +432,7 @@ export function createLocalDataAccess({ vault, stagingDirectory, protectDirector
     let anchorMs = clock(), anchorMono = monotonicClock(), lastWall = clock();
     const invalidated = new Set(), renewalListeners = new Set(), operations = new Set(), children = new Set();
     const permit = (rawTarget, method, transport) => {
-      const limit = routeLimit(applicationId, rawTarget, method, transport, backendContracts, dynamicApplication);
+      const limit = routeLimit(applicationId, rawTarget, method, transport, backendContracts, allowedCapabilities);
       if (allowedCapabilities) {
         const pathname = rawTarget.split('?')[0];
         const permitted = pathname === '/api/auth/me' ? method === 'GET' && allowedCapabilities.has('identity.read')

@@ -10,7 +10,7 @@ import {materialListHTML} from '../ui/material-workspace.mjs';
 import {goalDialogueText} from '../ui/material-goal-dialogue.mjs';
 test('an unfinished import explains the inaccessible warehouse and links to its management page',()=>{
   const html=conversationHTML({id:'warehouse',state:'import_failed'});
-  assert.match(html,/迁入未完成/);
+  assert.match(html,/尚未完成迁入/);
   assert.match(html,/data-view="data"/);
   assert.doesNotMatch(html,/请先选择一座可用的知识仓/);
 });
@@ -460,6 +460,19 @@ test('restoring an invalidated goal preserves newer drafts, including deliberate
   h.db.intents[0].document_version_id='new-version';h.db.source={document:{id:'doc',segment_count:1},version:{id:'new-version'},segments:[{id:'new',text:'新正文'}]};
   h.db.turn=null;h.flow=h.make();await h.flow.load();assert.equal(h.flow.state.goal,'');assert.equal(h.flow.state.instructions,'');
   assert.equal(h.flow.intake.record.goalDraft,undefined);assert.equal(nextConversationStep(h.flow),'source-review');
+});
+
+test('warehouse scope changes retain the material goal as an unconfirmed draft after reload',async()=>{
+  const h=await preparedIntakeGoal();h.flow.state.goal='核对付款义务';h.flow.state.instructions='排除个人联系方式';await h.flow.goal();
+  Object.assign(h.db.intents[0],{status:'awaiting_goal',invalid_reason:'purpose_changed',revision:4});delete h.db.intents[0].goal;
+  h.db.turn={...h.db.turn,is_current:false,content_status:'stale'};
+  h.flow=h.make();await h.flow.load();
+  assert.equal(h.flow.state.goal,'核对付款义务');assert.equal(h.flow.state.instructions,'排除个人联系方式');
+  assert.equal(h.flow.state.goalDirty,true);assert.equal(h.flow.intake.record.goalNeedsConfirmation,true);
+  assert.match(h.flow.state.goalReviewNotice,/仓库用途或整理范围已更新/);
+  await h.flow.preview();assert.equal(h.calls.filter(c=>c.action==='conversation-plan').length,0);
+  await h.flow.goal();await h.flow.preview();assert.equal(h.flow.state.error,'');
+  assert.equal(h.calls.some(c=>c.action==='conversation-confirm'),false);
 });
 
 test('a recovered goal receipt retains its exact text if rules changed before the snapshot was read',async()=>{

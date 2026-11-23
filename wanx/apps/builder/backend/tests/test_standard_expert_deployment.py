@@ -228,16 +228,19 @@ async def test_real_standard_build_adopt_export_preserves_original_zip(tmp_path,
     from wanx_studio.service import StudioService
     from wanx_studio import devkit_build
     from wanx_studio.contracts import digest
-    from test_studio_expert_delivery import wire,configure
+    from test_studio_expert_delivery import wire, TEMPLATE
     svc=StudioService(tmp_path/'state',Path(__file__).resolve().parents[2])
     try:
-        manager,exporter=wire(svc,tmp_path)
-        p=svc.store.create('alice','Standard expert','Synthetic build',uuid4().hex,dev_kit=True)
+        _,exporter=wire(svc,tmp_path)
+        svc.directory_profile.experts.templates = lambda: [{**TEMPLATE, 'resourceId': 'general-assistant'}]
+        ordinary=svc.create_project('alice','Ordinary','Synthetic client build',uuid4().hex)
+        assert not ordinary.get('deploymentExpert')
+        p=svc.create_project('alice','Standard expert','Synthetic build',uuid4().hex,target='expert')
         svc.preparation.enable('alice',p['id'])
-        contract=configure(manager,p)['configuration']['contract']
-        p=svc.store.get('alice',p['id']);p['solution']['capabilities']=['data','foundation']
+        p=svc.store.get('alice',p['id'])
+        contract=p['deploymentExpert']
         p['confirmation']={'hash':digest(p['solution']),'at':1}
-        p['preparation'].update(phase='acp',handoff={'contracts':{'foundation':{'expertDeployment':contract}}})
+        p['preparation'].update(phase='acp',handoff={'contracts':{'wanx.expert-app.v1':{'expertDeployment':contract}}})
         p['preparation']['interview'].update(state='completed',sync='saved')
         tid=uuid4().hex
         p['tasks']=[{'id':tid,'state':'running','solutionHash':digest(p['solution']),'instruction':'Synthetic standard developer result','events':[],'question':None,'buildFormat':'wanx-app-dev-kit'}]
@@ -252,6 +255,8 @@ async def test_real_standard_build_adopt_export_preserves_original_zip(tmp_path,
         request={'operationId':uuid4().hex,'expectedArtifactHash':artifact['hash'],'expectedVersionRevision':adopted['versioning']['revision']}
         exported=exporter.export('alice',p['id'],request)
         frozen=svc.directory_profile.intake.get('alice',exported['release']['releaseId'])
+        assert 'Synthetic build' in artifact['snapshot']['expertPrompt']
+        assert frozen['backend']['prompt'] == artifact['snapshot']['expertPrompt']
         assert frozen['base']['artifactHash']==artifact['hash']
         assert frozen['base']['manifest']==artifact['manifest']
         assert frozen['base']['applicationId']==p['appId']

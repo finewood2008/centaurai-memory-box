@@ -19,7 +19,7 @@ def test_missing_public_contract_cannot_pass_product_compatibility():
         'solution': {'capabilities': ['model', 'files', 'reports'], 'dependencies': []},
     }
     report = devkit.compatibility_report(project, ROOT)
-    assert report['capabilityMapping']['gaps'] == [{'id': 'reports', 'reason': 'NO_PUBLIC_HOST_CONTRACT'}]
+    assert report['capabilityMapping']['gaps'] == [{'id': cap, 'reason': 'LEGACY_CAPABILITY_REPLAN_REQUIRED'} for cap in ['model','files','reports']]
     assert report['valid'] is False
     assert report['stages']['runtime']['status'] == 'blocked'
 
@@ -68,9 +68,9 @@ def test_permission_without_callable_renderer_adapter_blocks_build(tmp_path, cap
     project = {'id': 'a'*32, 'name': 'Synthetic', 'appId': 'dev.wanx.synthetic',
                'devKit': True, 'artifacts': [], 'solution': {'capabilities': [capability]}}
     report = devkit.compatibility_report(project, ROOT)
-    assert report['capabilityMapping']['gaps'] == []  # Public permission exists.
+    assert report['capabilityMapping']['gaps'] == [{'id': capability, 'reason': 'LEGACY_CAPABILITY_REPLAN_REQUIRED'}]
     assert report['stages']['runtime']['errors'] == [
-        {'code': 'STANDARD_HOST_ADAPTER_UNAVAILABLE', 'path': '/capabilities/' + capability}]
+        {'code': 'LEGACY_CAPABILITY_REPLAN_REQUIRED', 'path': '/capabilities/' + capability}]
     assert report['valid'] is False
     with pytest.raises(StudioError, match='STANDARD_RUNTIME_CONTRACT_REQUIRED'):
         devkit_build.create_workspace(project, ROOT, tmp_path)
@@ -85,10 +85,11 @@ async def test_standard_prd_cannot_finish_with_only_legacy_runtime_contract(env)
     from wanx_studio.iterative import propose_contract
     svc, pid = await prepared(env)
     project = svc.store.get('alice', pid)
-    project['devKit'] = True
+    project['solution']['capabilities'] = ['data']
     svc.store.save(project)
-    propose_contract(svc, 'alice', pid, {'expectedHash': digest(project['solution']),
-                                      'collections': {'items': {'title': 'string'}}})
+    with pytest.raises(StudioError,match='LEGACY_CAPABILITY_REPLAN_REQUIRED'):
+        propose_contract(svc, 'alice', pid, {'expectedHash': digest(project['solution']),
+                                          'collections': {'items': {'title': 'string'}}})
     result = await assess(svc, pid)
     assert result['complete'] is False
     assert result['runtimeGaps']

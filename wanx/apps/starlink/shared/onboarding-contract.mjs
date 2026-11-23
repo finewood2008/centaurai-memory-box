@@ -17,7 +17,7 @@ function answers(value, draft) {
     value.flow_mode && !['create','profile'].includes(value.flow_mode) || value.creation_operation && !op(value.creation_operation))) error();
 }
 export const scopeFieldLimits = Object.freeze({
-  industry:0, occupation:0, service_objects:6, purposes:6, material_sources:6,
+  industry:0, occupation:0, service_objects:6, focus_objects:6, purposes:6, material_sources:6,
   questions_to_answer:6, excluded_scope:6, uncertain_items:8,
 });
 export function scopePatchError(value) {
@@ -29,6 +29,15 @@ export function scopePatchError(value) {
       item.some(text => typeof text !== 'string' || !text.trim() || [...text].length > 300);
   });
 }
+export function validCreationScope(scope, {guided=false}={}) {
+  const profileFields = ['occupation','service_objects','focus_objects'];
+  const textFields = guided ? {industry:200,background:8000,material_types:8000,questions:8000} : {};
+  if (!only(scope, [...profileFields, ...Object.keys(textFields)])) return false;
+  return Object.entries(scope).every(([key,value]) => Object.hasOwn(textFields,key)
+    ? typeof value==='string' && [...value].length<=textFields[key]
+    : !scopePatchError({[key]:value}));
+}
+
 export function onboardingRequest(action, input = {}) {
   if (!onboardingActions.has(action)) return null;
   const keys = {
@@ -60,7 +69,7 @@ export function onboardingRequest(action, input = {}) {
   if (write) {
     const b = input.body;
     const fields = action === 'onboarding-save' ? ['operation_id','expected_revision','answers','status']
-      : action === 'onboarding-create' ? ['operation_id','expected_revision','name','purpose']
+      : action === 'onboarding-create' ? ['operation_id','expected_revision','name','purpose','warehouse_scope']
       : action === 'onboarding-scope-publish' ? ['operation_id','expected_revision','base_ontology_id','changes','confirmed']
       : action === 'onboarding-confirm' ? ['operation_id','expected_revision','onboarding_revision','expected_confirmation_id','answers']
       : action === 'onboarding-rule-prepare' ? ['operation_id','proposal_id','expected_draft_id','name','schema','decisions']
@@ -86,6 +95,7 @@ export function onboardingRequest(action, input = {}) {
       if (b.status !== undefined && !['in_progress','skipped','completed'].includes(b.status)) error();
     }
     if (action === 'onboarding-create' && (typeof b.name !== 'string' || !b.name.trim() || [...b.name].length > 60 ||
+      b.warehouse_scope !== undefined && !validCreationScope(b.warehouse_scope,{guided:true}) ||
       b.purpose !== undefined && (typeof b.purpose !== 'string' || [...b.purpose].length > 16000))) error();
     if (action === 'onboarding-confirm') {
       answers(b.answers, false);

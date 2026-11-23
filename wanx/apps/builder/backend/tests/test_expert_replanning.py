@@ -65,8 +65,12 @@ async def expert_case(svc, tmp_path, monkeypatch):
             })
         if platform_gap and platform_position == "before":
             await record_platform()
-        requested = await svc.preparation.pm.tool("alice", pid, turn, "require_capability", {"capability": "foundation", "reason": REASON})
-        assert requested["returnToClient"] is True
+        # Historical PMs recorded the old foundation gap. Recreate persisted
+        # evidence, not a new declaration through today's public-only API.
+        def historical(p):
+            p['preparation']['gaps']=list(dict.fromkeys([*p['preparation']['gaps'],TYPED_GAP]))
+            svc.preparation.event(p,'capability.required',capability='foundation',reason=REASON,gapIntroduced=True)
+        svc.store.mutate('alice',pid,op(),{},historical)
         if platform_gap and platform_position == "after":
             await record_platform()
         end_pm(pid)
@@ -76,8 +80,8 @@ async def expert_case(svc, tmp_path, monkeypatch):
         assert configured["project"]["preparation"]["handoff"] is None
         checked = await check(pid)
         report = checked["preparation"]["report"]
-        assert report["required"] == ["foundation"]
-        assert report["results"]["foundation"]["status"] == "passed"
+        assert report["required"] == ["wanx.expert-app.v1"]
+        assert report["results"]["wanx.expert-app.v1"]["status"] == "passed"
         assert report["codex"]["available"] is True
         return pid, checked, request
 
@@ -93,7 +97,7 @@ async def test_selecting_expert_after_pm_gap_reopens_planning_without_approving_
     assert replanned["preparation"]["phase"] == "acp"
     assert replanned["preparation"]["interview"]["sync"] == "pending"
     assert not replanned["confirmation"] and not replanned["tasks"]
-    assert replanned["preparation"]["handoff"]["contracts"]["foundation"]["expertDeployment"]["template"] == TEMPLATE
+    assert replanned["preparation"]["handoff"]["contracts"]["wanx.expert-app.v1"]["expertDeployment"]["template"] == TEMPLATE
     current = svc.store.get("alice", pid)
     assert current["preparation"]["gaps"] == [TYPED_GAP]
     assert not replanned["preparation"].get("gapDecisions")
@@ -150,16 +154,14 @@ async def test_stale_or_unproved_expert_evidence_reopens_the_typed_gap(expert_ca
     svc, manager, create, configure, check, handoff, begin_pm, end_pm, prepare = expert_case
     pid, checked, _ = await prepare()
     if change == "failed_probe":
-        async def failed(*args):
-            raise StudioError("MODEL_UPSTREAM_FAILED", 502)
-        monkeypatch.setattr(svc, "model", failed)
+        monkeypatch.setattr(svc.directory_profile, "available", False)
         checked = await check(pid)
     else:
         def alter(p):
             prep = p["preparation"]
             if change == "running_probe": prep["currentProbe"]["state"] = "running"
             elif change == "stale_report": prep["revision"] += 1
-            elif change == "other_template": prep["report"]["results"]["foundation"]["expertTemplate"]["resourceId"] = "other-expert"
+            elif change == "other_template": prep["report"]["results"]["wanx.expert-app.v1"]["expertTemplate"]["resourceId"] = "other-expert"
             elif change == "other_revision": p["_deploymentExpertRevision"] += 1
             elif change == "missing_selection": prep["events"] = [e for e in prep["events"] if e["type"] != "expert.contract.selected"]
             elif change == "missing_report_revision": prep["report"].pop("preparationRevision")
@@ -190,16 +192,16 @@ async def test_pm_selected_foundation_is_a_supported_contract_requiring_fresh_pr
     configure(pid)
     await handoff(pid, await check(pid))
     turn = begin_pm(pid)
-    result = await svc.preparation.pm.tool("alice", pid, turn, "require_capability", {"capability": "foundation", "reason": REASON})
+    result = await svc.preparation.pm.tool("alice", pid, turn, "require_capability", {"capability": "wanx.expert-app.v1", "reason": REASON})
     assert result == {"returnToClient": False, "automaticCheck": True}
     current = svc.store.get("alice", pid)
     assert not current["preparation"]["gaps"]
-    assert "foundation" in current["preparation"]["required"]
-    assert "foundation" in current["solution"]["capabilities"]
+    assert "wanx.expert-app.v1" in current["preparation"]["required"]
+    assert "wanx.expert-app.v1" in current["solution"]["capabilities"]
     assert current["preparation"]["report"] is None
     end_pm(pid)
     checked = await check(pid)
-    assert checked["preparation"]["report"]["results"]["foundation"]["status"] == "passed"
+    assert checked["preparation"]["report"]["results"]["wanx.expert-app.v1"]["status"] == "passed"
 
 
 async def test_configuration_retries_cas_and_new_revision_preserve_real_checks(expert_case):
@@ -303,7 +305,7 @@ async def test_real_standard_artifact_transfer_archives_resolved_gap_without_imp
     # developer/model process; real workspace generation, build, package,
     # immutable capture, adoption and cross-owner transfer are exercised.
     def ready(p):
-        p["solution"]["capabilities"] = ["data", "foundation"]
+        p["solution"]["capabilities"] = ["wanx.expert-app.v1"]
         p["preparation"]["interview"].update(state="completed", sync="saved")
         p["confirmation"] = {"hash": digest(p["solution"]), "at": 1}
     svc.store.mutate("alice", pid, op(), {}, ready)
@@ -350,7 +352,7 @@ async def test_real_standard_artifact_transfer_archives_resolved_gap_without_imp
             raise StudioError("STUDIO_ADMIN_REQUIRED", 403)
     profile.authorize_owner = authorize_receiver
     fresh = await svc.preparation.check("bob", imported_id, {"operationId": op()})
-    assert fresh["preparation"]["report"]["results"]["foundation"]["status"] == "passed"
+    assert fresh["preparation"]["report"]["results"]["wanx.expert-app.v1"]["status"] == "passed"
     assert fresh["preparation"]["report"]["operationId"] != evidence["report"]["operationId"]
     restored = await svc.preparation.handoff("bob", imported_id, {"expectedRevision": fresh["preparation"]["revision"]})
     assert restored["preparation"]["phase"] == "acp"

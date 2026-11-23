@@ -436,6 +436,7 @@ class OnboardingScope(WireResponse):
         description="Warehouse business role; not account identity or access control"
     )
     service_objects: list[str]
+    focus_objects: list[str] = Field(default_factory=list)
     purposes: list[str]
     material_sources: list[str]
     questions_to_answer: list[str]
@@ -538,6 +539,35 @@ class OnboardingState(WireResponse):
     publication_performed: Literal[False]
 
 
+class TrialSource(WireResponse):
+    id: str
+    text: str = Field(min_length=1, max_length=1200)
+
+
+class TrialEntity(WireResponse):
+    name: str
+    type: str
+
+
+class TrialRelation(WireResponse):
+    source: str
+    predicate: str
+    target: str
+
+
+class OnboardingTrial(WireResponse):
+    conversation_id: str
+    draft_digest: str
+    document_id: str
+    document_version_id: str
+    title: str
+    source: TrialSource
+    entities: list[TrialEntity] = Field(max_length=18)
+    relations: list[TrialRelation] = Field(max_length=18)
+    partial_results: bool
+    publication_performed: Literal[False]
+
+
 class OnboardingPreview(Receipt):
     status: Literal["previewed"]
     conversation_id: str
@@ -630,6 +660,7 @@ def response_model(method, path):
         ("POST", one + "/onboarding/turns"): OnboardingTurn,
         ("GET", one + "/onboarding/turns/{turn_id}"): OnboardingTurn,
         ("POST", one + "/onboarding/preview"): OnboardingPreview,
+        ("POST", one + "/onboarding/trial"): OnboardingTrial,
         ("POST", one + "/onboarding/publish"): OnboardingPublication,
         ("GET", c + "/materials"): MaterialWorkflowPage,
         ("GET", c + "/materials/{document_id}"): MaterialWorkflow,

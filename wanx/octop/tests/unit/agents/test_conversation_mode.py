@@ -165,6 +165,17 @@ def test_answer_resume_without_mode_cannot_restore_craft(monkeypatch):
         assert handler.call_count == 1
 
 
+def test_zhijun_mode_reads_prior_checkpoints_and_prefers_current_metadata():
+    from langchain_core.messages import HumanMessage
+
+    from octop.infra.agents.conversation_mode import zhijun_message_mode
+
+    message = HumanMessage(content="继续", additional_kwargs={"zhijun_conversation_mode": "craft"})
+    assert zhijun_message_mode(message) == "craft"
+    message.additional_kwargs["zhijun_turn_mode"] = "ask"
+    assert zhijun_message_mode(message) == "ask"
+
+
 def test_sidebar_craft_recall_keeps_only_authorized_memory_tools(tmp_path, monkeypatch):
     from types import SimpleNamespace
     from uuid import uuid4
@@ -198,7 +209,8 @@ def test_sidebar_craft_recall_keeps_only_authorized_memory_tools(tmp_path, monke
     )
     middleware = host.AssistantProfileMiddleware(tmp_path, 42)
     latest = HumanMessage(
-        content="小林近况如何？", additional_kwargs={"assistant_persona": "zhijun"}
+        content="小林近况如何？",
+        additional_kwargs={"assistant_persona": "zhijun", "zhijun_turn_mode": "craft"},
     )
     request = ModelRequest(
         model=FakeListChatModel(responses=[""]),
@@ -255,3 +267,30 @@ def test_sidebar_craft_recall_keeps_only_authorized_memory_tools(tmp_path, monke
             context.run(middleware.wrap_tool_call, resumed, lambda _request: "unexpected").status
             == "error"
         )
+
+        # A stale graph config or legacy Plan marker does not upgrade a
+        # restored private assistant turn.
+        for mode in (None, "plan", "ask"):
+            resumed.state["messages"] = [
+                latest.model_copy(
+                    update={
+                        "additional_kwargs": {
+                            "assistant_persona": "zhijun",
+                            "zhijun_turn_mode": mode,
+                        }
+                    }
+                )
+            ]
+            resumed.tool_call.update(name="ask_user_question", args={})
+            assert (
+                context.run(middleware.wrap_tool_call, resumed, lambda _request: "answered")
+                == "answered"
+            )
+            assert config["configurable"]["conversation_mode"] == "ask"
+            resumed.tool_call.update(name="execute")
+            assert (
+                context.run(
+                    middleware.wrap_tool_call, resumed, lambda _request: "unexpected"
+                ).status
+                == "error"
+            )

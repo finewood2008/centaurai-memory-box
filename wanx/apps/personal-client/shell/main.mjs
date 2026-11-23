@@ -59,7 +59,7 @@ import { createTimingRecorder } from "./timings.mjs";
 import { createDashboardGateway } from "../octop/gateway.mjs";
 import { createStaticAssetCache } from "../octop/static-cache.mjs";
 import { createUIState } from "./ui-state.mjs";
-import { createUIBroadcast } from "./ui-broadcast.mjs";
+import { createUIBroadcast, sendToLiveFrame } from "./ui-broadcast.mjs";
 import { createNotificationCenter } from "./notification-center.mjs";
 import { createAIDialogue } from "./ai-dialogue.mjs";
 import { createZhijunMemmyRead } from "./zhijun-memmy.mjs";
@@ -94,10 +94,12 @@ import { createMyAiTask } from "./my-ai-task.mjs";
 import { createMyAiLauncher } from "./my-ai-launch.mjs";
 import { createMyAiInstallations } from "./my-ai-install.mjs";
 import { createMyAiMemoryTransfer } from "./my-ai-memory-transfer.mjs";
+import { createClaudeChatHistoryImport } from "./claude-chat-history-import.mjs";
 import { createCodexContext } from "./codex-context.mjs";
 import { createCodexContextConfig, findCodexCli } from "./codex-context-config.mjs";
 import { detectWindowsCodex, openWindowsCodex } from "./windows-codex.mjs";
 import { createCodexContextSources } from "./codex-context-sources.mjs";
+import { createSemanticaMcpClient } from "./semantica-mcp-client.mjs";
 import { createMyAiAccess, createMyAiMemoryAccess } from "./my-ai-access.mjs";
 import { configurableAgents, createMyAiMcpConfig } from "./my-ai-mcp-config.mjs";
 import { createAnnotationModelClient } from "./annotation-model-client.mjs";
@@ -278,7 +280,7 @@ if (process.argv.includes("--wanx-managed-app")) {
         directory: path.join(userData, "faq-cache"), edition: "personal",
         baseURL: process.env.WANX_CONSUMER_URL || DEFAULT_CONSUMER_URL,
         fetch: input => account.faq(input),
-        changed: () => { if (control && !control.isDestroyed()) control.webContents.send("wanx-client:faq-updated"); },
+        changed: () => sendToLiveFrame(control, "wanx-client:faq-updated"),
       });
       const resumeFaq = () => { void faqCache.checkDue(); };
       powerMonitor.on("resume", resumeFaq);
@@ -342,7 +344,7 @@ if (process.argv.includes("--wanx-managed-app")) {
       const authorizeRelease = (descriptor, options) => releaseAccess.authorize(descriptor, options);
       const { getCompatibilityContext, prepareApplication } = createApplicationBackend({ client, account, clientVersion: app.getVersion() });
       applications = await createApplicationManager({
-        openWorkshop: async applicationId => { if(!personalWorkshop)throw Object.assign(Error('WORKSHOP_UPDATE_REQUIRED'),{code:'WORKSHOP_UPDATE_REQUIRED',status:409});await personalWorkshop.action('sources');control.show();control.webContents.send('wanx-client:workshop-source',applicationId); },
+        openWorkshop: async applicationId => { if(!personalWorkshop)throw Object.assign(Error('WORKSHOP_UPDATE_REQUIRED'),{code:'WORKSHOP_UPDATE_REQUIRED',status:409});await personalWorkshop.action('sources');control.show();sendToLiveFrame(control,'wanx-client:workshop-source',applicationId); },
         applicationRoot: path.join(userData, "applications"),
         runtimeArgs: process.defaultApp ? [app.getAppPath()] : [],
         applicationId: "wanx-host",
@@ -519,7 +521,7 @@ if (process.argv.includes("--wanx-managed-app")) {
         openManagement(page) {
           if (control.isDestroyed()) return;
           if (control.isMinimized()) control.restore();
-          control.webContents.send("wanx-client:navigate", page);
+          sendToLiveFrame(control, "wanx-client:navigate", page);
           control.show();
           control.focus();
         },
@@ -531,6 +533,8 @@ if (process.argv.includes("--wanx-managed-app")) {
         store: createSecureAccountStore({ filePath: path.join(userData, "space-transfers.enc"), safeStorage }),
         annotationStore: createSecureAccountStore({ filePath: path.join(userData, "space-annotations.enc"), safeStorage }),
         workbenchStore: createSecureAccountStore({ filePath: path.join(userData, "space-annotation-workbench.enc"), safeStorage }),
+        redactionStore: createSecureAccountStore({ filePath: path.join(userData, "space-redaction-rules.enc"), safeStorage }),
+        enableTextEditing: true,
         annotationAI: {
           models: options => annotationModels ? annotationModels.models(options) : Promise.resolve({ available: false, presets: [], reason: "SPACE_ANNOTATION_MODEL_UNAVAILABLE" }),
           suggest: (input, options) => { if (!annotationModels) throw Object.assign(new Error("SPACE_ANNOTATION_MODEL_UNAVAILABLE"), { code: "SPACE_ANNOTATION_MODEL_UNAVAILABLE" }); return annotationModels.suggest(input, options); },
@@ -547,9 +551,7 @@ if (process.argv.includes("--wanx-managed-app")) {
           const result = await dialog.showSaveDialog(control, { title: "保存文件", defaultPath: name });
           return result.canceled ? null : result.filePath;
         },
-        onChanged: state => {
-          if (!control.isDestroyed()) control.webContents.send("wanx-client:space-state", state);
-        },
+        onChanged: state => sendToLiveFrame(control, "wanx-client:space-state", state),
       });
       const clipboardDirectory = path.join(userData, "super-clipboard");
       try {
@@ -560,7 +562,7 @@ if (process.argv.includes("--wanx-managed-app")) {
         systemClipboard: createSystemClipboard({clipboard,nativeImage,app,directory:path.join(clipboardDirectory,"native")}),
         chooseFiles: async (input={}) => { const result=await dialog.showOpenDialog(control,{title:"插入图片到便签",message:"每次最多20张图片，单张最大20 MB",filters:[{name:"图片",extensions:["png","jpg","jpeg","gif","webp"]}],properties:["openFile","multiSelections"]});return result.canceled?[]:result.filePaths; },
         chooseDownload: async (name,input={}) => {const result=await dialog.showSaveDialog(control,{title:"下载便签内容",defaultPath:name});return result.canceled?null:result.filePath;},
-        onChanged: state => {if(!control.isDestroyed())control.webContents.send("wanx-client:clipboard-state",state);},
+        onChanged: state => sendToLiveFrame(control, "wanx-client:clipboard-state", state),
       });
       } catch (error) {
         const code = error.code || "CLIPBOARD_CACHE_DAMAGED";
@@ -579,21 +581,20 @@ if (process.argv.includes("--wanx-managed-app")) {
             });
             return result.canceled ? null : result.filePaths[0];
           },
-          onChanged: () => {
-            if (control && !control.isDestroyed()) control.webContents.send("wanx-client:space-content-changed");
-          },
+          onChanged: () => sendToLiveFrame(control, "wanx-client:space-content-changed"),
         });
       } catch (error) {
         const code = error.code || "SPACE_LINK_START_FAILED";
         spaceLinks = { manage: async () => { throw new Error(code); }, close: async () => {} };
       }
-      personalWorkshop = createPersonalWorkshop({client,applications,nativeFoundation:{root:path.join(app.getPath('userData'),'workshop-foundation'),dialog,openWorkshop:async applicationId=>{control.show();control.webContents.send('wanx-client:workshop-source',applicationId);return {opened:true};}},getCatalog:()=>market.list(),assets:path.join(app.getAppPath(),'workshop'),BrowserWindow,WebContentsView,ipcMain,control,onChanged:()=>{control.webContents.send('wanx-client:workshop-changed');void broadcast?.publish()},onNavigate:()=>{control.webContents.send('wanx-client:workshop-changed');control.webContents.send('wanx-client:navigate','applications');control.show();}});
+      personalWorkshop = createPersonalWorkshop({client,applications,nativeFoundation:{root:path.join(app.getPath('userData'),'workshop-foundation'),dialog,openWorkshop:async applicationId=>{control.show();sendToLiveFrame(control,'wanx-client:workshop-source',applicationId);return {opened:true};}},getCatalog:()=>market.list(),assets:path.join(app.getAppPath(),'workshop'),BrowserWindow,WebContentsView,ipcMain,control,onChanged:()=>{sendToLiveFrame(control,'wanx-client:workshop-changed');void broadcast?.publish()},onNavigate:()=>{sendToLiveFrame(control,'wanx-client:workshop-changed');sendToLiveFrame(control,'wanx-client:navigate','applications');control.show();}});
       personalDataService = createPersonalDataService({client,applications,personalSpace,getMcpDetails:()=>spaceLinks.mcpDetails("starlink"),writeClipboard:text=>clipboard.writeText(text),starlinkPackageDir:path.join(app.getAppPath(),"applications/starlink"),selectFiles:async()=>{const result=await dialog.showOpenDialog(control,{title:"导入个人知识材料",properties:["openFile","multiSelections"]});return result.canceled?[]:result.filePaths;}});
       starlinkPanel = createStarlinkPanelService({client,personalSpace,
+        starxiaotuModelStore: createSecureAccountStore({filePath: path.join(userData, "starxiaotu-model.enc"), safeStorage}),
         selectFiles:async({multiple=true}={})=>{const result=await dialog.showOpenDialog(control,{title:"导入知识材料",properties:multiple?["openFile","multiSelections"]:["openFile"]});return result.canceled?[]:result.filePaths;},
         selectSave:async filename=>{const result=await dialog.showSaveDialog(control,{title:"保存材料原件",defaultPath:filename});return result.canceled?null:result.filePath;},
-        emit:event=>{if(!control.isDestroyed())control.webContents.send('wanx-client:starlink-event',event);},
-        openModels:()=>{control.webContents.send('wanx-client:navigate','dialogue-models');},
+        emit: event => sendToLiveFrame(control, 'wanx-client:starlink-event', event),
+        openModels: () => sendToLiveFrame(control, 'wanx-client:navigate', 'dialogue-models'),
       });
       const memoryLibrary = await readMemoryLibrary(userData);
       const memoryRuntimeLayout = memoryLibraryRuntime(memoryLibrary, userData);
@@ -610,8 +611,12 @@ if (process.argv.includes("--wanx-managed-app")) {
       });
       const serviceURL = process.env.WANX_CONSUMER_URL || DEFAULT_CONSUMER_URL;
       const boxScope = () => dataInteractionKey(client.snapshot(), serviceURL);
+      const starlink = (action, input) => personalDataService.action(action, input);
+      const starlinkMcp = createSemanticaMcpClient({
+        client, scope: boxScope, starlink, issueKey: id => personalDataService.createMcpKey(id),
+      });
       const sources = createCodexContextSources({
-        space: personalSpace, starlink: (action, input) => personalDataService.action(action, input),
+        space: personalSpace, nativeImage, starlink, starlinkMcp,
       });
       const myAiMemory = createMyAiMemoryAccess({ runtimeFile: memoryRuntimeFile });
       const readZhijunSources = createZhijunSourceReader({
@@ -647,7 +652,7 @@ if (process.argv.includes("--wanx-managed-app")) {
           return result.canceled ? null : result.filePath;
         },
         preferenceStore: createSecureAccountStore({ filePath: path.join(userData, "ai-dialogue-models.enc"), safeStorage }), onEvent: event => {
-        if (!control.isDestroyed()) control.webContents.send("wanx-client:ai-dialogue", event);
+        sendToLiveFrame(control, "wanx-client:ai-dialogue", event);
       } });
       annotationModels = createAnnotationModelClient({ runtimeFile: memoryRuntimeFile, ensureReady: () => memoryRuntime.ensure(),
         getScope: () => dataInteractionKey(client.snapshot(), process.env.WANX_CONSUMER_URL || DEFAULT_CONSUMER_URL),
@@ -677,7 +682,7 @@ if (process.argv.includes("--wanx-managed-app")) {
       });
       const agentAccess = createMyAiAccess({
         agents: ["codex", ...configurableAgents],
-        sources, memory: myAiMemory,
+        sources, memory: myAiMemory, spaceLinks,
         store: createSecureAccountStore({ filePath: path.join(userData, "my-ai-access.enc"), safeStorage }),
         owner: () => dataOwnerKey(client.snapshot(), serviceURL),
         box: () => client.snapshot().connection?.deviceId,
@@ -685,7 +690,8 @@ if (process.argv.includes("--wanx-managed-app")) {
         makeContext(agent, direct) {
           const descriptor = agent === "codex" ? path.join(userData, "codex-context", "endpoint.json")
             : path.join(userData, "my-ai-access", agent, "endpoint.json");
-          const paths = { stdioPath: fileURLToPath(new URL("./codex-context-stdio.mjs", import.meta.url)), descriptorPath: descriptor };
+          const paths = { stdioPath: fileURLToPath(new URL("./codex-context-stdio.mjs", import.meta.url)), descriptorPath: descriptor,
+            stableLauncher: app.isPackaged && !testBuild };
           const configure = agent === "codex" ? createCodexContextConfig({ ...paths,
             discover: async options => (await agentInstallations.inspect("codex_cli"))?.executable ?? findCodexCli(options),
             confirmReplace: async ({ previous, next }) => (await dialog.showMessageBox(control, {
@@ -693,7 +699,7 @@ if (process.argv.includes("--wanx-managed-app")) {
               detail: `更新后，Codex 将使用当前客户端中选择的资料范围。\n\n原客户端：${previous.command}\n原连接：${previous.args[1]}\n\n当前客户端：${next.command}\n当前连接：${next.args[1]}`,
               buttons: ["取消", "更新连接"], defaultId: 0, cancelId: 0, noLink: true,
             })).response === 1,
-          }) : createMyAiMcpConfig(agent, paths);
+          }) : createMyAiMcpConfig(agent, { ...paths, stableLauncher: app.isPackaged && !testBuild });
           return createCodexContext({
             sources, scope: boxScope, configure, descriptor, direct,
             protectFile: file => protectPrivateFile(file, { packaged: app.isPackaged }),
@@ -719,6 +725,15 @@ if (process.argv.includes("--wanx-managed-app")) {
         getState: () => client.snapshot(),
         agentAccess,
         memoryTransfer,
+        claudeChatImport: createClaudeChatHistoryImport({
+          runtimeFile: memoryRuntimeFile,
+          identity: () => dataOwnerKey(client.snapshot(), serviceURL),
+          async chooseFile() {
+            const selected = await dialog.showOpenDialog(control, { title: "选择 Claude Chat 导出文件",
+              properties: ["openFile", "dontAddToRecent"], filters: [{ name: "Claude 导出文件", extensions: ["zip", "json"] }] });
+            return selected.canceled ? null : selected.filePaths[0];
+          },
+        }),
         fetchAsset: url => net.fetch(url),
         client, serviceURL: process.env.WANX_CONSUMER_URL || DEFAULT_CONSUMER_URL,
         preferenceFile: path.join(userData, "memory-model-source"),
@@ -735,6 +750,7 @@ if (process.argv.includes("--wanx-managed-app")) {
           codexContext: agentAccess.codex,
           agentAccess,
           starlink: (action, input) => personalDataService.action(action, input),
+          assertClientUsable: () => clientUpdates.assertUsable(),
           polish: (text, signal, assertSource) => aiDialogue.polishTask(text, signal, assertSource),
         }),
         protectFile: file => protectPrivateFile(file, { packaged: app.isPackaged }),
@@ -826,6 +842,7 @@ if (process.argv.includes("--wanx-managed-app")) {
       unsubscribe = client.subscribe(() => {
         memoryWorkspace.sync();
         agentAccess.sync();
+        if (!testRuntime) void agentAccess.restore(reportError).catch(reportError);
         timings.state("platform", client.snapshot().platform);
         dashboards.sync(client.snapshot());
         desktop.sync(client.snapshot());
@@ -841,6 +858,7 @@ if (process.argv.includes("--wanx-managed-app")) {
           powerMonitor.removeListener("resume", resumeFaq);
           await faqCache.close();
           updateChecks.close();
+          await starlinkMcp.close();
           deviceTrust.lock("shutdown");
           uiState.invalidateOpen();
           personalWorkshop?.close();
@@ -901,7 +919,7 @@ if (process.argv.includes("--wanx-managed-app")) {
         return null;
       });
       await control.loadURL(controlURL);
-      if (setupStartFailed) control.webContents.send("wanx:setup:state", {
+      if (setupStartFailed) sendToLiveFrame(control, "wanx:setup:state", {
         state: "terminalError", errorCode: "SETUP_START_FAILED",
       });
       await clientUpdates.ready();

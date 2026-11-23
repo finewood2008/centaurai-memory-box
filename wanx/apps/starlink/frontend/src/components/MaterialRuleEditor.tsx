@@ -29,11 +29,16 @@ export default function MaterialRuleEditor({workspace,documentId,summary,status,
     return()=>controller.abort();
   },[workspace,reload,summary.stale_reason]);
   useEffect(()=>{
+    if (loadedTask.current && (status?.status !== 'completed' || status.task_id !== loadedTask.current)) {
+      loadedTask.current = '';
+      setPreview(undefined);
+      setBusy(false);
+    }
     if(disabled||status?.status!=='completed'||!status.task_id||loadedTask.current===status.task_id)return;
     const controller=new AbortController();setError('');
     requestJson<SuggestionPreview>(`/api/ontology-suggestions/materials/${encodeURIComponent(documentId)}/review`,{
       method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({workspace_id:workspace}),signal:controller.signal},15000)
-      .then(value=>{if(!controller.signal.aborted){loadedTask.current=status.task_id!;setPreview(value);}})
+      .then(value=>{if(!controller.signal.aborted && (!value.material_task_ids || value.material_task_ids[0]===status.task_id)){loadedTask.current=status.task_id!;setPreview(value);}})
       .catch(reason=>{if(!controller.signal.aborted)setError(reason.message);});
     return()=>controller.abort();
   },[status?.task_id,status?.status,documentId,workspace,disabled,reload]);
@@ -55,7 +60,7 @@ export default function MaterialRuleEditor({workspace,documentId,summary,status,
     }}>重新读取本篇建议</button>}
     {summary.stale_reason==='ONTOLOGY_TARGET_CHANGED'&&<p role="alert">知识库本体已变化。请核对下方与当前发布规则的差异，再保存待发布规则；人工内容保留。</p>}
     {differences.length>0&&<details><summary>与当前发布规则的差异（{differences.length} 项）</summary>{differences.map(value=><p key={value}>{value}</p>)}</details>}
-    {preview&&<OntologySuggestions key={preview.id} embedded schema={schema} initialPreview={preview} baseOntologyId={base} disabled={disabled} previewIds={ids} typeChanges={changes}
+    {status?.status==='completed'&&status.task_id===loadedTask.current&&preview&&<OntologySuggestions key={preview.id} embedded schema={schema} initialPreview={preview} disabled={disabled} previewIds={ids} typeChanges={changes}
       onReviewState={reviewState} onBusy={setBusy} onAdopt={(value,id)=>{setSchema(value);setIds(previous=>[...new Set([...previous,id])]);}} />}
     <details><summary>配置实体类型、属性和关系规则</summary>
       <OntologyEditor value={schema} disabled={disabled||busy} onChange={(value,change)=>{setSchema(value);if(change)setChanges(previous=>[...previous,change]);}} />

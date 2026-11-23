@@ -9,6 +9,7 @@ import path from 'node:path';
 import {createStudioControl} from '../integration/host-control.mjs';
 import {createTeamService} from '../integration/team-client/service.mjs';
 import {createApplicationInstaller} from '../../team-client/applications/installer.mjs';
+import {createApplicationInstaller as personalInstaller} from '../../personal-client/applications/installer.mjs';
 
 const exec=promisify(execFile);
 async function fixture(t,{legacy=false}={}){
@@ -32,8 +33,21 @@ async function fixture(t,{legacy=false}={}){
   const launched=[];
   const team=createTeamService({client,applications:{install:(...args)=>installer.install(...args),listInstalled:()=>installer.list(),launch:async applicationId=>{launched.push(applicationId);return{applicationId}}}});
   const open=()=>team.action('open',{applicationId:payload.applicationId,artifactHash:payload.artifactHash});
-  return{payload,installer,install,receipts,packageSha256,open,launched};
+  return{root,archive,payload,installer,install,receipts,packageSha256,open,launched};
 }
+
+test('personal installer records the exact adopted package and rejects mismatched identity',async t=>{
+  const app=await fixture(t);
+  const installer=personalInstaller({rootDir:path.join(app.root,'personal'),getCompatibilityContext:async()=>({hostProtocol:1})});
+  const input={archivePath:app.archive,standardArtifactHash:app.packageSha256,manifest:app.payload.manifest};
+  await assert.rejects(installer.install({...input,manifest:{...input.manifest,version:'1.0.1'}}),{code:'APPLICATION_MANIFEST_MISMATCH'});
+  await assert.rejects(installer.install({...input,standardArtifactHash:'a'.repeat(64)}),{code:'APPLICATION_ARTIFACT_INVALID'});
+  assert.equal((await installer.list()).length,0);
+  await installer.install(input);
+  const [installed]=await installer.list();
+  assert.equal(installed.applicationId,input.manifest.applicationId);
+  assert.equal(installed.packageSha256,input.standardArtifactHash);
+});
 
 test('original Kaiwu installs a standard ZIP through the real installer with its verified descriptor',async t=>{
   const f=await fixture(t);await f.install();
@@ -82,14 +96,11 @@ test('real standard installer refuses payload/ZIP manifest disagreement before a
   assert.deepEqual(await f.installer.list(),[]);assert.equal(f.receipts.length,0);
 });
 
-test('legacy miniapp installation and same-version retry retain artifact checks',async t=>{
-  const f=await fixture(t,{legacy:true});await f.install();await f.install();
-  assert.equal((await f.installer.list()).length,1);assert.equal(f.receipts.length,2);
-  f.payload.artifactHash='d'.repeat(64);
-  await assert.rejects(f.install(),{code:'INSTALLED_ARTIFACT_MISMATCH'});
-  assert.equal(f.receipts.length,2);
+test('legacy miniapp installation is refused before writing or acknowledging',async t=>{
+  const f=await fixture(t,{legacy:true});
+  await assert.rejects(f.install(),{code:'STANDARD_PACKAGE_REQUIRED'});
+  assert.deepEqual(await f.installer.list(),[]);assert.equal(f.receipts.length,0);
 });
-
 
 test('Team standard opening uses the real installer and validates bytes again on reuse',async t=>{
   const f=await fixture(t);await f.open();await f.open();

@@ -6,11 +6,11 @@ const source = await readFile(new URL('../integration/panel-view.js', import.met
 function fixture() {
   let event, respond = async () => ({ ok: true });
   const nodes = [];
-  const createButton = { disabled: true };
+  const directoryButton = { disabled: true };
   const anchor = { isConnected: true, getBoundingClientRect: () => ({ x: 20, y: 30, width: 900, height: 600 }) };
   const window = { addEventListener() {}, wanxClient: { onStarlinkEvent(fn) { event = fn; } } };
   const document = { baseURI: 'file:///C:/app/local-ui/renderer/index.html',
-    querySelector: selector => selector === '#starlink-banner-create' ? createButton : null,
+    querySelector: selector => selector === '#starlink-banner-warehouses' ? directoryButton : null,
     getElementById: id => id === 'starlink-panel-region' ? anchor : null,
     body: { append() {} }, createElement(tag) {
       const node = { tag, contentWindow: {}, style: {}, setAttribute() {}, append() {}, remove() { this.removed = true; } };
@@ -20,7 +20,7 @@ function fixture() {
   const panel = window.createStarlinkPanelView({ request: (...args) => args[1]?.action === 'reset' ? Promise.resolve({ok:true}) : respond(...args), changed() {} });
   const state = { canLaunchApplications: true, account: { accountId: 'one', clientId: 'client' }, connection: { deviceId: 'box' } };
   panel.sync(state, true, true); panel.mount();
-  return { panel, window, state, nodes, createButton, event: value => event(value), respond: fn => { respond = fn; },
+  return { panel, window, state, nodes, directoryButton, event: value => event(value), respond: fn => { respond = fn; },
     connect: () => window.wanxStarlinkPanel.connect(nodes.filter(n=>n.tag==='iframe').at(-1).contentWindow),
     frame: () => nodes.filter(n => n.tag === 'iframe').at(-1) };
 }
@@ -58,27 +58,27 @@ test('reload revokes the previous document even when its WindowProxy is unchange
   assert.equal((await current.call(source,'warehouses',{})).ok,true);
 });
 
-test('banner creation follows the active panel and is disabled when its document is retired', () => {
+test('banner warehouse navigation follows the active panel and is disabled when its document is retired', () => {
   const f = fixture();
   const source = f.frame().contentWindow;
   const bridge = f.connect();
   let opened = 0;
-  bridge.register(source, { createWarehouse() { opened++; } });
-  assert.equal(f.createButton.disabled, true);
-  bridge.setCreationEnabled(source, true);
-  assert.equal(f.createButton.disabled, false);
-  f.panel.action('new-warehouse');
+  bridge.register(source, { openWarehouseDirectory() { opened++; } });
+  assert.equal(f.directoryButton.disabled, true);
+  bridge.setDirectoryEnabled(source, true);
+  assert.equal(f.directoryButton.disabled, false);
+  f.panel.action('warehouses');
   assert.equal(opened, 1);
 
   f.panel.sync(f.state, true, false);
-  assert.equal(f.createButton.disabled, true);
-  f.panel.action('new-warehouse');
+  assert.equal(f.directoryButton.disabled, true);
+  f.panel.action('warehouses');
   f.panel.sync(f.state, true, true);
-  assert.equal(f.createButton.disabled, false);
+  assert.equal(f.directoryButton.disabled, false);
 
   f.connect();
-  assert.equal(f.createButton.disabled, true);
-  assert.throws(() => bridge.setCreationEnabled(source, true), /HOST_SESSION_EXPIRED/);
-  f.panel.action('new-warehouse');
+  assert.equal(f.directoryButton.disabled, true);
+  assert.throws(() => bridge.setDirectoryEnabled(source, true), /HOST_SESSION_EXPIRED/);
+  f.panel.action('warehouses');
   assert.equal(opened, 1);
 });

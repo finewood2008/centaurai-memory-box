@@ -1,6 +1,6 @@
 const sourceCodes = new Set(['SOURCE_VERSION_CONFLICT','SOURCE_NOT_READY','SOURCE_CONFIRMATION_STALE','SOURCE_OPERATION_CONFLICT']);
 // Only public codes and HTTP refusal metadata cross the workbench IPC boundary.
-const known = /^(?:(?:SEMANTICA|WAREHOUSE|MIGRATION|ACCESS_KEY|MODEL|MODELING|SKILL|REASONING|CORRECTION|ONTOLOGY|KNOWLEDGE|RELEASE|RESTORE|HOST_SESSION)_[A-Z_]+|INVALID_CORRECTION_[A-Z_]+|INVALID_RESOURCE|LLM_NOT_CONFIGURED)$/;
+const known = /^(?:(?:SEMANTICA|WAREHOUSE|MIGRATION|ACCESS_KEY|MODEL|MODELING|SKILL|REASONING|CORRECTION|ONTOLOGY|KNOWLEDGE|RELEASE|RESTORE|SENSITIVE|HOST_SESSION)_[A-Z_]+|INVALID_CORRECTION_[A-Z_]+|INVALID_RESOURCE|LLM_NOT_CONFIGURED)$/;
 const uncertain = new Set(['SEMANTICA_CONNECTION_FAILED', 'SEMANTICA_SERVICE_TIMEOUT']);
 const messages = {
   SEMANTICA_ANNOTATION_SEARCH_UNAVAILABLE: '当前无法按标签筛选，请更新盒端服务或清除标签后重试。',
@@ -9,6 +9,11 @@ const messages = {
   SOURCE_CONFIRMATION_STALE: '当前正文的确认已失效，请重新确认正文。',
   SOURCE_OPERATION_CONFLICT: '确认操作与原请求不一致，请读取最新进度后再继续。',
   INVALID_RESOURCE: '当前桌面无法转发此操作，请更新星图客户端后重试',
+  SENSITIVE_REVISION_CONFLICT: '脱敏设置已更新，请读取最新设置后再保存。',
+  SENSITIVE_RULE_INVALID: '规则设置不符合要求，请检查识别说明、样例和规则容量。',
+  SENSITIVE_SIMILAR_RULE: '有相似规则，请检查规则内容后再保存。',
+  SENSITIVE_PREVIEW_FAILED: '脱敏预览失败，请检查当前仓的模型设置后重试。',
+  MODEL_UNAVAILABLE: '当前仓的检测模型不可用，请在模型设置中确认配置后重试。',
   SEMANTICA_OPERATION_NOT_ALLOWED: '当前万象接口尚未支持此操作，请更新万象服务后重试',
   SEMANTICA_INVALID_REQUEST: '请求参数与当前万象接口不兼容，请同步更新客户端和服务端',
   SEMANTICA_QUERY_NOT_ALLOWED: '请求查询参数与当前万象接口不兼容，请同步更新客户端和服务端',
@@ -62,9 +67,11 @@ const messages = {
 export function workbenchErrorReply(error) {
   const code = typeof error?.code === 'string' && error.code.length <= 96 && (known.test(error.code) || sourceCodes.has(error.code)) ? error.code : 'SEMANTICA_REQUEST_FAILED';
   const status = !uncertain.has(code) && Number.isInteger(error?.status) && error.status >= 400 && error.status <= 599 ? error.status : 0;
-  return { ok: false, code, status, message: messages[code] || '知识操作未完成，请重试或重新核对' };
+  const similarRule = code === 'SENSITIVE_SIMILAR_RULE' && /^规则与 [a-z][a-z0-9_]{0,79} 相似$/.test(error?.message || '');
+  return { ok: false, code, status, message: similarRule ? error.message : messages[code] || '知识操作未完成，请重试或重新核对' };
 }
 export function workbenchFailure(value, status) {
-  const reply = workbenchErrorReply({ code: value?.code || (status === 404 ? 'SEMANTICA_UPGRADE_REQUIRED' : undefined), status });
+  const error = !value?.code && value?.detail && typeof value.detail === 'object' ? value.detail : value;
+  const reply = workbenchErrorReply({ code: error?.code || (status === 404 ? 'SEMANTICA_UPGRADE_REQUIRED' : undefined), status, message: error?.message });
   return Object.assign(new Error(reply.message), { code: reply.code, status: reply.status, publicMessage: reply.message });
 }

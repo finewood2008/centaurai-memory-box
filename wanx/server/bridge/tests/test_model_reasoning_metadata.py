@@ -62,6 +62,7 @@ def test_explicit_disabled_capability_wins_over_verified_default(fields):
         {"adapter": "unknown"},
         {"adapter": "thinking", "toggle": "yes"},
         {"adapter": "thinking", "efforts": ["high", {"bad": True}]},
+        {"adapter": "thinking", "efforts": ["synthetic-secret"]},
     ],
 )
 def test_invalid_capabilities_fail_discovery(capability):

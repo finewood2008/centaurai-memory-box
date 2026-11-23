@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {stripTypeScriptTypes} from 'node:module';
 import vm from 'node:vm';
+import {ontologyDraftName} from '../src/ontology.ts';
 
 // Exercise the page's real refresh callback, including its existing draft guards.
 const source=await readFile(new URL('../src/main.tsx',import.meta.url),'utf8');
@@ -15,7 +16,7 @@ const v2={id:'v2',status:'published',name:'two',schema:schema('PERSON','PATENT')
 function harness(){
   let response={items:[structuredClone(v1)]},read=async()=>structuredClone(response);
   const state={loaded:false,items:[],definition:null,name:'',saved:'',created:'old',createdId:undefined,resets:0};
-  const context=vm.createContext({JSON,structuredClone,workspaceId:'default',starterOntology:schema(),useCallback:fn=>fn,
+  const context=vm.createContext({JSON,structuredClone,ontologyDraftName,workspaceId:'default',starterOntology:schema(),useCallback:fn=>fn,
     loadSequence:{current:0},initialized:{current:false},editorBaselineId:{current:undefined},editorState:{current:{dirty:false,createdVersionId:undefined}},
     requestJson:()=>read(),setItems:v=>state.items=v,setDefinition:v=>state.definition=v,setName:v=>state.name=v,
     setSavedConfiguration:v=>state.saved=v,setLoaded:v=>state.loaded=v,setCreatedConfiguration:v=>state.created=v,

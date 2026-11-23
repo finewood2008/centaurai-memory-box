@@ -617,3 +617,42 @@ async def test_expert_failure_releases_lock_and_does_not_replay_admitted_run(set
     assert old['run']['id'] == run['id'] and len(h.enqueued) == 1
     with acquire(h.svc.store.root, exclusive=True):
         pass
+
+
+async def test_general_project_prompt_reaches_isolated_expert_workspace(setup):
+    from wanx_studio.deployment.project_expert import build_expert_prompt
+    from wanx_studio.service import StudioService
+
+    env = setup
+    env.svc.directory_profile = SimpleNamespace(available=True, runtime_namespace='studio',
+                                               authorize_owner=lambda owner: None, experts=env.engine)
+    goal = '从客户原话中判断跟进时机'
+    operation = uuid4().hex
+    from test_studio import ROOT
+    env.svc.project_root = ROOT
+    project = StudioService.create_project(env.svc, OWNER, '销售助手', goal, operation, target='expert')
+    assert project['deploymentExpert']['template'] == env.descriptor['template']
+    assert project['solution']['capabilities'] == ['wanx.expert-app.v1']
+    project['solution']['prd']['rules'] = ['附上客户原话', '先握手再提交；失败则等待。']
+    project['solution']['prd']['exceptions'] = ['按 runId 轮询']
+    assert '等待' not in build_expert_prompt(project)
+    assert 'runId' not in build_expert_prompt(project)
+    project['solution']['prd']['expertRules'] = [goal, '附上客户原话']
+    project['solution']['prd']['rules'].append('客户端实现细节')
+    assert '客户端实现细节' not in build_expert_prompt(project)
+    prompt = build_expert_prompt(project)
+    assert goal in prompt and '附上客户原话' in prompt
+    descriptor = {**env.descriptor, 'prompt': prompt}
+    binding = await env.engine.prepare(OWNER, TARGET, project['id'], descriptor, lambda: None)
+    workspace = env.registry.workspace_for_agent(binding['agentId'])
+    assert workspace.files['SOUL.md'] == prompt.encode()
+    assert (env.root / 'SOUL.md').read_text() == 'Synthetic expert identity'
+    changed = await env.engine.prepare(OWNER, TARGET, project['id'], {**descriptor, 'prompt': '新需求'}, lambda: None)
+    assert changed['agentId'] != binding['agentId']
+    workspace.files['SOUL.md'] = b'wrong prompt'
+    with pytest.raises(StudioError, match='EXPERT_WORKSPACE_CHANGED'):
+        await env.engine.verify(OWNER, binding, lambda: None)
+    env.svc.directory_profile.experts = SimpleNamespace(templates=lambda: [])
+    assert StudioService.create_project(env.svc, OWNER, '销售助手', goal, operation, target='expert')['id'] == project['id']
+    with pytest.raises(StudioError, match='EXPERT_TEMPLATE_UNAVAILABLE'):
+        StudioService.create_project(env.svc, OWNER, '另一项目', goal, uuid4().hex, target='expert')

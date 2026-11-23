@@ -11,7 +11,6 @@ import unicodedata
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from octop_memory.core import Memory
 from octop_memory.types import AtomCard, MemoryNode
@@ -20,7 +19,6 @@ _LOCK = threading.Lock()
 _HAN = re.compile(r"[\u3400-\u9fff]+")
 _WORD = re.compile(r"[a-z0-9]+")
 _QUERY_FILLER = "帮我找回知君记得记住请问我们上次之前聊过什么是谁还记得这件事哪儿从前的资料"
-_REMEMBER = re.compile(r"^(?:请帮我|请|帮我)?记住[：:，,\s]+(.+)$", re.DOTALL)
 _CHANNEL_LABELS = {"weixin": "微信", "wecom": "企业微信", "feishu": "飞书", "dingtalk": "钉钉"}
 
 
@@ -74,13 +72,29 @@ def _evidence(memory: Memory, atom: AtomCard) -> dict[str, Any]:
         "createdAt": atom.created_at.isoformat(),
         "threadId": note.get("threadId"),
         "messageId": note.get("messageId"),
-        **({"title": _CHANNEL_LABELS[note["channel"]] + "私聊"} if note.get("channel") in _CHANNEL_LABELS else {}),
+        **(
+            {"title": _CHANNEL_LABELS[note["channel"]] + "私聊"}
+            if note.get("channel") in _CHANNEL_LABELS
+            else {}
+        ),
     }
 
 
 def _active(memory: Memory, atom_id: str) -> AtomCard | None:
     atom = memory.get_atom(atom_id)
     return atom if atom and atom.deprecated_at is None else None
+
+
+def _resolve_turn_target(memory: Memory, target: str) -> str:
+    if memory.get_atom(target) is not None:
+        return target
+    normalized = _normalize(target)
+    matches = [
+        atom.id for atom in memory.list_atoms(limit=-1) if _normalize(atom.assertion) == normalized
+    ]
+    if len(matches) != 1:
+        raise MemoryMissing("memory target missing or ambiguous")
+    return matches[0]
 
 
 def _list(memory: Memory, query: str, limit: int, offset: int) -> dict[str, Any]:
@@ -121,24 +135,48 @@ def _eligible_references(
         if not (
             (reference["source"] == "memmy" and history_may_revive_retired_fact)
             or any(
-                text in _normalize(reference["title"] + "\n" + reference["text"]) for text in retired
+                text in _normalize(reference["title"] + "\n" + reference["text"])
+                for text in retired
             )
         )
     ]
 
 
-def _write(memory: Memory, fields: dict[str, Any]) -> dict[str, Any]:
+def _receipt_digest(fields: dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
+
+
+def _write(
+    memory: Memory, fields: dict[str, Any], *, legacy_request_id: str | None = None
+) -> dict[str, Any]:
     action = fields["action"]
     receipt_id = "zhijun-op-" + fields["requestId"]
-    digest = hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
+    digest = _receipt_digest(fields)
     atom_id = fields.get("id")
     assertion = fields.get("text", "").strip()
     note = json.dumps(
-        {"threadId": fields.get("threadId"), "messageId": fields.get("messageId"),
-         "channel": fields.get("channel")}
+        {
+            "threadId": fields.get("threadId"),
+            "messageId": fields.get("messageId"),
+            "channel": fields.get("channel"),
+        }
     )
     with memory.backend.transaction():
         receipt = memory.backend.get_node(receipt_id)
+        if receipt is None and legacy_request_id is not None:
+            receipt = memory.backend.get_node("zhijun-op-" + legacy_request_id)
+            if receipt is not None:
+                if action != "remember":
+                    raise MemoryConflict("operation id already used")
+                # Older phone writes omitted conversation provenance from the digest.
+                digest = _receipt_digest(
+                    {
+                        "action": action,
+                        "requestId": legacy_request_id,
+                        "text": assertion,
+                        "channel": fields["channel"],
+                    }
+                )
         if receipt:
             if receipt.metadata["digest"] != digest:
                 raise MemoryConflict("operation id already used")
@@ -157,6 +195,8 @@ def _write(memory: Memory, fields: dict[str, Any]) -> dict[str, Any]:
             )
             atom = existing or memory.create_atom(assertion, entity_name="知君记忆", note=note)[0]
         else:
+            if "target" in fields:
+                atom_id = _resolve_turn_target(memory, fields["target"])
             atom = _active(memory, atom_id)
             if not atom:
                 if memory.get_atom(atom_id):
@@ -186,7 +226,9 @@ def _write(memory: Memory, fields: dict[str, Any]) -> dict[str, Any]:
         return {"item": None if action == "forget" else _evidence(memory, atom), "applied": True}
 
 
-def run_memory(root: Path, owner_id: int, fields: dict[str, Any]) -> dict[str, Any]:
+def run_memory(
+    root: Path, owner_id: int, fields: dict[str, Any], *, legacy_request_id: str | None = None
+) -> dict[str, Any]:
     directory = root / "zhijun-sidebar-memory"
     db = directory / f"user-{owner_id}.sqlite"
     action = fields["action"]
@@ -206,30 +248,9 @@ def run_memory(root: Path, owner_id: int, fields: dict[str, Any]) -> dict[str, A
                 if references is not None:
                     result["references"] = _eligible_references(memory, query, references)
                 return result
-            return _write(memory, fields)
+            return _write(memory, fields, legacy_request_id=legacy_request_id)
         finally:
             saver = getattr(memory, "_checkpointer", None)
             if saver is not None:
                 saver.conn.close()
             memory.backend.close()
-
-
-def remember_from_channel(
-    root: Path, owner_id: int, text: str, channel: str, channel_id: str, event_id: str
-) -> str | None:
-    """Handle an explicit memory instruction from a verified owner DM."""
-    matched = _REMEMBER.fullmatch(text.strip())
-    if not matched:
-        return None
-    assertion = matched[1].strip()
-    if not assertion or len(assertion) > 3000 or "\0" in assertion:
-        return "请输入一条 3000 字以内、想让我记住的内容。"
-    request_id = (
-        uuid5(NAMESPACE_URL, f"wanx:zhijun:{channel}:{channel_id}:{event_id}")
-        if event_id else uuid4()
-    )
-    result = run_memory(root, owner_id, {
-        "action": "remember", "requestId": str(request_id), "text": assertion, "channel": channel,
-    })
-    item = result["item"]
-    return f"已记住：{item['text']}" if item else "这条消息已处理。想重新记住，可以再发一条。"

@@ -22,6 +22,7 @@ async function verify() {
         if(method==='dialogue.channels-list')value={scope,items:channelRows};
         if(method==='dialogue.channels-save'){const row={id:'channel-1',kind:input.kind,name:input.name,enabled:true,status:'connected'};channelRows=[row];value={scope,channel:row};}
         if(method==='dialogue.channels-detail')value={scope,channel:channelRows[0],values:{app_id:'synthetic-app'},configured:['app_secret']};
+        if(method==='dialogue.channels-verify-start')value={scope,verification:{status:'awaiting_message'}};
         if(method==='dialogue.channels-delete'){channelRows=[];value={scope};}
         if(method==='dialogue.channels-start')value={scope,handle:'synthetic-ticket',interval:60000,qr:'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyMDAiIGhlaWdodD0iMjAwIj48L3N2Zz4='};
         return {ok:true,value};
@@ -57,7 +58,9 @@ async function verify() {
       await until(()=>dialog.querySelector('[data-channel-form]'));dialog.querySelector('.ai-channel-manual').open=true;
       const form=dialog.querySelector('[data-channel-form]');
       for(const [name,value]of Object.entries({name:'Synthetic connection',app_id:'synthetic-app',app_secret:'synthetic-secret'}))form.elements.namedItem(name).value=value;
-      form.requestSubmit();await until(()=>dialog.querySelector('[data-channel-action="edit"]'));
+      form.requestSubmit();await until(()=>dialog.querySelector('[data-channel-action="verify-check"]'));
+      dialog.querySelector('[data-channel-action="close"]').click();channelButton.click();
+      await until(()=>dialog.querySelector('[data-channel-action="edit"]'));
       dialog.querySelector('[data-channel-action="edit"]').click();await until(()=>dialog.querySelector('[data-channel-action="delete-ask"]'));
       check(dialog.querySelector('input[name="app_secret"]').value==='','channel edit exposed a secret');
       dialog.querySelector('[data-channel-action="delete-ask"]').click();check(!calls.some(c=>c.method==='dialogue.channels-delete'),'removal skipped confirmation');

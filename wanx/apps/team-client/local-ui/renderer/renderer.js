@@ -1244,7 +1244,7 @@ function applicationManagement(item, installed) {
   return `<div class="store-detail-body">${item.description ? `<p class="store-full-description">${escapeHTML(item.description)}</p>` : ""}${installed && item.version ? `<p class="muted">${active ? "当前版本" : "待安装版本"} v${escapeHTML(item.version)}</p>` : ""}<p class="market-status">${escapeHTML(availability)}</p>${candidateDetails(candidate)}${installed && !item.selectionRequired ? `<div class="market-actions">${active && previous && !isManagedLocalApplication(item) ? `<button class="text-button ${restoring ? "activity-button" : ""}" data-action="${applicationsTab === "local" ? "local-rollback" : "market-rollback"}" data-application-id="${id}" aria-busy="${restoring}" ${disabled}>${restoring ? activityLabel("正在恢复…") : "恢复上一版本"}</button>` : ""}<button class="text-button danger-text ${uninstalling ? "activity-button" : ""}" data-action="${isManagedLocalApplication(item) || applicationsTab === "local" ? "local-uninstall" : "market-uninstall"}" data-application-id="${id}" aria-busy="${uninstalling}" ${disabled}>${uninstalling ? activityLabel("正在卸载…") : "卸载"}</button></div>` : ""}${!candidate?.artifact && !candidate?.release?.notes && !installed ? '<p class="muted">暂无更多版本信息。</p>' : ""}</div>`;
 }
 function applicationCard(item, installed = true) {
-  if (applicationsTab !== "local") item = withMarketName(item);
+  item = withMarketName(item);
   const candidate = applicationsTab === "local" ? null : marketCandidates.get(item.applicationId);
   const id = escapeHTML(item.applicationId);
   const operation = operationFor(item.applicationId);
@@ -1266,7 +1266,14 @@ function discoverableApplications() {
 }
 function withMarketName(item) {
   const installed = currentState.applications?.find(record => record.applicationId === item.applicationId);
-  if (window.wanxApplicationPresentation?.environment(installed)) return { ...item, name: installed.name };
+  if (window.wanxApplicationPresentation?.environment(installed)) {
+    const name = studioHome.projectName(installed.deployment?.baseApplicationId);
+    return { ...item, name: name || installed.name };
+  }
+  if (installed) {
+    const name = studioHome.projectName(installed.applicationId);
+    if (name) return { ...item, name };
+  }
   if (applicationsTab === "local") return item;
   const cloud = marketItems.find(entry => entry.applicationId === item.applicationId);
   // Directory presentation comes only from cloud; installed runtime metadata stays intact.
@@ -1287,7 +1294,7 @@ function localInstalledApplications() {
 }
 function localApplicationsView() {
   const items = localInstalledApplications(), installing = busyFor("applications.install-local");
-  return `<section class="content-section local-applications" aria-label="本机安装"><div class="section-heading"><div><h3>本机安装 <span class="count">${items.length}</span></h3><p>从本机安装包安装与更新。卸载保留应用业务数据。</p></div><div class="store-toolbar"><button class="button small" data-action="local-refresh" ${busy ? "disabled" : ""}>刷新</button><button class="button primary ${installing ? "activity-button" : ""}" data-action="local-install" ${busy ? "disabled" : ""}>${installing ? activityLabel("正在安装…") : "＋ 安装本地应用"}</button></div></div><p class="muted">支持万象 ZIP 应用包；安装时会检查包内容、平台与版本。</p>${items.length ? `<div class="application-list">${items.map(item => applicationCard(item)).join("")}</div>` : '<div class="empty-state"><h3>暂无本地安装的应用</h3><p>选择电脑上的应用安装包，安装后可在这里打开、管理版本或卸载。</p></div>'}</section>${teamView.catalog()}`;
+  return `<section class="content-section local-applications" aria-label="本机安装"><div class="section-heading"><div><h3>本机安装 <span class="count">${items.length}</span></h3><p>从本机安装包安装与更新。卸载保留应用业务数据。</p></div><div class="store-toolbar"><button class="button small" data-action="local-refresh" ${busy ? "disabled" : ""}>刷新</button><button class="button primary ${installing ? "activity-button" : ""}" data-action="local-install" ${busy ? "disabled" : ""}>${installing ? activityLabel("正在安装…") : "＋ 安装本地应用"}</button></div></div><p class="muted">支持万象 ZIP 应用包；安装时会检查包内容、平台与版本。</p>${items.length ? `<div class="application-list">${items.map(item => applicationCard(item)).join("")}</div>` : '<div class="empty-state"><h3>暂无本地安装的应用</h3><p>选择电脑上的应用安装包，安装后可在这里打开、管理版本或卸载。</p></div>'}</section>${teamView.catalog(studioHome.projectName)}`;
 }
 function applicationMedia(id) { return window.wanxAppMedia?.[id]; }
 function storeFeatures() {

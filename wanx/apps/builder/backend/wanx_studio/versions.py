@@ -1,5 +1,7 @@
 """Project-owned immutable versions and an explicit, single improvement line."""
+from .public_capabilities import expert_contract
 from copy import deepcopy
+from itertools import chain
 import time
 from uuid import uuid4
 from .contracts import StudioError, digest
@@ -14,10 +16,16 @@ def idle(p, pending=True):
     if not direct and p.get('preparation',{}).get('interview',{}).get('state')=='running':raise StudioError('INTERVIEW_BUSY',409)
 
 def next_version(p):
-    if not p.get("workshop"):
-        return f"0.1.{len(p['artifacts'])}"
-    sequence = max([p.get("_versionSequence", -1)] + [int(a["version"].split(".")[-1]) for a in p["artifacts"]]) + 1
-    p["_versionSequence"] = sequence
+    artifacts = p["artifacts"]
+    # Older projects used the artifact count. Imports and pruning can leave gaps.
+    highest = max(len(artifacts) - 1, p.get("_versionSequence", -1))
+    for artifact in chain(artifacts, p.get("_cleanedVersions", [])):
+        patch = str(artifact.get("version", "")).rsplit(".", 1)[-1]
+        if patch.isascii() and patch.isdecimal():
+            highest = max(highest, int(patch))
+    sequence = highest + 1
+    if p.get("workshop"):
+        p["_versionSequence"] = sequence
     return f"0.1.{sequence}"
 
 def state(p):
@@ -72,7 +80,7 @@ def standard_artifact_hash(a):
 
 
 def verify(a):
-    expert=a.get('snapshot',{}).get('contracts',{}).get('foundation',{}).get('expertDeployment')
+    expert=expert_contract(a.get('snapshot',{}).get('contracts',{})).get('expertDeployment')
     sealed=a.get('expertContractDigest')
     if sealed is not None and (not expert or digest(expert)!=sealed) or expert and expert.get('profile')=='wanx-expert-app-v1' and sealed is None:
         raise StudioError('ARTIFACT_INTEGRITY_FAILED',409)
@@ -86,7 +94,7 @@ def verify(a):
             expected=standard_artifact_hash(a)
         except (StudioError,KeyError,TypeError,ValueError) as error:
             raise StudioError('ARTIFACT_INTEGRITY_FAILED',409) from error
-    else:expected=artifact_hash(a['files'],a['manifest'],a['solutionHash'],a['taskId'],sealed)
+    else:raise StudioError('STANDARD_ARTIFACT_REQUIRED',409)
     if a['hash']!=expected or a.get('contentHash',digest({k:a[k] for k in ['files','manifest','bundle','css']}))!=digest({k:a[k] for k in ['files','manifest','bundle','css']}):
         raise StudioError('ARTIFACT_INTEGRITY_FAILED',409)
     if a.get('checkpoint') and (digest(a['checkpoint'])!=a.get('checkpointHash') or a['checkpoint']['artifactHash']!=a['hash']):raise StudioError('ARTIFACT_INTEGRITY_FAILED',409)

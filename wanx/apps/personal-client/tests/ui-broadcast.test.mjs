@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createUIBroadcast } from "../shell/ui-broadcast.mjs";
+import { createUIBroadcast, sendToLiveFrame } from "../shell/ui-broadcast.mjs";
 
 const deferred = () => {
   let resolve, reject;
@@ -9,11 +9,15 @@ const deferred = () => {
 };
 function windowFixture() {
   const sent = [];
+  const mainFrame = {
+    destroyed: false, detached: false, isDestroyed() { return this.destroyed; },
+    send(channel, value) { sent.push([channel, structuredClone(value)]); },
+  };
   return {
     sent, destroyed: false, isDestroyed() { return this.destroyed; },
     webContents: {
       destroyed: false, isDestroyed() { return this.destroyed; },
-      send(channel, value) { sent.push([channel, structuredClone(value)]); },
+      crashed: false, isCrashed() { return this.crashed; }, mainFrame,
     },
   };
 }
@@ -137,6 +141,45 @@ test("destroyed windows and destroyed web contents receive no broadcast", async 
   assert.deepEqual(h.panel.sent, []);
   assert.deepEqual(h.management.sent, []);
   assert.deepEqual(h.errors, []);
+});
+
+test("a disposed main frame skips both immediate and delayed delivery until a replacement is live", async () => {
+  const h = harness(), contents = h.management.webContents, frame = contents.mainFrame;
+  contents.mainFrame = null;
+  h.broadcaster.publish();
+  assert.equal(h.panel.sent.length, 1);
+  assert.deepEqual(h.management.sent, []);
+  await tick();
+  contents.mainFrame = frame;
+  frame.destroyed = true;
+  h.reads[0].resolve([{ applicationId: "example.latest" }]);
+  await tick();
+  assert.deepEqual(h.management.sent, []);
+  contents.crashed = true;
+  contents.mainFrame = { ...frame, detached: true, destroyed: false };
+  h.broadcaster.publish();
+  assert.deepEqual(h.management.sent, []);
+  contents.crashed = false;
+  h.broadcaster.publish();
+  assert.equal(h.management.sent.at(-1)[1].applications[0].applicationId, "example.latest");
+  assert.deepEqual(h.errors, []);
+  h.broadcaster.dispose();
+});
+
+test("sending a Space update tolerates the native wrapper being disposed during lookup", () => {
+  const window = windowFixture();
+  const contents = window.webContents;
+  Object.defineProperty(contents, "mainFrame", {
+    get() { throw Error("Render frame was disposed before WebFrameMain could be accessed"); },
+  });
+  assert.equal(sendToLiveFrame(window, "wanx-client:space-state", { phase: "ready" }), false);
+  assert.deepEqual(window.sent, []);
+});
+
+test("unexpected errors still surface from the send guard", () => {
+  const window = windowFixture();
+  window.webContents.mainFrame.send = () => { throw Error("Unexpected IPC error"); };
+  assert.throws(() => sendToLiveFrame(window, "wanx-client:space-state", {}), /Unexpected IPC error/);
 });
 
 test("background delivery uses the live window registry", async () => {

@@ -1,6 +1,7 @@
 import { useId, useMemo, useState } from 'react';
 import type { OntologyDefinition, EntityDefinition, RelationDefinition } from '../ontology';
 import OntologyRelationGraph from './OntologyRelationGraph';
+import StarxiaotuTerm from './StarxiaotuTerm';
 import OntologyInstances from './OntologyInstances';
 
 type TypeKind = 'entity' | 'relation';
@@ -102,7 +103,7 @@ export default function OntologyCatalog({ schema, onAdd, onEdit, disabled = fals
       </section>
       {selected && <aside className="knowledge-card catalog-detail rules-catalog-detail" aria-label="类型定义">
         <header>
-          <div><span className="rules-detail-kind">{typeTitle}</span><h2>{selected.label || selected.name}</h2></div>
+          <div><span className="rules-detail-kind">{typeTitle}<StarxiaotuTerm name={kind === 'entity' ? 'entity-type' : 'relation-type'} /></span><h2>{selected.label || selected.name}</h2></div>
           <div className="rules-detail-actions">
             {onEdit && <button type="button" disabled={disabled} onClick={() => onEdit(kind, selected.name)} aria-label={`编辑${selected.label || selected.name}`}>手动编辑</button>}
           </div>
@@ -112,14 +113,14 @@ export default function OntologyCatalog({ schema, onAdd, onEdit, disabled = fals
         <details className="rules-definition-source rules-definition" open={graph || undefined}>
           <summary>查看类型定义</summary>
           <p className={selected.definition ? undefined : 'muted'}>{selected.definition || '当前版本尚未填写定义。'}</p>
-          {selected.classification_boundary && <section className="rules-type-boundary"><h3>分类边界</h3><p>{selected.classification_boundary}</p></section>}
-          {isRelation(selected) && <section className="rules-type-direction"><h3>允许的关系方向</h3>
+          {selected.classification_boundary && <section className="rules-type-boundary"><h3>分类边界<StarxiaotuTerm name="classification-boundary" /></h3><p>{selected.classification_boundary}</p></section>}
+          {isRelation(selected) && <section className="rules-type-direction"><h3>允许的关系方向<StarxiaotuTerm name="relation-direction" /></h3>
             <p>{endpoints(selected.source_types)}{' → '}<strong>{selected.label || selected.name}</strong>{' → '}{endpoints(selected.target_types)}</p></section>}
           {!!links.length && <section className="rules-related-types"><h3>相关连接规则</h3>
             {directionGroup('作为起点', 'source_types')}
             {directionGroup('作为终点', 'target_types')}
           </section>}
-          <section className="rules-properties"><h3>属性 {selected.properties.length > 0 && <span>{selected.properties.length}</span>}</h3>
+          <section className="rules-properties"><h3>属性<StarxiaotuTerm name="property" /> {selected.properties.length > 0 && <span>{selected.properties.length}</span>}</h3>
             {selected.properties.length ? <dl>
               {selected.properties.map(property => <div key={property.name}><dt>{property.label || property.name}</dt>
                 <dd><span className="badge">{property.required ? '必填' : '选填'}</span>{property.definition && <p>{property.definition}</p>}</dd>

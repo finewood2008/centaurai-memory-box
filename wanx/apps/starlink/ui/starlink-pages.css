@@ -1,0 +1,98 @@
+.starlink-current-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.starlink-overview {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
+  gap: 12px;
+}
+.starlink-overview section, .knowledge-layout {
+  min-width: 0;
+  border: 1px solid var(--starlink-rail-divider);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.starlink-overview section { padding: 20px; }
+.starlink-overview .overview-goal { grid-column: 1 / -1; }
+.starlink-overview header, .knowledge-reader > header, .knowledge-section > header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.starlink-overview h2, .knowledge-section h3 { margin: 0; font-size: 15px; }
+.overview-goal p { max-width: 76ch; margin: 10px 0 0; white-space: pre-line; overflow-wrap: anywhere; }
+.overview-numbers {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 12px 0 0;
+}
+.overview-numbers dt { color: var(--muted); font-size: 12px; }
+.overview-numbers dd { margin: 3px 0 0; font-size: 25px; font-variant-numeric: tabular-nums; }
+.overview-documents { list-style: none; padding: 0; margin: 10px 0 0; }
+.overview-documents li { display: flex; align-items: baseline; gap: 8px; justify-content: space-between; border-top: 1px solid var(--starlink-rail-divider); padding: 9px 0; }
+.overview-documents button { text-align: left; min-width: 0; overflow-wrap: anywhere; }
+.overview-documents time { flex: none; }
+.knowledge-layout { display: grid; grid-template-columns: minmax(180px, 27%) minmax(0, 1fr); overflow: hidden; }
+.knowledge-index { border-right: 1px solid var(--starlink-rail-divider); background: var(--starlink-rail-bg); }
+.knowledge-search { display: grid; gap: 6px; padding: 14px; font-size: 13px; font-weight: 600; }
+.knowledge-search input { width: 100%; }
+#knowledge-list { max-height: 62vh; overflow: auto; padding: 0 8px 8px; }
+.knowledge-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  padding: 8px;
+  text-align: left;
+}
+.knowledge-item span:nth-child(2) { flex: 1; overflow-wrap: anywhere; }
+.knowledge-item small { color: var(--muted); }
+.knowledge-item:hover, .knowledge-item[aria-current] { border-color: var(--starlink-rail-divider); background: var(--surface); }
+.knowledge-reader { padding: clamp(16px, 3vw, 32px); }
+.knowledge-reader h2 { margin: 4px 0 0; overflow-wrap: anywhere; }
+.knowledge-type { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+.knowledge-section { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--starlink-rail-divider); }
+.knowledge-section dl { margin: 8px 0 0; }
+.knowledge-section dl div { display: grid; grid-template-columns: minmax(80px, 28%) minmax(0, 1fr); gap: 8px; padding: 6px 0; }
+.knowledge-section dt { color: var(--muted); }
+.knowledge-section dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.knowledge-evidence { display: grid; gap: 4px; margin: 9px 0 0; padding: 0; list-style: none; overflow-wrap: anywhere; }
+.knowledge-section .fact-btn { margin-top: 8px; width: 100%; }
+@media (max-width: 700px) {
+  .starlink-overview, .knowledge-layout { grid-template-columns: minmax(0, 1fr); }
+  .knowledge-index { border-right: 0; border-bottom: 1px solid var(--starlink-rail-divider); }
+  #knowledge-list { max-height: 200px; }
+}
+.has-project-banner #crumb-warehouse,
+.has-project-banner .graph-nav-import { display: none; }
+.starlink-project-switch {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  margin-bottom: 8px;
+  border: 1px solid var(--starlink-rail-divider);
+  border-radius: 9px;
+  background: var(--surface);
+}
+.starlink-project-switch .nav-item { min-width: 0; }
+.starlink-project-switch .icon { flex-shrink: 0; }
+.starlink-project-switch #starlink-sidebar-project {
+  justify-content: center;
+  padding: 0;
+  border-left: 1px solid var(--starlink-rail-divider);
+  border-radius: 0 8px 8px 0;
+}
+.starlink-project-caret {
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-2px) rotate(45deg);
+}

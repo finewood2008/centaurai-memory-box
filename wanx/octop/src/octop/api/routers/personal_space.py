@@ -14,7 +14,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from octop.api.deps import current_user, get_server
 from octop.infra.box_resources import box_resources
-from octop.infra.personal_space.service import CHUNK_SIZE, PersonalSpace, SpaceError
+from octop.infra.personal_space.service import (
+    CHUNK_SIZE,
+    TEXT_EDIT_LIMIT,
+    PersonalSpace,
+    SpaceError,
+)
 
 router = APIRouter()
 
@@ -40,6 +45,12 @@ class UploadInput(FolderInput):
 
 class CompleteInput(Input):
     digest: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class TextEditInput(CompleteInput):
+    id: str = Field(pattern=r"^[a-f0-9]{32}$")
+    size: int = Field(ge=0, le=TEXT_EDIT_LIMIT)
+    expected: int = Field(ge=1, le=2**53 - 2)
 
 
 class Entry(BaseModel):
@@ -116,6 +127,7 @@ class BoxNetwork(BaseModel):
 
 class Overview(BaseModel):
     protocolVersion: int
+    textEditing: bool = False
     chunkSize: int
     collectedAt: float
     filesBytes: int
@@ -266,6 +278,19 @@ async def upload(body: UploadInput, service: PersonalSpace = Depends(space)) -> 
 )
 async def upload_status(upload_id: str, service: PersonalSpace = Depends(space)) -> Any:
     return await call(service.upload_status, upload_id)
+
+
+@router.post(
+    "/files/{item_id}/edit-uploads",
+    response_model=UploadStatus,
+    summary="Start or resume a version-checked text file update",
+)
+async def begin_text_edit(
+    item_id: str, body: TextEditInput, service: PersonalSpace = Depends(space)
+) -> Any:
+    return await call(
+        service.begin_text_edit, item_id, body.expected, body.id, body.size, body.digest
+    )
 
 
 @router.put("/uploads/{upload_id}", summary="Append one SHA-256 checked chunk, at most 4 MiB")

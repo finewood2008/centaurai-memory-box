@@ -330,7 +330,7 @@ class RequiredModelRelay:
                     async with asyncio.timeout(1.5):
                         await self._authorize(lease, authorization, config)
                 if action == "catalog":
-                    result = await self.relay.catalog_result(items, fallback_active=True)
+                    result = await self.relay.catalog_result(items)
                     await permitted()
                     outcome = "completed"
                     return result

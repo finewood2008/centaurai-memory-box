@@ -8,7 +8,7 @@ const modeling = [
   ['POST', '/modeling/onboarding'],
   ['POST', `/modeling/onboarding/${id}/warehouse`],
   ['GET', `/warehouses/${warehouse}/modeling/suggestion-context`],
-  ['POST', `/warehouses/${warehouse}/modeling/(?:answer-confirmations|answer-suggestions|rule-previews|warehouse-scope/publish)`],
+  ['POST', `/warehouses/${warehouse}/modeling/(?:answer-confirmations|answer-suggestions|rule-previews|warehouse-scope/publish|assistant-intent)`],
   ['GET', `/warehouses/${warehouse}/modeling/answer-suggestions/${id}(?:/rules)?`],
   ['POST', `/warehouses/${warehouse}/modeling/rule-previews/${id}/publish`],
 ].map(([method, route]) => [method, new RegExp(`^${prefix}${route}$`)]);

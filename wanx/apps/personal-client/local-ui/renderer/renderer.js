@@ -15,6 +15,15 @@ function syncWalletCountdown() {
 }
 let currentState;
 const dataView=window.createStarlinkPanelView({request:async(name,input)=>{const result=await window.wanxClient.action(name,input);if(!result.ok)throw Object.assign(Error(result.code),{code:result.code});return result.value;},changed:()=>{if(currentState)render(currentState);}});
+const spaceRedactionSettings = window.createSpaceRedactionSettings?.({
+  escapeHTML: value => escapeHTML(value),
+  request: async (action, input) => {
+    const result = await window.wanxClient.action(action, input);
+    if (!result.ok) throw Object.assign(new Error(result.code), { code: result.code });
+    return result.value;
+  },
+});
+let redactionRuleComposition = null;
 const homePage = "my-ai";
 let page = homePage;
 const clientBrand = "半人马AI记忆盒子";
@@ -440,6 +449,12 @@ const dialogueModelSettings = window.createDialogueModelSettingsView?.({
   request: (action, input) => window.wanxClient.action(action, input),
   onSaved: () => aiDialogueView?.modelsChanged(),
 });
+let restoringWalletFocus = false;
+function restoreWalletFocus(element) {
+  restoringWalletFocus = true;
+  try { element.focus({ preventScroll: true }); }
+  finally { restoringWalletFocus = false; }
+}
 const creditsView = window.createWalletView({
   getBoxName: deviceId => {
     const device = currentState?.devices?.find(item => item.deviceId === deviceId);
@@ -1265,6 +1280,7 @@ function settingsView() {
     ${notice && !passwordEditing ? `<div class="notice ${codeSent ? "success" : "error"}" role="status">${escapeHTML(notice)}</div>` : ""}
     ${versionUpdatesView()}
     <section class="settings-panel" aria-label="空间 MCP"><div><h3>空间 MCP</h3><p class="muted">通用 MCP 的资料授权、记忆归档与接入管理统一在空间中完成。</p></div><button class="button small" data-action="show-space" data-agent-hub-open>管理连接 →</button></section>
+    <div id="space-redaction-settings-host"></div>
     <section class="settings-panel"><div><h3>云账号</h3><p class="muted">${currentState.dataIdentity?.profileId ? "云账号用于市场与计费。本地数据访问由可信设备授权管理。" : "已登录云账号。退出后将断开盒子连接，客户端继续在后台运行。"}</p></div><div class="settings-actions">${currentState.account?.phase === "authenticated" ? `<button class="button small" data-action="password-open" ${busy ? "disabled" : ""}>修改密码</button><button class="button small ${busyFor("auth.logout") ? "activity-button" : ""}" data-action="logout" aria-busy="${busyFor("auth.logout")}" ${busy ? "disabled" : ""}>${busyFor("auth.logout") ? activityLabel("正在退出…") : currentState.dataIdentity?.profileId ? "退出云账号" : "退出当前账号"}</button>` : `<button class="button small" data-action="cloud-login">登录云账号</button>`}</div></section>
     ${passwordEditing ? `<section class="password-panel"><h3>修改密码</h3><p class="muted">验证码将发送至当前账号${currentState.account?.maskedPhone ? `（${escapeHTML(currentState.account.maskedPhone)}）` : "绑定的手机号"}。修改后所有设备上的旧登录将失效，请重新登录。</p><form data-form="password-change" novalidate><label for="change-password">新密码</label><input id="change-password" name="password" type="password" required autocomplete="new-password" placeholder="设置 8–72 字节的新密码" />${passwordFields("change", "send-change-code", changeResendAt)}<div data-password-notice class="notice ${codeSent ? "success" : "error"}" role="status" ${notice ? "" : "hidden"}>${escapeHTML(notice)}</div><div class="settings-actions"><button type="button" class="button" data-action="password-cancel" ${busy ? "disabled" : ""}>取消</button><button type="submit" class="button primary" ${busy ? "disabled" : ""}>${busy ? busyRequest?.action === "auth.change-password" ? "正在修改…" : "处理中…" : "确认修改"}</button></div></form></section>` : ""}
     <section class="settings-panel"><div><h3>登录电脑时启动</h3><p class="muted ${busyFor("desktop.startup.set") ? "activity-status" : ""}" role="status">${busyFor("desktop.startup.set") ? activityLabel("正在保存设置…") : escapeHTML(startup.reason || (startup.supported ? startup.status === "requires-approval" ? "请在系统设置中允许登录项。" : "在菜单栏静默启动，随时打开应用。" : "安装正式应用后可设置开机启动。"))}</p></div><button class="switch" role="switch" aria-checked="${Boolean(startup.enabled)}" aria-label="登录电脑时启动" aria-busy="${busyFor("desktop.startup.set")}" data-action="startup-toggle" ${busy || !startup.supported ? "disabled" : ""}><span></span></button></section>
@@ -2087,12 +2103,18 @@ function render(state) {
   }
   dialogueModelSettings?.hostState(state);
   dialogueModelSettings?.visible(!auth && page === "dialogue-models");
+  const viewingRedactionSettings = !auth && page === "settings";
+  const redactionSettingsOwner = state.dataIdentity?.profileId ? state.dataOwnerId : state.account?.accountId;
+  spaceRedactionSettings?.sync(viewingRedactionSettings && redactionSettingsOwner
+    ? JSON.stringify([Boolean(state.dataIdentity?.profileId), redactionSettingsOwner]) : null);
+  if (!viewingRedactionSettings || !redactionRuleComposition?.isConnected) redactionRuleComposition = null;
   window.wanxSpace?.activate(!auth && (page === "boxes" || page === "space"), page === "space");
   supportView.sync(auth || state.account?.phase !== "authenticated" ? null : JSON.stringify([state.account?.accountId, state.account?.clientId]), state.devices || []);
   supportView.visible(!auth && page === "boxes");
   creditsView.visible(!auth && page === "credits");
   if (activeInteraction || window.wanxSpace?.isSelecting?.() || window.wanxSpace?.isDragging?.()) return;
   // Moving even the same input node interrupts the native IME candidate session.
+  if (viewingRedactionSettings && redactionRuleComposition?.isConnected) return;
   if (!auth && page === "data" && dataView.isComposing?.()) return;
   if (!auth && page === "space" && window.wanxSpace?.retainEditor?.()) return;
   if (auth || page !== "memory") {
@@ -2103,8 +2125,7 @@ function render(state) {
   const markup = page === "help" ? `<div class="app-layout">${auth ? `<header class="topbar faq-public-header"><div class="brand"><img class="brand-mark" src="./assets/centaurai-mark.png" alt="" />${clientBrandCopy}</div></header>` : shellHeader("常见问题")}${helpView?.render({ backLabel: helpReturnLabel }) || ""}</div>` : auth ? authView() : page === "client-update" ? requiredClientUpdateView() : page === "provisioning" ? provisioningView()
     : desiredMemorySection !== null ? memoryView(desiredMemorySection)
     : page === "dialogue-models" ? `<div class="app-layout">${shellHeader("助理模型")}<div class="page-content dialogue-model-settings-page"><div id="dialogue-model-settings-host"></div></div></div>`
-    : page === "data" ? `<div class="app-layout starlink-layout">${shellHeader("星图")}<header class="wanx-section-banner starlink-banner" data-section="starlink">${personalModuleHeading("starlink", "知识星图", "在图谱中探索资料里的实体与关系，沿着关联追溯原文。")}
-      <div class="wanx-section-actions"><button type="button" id="starlink-banner-create" class="button primary" data-data-action="new-warehouse" disabled>＋ 新建数据仓</button></div></header><div class="page-content data-page-content">${dataView.render()}</div></div>`
+    : page === "data" ? `<div class="app-layout starlink-layout">${shellHeader("星图")}<header class="wanx-section-banner starlink-banner" data-section="starlink">${personalModuleHeading("starlink", "本体星图", "在图谱中探索个人本体的实体与关系，沿着关联追溯原文。")}</header><div class="page-content data-page-content">${dataView.render()}</div></div>`
     : page === "space" ? spaceView()
     : page === "notifications" ? notificationView() : page === "profile" ? profileView() : page === "credits" ? `<div class="app-layout"><div ${creditsView.isOpen() ? "inert" : ""}>${shellHeader("积分")}</div>${creditsView.render()}</div>` : page === "boxes" ? boxesView() : page === "settings" ? settingsView() : memoryView("my-ai");
   if (markup === renderedMarkup) {
@@ -2150,6 +2171,8 @@ function render(state) {
   const searchSelection = spaceSearch ? [spaceSearch.selectionStart, spaceSearch.selectionEnd] : null;
   const modelSettingsHost = !auth && page === "dialogue-models" ? app.querySelector?.("#dialogue-model-settings-host") : null;
   const modelSettingsFocus = modelSettingsHost?.contains(document.activeElement) ? document.activeElement : null;
+  const redactionSettingsHost = viewingRedactionSettings ? app.querySelector?.("#space-redaction-settings-host") : null;
+  const redactionSettingsFocus = redactionSettingsHost?.contains(document.activeElement) ? document.activeElement : null;
   const memoryHost = app.querySelector?.(".memory-host");
   if (memoryHost && desiredMemorySection !== null && memoryHost.dataset.memorySection === desiredMemorySection &&
     (memoryHost.dataset.memoryAgent ?? "") === (page === "memory" ? memoryAgent : "") &&
@@ -2176,6 +2199,11 @@ function render(state) {
   syncAcademyModal();
   if (modelSettingsHost) { app.querySelector?.("#dialogue-model-settings-host")?.replaceWith(modelSettingsHost); modelSettingsFocus?.focus({ preventScroll:true }); }
   if (!auth && page === "dialogue-models") dialogueModelSettings?.mount(app.querySelector?.("#dialogue-model-settings-host"));
+  if (redactionSettingsHost) {
+    app.querySelector?.("#space-redaction-settings-host")?.replaceWith(redactionSettingsHost);
+    redactionSettingsFocus?.focus({ preventScroll: true });
+  }
+  spaceRedactionSettings?.mount(viewingRedactionSettings ? app.querySelector?.("#space-redaction-settings-host") : null);
   if (spacePosition) {
     const replacement = app.querySelector?.(".space-file-list");
     if (replacement?.dataset.location === spacePosition.key) {
@@ -2240,7 +2268,7 @@ function render(state) {
     const previous = walletInput ? nextWalletDialog.querySelector('#wallet-custom-amount:not(:disabled)')
       : buttons.find(button => button.dataset.action === walletFocus?.action && button.dataset.amount === walletFocus?.amount && button.dataset.channel === walletFocus?.channel);
     if (!nextWalletDialog.contains(document.activeElement) || document.activeElement.disabled) {
-      (previous || buttons.find(button => button.getAttribute('aria-pressed') === 'true') || buttons.find(button => button.dataset.action === 'credits-buy') || nextWalletDialog).focus({ preventScroll: true });
+      restoreWalletFocus(previous || buttons.find(button => button.getAttribute('aria-pressed') === 'true') || buttons.find(button => button.dataset.action === 'credits-buy') || nextWalletDialog);
     }
     if (walletSelection && previous) previous.setSelectionRange(...walletSelection);
     if (walletScroll && walletScroll.step !== nextWalletDialog.dataset.step) {
@@ -2537,6 +2565,7 @@ app.addEventListener("click", async (event) => {
   if(dataTarget?.dataset.dataAction){event.preventDefault();return dataView.action(dataTarget.dataset.dataAction,dataTarget.dataset);}
   activeInteraction = false;
   finishInteraction();
+  if (event.target.id === "wallet-custom-amount") return creditsView.action("credits-custom");
   const target = event.target.closest("[data-action]");
   if (!target) { if (profileMenuOpen) { profileMenuOpen = false; render(currentState); } return; }
   if (target.disabled) return;
@@ -2743,6 +2772,7 @@ app.addEventListener("click", async (event) => {
     if (page === "boxes") void refreshTransfers();
     notice = null;
     render(currentState);
+    if (action === 'show-data') dataView.action('open-graph');
     if (page !== previousPage) document.scrollingElement?.scrollTo?.(0, 0);
     return;
   }
@@ -2952,14 +2982,23 @@ function selectWifi(key) {
   updateWifiPicker();
 }
 app.addEventListener("compositionstart", event => {
+  if (page === "settings" && event.target.dataset?.redactionField) redactionRuleComposition = event.target;
   if(page === "data") dataView.compositionStart?.(event.target);
 });
 app.addEventListener("compositionend", event => {
+  if (redactionRuleComposition === event.target) {
+    redactionRuleComposition = null;
+    setTimeout(() => { if (currentState && page === "settings") render(currentState); }, 0);
+    return;
+  }
   const result=dataView.compositionEnd?.(event.target);
   if(!result)return;
   dataView.input(result.name,result.value);
   // The final input event follows compositionend; let it finish before rendering.
   setTimeout(()=>{if(currentState && page === "data")render(currentState);},0);
+});
+app.addEventListener("focusin", event => {
+  if (!restoringWalletFocus && event.target.id === "wallet-custom-amount") void creditsView.action("credits-custom");
 });
 app.addEventListener("input", event => {
   if (event.target.closest?.('[data-form="help-feedback"]')) { helpView?.input(event.target.name, event.target.value); return; }

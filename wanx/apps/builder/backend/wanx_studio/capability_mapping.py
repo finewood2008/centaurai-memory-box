@@ -3,38 +3,18 @@ from __future__ import annotations
 
 from typing import Any
 
-HOST_CAPABILITIES = frozenset({
-    "identity.read", "http.request", "experts.read", "experts.select", "chat.stream", "files.upload",
-})
+from .public_capabilities import EXPERT, gaps
 
-# Product capabilities are intentionally not copied into protocol-3 manifests.
-PRODUCT_MAP = {
-    "files": ("files.upload",),
-    "model": ("chat.stream",),
-}
+# Protocol permissions used by the fixed standard shell. Business contract IDs
+# are deliberately separate from these Host transport permissions.
+HOST_CAPABILITIES = frozenset({"identity.read", "http.request"})
 
 
 def resolve(capabilities: list[str], *, expert: bool = False, backend: dict[str, Any] | None = None) -> dict[str, Any]:
-    host: list[str] = ["identity.read"]
-    gaps: list[dict[str, str]] = []
-    managed=bool(backend and backend.get("mode")=="existing" and backend.get("connectionRef")=="wanx.expert-app.v1")
-    for product in dict.fromkeys(capabilities):
-        if managed:
-            if product in {"data","foundation","model"}:host.append("http.request")
-            elif product:gaps.append({"id":product,"reason":"NO_PUBLIC_HOST_CONTRACT"})
-            continue
-        mapped = PRODUCT_MAP.get(product)
-        if mapped:
-            host.extend(mapped)
-        elif product in {"data", "reports", "knowledge"}:
-            gaps.append({"id": product, "reason": "NO_PUBLIC_HOST_CONTRACT"})
-        elif product:
-            gaps.append({"id": product, "reason": "UNKNOWN_PRODUCT_CAPABILITY"})
+    host = ["identity.read"]
     if backend and backend.get("mode") != "none":
         host.append("http.request")
-    if expert and not managed:
-        host.extend(("experts.read", "experts.select"))
-    return {"hostCapabilities": list(dict.fromkeys(host)), "gaps": gaps}
+    return {"hostCapabilities": host, "gaps": gaps(capabilities, backend=backend)}
 
 
 def validate_manifest_capabilities(manifest: dict[str, Any]) -> list[dict[str, str]]:
@@ -49,15 +29,4 @@ def validate_manifest_capabilities(manifest: dict[str, Any]) -> list[dict[str, s
 
 
 def runtime_gaps(capabilities: list[str], *, expert: bool = False, backend: dict[str, Any] | None = None) -> list[dict[str, str]]:
-    """A public permission alone does not provide a callable template adapter.
-
-    The standard-host template exposes expertInvoke/listFiles, but no chat or
-    file-upload renderer method. Managed expert model calls use expertInvoke.
-    Keep this separate from the public manifest permission vocabulary.
-    """
-    gaps = resolve(capabilities, expert=expert, backend=backend)["gaps"]
-    managed = bool(backend and backend.get("mode") == "existing" and backend.get("connectionRef") == "wanx.expert-app.v1")
-    if not managed:
-        gaps += [{"id": cap, "reason": "STANDARD_HOST_ADAPTER_UNAVAILABLE"}
-                 for cap in dict.fromkeys(capabilities) if cap in PRODUCT_MAP]
-    return gaps
+    return gaps(capabilities, backend=backend)

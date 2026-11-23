@@ -41,6 +41,8 @@ export async function createAnnotationWorkbench({ store, scope, owner = scope, i
     }); queue = work; return work;
   }
   const update = (id, fn) => mutate(next => { const job = next.jobs.find(item => item.id === id); if (!job) throw fail("SPACE_NOT_FOUND"); fn(job); job.updated = Date.now(); return job; });
+  const canRefreshDirectory = job => !job.initialIds && job.scanComplete && !job.activity &&
+    !activeStatuses.has(job.status) && !running.has(job.id);
   function bound(job, signal, online = true) {
     const context = interaction();
     const check = () => {
@@ -109,6 +111,39 @@ export async function createAnnotationWorkbench({ store, scope, owner = scope, i
     }).finally(() => { running.delete(id); notify(); });
     running.set(id, { controller, promise, activity });
   }
+  async function directoryEntries(job, parent, check) {
+    const page = await operation("list", { parent, space_id: job.space_id }); check();
+    if (!Array.isArray(page?.items)) throw fail("SPACE_REQUEST_FAILED");
+    return page.items.filter(entry => entry.trashed == null && (entry.parent || "") === parent &&
+      (!entry.space_id || entry.space_id === job.space_id));
+  }
+  function scanRow(entry, path) {
+    if (!entry.annotation) throw fail(entry.annotationError || "SPACE_ANNOTATION_UNAVAILABLE");
+    return { ...entry, path, sourceVersion: sourceVersion(entry),
+      format: entry.kind === "folder" ? "folder" : extname(entry.name).slice(1).toLowerCase(), writable: entry.writable !== false };
+  }
+  async function refreshDirectory(job, check) {
+    // Keep the task and its existing rows so drafts and undo receipts remain usable.
+    const known = new Set(job.rows.map(row => row.id)), additions = [];
+    const folders = [{ id: job.parent, path: "" }], visited = new Set([job.parent]);
+    for (const folder of folders) {
+      for (const entry of await directoryEntries(job, folder.id, check)) {
+        if (!isId(entry.id)) continue;
+        const path = [folder.path, entry.name].filter(Boolean).join("/");
+        if (!known.has(entry.id)) { additions.push(scanRow(entry, path)); known.add(entry.id); }
+        if (job.recursive && entry.kind === "folder" && !visited.has(entry.id)) {
+          folders.push({ id: entry.id, path }); visited.add(entry.id);
+        }
+      }
+    }
+    check();
+    if (additions.length && canRefreshDirectory(jobFor(job.id))) await update(job.id, item => {
+      check();
+      if (!canRefreshDirectory(item)) return;
+      const current = new Set(item.rows.map(row => row.id));
+      for (const row of additions) if (!current.has(row.id)) item.rows.push(row);
+    });
+  }
   async function scan(id, signal) {
     let job = jobFor(id); const check = bound(job, signal);
     await update(id, item => { item.status = "scanning"; item.activity = "scan"; item.error = null; });
@@ -123,10 +158,7 @@ export async function createAnnotationWorkbench({ store, scope, owner = scope, i
           for (let at = 0; at < folder.ids.length; at += 2) {
             const group = await Promise.all(folder.ids.slice(at, at + 2).map(itemId => operation("stat", { id: itemId, space_id: job.space_id }))); check(); entries.push(...group);
           }
-        } else {
-          const page = await operation("list", { parent: folder.id, space_id: job.space_id }); check();
-          if (!Array.isArray(page?.items)) throw fail("SPACE_REQUEST_FAILED"); entries = page.items;
-        }
+        } else entries = await directoryEntries(job, folder.id, check);
         await update(id, item => { item.scanCurrent = { folder, entries: entries.filter(entry => entry.trashed == null), offset: 0 }; });
         job = jobFor(id);
       }
@@ -135,9 +167,8 @@ export async function createAnnotationWorkbench({ store, scope, owner = scope, i
         const known = new Set(item.rows.map(row => row.id));
         for (const entry of chunk) {
           if (!isId(entry.id) || known.has(entry.id)) continue;
-          if (!entry.annotation) throw fail(entry.annotationError || "SPACE_ANNOTATION_UNAVAILABLE");
           const path = [current.folder.path, entry.name].filter(Boolean).join("/");
-          item.rows.push({ ...entry, path, sourceVersion: sourceVersion(entry), format: entry.kind === "folder" ? "folder" : extname(entry.name).slice(1).toLowerCase(), writable: entry.writable !== false }); known.add(entry.id);
+          item.rows.push(scanRow(entry, path)); known.add(entry.id);
           if (item.recursive && entry.kind === "folder" && !item.seenFolders.includes(entry.id)) { item.scanQueue.push({ id: entry.id, path }); item.seenFolders.push(entry.id); }
         }
         item.scanCurrent.offset += chunk.length;
@@ -310,7 +341,15 @@ export async function createAnnotationWorkbench({ store, scope, owner = scope, i
         const key = namespace(space); if (!key || !ready()) throw fail("BOX_CONNECTION_REQUIRED");
         const initialIds = input.ids ? [...new Set(input.ids)].sort() : null;
         const previous = !input.fresh && [...state.jobs].reverse().find(job => job.scope === key && job.parent === parent && job.recursive === !!input.recursive && JSON.stringify(job.initialIds) === JSON.stringify(initialIds));
-        if (previous) return view(previous);
+        if (previous) {
+          let refreshError;
+          if (canRefreshDirectory(previous)) {
+            const check = bound(previous);
+            try { await refreshDirectory(previous, check); }
+            catch (cause) { check(); refreshError = cause.code || "SPACE_REQUEST_FAILED"; }
+          }
+          return { ...view(jobFor(previous.id)), ...(refreshError ? { directoryRefreshError: refreshError } : {}) };
+        }
         const job = { id: uid(), scope: key, space_id: space, parent, recursive: input.recursive === true, initialIds, rows: [],
           scanQueue: [initialIds ? { ids: initialIds, path: "" } : { id: parent, path: "" }], scanCurrent: null, seenFolders: parent ? [parent] : [], scanComplete: false,
           status: "scanning", activity: "scan", created: Date.now(), updated: Date.now(), completed: 0 };
@@ -327,7 +366,16 @@ export async function createAnnotationWorkbench({ store, scope, owner = scope, i
         if (!patch || Array.isArray(patch) || Object.keys(patch).some(key => !["tags", "description", "inherit"].includes(key)) ||
           patch.tags !== undefined && !tagsValid(patch.tags) || patch.description !== undefined && (typeof patch.description !== "string" || patch.description.length > 2000) || patch.inherit !== undefined && typeof patch.inherit !== "boolean") throw fail("SPACE_ANNOTATION_INVALID");
         bound(job, undefined, false);
-        await update(job.id, item => { const row = item.rows.find(row => row.id === input.id); if (!row) throw fail("SPACE_NOT_FOUND"); row.draft = { ...row.draft, ...copy(patch) }; row.draftRevision = row.annotation.revision; item.plan = null; }); return view(jobFor(job.id));
+        await update(job.id, item => {
+          const row = item.rows.find(row => row.id === input.id);
+          if (!row) throw fail("SPACE_NOT_FOUND");
+          const revision = input.expectedRevision ?? row.draftRevision ?? row.annotation.revision;
+          if (revision !== row.annotation.revision) throw fail("SPACE_ANNOTATION_CONFLICT");
+          row.draft = { ...row.draft, ...copy(patch) };
+          row.draftRevision = revision;
+          item.plan = null;
+        });
+        return view(jobFor(job.id));
       }
       if (input.op === "refresh-item") {
         if (activeStatuses.has(job.status)) throw fail("SPACE_ANNOTATION_BUSY");

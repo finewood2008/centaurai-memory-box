@@ -7,7 +7,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from wanx_bridge.semantica.client import SemanticaError
 from wanx_bridge.zhijun_memory import MemoryConflict, MemoryMissing, run_memory
 
@@ -21,6 +21,7 @@ from octop.infra.agents.assistant_knowledge import (
     KnowledgeReader,
     KnowledgeSources,
 )
+from octop.infra.agents.assistant_memory_access import authorize_sidebar_memory_write
 from octop.infra.agents.assistant_profile import AssistantProfiles, is_assistant_profile
 from octop.infra.agents.assistant_space import AssistantSpaceGrants
 from octop.infra.personal_space.service import SpaceError
@@ -61,6 +62,16 @@ class ConversationPatch(BaseModel):
     revision: int = Field(ge=0)
     context: ConversationContext | None = None
     active_thread_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,128}$")
+    conversation_mode: Literal["ask", "craft"] | None = None
+
+    @field_validator("conversation_mode")
+    @classmethod
+    def valid_conversation_mode(
+        cls, value: Literal["ask", "craft"] | None
+    ) -> Literal["ask", "craft"]:
+        if value is None:
+            raise ValueError("conversation_mode must be ask or craft")
+        return value
 
 
 class ConversationVersion(BaseModel):
@@ -83,6 +94,7 @@ class ConversationResponse(BaseModel):
     id: str
     active_thread_id: str
     revision: int
+    conversation_mode: Literal["ask", "craft"] | None = None
     context: ConversationContext
     versions: list[ConversationVersionInfo]
     validation_errors: list[dict[str, str]]
@@ -175,7 +187,7 @@ async def assistant_conversations_list(
 @router.get(
     "/assistant/conversations/{conversation_id}",
     response_model=ConversationResponse,
-    summary="Read assistant conversation sources and versions",
+    summary="Read assistant conversation sources, mode and versions",
     description="Restores saved source choices without granting MCP access. Revalidates available sources; unavailable choices are retained with explicit validation_errors.",
 )
 async def assistant_conversation_get(
@@ -211,7 +223,7 @@ async def assistant_conversation_open(
 @router.patch(
     "/assistant/conversations/{conversation_id}",
     response_model=ConversationResponse,
-    summary="Update conversation sources or selected answer version",
+    summary="Update conversation sources, mode or selected answer version",
     description="Uses revision compare-and-swap. Source preferences are separate from two-hour grants. Disabling access revokes all capabilities for this conversation, including connected MCP reads. New access and version switches are blocked while a turn or confirmation is pending.",
 )
 async def assistant_conversation_patch(
@@ -228,6 +240,7 @@ async def assistant_conversation_patch(
             body.revision,
             body.context.model_dump(exclude_none=True) if body.context else None,
             body.active_thread_id,
+            conversation_mode=body.conversation_mode,
         )
     except ConversationError as exc:
         raise conversation_error(exc, user) from exc
@@ -263,6 +276,7 @@ class AssistantProfileResponse(BaseModel):
     sidebar_sources: bool
     sidebar_evidence: bool = False
     sidebar_agent_scope: bool = False
+    sidebar_conversation_modes: bool = False
 
 
 @router.post(
@@ -291,6 +305,7 @@ async def ensure_assistant(
         "sidebar_sources": personal,
         "sidebar_evidence": personal,
         "sidebar_agent_scope": personal,
+        "sidebar_conversation_modes": personal,
     }
 
 
@@ -301,8 +316,10 @@ class SidebarMemoryRequest(BaseModel):
     requestId: UUID
     id: UUID | None = None
     text: str = Field(default="", max_length=3000)
-    threadId: str | None = Field(default=None, max_length=128)
-    messageId: str | None = Field(default=None, max_length=128)
+    threadId: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,128}$")
+    messageId: str | None = Field(default=None, min_length=1, max_length=128)
+    conversation_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,128}$")
+    conversation_mode: Literal["ask", "craft"] | None = None
 
 
 def _sidebar_owner(user: Any, server: Any) -> Any:
@@ -342,22 +359,34 @@ async def sidebar_memory_search(
 @router.post("/assistant/sidebar-memory")
 async def sidebar_memory(
     body: SidebarMemoryRequest,
+    request: Request,
     user: Any = Depends(current_user),
     server: Any = Depends(get_server),
 ) -> dict[str, Any]:
-    existing = _sidebar_owner(user, server)
+    _sidebar_owner(user, server)
     if (body.action != "remember" and not body.id) or (
         body.action != "forget" and (not body.text or "\0" in body.text)
     ):
         raise HTTPException(422)
-    if body.threadId:
-        thread = server.services.thread_repo.get(body.threadId)
-        if not thread or thread.user_id != user.id or thread.agent_id != existing.agent_id:
-            raise HTTPException(404)
     try:
-        return await asyncio.to_thread(
-            run_memory, server.paths.root, user.id, body.model_dump(mode="json", exclude_none=True)
+        await authorize_sidebar_memory_write(
+            conversations(request, server),
+            user,
+            conversation_id=body.conversation_id,
+            requested_mode=body.conversation_mode,
+            thread_id=body.threadId,
+            message_id=body.messageId,
         )
+        return await asyncio.to_thread(
+            run_memory,
+            server.paths.root,
+            user.id,
+            body.model_dump(
+                mode="json", exclude_none=True, exclude={"conversation_id", "conversation_mode"}
+            ),
+        )
+    except ConversationError as exc:
+        raise conversation_error(exc, user) from exc
     except MemoryMissing as exc:
         raise HTTPException(404) from exc
     except MemoryConflict as exc:

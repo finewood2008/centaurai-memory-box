@@ -1,8 +1,8 @@
 import{test}from'node:test';import assert from'node:assert/strict';
-import{spawn}from'node:child_process';import{mkdtemp,rm,readFile}from'node:fs/promises';import os from'node:os';import path from'node:path';import readline from'node:readline';
+import{spawn}from'node:child_process';import{mkdtemp,rm}from'node:fs/promises';import os from'node:os';import path from'node:path';import readline from'node:readline';
 test('official sandboxed DSH performs ACP tool calls, pauses for a product answer and returns compiled files',{timeout:45000},async()=>{
   const taskRoot=await mkdtemp(path.join(os.tmpdir(),'wanx-dsh-loop-'));
-  const manifest=JSON.parse(await readFile(new URL('../examples/ledger/miniapp.manifest.json',import.meta.url),'utf8'));
+  const manifest={schemaVersion:1,name:'DSH test',entry:'src/app.js',capabilities:[],collections:{}};
   const steps=[['read_material',{}],['ask_product',{question:'是否保留备注？',options:['保留','后置']}],['write_source',{path:'miniapp.manifest.json',content:JSON.stringify(manifest)}],['write_source',{path:'src/app.js',content:'export function mount(root, api){root.textContent="DSH 工具验证"}'}],['validate_app',{}]];
   const child=spawn(process.execPath,['dsh/driver.mjs'],{cwd:new URL('..',import.meta.url),env:{PATH:process.env.PATH,LANG:'en_US.UTF-8',TMPDIR:process.env.TMPDIR},stdio:['pipe','pipe','pipe']});
   let error='';child.stderr.on('data',b=>error+=b);const events=[];let calls=0;

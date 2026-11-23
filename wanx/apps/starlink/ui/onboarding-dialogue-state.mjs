@@ -1,4 +1,4 @@
-import {identityKey,onboardingRequest} from '../shared/onboarding-contract.mjs';
+import {identityKey,onboardingRequest,validCreationScope} from '../shared/onboarding-contract.mjs';
 import {conversationRequest} from '../shared/conversation-contract.mjs';
 import {validateQuestionActions,questionActionsFromReceipt} from '../shared/onboarding-dialogue-contract.mjs';
 import {nextDialogueQuestion,nextScopeQuestion} from './onboarding-dialogue-questions.mjs';
@@ -21,11 +21,12 @@ const fail=(code,status=0)=>Object.assign(Error(code),{code,status});
 export const scopeOnlyInstruction = '本轮仅校准业务范围，原样保留现行本体的类型、关系与属性。';
 export const onboardingUnavailable = (code, status) => code === 'SEMANTICA_UPGRADE_REQUIRED' ||
   ['SEMANTICA_RESOURCE_NOT_FOUND','SEMANTICA_OPERATION_NOT_ALLOWED'].includes(code) && (status === undefined || status === 404);
-const messages={MODELING_ONBOARDING_BUSY:'本轮正在生成，请读取原轮次进度。',MODELING_ONBOARDING_STALE:'本体、用途或草稿已变化。已保留历史，请读取最新状态；必要时基于当前规则开始新的建仓对话。',MODELING_ONBOARDING_NOT_READY:'请先明确服务对象、用途，并形成至少一个实体类型。',MODELING_ONBOARDING_TIMEOUT:'本轮生成超时，原草稿保留。请先读取进度，再决定是否重试。',MODELING_ONBOARDING_INVALID_OUTPUT:'模型结果不完整或结构无效，原草稿保留。',MODELING_ONBOARDING_MODEL_FAILED:'本轮生成失败，原草稿保留。请检查处理模型后重试。',MODELING_CONTEXT_BUDGET:'当前对话或本体超出模型预算。请精简要求、调整模型，或使用已有本体编辑流程。',MODELING_OPERATION_CONFLICT:'操作号与原请求不一致，请恢复原请求。',MODELING_SCENARIO_MISMATCH:'会话类型不匹配，请重新选择建仓会话。',MODELING_INVALID_REQUEST:'请检查输入长度、名称和请求内容。',MODELING_LOCAL_SAVE_FAILED:'本机恢复记录无法保存。请求未继续提交，请检查可用空间或存储权限。',MODELING_LOCAL_RECORD_INVALID:'恢复记录无法读取，请保留记录并检查客户端版本。',MODELING_REQUEST_PENDING:'上次请求结果尚未确认，请先恢复原请求。',MODELING_CONFIRMATION_REQUIRED:'请先核对最新的完整预览并勾选发布确认。',MODELING_RESOURCE_NOT_FOUND:'知识仓或会话不存在，或当前账号无权访问。',HOST_SESSION_EXPIRED:'账号会话已失效，请重新登录。',WAREHOUSE_NAME_CONFLICT:'已有同名知识仓，请修改名称。',MODELING_REVIEW_REQUIRED:'内容已更新，请重新核对后提交。',SEMANTICA_UPGRADE_REQUIRED:'当前 Bridge 尚未提供建仓对话接口，请更新并重启服务。',MODELING_PUBLICATION_REPLACED:'本次规则已发布，随后已有新版生效。进入数据仓可查看当前规则。',MODELING_PUBLISHED_ENTRY_FAILED:'规则已发布，暂时无法打开工作区。',MODELING_HOST_CREATION_REQUIRED:'请从万象个人空间打开星图后继续。'};
+const messages={MODELING_ONBOARDING_BUSY:'本轮正在生成，请读取原轮次进度。',MODELING_ONBOARDING_STALE:'本体、用途或草稿已变化。对话记录已保留，请读取最新规则并重新核对。',MODELING_ONBOARDING_NOT_READY:'请先明确服务对象、用途，并形成至少一个实体类型。',MODELING_ONBOARDING_TIMEOUT:'本轮生成超时，原草稿保留。请先读取进度，再决定是否重试。',MODELING_ONBOARDING_INVALID_OUTPUT:'模型结果不完整或结构无效，原草稿保留。',MODELING_ONBOARDING_MODEL_FAILED:'本轮生成失败，原草稿保留。请检查处理模型后重试。',MODELING_CONTEXT_BUDGET:'当前对话或本体超出模型预算。请精简要求或调整模型后重试。',MODELING_OPERATION_CONFLICT:'操作号与原请求不一致，请恢复原请求。',MODELING_SCENARIO_MISMATCH:'会话类型不匹配，请重新选择星图创建会话。',MODELING_INVALID_REQUEST:'请检查输入长度、名称和请求内容。',MODELING_LOCAL_SAVE_FAILED:'本机恢复记录无法保存。请求未继续提交，请检查可用空间或存储权限。',MODELING_LOCAL_RECORD_INVALID:'恢复记录无法读取，请保留记录并检查客户端版本。',MODELING_REQUEST_PENDING:'上次请求结果尚未确认，请先恢复原请求。',MODELING_CONFIRMATION_REQUIRED:'请先核对最新草稿，再确认发布。',MODELING_RESOURCE_NOT_FOUND:'知识仓或会话不存在，或当前账号无权访问。',HOST_SESSION_EXPIRED:'账号会话已失效，请重新登录。',WAREHOUSE_NAME_CONFLICT:'已有同名知识仓，请修改名称。',MODELING_REVIEW_REQUIRED:'内容已更新，请重新核对后提交。',SEMANTICA_UPGRADE_REQUIRED:'当前 Bridge 尚未提供星图创建对话接口，请更新并重启服务。',MODELING_PUBLICATION_REPLACED:'本次规则已发布，随后已有新版生效。进入星图可查看当前规则。',MODELING_PUBLISHED_ENTRY_FAILED:'规则已发布，暂时无法打开工作区。',MODELING_HOST_CREATION_REQUIRED:'请从万象个人空间打开星图后继续。'};
 export function dialogueError(error) {
   const code = error?.code || error?.error_code || '';
   if (code === 'MODELING_SCOPE_RULE_CHANGE') return '范围向导仅更新业务范围。请移除草稿中的规则变更，或前往规则总览手动编辑本体。';
   if (code === 'MODELING_UNSENT_ANSWER') return '还有尚未发送的回答或修改要求，请先发送，或清空输入后核对现有范围。';
+  if (code === 'MODEL_CONFIG_CHANGED') return '处理模型配置已变更，请在「模型设置」重新检查。';
   if (code === 'MODEL_BILLING_REQUIRED') return '云端模型因计费问题无法调用。请在「模型设置」选择可用的模型后重试。草稿已保留。';
   if (code === 'MODELING_CONTEXT_BUDGET') {
     const {context_tokens: current, required_context_tokens: required} = error.context_budget || {};
@@ -35,15 +36,15 @@ export function dialogueError(error) {
   }
   if (messages[code]) return messages[code];
   if (/MODEL_|LLM_NOT_CONFIGURED/.test(code)) return '模型调用未完成，请检查“模型与处理”中的配置和授权后再试。';
-  if (/SEMANTICA_(OPERATION_NOT_ALLOWED|QUERY_NOT_ALLOWED|INVALID_REQUEST)/.test(code)) return '当前 Bridge 尚未提供兼容的建仓对话入口，请更新并重启服务。';
+  if (/SEMANTICA_(OPERATION_NOT_ALLOWED|QUERY_NOT_ALLOWED|INVALID_REQUEST)/.test(code)) return '当前 Bridge 尚未提供兼容的星图创建对话入口，请更新并重启服务。';
   return '操作未完成，请读取状态或恢复原请求。不要重复创建或发布。';
 }
 const validSnapshot=v=>v&&typeof v.conversation_id==='string'&&['guiding','ready_for_preview','stale','published'].includes(v.status)&&Number.isSafeInteger(v.draft?.revision)&&v.draft.revision>=0&&/^[a-f0-9]{64}$/.test(v.draft_digest||'')&&Array.isArray(v.draft.schema?.entity_types)&&Array.isArray(v.draft.schema?.relation_types)&&v.draft.scope&&Array.isArray(v.turns?.items);
 Object.assign(messages,{MODELING_ONBOARDING_ALREADY_STARTED:'开场已生成，请读取最新状态并继续回答或修改。',MODELING_ONBOARDING_QUESTION_STALE:'问题台账已变化，请读取最新问题后重新核对本轮操作。',MODELING_QUESTION_ACTION_LIMIT:'每次最多提交两个问题的操作，请先发送当前内容。'});
 
 export class OnboardingDialogue {
-  constructor({call,storage,identity,onChange=()=>{},onEnter=async()=>{},uuid=()=>crypto.randomUUID()}){
-    this.call=call;this.storage=storage;this.onChange=onChange;this.onEnter=onEnter;this.uuid=uuid;this.live=true;this.readSequence=0;
+  constructor({call,storage,identity,onChange=()=>{},onEnter=async()=>{},guidedRules=false,uuid=()=>crypto.randomUUID()}){
+    this.guidedRules=guidedRules;this.call=call;this.storage=storage;this.onChange=onChange;this.onEnter=onEnter;this.uuid=uuid;this.live=true;this.readSequence=0;
     this.key='starlink.onboarding-dialogue.v1.'+identityKey(identity);
     this.saved={version:1,warehouse:null,conversationId:null,creation:null,pending:null,preview:null,input:'',inputMode:'answer',inputQuestionId:null,deferredQuestionId:null,name:'',questionActions:[],openingAttempts:[],activeTurn:null,composers:{},warehouseDrafts:{},setupMode:null,publication:null,entryPending:false};
     this.state={loaded:false,busy:false,error:'',errorCode:'',page:'name',snapshot:null,turns:[],sessions:[],tab:'graph',confirmed:false,pollError:false};
@@ -53,6 +54,9 @@ export class OnboardingDialogue {
   persist(){this.check();try{this.storage.setItem(this.key,JSON.stringify(this.saved));}catch{throw fail('MODELING_LOCAL_SAVE_FAILED');}}
   restore(){this.restoreBlocked=false;try{const raw=this.storage.getItem(this.key);if(!raw)return;const s=JSON.parse(raw);
     if(s.version!==1||typeof s.name!=='string'||typeof s.input!=='string')throw Error();
+    if(s.profileInputs===undefined)s.profileInputs={};
+    if (!s.profileInputs || typeof s.profileInputs!=='object' || Array.isArray(s.profileInputs) || Object.entries(s.profileInputs).some(([key,value]) =>
+      !['occupation','service_objects','focus_objects'].includes(key) || typeof value !== 'string')) throw Error();
     s.purpose??='';if(typeof s.purpose!=='string'||[...s.purpose].length>16000)throw Error();
     if(s.warehouse)conversationRequest('conversation-list',{warehouseId:s.warehouse.id});
     if(s.conversationId)conversationRequest('conversation-onboarding-get',{warehouseId:s.warehouse?.id,conversationId:s.conversationId});
@@ -60,17 +64,19 @@ export class OnboardingDialogue {
       if(s.pending.input.warehouseId&&s.pending.input.warehouseId!==s.warehouse?.id)throw Error();
       if(s.pending.input.conversationId&&s.pending.input.conversationId!==s.conversationId)throw Error();
       if(s.pending.composer){if(typeof s.pending.composer.input!=='string')throw Error();validateQuestionActions(s.pending.composer.questionActions,{draft:true});}}
-    if(s.creation&&(!s.creation.name||!s.creation.operationId||s.creation.purpose!==undefined&&(typeof s.creation.purpose!=='string'||[...s.creation.purpose].length>16000)))throw Error();
+    if(s.creation&&(!s.creation.name||!s.creation.operationId||
+      s.creation.purpose!==undefined&&(typeof s.creation.purpose!=='string'||[...s.creation.purpose].length>16000)||
+      s.creation.warehouseScope!==undefined&&!validCreationScope(s.creation.warehouseScope,{guided:true})))throw Error();
     s.questionActions??=[];s.openingAttempts??=[];s.activeTurn??=null;s.composers??={};validateQuestionActions(s.questionActions,{draft:true});
     if(s.activeTurn){if(s.activeTurn.conversationId!==s.conversationId)throw Error();conversationRequest('conversation-onboarding-turn',{warehouseId:s.warehouse?.id,conversationId:s.conversationId,turnId:s.activeTurn.turnId});}
     if(!s.composers||typeof s.composers!=='object'||Array.isArray(s.composers))throw Error();
     restoreInputMode(s);
     for(const value of Object.values(s.composers)){if(typeof value?.input!=='string')throw Error();validateQuestionActions(value.questionActions,{draft:true});restoreInputMode(value);}
     s.warehouseDrafts??={};s.setupMode??=null;s.publication??=null;s.entryPending??=false;
-    if(!s.warehouseDrafts||typeof s.warehouseDrafts!=='object'||Array.isArray(s.warehouseDrafts)||![null,'new','update'].includes(s.setupMode))throw Error();
+    if(!s.warehouseDrafts||typeof s.warehouseDrafts!=='object'||Array.isArray(s.warehouseDrafts)||![null,'new','update','suggestions'].includes(s.setupMode))throw Error();
     for(const [warehouseId,draft] of Object.entries(s.warehouseDrafts)){
       conversationRequest('conversation-list',{warehouseId});
-      if(!draft||!['new','update'].includes(draft.setupMode))throw Error();
+      if(!draft||!['new','update','suggestions'].includes(draft.setupMode))throw Error();
       if(draft.conversationId)conversationRequest('conversation-onboarding-get',{warehouseId,conversationId:draft.conversationId});
       if(draft.activeTurn)conversationRequest('conversation-onboarding-turn',{warehouseId,conversationId:draft.conversationId,turnId:draft.activeTurn.turnId});
     }
@@ -78,7 +84,7 @@ export class OnboardingDialogue {
   }catch{this.restoreBlocked=true;this.state.loaded=false;throw fail('MODELING_LOCAL_RECORD_INVALID');}}
   validate(action,input){const r=action.startsWith('onboarding-')?onboardingRequest(action,input):conversationRequest(action,input);if(!r)throw fail('MODELING_INVALID_REQUEST');return r;}
   async read(action,input={}){this.check();const request=this.validate(action,input);try{const r=await this.call(action,clone(input));this.check();return r;}catch(e){if(request.method==='GET')e.dialogueReadFailure=true;throw e;}}
-  error(e){if(!this.live)return;this.state.errorCode=e.code||'';this.state.error=e.dialogueAction==='conversation-create'&&['MODELING_INVALID_REQUEST','SEMANTICA_INVALID_REQUEST'].includes(e.code)?'知识仓已创建，但建仓会话请求被拒绝。请检查 WANX Bridge 是否支持 onboarding 建仓场景；更新并重启后可继续创建会话，无需重建知识仓。':dialogueError(e);this.state.readFailure=e.dialogueReadFailure===true;
+  error(e){if(!this.live)return;this.state.errorCode=e.code||'';this.state.error=e.dialogueAction==='conversation-create'&&['MODELING_INVALID_REQUEST','SEMANTICA_INVALID_REQUEST'].includes(e.code)?'星图已创建，但星图创建会话请求被拒绝。请检查 WANX Bridge 是否支持 onboarding 建仓场景；更新并重启后可继续创建会话，无需重建知识仓。':dialogueError(e);this.state.readFailure=e.dialogueReadFailure===true;
     if([401,403,404].includes(e.status)||e.code==='HOST_SESSION_EXPIRED'){this.state.loaded=false;this.state.snapshot=null;this.state.turns=[];this.state.confirmed=false;this.state.sessions=[];}
   }
   async run(fn){if(!this.live||this.state.busy)return;this.state.busy=true;this.state.error='';this.state.errorCode='';this.emit();try{await fn();}catch(e){this.error(e);}finally{this.state.busy=false;this.emit();}}
@@ -109,7 +115,14 @@ export class OnboardingDialogue {
       baseRule.id===preview.base_ontology_id&&preview.draft_digest===snapshot.draft_digest&&
       JSON.stringify(canonicalSchema(preview.schema))===JSON.stringify(canonicalSchema(baseRule.schema));
   }
-  get currentQuestion(){return (this.saved.setupMode==='update'?nextScopeQuestion:nextDialogueQuestion)(this.state.snapshot?.draft);}
+  get updatePublicationAllowed(){
+    if(!this.guidedRules)return this.scopePublicationAllowed;
+    const {preview}=this.saved,{baseRule,snapshot}=this.state;
+    return !!preview&&Array.isArray(preview.changes)&&!!baseRule?.schema&&
+      baseRule.id===snapshot?.draft.base_ontology_id&&baseRule.id===preview.base_ontology_id&&
+      preview.draft_digest===snapshot.draft_digest&&preview.draft_revision===snapshot.draft.revision;
+  }
+  get currentQuestion(){if(this.guidedRules&&this.saved.setupMode==='update'&&this.state.snapshot?.draft.revision===0)return null;return (this.saved.setupMode==='update'&&!this.guidedRules?nextScopeQuestion:nextDialogueQuestion)(this.state.snapshot?.draft);}
   get inputQuestion(){if(this.saved.inputMode==='free')return null;return this.saved.inputQuestionId?this.questions.find(q=>q.question_id===this.saved.inputQuestionId)||{question_id:this.saved.inputQuestionId,text:'原问题已变化，请重新选择回答对象'}:this.currentQuestion;}
   rememberComposer(){if(this.saved.warehouse&&this.saved.conversationId)this.saved.composers[this.saved.warehouse.id+':'+this.saved.conversationId]={input:this.saved.input,inputMode:this.saved.inputMode,inputQuestionId:this.saved.inputQuestionId,deferredQuestionId:this.saved.deferredQuestionId,questionActions:clone(this.saved.questionActions)};}
   restoreComposer(){const c=this.saved.composers[this.saved.warehouse.id+':'+this.saved.conversationId];this.saved.input=c?.input||'';this.saved.inputMode=c?.inputMode||'answer';this.saved.inputQuestionId=c?.inputQuestionId||null;this.saved.deferredQuestionId=c?.deferredQuestionId||null;this.saved.questionActions=clone(c?.questionActions||[]);}
@@ -139,7 +152,7 @@ export class OnboardingDialogue {
     if((warehouse&&warehouse.id!==this.saved.warehouse?.id||fresh)&&(this.saved.pending||this.saved.creation))throw fail('MODELING_REQUEST_PENDING');
     if(fresh&&this.saved.warehouse){
       this.rememberWarehouseDraft();
-      Object.assign(this.saved,{warehouse:null,conversationId:null,preview:null,name:'',purpose:'',activeTurn:null,setupMode:null,publication:null,entryPending:false,input:'',inputMode:'answer',inputQuestionId:null,deferredQuestionId:null,questionActions:[]});
+      Object.assign(this.saved,{warehouse:null,conversationId:null,preview:null,name:'',purpose:'',profileInputs:{},activeTurn:null,setupMode:null,publication:null,entryPending:false,input:'',inputMode:'answer',inputQuestionId:null,deferredQuestionId:null,questionActions:[]});
       this.persist();
     }
     if(fresh&&template){if(typeof template.name!=='string'||typeof template.purpose!=='string'||[...template.purpose].length>16000)throw fail('MODELING_INVALID_REQUEST');this.saved.name=template.name;this.saved.purpose=template.purpose;this.persist();}
@@ -151,9 +164,7 @@ export class OnboardingDialogue {
       this.persist();
     }
     await this.authorize();this.state.loaded=true;
-    if(startUpdate&&warehouse&&warehouse.id===this.saved.warehouse?.id&&this.saved.setupMode!=='update'&&!this.saved.pending&&!this.saved.entryPending){
-      this.saved.setupMode='update';this.persist();
-    }
+    if(this.saved.setupMode==='suggestions' && this.saved.warehouse)return;
     if(this.saved.warehouse){this.state.page='chat';const sessions=await this.listSessions();
       if(this.saved.conversationId&&!sessions.some(c=>c.id===this.saved.conversationId))throw fail('MODELING_RESOURCE_NOT_FOUND',404);
       this.restoreSession(sessions);
@@ -163,6 +174,7 @@ export class OnboardingDialogue {
         if(startUpdate&&!this.saved.entryPending&&!this.saved.pending&&this.state.snapshot?.status==='published'){
           this.saved.setupMode='update';await this.createSession();await this.snapshot();
         }
+        // A saved confirmation is shown in the conversation after its draft is verified.
         if(this.saved.preview)this.state.page='review';
       }
     }
@@ -170,7 +182,7 @@ export class OnboardingDialogue {
   });}
   async createSession(){await this.write('conversation-create',{warehouseId:this.saved.warehouse.id,operationId:this.uuid(),scenario:'onboarding'});await this.listSessions();}
   async write(action,input){
-    if(action==='conversation-onboarding-publish'&&this.saved.setupMode==='update'&&!this.scopePublicationAllowed)throw fail('MODELING_SCOPE_RULE_CHANGE');
+    if(action==='conversation-onboarding-publish'&&this.saved.setupMode==='update'&&!this.updatePublicationAllowed)throw fail('MODELING_SCOPE_RULE_CHANGE');
     if(this.saved.pending&&this.saved.pending.action!==action)throw fail('MODELING_REQUEST_PENDING');
     if(!this.saved.pending){this.validate(action,input);this.saved.pending={action,input:clone(input),...(action==='conversation-onboarding-send'?{composer:{input:this.saved.input,questionActions:clone(this.saved.questionActions)}}:{})};}
     this.persist();const p=this.saved.pending;this.inFlight=p.action;this.emit();let result;
@@ -191,7 +203,12 @@ export class OnboardingDialogue {
   }
   accept(p,r){
     if(p.action==='onboarding-save'){if(!r.resource_id||!Number.isSafeInteger(r.revision))throw fail('SEMANTICA_INVALID_RESPONSE');this.saved.creation.record={id:r.resource_id,revision:r.revision};}
-    else if(p.action==='onboarding-create'){if(!r.warehouse?.id||r.warehouse.state!=='active')throw fail('SEMANTICA_INVALID_RESPONSE');this.saved.warehouse=r.warehouse;this.saved.setupMode='new';this.saved.creation=null;this.saved.name=r.warehouse.name;this.state.page='chat';}
+    else if(p.action==='onboarding-create'){
+      if(!r.warehouse?.id||r.warehouse.state!=='active')throw fail('SEMANTICA_INVALID_RESPONSE');
+      this.saved.warehouse=r.warehouse;
+      this.saved.setupMode=this.saved.creation?.destination==='suggestions'?'suggestions':'new';
+      this.saved.creation=null;this.saved.name=r.warehouse.name;this.state.page=this.saved.setupMode==='suggestions'?'result':'chat';
+    }
     else if(p.action==='conversation-create'){if(!r.resource_id)throw fail('SEMANTICA_INVALID_RESPONSE');this.rememberComposer();this.saved.conversationId=r.resource_id;this.saved.activeTurn=null;this.saved.preview=null;this.restoreComposer();this.state.snapshot=null;this.state.turns=[];this.state.confirmed=false;this.state.page='chat';this.saved.publication=null;this.saved.entryPending=false;}
     else if(['conversation-onboarding-send','conversation-onboarding-start'].includes(p.action)){
       if(r.conversation_id!==p.input.conversationId||!r.resource_id||!['generating','succeeded','failed','stale'].includes(r.status)||r.publication_performed===true)throw fail('SEMANTICA_INVALID_RESPONSE');
@@ -203,25 +220,26 @@ export class OnboardingDialogue {
       this.saved.preview=null;this.state.confirmed=false;this.state.page='chat';
     }else if(p.action==='conversation-onboarding-preview'){
       if(r.conversation_id!==p.input.conversationId||r.status!=='previewed'||r.draft_revision!==p.input.revision||r.draft_digest!==p.input.draftDigest||!/^[a-f0-9]{64}$/.test(r.preview_digest||'')||!r.resource_id||r.publication_performed!==false||!r.scope||!Array.isArray(r.schema?.entity_types)||!Array.isArray(r.schema?.relation_types))throw fail('SEMANTICA_INVALID_RESPONSE');
-      this.saved.preview=r;this.state.confirmed=false;this.state.page='review';
+      this.saved.preview=r;this.saved.inputMode='free';this.saved.inputQuestionId=null;this.state.confirmed=false;this.state.page='review';
     }else if(p.action==='conversation-onboarding-publish'){
       if(r.conversation_id!==p.input.conversationId||r.status!=='published'||r.resource_id!==p.input.previewId||!r.ontology_id||r.publication_performed!==true||r.extraction_started!==false)throw fail('SEMANTICA_INVALID_RESPONSE');
       this.saved.publication=r;this.saved.entryPending=true;this.saved.preview=null;this.state.confirmed=false;this.state.page='chat';
     }
   }
-  create(){return this.run(async()=>{
+  create(warehouseScope, destination='dialogue'){return this.run(async()=>{
     if(!this.state.loaded||this.saved.pending)throw fail('MODELING_REQUEST_PENDING');
     if(this.saved.warehouse)return;
+    if(warehouseScope!==undefined&&!validCreationScope(warehouseScope,{guided:true}))throw fail('MODELING_INVALID_REQUEST');
     const name=this.saved.name.trim();if([...name].length<2||[...name].length>30)throw fail('MODELING_INVALID_REQUEST');
     const list=await this.authorize();if(list.some(w=>w.state!=='deleted'&&w.name.normalize('NFKC').trim().toLowerCase()===name.normalize('NFKC').toLowerCase()))throw fail('WAREHOUSE_NAME_CONFLICT');
     const root=await this.read('onboarding-read');
     if(!Number.isSafeInteger(root?.revision)||root.revision<0||!root.id&&root.revision!==0)throw fail('SEMANTICA_INVALID_RESPONSE');
-    this.saved.creation||={name,purpose:this.saved.purpose||'',operationId:this.uuid(),record:null};
+    this.saved.creation||={name,purpose:this.saved.purpose||'',...(warehouseScope && {warehouseScope}),destination,operationId:this.uuid(),record:null};
     this.persist();
     await this.continueCreation(root);
   });}
-  async continueCreation(){const c=this.saved.creation;
-    if(c){if(!c.record){const root=await this.read('onboarding-read');if(!Number.isSafeInteger(root.revision)||root.revision<0)throw fail('SEMANTICA_INVALID_RESPONSE');
+  async continueCreation(root,{warehouseOnly=false}={}){const c=this.saved.creation;
+    if(c){if(!c.record){root??=await this.read('onboarding-read');if(!Number.isSafeInteger(root.revision)||root.revision<0)throw fail('SEMANTICA_INVALID_RESPONSE');
       // The compatibility record identifies the creator; its global answers
       // are neither a new warehouse's scope nor disposable form state.
       if(root.id){c.record={id:root.id,revision:root.revision};this.persist();}
@@ -229,19 +247,29 @@ export class OnboardingDialogue {
         if(root.revision!==0)throw fail('SEMANTICA_INVALID_RESPONSE');
         await this.write('onboarding-save',{body:{operation_id:this.uuid(),expected_revision:0,answers:{},status:'in_progress'}});
       }}
-      await this.write('onboarding-create',{onboardingId:this.saved.creation.record.id,body:{operation_id:c.operationId,expected_revision:this.saved.creation.record.revision,name:c.name,purpose:c.purpose||''}});
+      await this.write('onboarding-create',{onboardingId:this.saved.creation.record.id,body:{operation_id:c.operationId,expected_revision:this.saved.creation.record.revision,name:c.name,purpose:c.purpose||'',...(c.warehouseScope && {warehouse_scope:c.warehouseScope})}});
     }
+    if(warehouseOnly||this.saved.setupMode==='suggestions')return;
     if(this.saved.warehouse&&!this.saved.conversationId){
       this.restoreSession(await this.listSessions());
       if(!this.saved.conversationId)await this.createSession();
     }
     if(this.saved.conversationId){await this.snapshot();await this.maybeStart();}
   }
+  async recoverWarehouseCreation(){
+    await this.authorize();
+    const pending=this.saved.pending;
+    if(pending && ['onboarding-save','onboarding-create'].includes(pending.action))
+      await this.write(pending.action,pending.input);
+    if(this.saved.creation)await this.continueCreation(undefined,{warehouseOnly:true});
+    if(!this.saved.warehouse)throw fail('SEMANTICA_INVALID_RESPONSE');
+    return this.saved.warehouse;
+  }
   async maybeStart(){const s=this.state.snapshot;
     // Only the first visit to a pristine server conversation may start a model.
     // Refresh, failed attempts, unknown outcomes and unfinished user input never do.
     if(!this.state.loaded||!s?.can_start||this.generating||this.saved.pending||this.unsent||this.saved.openingAttempts.includes(this.saved.conversationId)||s.turns.items.length||s.turns.has_more)return;
-    if(this.saved.setupMode==='update'&&!this.currentQuestion)return;
+    if(this.saved.setupMode==='update'&&(this.guidedRules||!this.currentQuestion))return;
     await this.startCurrent();
   }
   start(){return this.run(()=>this.startCurrent());}
@@ -339,12 +367,17 @@ export class OnboardingDialogue {
     try{this.persist();if(!unavailable){this.state.error='';this.state.errorCode='';}}catch(e){this.saved=before;this.error(e);}this.emit();
   }
   setName(value){if(this.restoreBlocked||this.saved.creation||this.saved.pending||this.saved.warehouse)return;this.saved.name=value;try{this.persist();}catch(e){this.error(e);this.emit();}}
+  setProfileInput(field,value){
+    if(this.restoreBlocked||this.saved.creation||this.saved.pending||this.saved.warehouse)return;
+    this.saved.profileInputs={...this.saved.profileInputs,[field]:value};
+    try{this.persist();}catch(e){this.error(e);this.emit();}
+  }
   setPurpose(value){if(this.restoreBlocked||this.saved.creation||this.saved.pending||this.saved.warehouse)return;this.saved.purpose=value;try{this.persist();}catch(e){this.error(e);this.emit();}}
   sendComposer(){return this.send({answerQuestionId:this.inputQuestion?.question_id||null});}
   send({answerQuestionId=null}={}){return this.run(async()=>{
     if(!this.state.loaded||this.saved.pending)throw fail('MODELING_REQUEST_PENDING');
     const raw=answerQuestionId?'':this.saved.input;
-    const content=this.saved.setupMode==='update'?
+    const content=this.saved.setupMode==='update'&&!this.guidedRules?
       [scopeOnlyInstruction,raw].filter(Boolean).join('\n'):
       raw;
     const questionActions=clone(this.saved.questionActions),seen=this.state.snapshot?.draft_digest;
@@ -364,7 +397,7 @@ export class OnboardingDialogue {
     if(seen!==snapshot.draft_digest||snapshot.status==='stale')throw fail('MODELING_ONBOARDING_STALE');
     if(this.generating)throw fail('MODELING_ONBOARDING_BUSY');
     if(!snapshot.can_preview||this.saved.setupMode!=='update'&&snapshot.draft.ontology_proposed===false)throw fail('MODELING_ONBOARDING_NOT_READY');
-    const title=this.saved.setupMode==='update'?'范围校准':'初始本体';
+    const title=this.saved.setupMode==='update'?(this.guidedRules?'本体调整':'范围校准'):'初始本体';
     await this.write('conversation-onboarding-preview',{...this.ids(),operationId:this.uuid(),revision:this.state.snapshot.draft.revision,draftDigest:seen,name:(this.saved.warehouse.name+' · '+title).slice(0,120)});
   });}
   publish(){return this.run(async()=>{
@@ -385,7 +418,7 @@ export class OnboardingDialogue {
         this.persist();
         return;
       }
-      if(!this.scopePublicationAllowed){
+      if(!this.updatePublicationAllowed){
         this.saved.pending=null;
         this.persist();
         if(this.state.snapshot?.status!=='published')throw fail('MODELING_SCOPE_RULE_CHANGE');

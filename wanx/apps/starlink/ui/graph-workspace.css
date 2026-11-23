@@ -288,3 +288,29 @@
 }
 @keyframes explore-path-flow { to { stroke-dashoffset:-44; } }
 @keyframes explore-time-appear { from { opacity:.2; } }
+
+.graph-inline-help, .graph-workspace .graph-toolbar .graph-inline-nav { display: none; }
+.has-project-banner.graph-workspace > .main > .topbar { display: none; }
+.has-project-banner .graph-inline-help { display: inline-flex; flex: 0 0 32px; }
+.graph-auto-rotate {
+  min-height: 27px;
+  padding: 3px 7px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.graph-auto-rotate:enabled:hover { background: var(--fg-soft); }
+.graph-auto-rotate[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.graph-auto-rotate:disabled { opacity: .5; }
+@media (max-width: 900px) {
+  .has-project-banner.graph-workspace .graph-toolbar .graph-inline-nav { display: inline-flex; flex: 0 0 32px; }
+}
+@media (max-width: 460px) {
+  .has-project-banner .graph-toolbar { flex-wrap: wrap; }
+  .has-project-banner .graph-entity-search { flex: 1 1 calc(100% - 42px); }
+  .graph-workspace .graph-tools { right: 6px; }
+}

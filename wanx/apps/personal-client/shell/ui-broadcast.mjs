@@ -8,6 +8,24 @@ export const projectApplicationsForUI = records => records.map(({presentation,ma
     Number.isSafeInteger(record.deployment.generation) && record.deployment.generation > 0,
 }));
 
+export function sendToLiveFrame(window, channel, ...args) {
+  if (!window || window.isDestroyed()) return false;
+  try {
+    const contents = window.webContents;
+    if (!contents || contents.isDestroyed() || contents.isCrashed()) return false;
+    const frame = contents.mainFrame;
+    // Electron 37 can keep detached set on a recovered primary frame.
+    if (!frame || frame.isDestroyed()) return false;
+    frame.send(channel, ...args);
+    return true;
+  } catch (error) {
+    // Electron can release the native frame while its JS wrapper still exists.
+    if (error.message === "Render frame was disposed before WebFrameMain could be accessed" ||
+        error.message === "Object has been destroyed") return false;
+    throw error;
+  }
+}
+
 // Account and connection state must reach the UI without waiting for disk reads
 // or an app installation. Installed apps refresh in the background and publish
 // separately; reads from a previous account/connection can never replace them.
@@ -30,10 +48,7 @@ export function createUIBroadcast({ client, applications, uiState, startup, upda
   }
   function deliver(state) {
     if (closed) return;
-    for (const window of windows()) {
-      if (window && !window.isDestroyed() && !window.webContents.isDestroyed())
-        window.webContents.send("wanx-client:state", state);
-    }
+    for (const window of windows()) sendToLiveFrame(window, "wanx-client:state", state);
   }
   function refresh() {
     if (closed) return;

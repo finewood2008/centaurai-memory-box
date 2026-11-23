@@ -48,5 +48,9 @@ window.createStudioHome = function({request,changed}) {
  });if(!loaded)await refresh();
  }
  window.addEventListener?.('focus',()=>{if(visible)void refresh()});
- return{sync,suspend(){online=false;generation++;visible=false;loading=false;busy=false;loaded=false;modal=null;product?.pause();intake?.suspend()},render,action,refresh,search:value=>{query=value;mobileDetail=false;changed()},preparing:()=>Boolean(intake?.visible),create:()=>action('studio-workspace'),input:value=>{renamed=value},field:(name,value)=>intake?.field(name,value),mounted(root){intake?.mounted();product?.mounted(root)},productField:(name,value)=>product?.field(name,value),continueButton:appId=>{const p=projects.find(p=>!p.deletedAt&&p.appId===appId);return p?`<button class="text-button" data-action="studio-open" data-project-id="${p.id}">继续改进 ↗</button>`:''}};
+ function projectName(appId) {
+  if (!online || !loaded || !appId) return '';
+  return projects.find(project => project.appId === appId && !project.deletedAt)?.name || '';
+ }
+ return{sync,projectName,suspend(){online=false;generation++;visible=false;loading=false;busy=false;loaded=false;modal=null;product?.pause();intake?.suspend()},render,action,refresh,search:value=>{query=value;mobileDetail=false;changed()},preparing:()=>Boolean(intake?.visible),create:()=>action('studio-workspace'),input:value=>{renamed=value},field:(name,value)=>intake?.field(name,value),mounted(root){intake?.mounted();product?.mounted(root)},productField:(name,value)=>product?.field(name,value),continueButton:appId=>{const p=projects.find(p=>!p.deletedAt&&p.appId===appId);return p?`<button class="text-button" data-action="studio-open" data-project-id="${p.id}">继续改进 ↗</button>`:''}};
 };

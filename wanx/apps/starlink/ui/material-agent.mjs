@@ -58,6 +58,20 @@ export function materialRecoveryHTML(f,workflow=currentMaterialWorkflow(f)){
   const previewOff=off||stale||workflow?.actions?.prepare_automatic?.allowed!==true||importing&&!f.importer.complete;
   const reason=stale?'本次处理已被后续操作替代。请读取最新进度后，再选择当前材料的处理方式。':protectedResult?(code==='MATERIAL_REVIEW_REQUIRED'?'候选已被人工调整，不能直接重试原任务。重新预览后核对影响，再确认新的处理。':'处理依据已变化，不能直接重试原任务。重新预览后核对影响，再确认新的处理。'):s.stage==='cancelled'?'本次处理已停止。可以重新预览后开始新一轮处理。':retry?'可以按原配置重试失败任务；如果需要改变处理依据，请重新预览。':c.failureJob?.status==='succeeded'?'抽取已完成，后续处理未完成。请在任务记录中查看校验或发布问题；重新预览会开始新一轮抽取。':'失败任务尚未确认或不能直接重试，请读取最新进度并查看任务记录。';
   const btn=(action,text,disabled=off)=>`<button class="btn btn-secondary" data-cv="${action}" ${disabled?'disabled':''}>${text}</button>`;
+  if(importing){
+    const main=retry?btn('material-retry-job','重试原任务'):review?btn('import-review','继续核对'):
+      !previewOff?btn('import-auto','重新预览'):btn('import-refresh','读取最新进度');
+    return `<section class="mw-failure-recovery">
+      <div class="mw-reader-next"><div><strong>${s.stage==='cancelled'?'处理已停止':'处理未完成'}</strong><p>${reason}</p></div>${main}</div>
+      <details class="mw-reader-progress" data-cv-disclosure="reader-recovery">
+        <summary>失败详情</summary>
+        ${c.receipt?.replacement?'<p>旧草稿已转为历史，不会自动恢复编辑；本次失败或取消不撤回原已发布知识。</p>':''}
+        ${s.error?.detail||s.error?.message?`<p>${esc(s.error.detail||s.error.message)}</p>`:''}
+        ${extractionFailuresHTML(c.failureJob)}
+        ${retry||review||previewOff?btn('import-auto','重新预览',previewOff):''}
+      </details>
+    </section>`;
+  }
   return `<section class="mw-failure-recovery"><div class="mw-import-complete"><div><h3>${stale?'处理已被替代':s.stage==='cancelled'?'处理已停止':'处理未完成'}</h3><p>${reason}</p>${c.receipt?.replacement?'<p>旧草稿已转为历史，不会自动恢复编辑；本次失败或取消不撤回原已发布知识。</p>':''}</div><div class="mw-import-actions">${retry?btn('material-retry-job','重试原任务'):''}${!stale?btn(importing?'import-auto':'material-auto','重新预览',previewOff):''}${review?btn(importing?'import-review':'material-review','继续核对'):!stale&&!importing?btn('material-dialogue','对话调整',off):''}${stale||!retry&&c.diagnosticUnavailable?btn(importing?'import-refresh':'refresh','读取最新进度'):''}</div></div>${s.error?.detail||s.error?.message?`<p>${esc(s.error.detail||s.error.message)}</p>`:''}${extractionFailuresHTML(c.failureJob)}${c.diagnosticUnavailable?'<p>详细诊断暂未读取成功，请读取最新进度。</p>':''}</section>`;
 }
 
@@ -126,8 +140,10 @@ export class MaterialAgent{
       this.f.saved.materialOperations={...this.f.saved.materialOperations,[id]:{...this.f.saved.materialOperations?.[id],preview:value,previewError:null}};
       if(id===this.documentId)this.f.state.reviewingSource=false;
     }
-    if(p.action==='conversation-processing-confirm'){
+    if(['conversation-processing-confirm','conversation-processing-start'].includes(p.action)){
       if(value.receipt?.document_id!==id||!value.receipt.transition_id)throw fail('SEMANTICA_INVALID_RESPONSE');
+      if(p.action==='conversation-processing-start'&&(value.receipt.document_version_id!==p.input.documentVersionId||
+        value.receipt.operation_id!==p.input.operationId||value.receipt.waits_for_source_index!==true))throw fail('SEMANTICA_INVALID_RESPONSE');
       if(value.receipt.replacement)this.f.changes.retireForAutomatic(id);
       this.f.rounds?.retire(id);
       this.f.saved.materialOperations={...this.f.saved.materialOperations,[id]:{transitionId:value.receipt.transition_id}};
@@ -246,7 +262,8 @@ export class MaterialAgent{
     const acknowledgement=replacementDigest(p);
     if(acknowledgement===null||acknowledgement&&(confirmation.previewId!==p.preview_id||confirmation.replacementAcknowledgement!==acknowledgement))throw fail('MATERIAL_PROCESSING_ACK_REQUIRED');
     await f.write('conversation-processing-confirm',{documentId:p.document_id,previewId:p.preview_id,previewDigest:p.preview_digest,workflowRevision:p.workflow_revision,confirmed:true,...(acknowledgement?{replacementAcknowledgement:acknowledgement}:{})});
-    await f.snapshot();await this.sync();
+    if(f.readerOnly)await f.readOntology();else await f.snapshot();
+    await this.sync();
   });}
   cancelPreview(){if(this.f.state.busy||this.f.saved.pending)return;delete this.record.preview;delete this.record.previewError;this.f.state.automaticPreviewProblem=null;this.f.state.inputNotice='';this.f.persist();this.f.emit();}
   clearAutomaticContext(){
@@ -279,6 +296,7 @@ export class MaterialAgent{
   });}
   async dialogue(){
     const f=this.f;
+    if(f.readerOnly)return;
     if(materialProcessingActive(f))return f.run(async()=>{throw fail('MODELING_MATERIAL_BUSY');});
     let editExisting=false,reviewCandidates=false,handedOff=false;
     if(!await this.ensureConversation())return;

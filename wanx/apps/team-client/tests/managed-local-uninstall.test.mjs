@@ -4,7 +4,7 @@ import {mkdtemp,mkdir,writeFile,readFile,rm,access,cp} from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import {createHash} from 'node:crypto';
-import {writeMiniappPackage} from '../../builder/core/package.mjs';
+import {writeMiniappPackage} from '../../builder/tests/fixtures/miniapp-package.mjs';
 import {writeApplicationZip} from './support/application-zip.mjs';
 
 const slot='ai.wanx.selfmade.'+'a'.repeat(32),base='example.local.expert';

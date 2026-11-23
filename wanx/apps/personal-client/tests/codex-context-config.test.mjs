@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -26,6 +26,50 @@ test('uses the runnable desktop CLI if Windows PATH has no executable', async t 
   assert.equal(await findCodexCli({platform: 'win32', env: {LOCALAPPDATA: directory}}), executable);
 });
 
+test('discovers the Mac desktop CLI without a shell PATH and preserves explicit PATH precedence', async t => {
+  const home = await tempDirectory(t);
+  const applications = path.join(home, 'Applications');
+  const bundled = path.join(applications, 'ChatGPT.app', 'Contents', 'Resources', 'codex-cli', 'CodexCLI.app', 'Contents', 'MacOS', 'codex');
+  const external = path.join(home, 'bin', 'codex');
+  for (const file of [bundled, external]) {
+    await mkdir(path.dirname(file), {recursive: true});
+    await writeFile(file, 'fixture', {mode: 0o700});
+  }
+  const options = {platform: 'darwin', home, macApplicationDirectories: [applications]};
+  assert.equal(await findCodexCli({...options, env: {PATH: '/usr/bin:/bin'}}), bundled);
+  assert.equal(await findCodexCli({...options, env: {PATH: path.dirname(external)}}), external);
+});
+
+test('discovers a Mac user CLI outside the desktop PATH', async t => {
+  const home = await tempDirectory(t);
+  const executable = path.join(home, '.local', 'bin', 'codex');
+  await mkdir(path.dirname(executable), {recursive: true});
+  await writeFile(executable, 'fixture', {mode: 0o700});
+  assert.equal(await findCodexCli({platform: 'darwin', home, macApplicationDirectories: [],
+    env: {PATH: '/usr/bin:/bin'}}), executable);
+});
+
+test('Codex MCP commands receive the Mac CLI runtime PATH and keep CODEX_HOME', async t => {
+  const directory = await tempDirectory(t);
+  const env = {PATH: '/usr/bin:/bin', CODEX_HOME: directory};
+  const config = createCodexContextConfig({stdioPath, descriptorPath: path.join(directory, 'endpoint.json'), env, platform: 'darwin',
+    discover: async options => {
+      assert.equal(options.env, env);
+      return path.join(directory, 'codex');
+    },
+    run: async (_cli, args, options) => {
+      assert.deepEqual(args, ['mcp', 'list', '--json']);
+      assert.equal(options.env.CODEX_HOME, directory);
+      const directories = options.env.PATH.split(':');
+      assert.deepEqual(directories.slice(0, 2), ['/usr/bin', '/bin']);
+      assert.ok(directories.includes('/opt/homebrew/bin'));
+      assert.ok(directories.includes('/usr/local/bin'));
+      return {stdout: '[]'};
+    },
+  });
+  assert.equal(await config.isConfigured(), false);
+});
+
 test('registers only if the name is free and preserves replaced or disabled configuration', async () => {
   const environment = {CODEX_HOME: path.join(tmpdir(), 'wanx-fixture')};
   const descriptorPath = path.join(tmpdir(), 'wanx-test-descriptor.json');
@@ -34,7 +78,7 @@ test('registers only if the name is free and preserves replaced or disabled conf
   const transport = {type: 'stdio', command: process.execPath, args: [stdioPath, descriptorPath], env: {ELECTRON_RUN_AS_NODE: '1'}};
   let entries = [];
   const config = createCodexContextConfig({
-    stdioPath, descriptorPath, env: environment,
+    stdioPath, descriptorPath, env: environment, platform: 'linux',
     discover: async () => cli,
     run: async (filename, args, options) => {
       assert.equal(filename, cli);
@@ -46,15 +90,44 @@ test('registers only if the name is free and preserves replaced or disabled conf
     },
   });
   assert.equal(await config.isConfigured(), false);
-  await Promise.all([config.ensure(), config.ensure()]);
+  assert.deepEqual(await Promise.all([config.ensure(), config.ensure()]), [
+    {configurationChanged: true}, {configurationChanged: true},
+  ]);
   assert.equal(await config.isConfigured(), true);
-  await config.ensure();
+  assert.deepEqual(await config.ensure(), {configurationChanged: false});
   assert.deepEqual(commands.filter(args => args[1] === 'add'), [['mcp', 'add', 'wanx-memobox', '--env', 'ELECTRON_RUN_AS_NODE=1', '--', process.execPath, stdioPath, descriptorPath]]);
   entries = [{name: 'wanx-memobox', enabled: true, transport: {type: 'streamable_http'}}];
   await assert.rejects(config.ensure(), /已被占用/);
   entries = [{name: 'wanx-memobox', enabled: false, transport}];
   await assert.rejects(config.ensure(), /已禁用/);
   assert.equal(commands.filter(args => args[1] === 'add').length, 1);
+});
+
+test('the installed Mac Codex bridge migrates the same profile and keeps a stable command after the app moves', async t => {
+  const profile = path.join(await tempDirectory(t), 'codex-context');
+  const descriptorPath = path.join(profile, 'endpoint.json');
+  const launcher = path.join(profile, 'stdio-launcher.sh');
+  const commands = [];
+  let transport = {type: 'stdio', command: process.execPath, args: [stdioPath, descriptorPath], env: {ELECTRON_RUN_AS_NODE: '1'}};
+  const options = {stdioPath, descriptorPath, platform: 'darwin', stableLauncher: true, discover: async () => '/test/codex',
+    async run(_cli, args) {
+      if (args[1] === 'list') return {stdout: JSON.stringify([{name: 'wanx-memobox', transport, enabled: true}])};
+      commands.push(args);
+      transport = {type: 'stdio', command: '/bin/sh', args: [launcher]};
+      return {stdout: ''};
+    },
+  };
+  const original = createCodexContextConfig(options);
+  assert.equal(await original.restore(() => {}), true);
+  assert.equal(await original.isConfigured(), true);
+  assert.deepEqual(commands, [['mcp', 'add', 'wanx-memobox', '--', '/bin/sh', launcher]]);
+  const executable = path.join(profile, '新版.app', 'Contents', 'MacOS', '客户端');
+  const moved = createCodexContextConfig({...options, executable});
+  assert.equal(await moved.isConfigured(), false);
+  assert.equal(await moved.restore(() => {}), true);
+  assert.equal(await moved.isConfigured(), true);
+  assert.ok((await readFile(launcher, 'utf8')).includes(executable));
+  assert.equal(commands.length, 1);
 });
 
 test('stdio uses the private loopback descriptor for every call, including after token rotation', {timeout: 10000}, async t => {

@@ -106,7 +106,7 @@ try {
     await until(() => !!product('product-1') && !product('product-1').disabled);
     check(createCount === 0, 'opening dialog created a purchase');
     check(dialog().textContent.includes('¥0.01') && dialog().textContent.includes('充值商品 1'), 'penny product not displayed');
-    check(document.querySelector('.credits-page').inert && button('show-applications').closest('[inert]'), 'background remained interactive');
+    check(document.querySelector('.credits-page').inert && button('show-memory').closest('[inert]'), 'background remained interactive');
     check(dialog().contains(document.activeElement), 'dialog did not take focus');
     const wechat = document.querySelector('[data-action="credits-channel"][data-channel="wechat"]');
     check(wechat && !wechat.disabled, 'WeChat choice unavailable');

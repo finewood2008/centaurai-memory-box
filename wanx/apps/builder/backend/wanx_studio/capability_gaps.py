@@ -7,6 +7,8 @@ def expert_gap_resolutions(project):
     from .deployment.project_expert import selected, validate_verification, CLIENT_FORMAT, RUNTIME_CONTRACT
     from .deployment.expert_runtime import validate_backend
 
+    from .public_capabilities import EXPERT
+    key = EXPERT if project.get('devKit') else 'foundation'
     prep = project.get('preparation', {})
     contract = selected(project)
     report = prep.get('report') or {}
@@ -22,7 +24,7 @@ def expert_gap_resolutions(project):
             or probe.get('state') != 'completed'
             or not probe.get('operationId')
             or probe['operationId'] != report.get('operationId')
-            or 'foundation' not in report.get('required', [])
+            or key not in report.get('required', [])
             or report.get('codex', {}).get('available') is not True):
         return {}
     if project.get('devKit') and (contract.get('clientFormat') != CLIENT_FORMAT
@@ -34,7 +36,7 @@ def expert_gap_resolutions(project):
         validate_verification(contract['verification'])
     except (KeyError, TypeError, StudioError):
         return {}
-    evidence = report.get('results', {}).get('foundation', {})
+    evidence = report.get('results', {}).get(key, {})
     if evidence.get('status') != 'passed' or evidence.get('expertTemplate') != contract['template']:
         return {}
     events = prep.get('events', [])

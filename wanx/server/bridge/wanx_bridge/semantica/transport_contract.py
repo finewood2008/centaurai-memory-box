@@ -56,7 +56,7 @@ def operation_timeout(path: str) -> int:
         or re.fullmatch(
             r"/workbench/conversations/[A-Za-z0-9_-]{1,128}/instruction-plans(?:/[A-Za-z0-9_-]{1,128}/prepare)?", path
         )
-        or path in {"/processing", "/processing/check"}
+        or path in {"/processing", "/processing/check", "/workbench/sensitive/preview"}
         or path.startswith("/reasoning/")
     ):
         return 285
@@ -97,6 +97,10 @@ OWNER_ERROR_CODES = frozenset(
         "RESTORE_NOTE_INVALID",
         "RESTORE_PREVIEW_STALE",
         "RESTORE_SNAPSHOT_INCOMPLETE",
+        "SENSITIVE_REVISION_CONFLICT",
+        "SENSITIVE_RULE_INVALID",
+        "SENSITIVE_SIMILAR_RULE",
+        "SENSITIVE_PREVIEW_FAILED",
     }
 )
 
@@ -106,3 +110,11 @@ def owner_error(code) -> bool:
         code in OWNER_ERROR_CODES
         or re.fullmatch(r"(?:CORRECTION|INVALID_CORRECTION)_[A-Z_]{1,100}", code) is not None
     )
+
+
+def owner_error_message(code, message) -> str | None:
+    if code == "SENSITIVE_SIMILAR_RULE" and isinstance(message, str) and re.fullmatch(
+        r"规则与 [a-z][a-z0-9_]{0,79} 相似", message
+    ):
+        return message
+    return None

@@ -1,5 +1,6 @@
 import {identityKey, scopeFieldLimits, scopePatchError} from '../shared/onboarding-contract.mjs';
-import {baseScope, scopeGroups, scopeFields, scopeChangesHTML, scopeUnresolvedHTML} from './onboarding-scope-workspace.mjs';
+import {baseScope, scopeGroups, scopeFields} from './onboarding-scope-workspace.mjs';
+import {reviewChecklistHTML, reviewVersionHTML} from './onboarding-review-view.mjs';
 
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({
   '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;',
@@ -68,7 +69,7 @@ function inputHTML(scope, edits) {
     </section>`).join('')}</div>`;
 }
 
-export function mountScopeEditor({host, call, warehouse, identity, storage, onClose}) {
+export function mountScopeEditor({host, call, warehouse, identity, storage, onClose, onGuide}) {
   const key = 'starlink.warehouse-scope.v1.' + identityKey(identity) + '.' + warehouse.id;
   const editor = document.createElement('section');
   editor.className = 'od-inline od-update od-direct-scope';
@@ -89,36 +90,30 @@ export function mountScopeEditor({host, call, warehouse, identity, storage, onCl
     const title = review ? '发布核对' : receipt ? '范围发布完成' : '规则调整向导';
     const version = initial?.rule.version_number;
     editor.dataset.stage = review ? 'review' : 'edit';
+    editor.classList.toggle('od-final-guide', !!review);
     const header = `<div class="od-heading"><div>
       <div class="od-crumb">本体与关系 / ${escape(warehouse.name)}</div>
       <h1 id="od-title" tabindex="-1">${title}</h1>
-      <div class="od-calibration-meta">${version != null ? `<span>现行 v${escape(version)}</span>` : ''}
-        ${review ? '<span data-state="review">待确认 · 尚未发布</span>' : ''}</div></div>
+      ${review && initial.scope.purposes[0]?`<p class="od-guide-goal">${escape(initial.scope.purposes[0])}</p>`:''}
+      ${!review && version != null ? `<div class="od-calibration-meta"><span>现行 v${escape(version)}</span></div>` : ''}</div>
       <div class="od-heading-actions">
+        ${review?reviewVersionHTML(version):''}
+        ${onGuide && initial && !review && !receipt ? `<button type="button" class="btn btn-secondary" data-scope-action="guide" ${busy ? 'disabled' : ''}>对话梳理星图目标</button>` : ''}
         <button type="button" class="btn btn-secondary" data-scope-action="close" ${busy ? 'disabled' : ''}>${initial && !receipt ? '保存草稿并返回' : '返回'}</button>
         ${initial && !review && !receipt ? `<button type="button" class="btn btn-primary" data-scope-action="review" ${busy || !Object.keys(editedScope(initial.scope, edits)).length ? 'disabled' : ''}>进入发布核对</button>` : ''}
       </div></div>`;
     let content;
     if (review) {
-      content = `<div class="od-calibration-review">
-        <section class="od-review-section" aria-label="范围变化">
-          <header><h2>范围变化</h2></header>
-          ${scopeChangesHTML({draft:{revision:0,scope:initial.scope}}, {scope:review.scope})}
-        </section>
-        <section class="od-review-section" aria-label="规则差异">
-          <header><h2>规则差异</h2><span>0 项改动 · 沿用现行 v${escape(version)}</span></header>
-          <p class="wp-muted">本次发布只更新仓用途等业务范围。</p>
-        </section>
-        <section class="od-review-section od-unresolved" aria-label="未确定项"><header><h2>未确定项</h2></header>
-          ${scopeUnresolvedHTML([], review.scope.uncertain_items)}</section>
-        <div class="od-review-actions">
-          ${initial.canPublish ? '' : '<p class="wp-muted">此盒端版本支持核对。发布直接编辑的范围需要更新盒端服务。</p>'}
-          <label class="wp-check"><input id="od-confirm" type="checkbox" ${confirmed ? 'checked' : ''} ${busy || !initial.canPublish ? 'disabled' : ''}>我已核对范围变化</label>
+      content = reviewChecklistHTML({
+        snapshot:{draft:{revision:0,scope:initial.scope}},preview:{scope:review.scope},version,scopeOnly:true,
+        scopeEdit:`<button type="button" class="od-guide-link" data-scope-action="continue" ${busy?'disabled':''}>编辑</button>`,
+        notice:initial.canPublish?'':'发布直接编辑的范围需要更新盒端服务。',
+        actions:`<label class="wp-check"><input id="od-confirm" type="checkbox" ${confirmed?'checked':''} ${busy||!initial.canPublish?'disabled':''}>我已核对范围变化</label>
           <div class="wp-actions">
-            <button type="button" class="btn btn-secondary" data-scope-action="continue" ${busy ? 'disabled' : ''}>返回编辑</button>
-            <button type="button" class="btn btn-primary" data-scope-action="publish" ${busy || !confirmed || !initial.canPublish ? 'disabled' : ''}>确认发布</button>
-          </div>
-        </div></div>`;
+            <button type="button" class="btn btn-secondary" data-scope-action="continue" ${busy?'disabled':''}>返回编辑</button>
+            <button type="button" class="btn btn-primary" data-scope-action="publish" ${busy||!confirmed||!initial.canPublish?'disabled':''}>确认发布</button>
+          </div>`
+      });
     } else if (receipt) {
       content = '<p class="wp-info" role="status">业务范围已更新。已有资料不会自动重新抽取。</p>';
     } else {
@@ -203,6 +198,9 @@ export function mountScopeEditor({host, call, warehouse, identity, storage, onCl
     if (busy) return;
     if (action === 'close') {
       if (!Object.keys(edits).length || persist()) onClose();
+      else { message = '无法保存本机草稿。'; render(); }
+    } else if (action === 'guide') {
+      if (!Object.keys(edits).length || persist()) onGuide?.();
       else { message = '无法保存本机草稿。'; render(); }
     } else if (action === 'review') void prepareReview();
     else if (action === 'load') void load();

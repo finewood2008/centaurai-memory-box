@@ -42,6 +42,9 @@ ERROR_CODES = frozenset(
         "MODELING_ONBOARDING_MODEL_FAILED",
         "MODELING_ONBOARDING_ALREADY_STARTED",
         "MODELING_ONBOARDING_QUESTION_STALE",
+        "MODELING_TRIAL_NO_TEXT",
+        "MODELING_TRIAL_OUTPUT",
+        "MODELING_TRIAL_TIMEOUT",
         "MODELING_CHANGE_BUSY",
         "MODELING_CHANGE_STALE",
         "MODELING_CHANGE_INVALID",
@@ -150,6 +153,11 @@ class OnboardingPreview(OnboardingStart):
         if not self.name.strip():
             raise ValueError("Onboarding ontology name must be nonblank")
         return self
+
+
+class OnboardingTrial(OnboardingStart):
+    document_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,120}$")
+    document_version_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,120}$")
 
 
 class OnboardingPublish(NativeOperation):
@@ -321,6 +329,13 @@ ROUTES = [
         ONE + "/onboarding/preview",
         "Bind a publication preview to the onboarding draft",
         OnboardingPreview,
+        {},
+    ),
+    (
+        "POST",
+        ONE + "/onboarding/trial",
+        "Try an onboarding draft against a bounded excerpt",
+        OnboardingTrial,
         {},
     ),
     (
@@ -566,7 +581,10 @@ def success_status(method, path):
         return 201
     if (method, path) in source_preparation_contract.RESPONSES:
         return 202
-    if method == "POST" and path == material_processing_contract.MATERIAL + "/processing-transitions":
+    if method == "POST" and path in {
+        material_processing_contract.MATERIAL + "/processing-transitions",
+        material_processing_contract.MATERIAL + "/processing-starts",
+    }:
         return 202
     if method == "POST" and path.startswith(C):
         if path in {C, ONE + "/intents"}:

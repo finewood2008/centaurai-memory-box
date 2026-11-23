@@ -12,7 +12,7 @@ function setup({ warehouseId = null, warehouses = [], ready = true, invalid = fa
   const toasts = [], shown = [], refreshes = [];
   const elements = new Map();
   const context = {
-    state, bridge: null,
+    state, bridge: null, conversationFlow: null, onboarding:{busy:false},
     pages: Object.fromEntries(['warehouses', 'models', 'conversation', ...views].map(view => [view, [view, '', '']])),
     workbench: { has: view => views.includes(view), clearOntologyAction() {}, show: view => { shown.push(view); return Boolean(warehouseId) && canNavigate; } },
     document: { querySelectorAll: () => [], getElementById: () => null },
@@ -21,7 +21,7 @@ function setup({ warehouseId = null, warehouses = [], ready = true, invalid = fa
       return elements.get(selector);
     },
     toast: message => toasts.push(message), icon: () => '',
-    renderWarehouses() {}, renderProcessingSummary() {}, syncControls() {}, stopConversation() {}, setNavigationOpen() {},
+    renderWarehouses() {}, renderProcessingSummary() {}, syncControls() {}, syncStarxiaotu() {}, stopConversation() {}, setNavigationOpen() {},
     refresh: () => refreshes.push('directory-read'),
     loadPolicy() {}, loadKeys() {}, renderManagement() {}, loadModels() {},
     skillsUi: { load() {} },
@@ -40,7 +40,7 @@ for (const view of views) test(`unselected ${view} opens the warehouse directory
     assert.equal(h.state.view, 'warehouses');
     assert.equal(h.state.warehouseId, null);
     assert.equal(h.toasts.length, 1);
-    assert.match(h.toasts[0], /选择.*创建.*数据仓/);
+    assert.match(h.toasts[0], /选择.*新建.*星图/);
     assert.deepEqual(h.shown, [], 'no unscoped iframe or knowledge read may be started');
     assert.deepEqual(h.refreshes, ['directory-read']);
   }

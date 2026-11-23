@@ -77,6 +77,17 @@ test('launch navigation verifies the document and conversation attachment before
   assert.equal(flow.state.error,'MODELING_RESOURCE_NOT_FOUND');assert.equal(calls.length,before+1);
 });
 
+test('reader-only launch validates a historical reference and opens the material itself',async()=>{
+  const {flow,calls}=fixture();flow.readerOnly=true;
+  flow.all=async()=>[{id:'intent',document_id:'external'}];
+  flow.importer={async select(id){calls.push(['reader',id]);this.view={documentId:id};}};
+  assert.equal(await openWarehouseMaterial(flow,{documentId:'external',conversationId:'c',intentId:'intent'}),true);
+  assert.deepEqual(calls.at(-1),['reader','external']);
+  assert.equal(calls.some(c=>c[0]==='select'),false);
+  assert.equal(await openWarehouseMaterial(flow,{documentId:'external',conversationId:'c',intentId:'foreign'}),false);
+  assert.equal(flow.state.error,'MODELING_RESOURCE_NOT_FOUND');
+});
+
 test('launching an unlinked material outside the first inventory page only reads and selects that document',async()=>{
   const {flow,calls}=fixture();assert.equal(await openWarehouseMaterial(flow,{documentId:'external'}),true);
   assert.equal(flow.state.librarySelection.document.id,'external');assert.equal(calls.filter(Array.isArray).every(c=>['document','conversation-material-workflow'].includes(c[0])),true);

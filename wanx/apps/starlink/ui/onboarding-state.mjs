@@ -60,7 +60,7 @@ const blank = () => Object.fromEntries([...Object.keys(answerLimits),'warehouse_
 const normalize = name => name.normalize('NFKC').trim().toLowerCase();
 const sameAnswers = (a,b) => Object.keys(answerLimits).every(key=>(a?.[key]||'')===(b?.[key]||''));
 const profileAnswers = answers => Object.fromEntries(['industry','occupation'].map(key=>[key,answers?.[key]||'']));
-const generationAnswers = answers => Object.fromEntries(Object.keys(answerLimits).map(key=>[key,key==='background'?'':answers?.[key]||'']));
+const generationAnswers = (answers, includeBackground=false) => Object.fromEntries(Object.keys(answerLimits).map(key=>[key,key==='background'&&!includeBackground?'':answers?.[key]||'']));
 export function currentRuleReview(context, proposal) {
   const review=context?.rule_review;
   return review && (!proposal?.id || review.proposal_id===proposal.id) ? review : null;
@@ -95,9 +95,11 @@ export function validation(answers, warehouses, name = false) {
 
 // All navigation decisions live here so the three-screen route can evolve independently.
 export class OnboardingFlow {
-  constructor({call, storage, identity, onChange = () => {}, uuid = () => crypto.randomUUID()}) {
+  constructor({call, storage, identity, warehouseId, onChange = () => {}, uuid = () => crypto.randomUUID()}) {
     this.call=call; this.storage=storage; this.uuid=uuid; this.onChange=onChange;this.identity=identity;
     this.key='starlink.onboarding.v1.'+identityKey(identity);
+    this.warehouseId=warehouseId;
+    if(warehouseId)this.key+='.suggestions.'+encodeURIComponent(warehouseId);
     this.epoch=0; this.live=true;
     this.state={step:'welcome', answers:blank(), record:null, warehouses:[], pending:null, creation:null,
       warehouse:null, context:null, proposal:null, ruleProposalId:null, reviewQuestions:[], answerEdit:null, busy:false, error:'', notice:'', needsReview:false, loaded:false};
@@ -274,6 +276,7 @@ export class OnboardingFlow {
     }
     this.persist(); // Must succeed before sending any write.
     const pending=this.state.pending;
+    this.emit();
     const result=await this.read(pending.action,pending.input);
     const before=copy(this.state);
     try {
@@ -348,7 +351,21 @@ export class OnboardingFlow {
       this.state.pending=null; this.persist();
     }
   }
+  async openSuggestions(warehouse, initialCreation=false) {
+    return this.run(async()=>{
+      this.restore();
+      if(this.warehouseId!==warehouse.id || this.state.warehouse && this.state.warehouse.id!==warehouse.id)throw fail('MODELING_LOCAL_RECORD_INVALID');
+      Object.assign(this.state,{warehouse,step:'result',loaded:false});
+      await this.recoverContext();
+      this.state.loaded=true;
+      this.persist();
+      // A creation receipt authorizes the first version of this warehouse only.
+      if(initialCreation && this.state.context.purpose_revision===1 && !this.state.proposal && !this.state.pending && !this.state.needsReview)
+        await this.generateConfirmed({initialCreation:true});
+    });
+  }
   async refresh() {
+    if(this.warehouseId && this.state.warehouse)return this.openSuggestions(this.state.warehouse);
     if(!this.state.loaded) return this.load();
     return this.run(async()=>{
       this.state.loaded=false;
@@ -358,7 +375,8 @@ export class OnboardingFlow {
   async reviewAgain() {
     if(!this.state.loaded) return;
     return this.run(async()=>{
-      await this.readRoots(); await this.recoverContext();
+      if(!this.warehouseId)await this.readRoots();
+      await this.recoverContext();
       this.state.pending=null; this.state.creation=null; this.state.needsReview=false;
       if(!this.state.warehouse) {
         const record=this.state.record;
@@ -409,7 +427,7 @@ export class OnboardingFlow {
       await this.generateConfirmed();
     });
   }
-  async generateConfirmed() {
+  async generateConfirmed({initialCreation=false}={}) {
       if(this.state.needsReview&&!this.state.pending) throw fail('MODELING_ANSWERS_STALE');
       if(!this.state.context || !this.state.warehouse) throw fail('MODELING_RESOURCE_NOT_FOUND');
       const warehouseId=this.state.warehouse.id;
@@ -427,10 +445,10 @@ export class OnboardingFlow {
         await this.write('onboarding-generate',this.state.pending.input,result=>this.acceptProposal(result));
         return;
       }
-      if(!confirmation || this.state.answerEdit || context.answers?.background || this.state.pending?.action==='onboarding-confirm') {
+      if(!confirmation || this.state.answerEdit || (!this.warehouseId && context.answers?.background) || this.state.pending?.action==='onboarding-confirm') {
         await this.write('onboarding-confirm',{warehouseId,body:{operation_id:this.uuid(),expected_revision:context.purpose_revision,
           onboarding_revision:context.onboarding_revision,expected_confirmation_id:context.latest_confirmation_id,
-          answers:generationAnswers(this.state.answerEdit?.answers||context.answers)}},result=>{
+          answers:generationAnswers(this.state.answerEdit?.answers||context.answers,Boolean(this.warehouseId))}},result=>{
           if(!result.resource_id) throw fail('SEMANTICA_INVALID_RESPONSE');
           confirmation=result.confirmation || {id:result.resource_id}; this.state.context.confirmation=confirmation;
           this.state.context.answers=copy(confirmation.answers||this.state.pending.input.body.answers);
@@ -440,7 +458,9 @@ export class OnboardingFlow {
           this.state.needsReview=false;
         });
       }
-      await this.write('onboarding-generate',{warehouseId,body:{operation_id:this.uuid(),confirmation_id:confirmation.id,
+      // Multiple windows may resume the same first generation. Explicit later
+      // retries use fresh operations after an observed failure.
+      await this.write('onboarding-generate',{warehouseId,body:{operation_id:initialCreation?'initial-'+confirmation.id:this.uuid(),confirmation_id:confirmation.id,
         base_ontology_id:context.base_ontology_id}},result=>{
         this.acceptProposal(result);
       });

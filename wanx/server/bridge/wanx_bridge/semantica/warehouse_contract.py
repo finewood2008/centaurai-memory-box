@@ -1,12 +1,13 @@
 """Finite warehouse metadata commands within current owner authorization."""
 from pydantic import Field
 
-from .modeling_contract import Operation, openapi_extra
+from .modeling_contract import CreationProfile, Operation, openapi_extra
 
 
 class QuickWarehouse(Operation):
     name: str = Field(min_length=1, max_length=60)
     description: str = Field(default="", max_length=500)
+    warehouse_scope: CreationProfile | None = None
 
 
 class RenameWarehouse(Operation):
@@ -33,7 +34,7 @@ def schema_extra(path, model):
         return extra
     extra["description"] = (
         "Uses existing WANX identity and warehouse authorization. Quick creation needs only name, "
-        "optional description and a stable operation_id. No model call or template selector. "
+        "optional description and warehouse scope, and a stable operation_id. No model call or template selector. "
         "The successful receipt contains current_ontology: id, version_number, name, status, "
         "template_id, template_version, entity_type_count, relation_type_count. "
         "An operation replay returns the original receipt; GET the warehouse to read current rules. "

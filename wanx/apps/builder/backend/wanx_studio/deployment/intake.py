@@ -239,9 +239,9 @@ class ReleaseIntake:
             archive=files[ids[package_id]['path']]
             validate_standard_package(base64.b64encode(archive).decode(),payload['packageSha256'],payload['manifest'],application_id=manifest['applicationId'],version=manifest['version'])
         else:
-            self._validate_client(manifest, payload)
+            _fail('STANDARD_ARTIFACT_REQUIRED')
         backend_value = _json(files[ids[backend["artifactId"]]["path"]])
-        if canonicalize_json(backend_value) != canonicalize_json({"schemaVersion": 1, "format": "wanx-expert-backend-v1", "template": backend["template"], "mode": "ask"}):
+        if not isinstance(backend_value, dict) or canonicalize_json({k: v for k, v in backend_value.items() if k != "prompt"}) != canonicalize_json({"schemaVersion": 1, "format": "wanx-expert-backend-v1", "template": backend["template"], "mode": "ask"}):
             _fail("DIRECTORY_BACKEND_INVALID")
         validated = self.backend_validator(deepcopy(backend_value))
         if not isinstance(validated, dict) or canonicalize_json(validated) != canonicalize_json(backend_value) or validated.get("template") != backend["template"]:

@@ -9,6 +9,26 @@ export function createSpaceMcp({state,persist,scope,storageScope=scope,assertSco
  const call=async(bound,path='',options={})=>(await remote(bound,path,{prefix:PREFIX,...options})).value;
  return {
   contextChanged(){},close(){},
+  async output({connectionId, grantId},name,args) {
+   const bound=scope(), owner=storageScope();assertScope(bound);
+   const credential=state.spaceMcp.find(r=>r.scope===owner&&r.id===connectionId&&r.internal)?.credential;
+   if(!credential||!/^[a-f0-9]{32}$/.test(grantId)||
+      (name!=='space_write_text'&&(name!=='space'||!['begin-write','write-chunk','commit-write','write-status','cancel-write'].includes(args.action))))
+    throw fail('MCP_OUTPUT_UNAVAILABLE');
+   const url=await endpoint();assertScope(bound);
+   const response=await fetch(url,{method:'POST',redirect:'error',signal:AbortSignal.timeout(55000),headers:{
+    authorization:'Bearer '+credential,accept:'application/json, text/event-stream','content-type':'application/json','mcp-protocol-version':'2025-03-26',
+   },body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name,arguments:{...args,grant_id:grantId}}})});
+   assertScope(bound);
+   const reply=response.ok?await response.json():null;assertScope(bound);
+   const result=reply?.result;
+   if(reply?.id!==1||!result||result.isError){
+    const code=result?.content?.find(row=>row.type==='text')?.text.match(/\b(?:SPACE|MCP|AGENT)_[A-Z_]+\b/)?.[0];
+    throw fail(code||'MCP_OUTPUT_UNAVAILABLE');
+   }
+   if(result.structuredContent)return result.structuredContent;
+   try{return JSON.parse(result.content.find(row=>row.type==='text').text);}catch{throw fail('MCP_OUTPUT_UNAVAILABLE');}
+  },
   async handle(_req,res){res.writeHead(410,{'Content-Type':'application/json'});res.end(JSON.stringify({error:{code:'MCP_SERVER_HOSTED'}}));},
   async manage(action,input={}) {
    const bound=scope();assertScope(bound);
@@ -28,15 +48,15 @@ export function createSpaceMcp({state,persist,scope,storageScope=scope,assertSco
     let url=null,endpointError=null;
     try{url=await endpoint();}catch(error){assertScope(bound);const code=error.code||error.message;if(!['MCP_PORT_IN_USE','MCP_TRANSPORT_UNAVAILABLE','MCP_ADDRESS_INVALID'].includes(code))throw error;endpointError=code;}
     assertScope(bound);
-    return {...value,url,endpointError,localRelay:client.snapshot().connection.mode==='netbird',connections:value.connections.map(c=>({...c,localKey:!!record(c.id)?.credential}))};
+    return {...value,url,endpointError,localRelay:client.snapshot().connection.mode==='netbird',connections:value.connections.map(c=>({...c,localKey:!!record(c.id)?.credential&&!record(c.id)?.internal}))};
    }
    if(action==='mcp-reset-endpoint') {
     if(client.snapshot().connection.mode!=='netbird'||!resetEndpoint)throw fail('SPACE_ACTION_INVALID');
     const url=await resetEndpoint();assertScope(bound);return {url};
    }
    if(action==='mcp-issue') {
-    let pending=state.spaceMcp.find(r=>r.scope===owner&&!r.id&&r.name===input.name);
-    if(!pending){pending={scope:owner,name:String(input.name||'我的 MCP 接入').slice(0,80),operation_id:randomBytes(16).toString('hex'),credential:randomBytes(32).toString('base64url'),destination};state.spaceMcp.push(pending);await persist();}
+    let pending=state.spaceMcp.find(r=>r.scope===owner&&!r.id&&r.name===input.name&&Boolean(r.internal)===Boolean(input.internal));
+    if(!pending){pending={scope:owner,name:String(input.name||'我的 MCP 接入').slice(0,80),operation_id:randomBytes(16).toString('hex'),credential:randomBytes(32).toString('base64url'),destination,...(input.internal===true&&{internal:true})};state.spaceMcp.push(pending);await persist();}
     const value=await call(bound,'/connections',{method:'POST',body:{operation_id:pending.operation_id,credential:pending.credential,name:pending.name,destination:pending.destination}});assertScope(bound);pending.id=value.id;await persist();assertScope(bound);return {...value,localKey:true};
    }
    if(action==='mcp-revoke') {const v=await call(bound,'/connections/'+input.id,{method:'DELETE'});assertScope(bound);const r=record(input.id);if(r){delete r.credential;await persist();assertScope(bound);}return v;}
@@ -51,7 +71,7 @@ export function createSpaceMcp({state,persist,scope,storageScope=scope,assertSco
     else if(input.kind==='prompt')text=(await call(bound,`/connections/${input.id}/prompt`)).prompt;
     else {
      const overview=await call(bound,'?destination='+destination),connection=overview.connections.find(c=>c.id===input.id&&c.status==='active');
-     const r=record(input.id);if(!connection||!r?.credential)throw fail('MCP_KEY_NOT_ON_THIS_CLIENT');
+     const r=record(input.id);if(!connection||!r?.credential||r.internal)throw fail('MCP_KEY_NOT_ON_THIS_CLIENT');
      text=input.kind==='key'?r.credential:JSON.stringify({mcpServers:{'wanx-space':{url:await endpoint(),headers:{Authorization:'Bearer '+r.credential}}}},null,2);
     }
     assertScope(bound);if(!copyText)throw fail('MCP_CLIPBOARD_UNAVAILABLE');await copyText(text);return {copied:true};

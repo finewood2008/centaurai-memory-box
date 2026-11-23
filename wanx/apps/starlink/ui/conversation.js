@@ -1,3 +1,4 @@
+import {starxiaotuWorkflowHeader} from './starxiaotu.mjs';
 import {ontologyGraphHTML,ontologyDefinitionsHTML} from './onboarding-ontology-view.mjs';
 import {currentRuleReview} from './onboarding-state.mjs';
 import {unresolvedQuestions,savedReviewQuestions} from './onboarding-notes.mjs';
@@ -37,8 +38,8 @@ export async function readConversationOnboarding({call,warehouseId,isCurrent,sto
 
 function welcomeHTML(flow){
   const s=flow?.state,o=s?.ontology,schema=o?.schema;
-  const graph=s?.ontologyError?'<p role="status">当前本体读取失败，请点击顶部“读取进度”重试。</p>':!s?.loaded?'<p role="status">正在读取当前仓库本体…</p>':!o?'<p>当前仓库尚无已发布本体。</p>':!schema?.entity_types?.length?'<p>当前本体尚未定义实体类型。</p>':ontologyGraphHTML(schema,[],'mw-current',{label:'当前仓库本体图谱'});
-  return `<section class="mw-welcome"><h2>当前仓库本体图谱</h2>${o?`<div class="mw-ontology-meta"><span>${esc(o.name)}${Number.isSafeInteger(o.version_number)?` · v${o.version_number}`:''} · 当前生效</span><span>${schema?.entity_types?.length??0} 个实体类型 · ${schema?.relation_types?.length??0} 个关系类型</span></div>`:''}<div class="mw-ontology-layout"><div class="mw-ontology-graph">${graph}</div>
+  const graph=s?.ontologyError?'<p role="status">当前本体读取失败，请点击顶部“读取进度”重试。</p>':!s?.loaded?'<p role="status">正在读取当前星图的本体…</p>':!o?'<p>当前星图尚无已发布本体。</p>':!schema?.entity_types?.length?'<p>当前本体尚未定义实体类型。</p>':ontologyGraphHTML(schema,[],'mw-current',{label:'当前星图的整理规则'});
+  return `<section class="mw-welcome"><h2>当前星图的整理规则</h2>${o?`<div class="mw-ontology-meta"><span>${esc(o.name)}${Number.isSafeInteger(o.version_number)?` · v${o.version_number}`:''} · 当前生效</span><span>${schema?.entity_types?.length??0} 个实体类型 · ${schema?.relation_types?.length??0} 个关系类型</span></div>`:''}<div class="mw-ontology-layout"><div class="mw-ontology-graph">${graph}</div>
     ${schema?.entity_types?.length?`<aside class="mw-ontology-definitions" aria-label="本体类型、关系与属性列表">${ontologyDefinitionsHTML(schema,'mw-current')}</aside>`:''}</div>
     </section>`;
 }
@@ -56,7 +57,7 @@ function conversationActions(flow) {
     const working=['queued','running','generating'].includes(s.turn?.status);
     const confirmed=!!d?.goal?.goal&&!s.goalDirty&&!r.goalNeedsConfirmation&&s.inspectCard!=='goal';
     const body=flow.saved.pending?'<p>本轮请求结果尚未确认，请通过上方入口恢复原请求。</p>':working?'<progress aria-label="正在明确整理目标"></progress><p role="status">正在初步阅读材料、整理本轮答复，完成后展示目标建议与必要追问。</p>':confirmed?`<p role="status">整理目标已由服务端确认保存，尚未开始抽取。</p><h3>${esc(d.goal.goal)}</h3><p>${esc(d.goal.instructions||'未设置其他关注或排除内容')}</p><button type="button" class="btn btn-secondary" data-cv="intake-edit-goal">调整整理目标</button>`:conversationGoal(flow);
-    return `<div class="cv-conversation-actions cv-goal-preparation" data-next-step="goal"><article class="cv-message cv-assistant cv-action-message"><header><strong>整理助手</strong><span>第 2 步 · 明确整理目标</span></header><div class="cv-action-body">${r.usingOriginal?'<p>本轮依据服务端原文；本机正文修改尚未应用。</p>':''}${!r.goalTurnId&&!flow.saved.pending&&!working?'<button type="button" class="btn btn-secondary" data-cv="intake-start-goal">初读材料，建议整理目标</button>':''}${body}</div></article></div>`;
+    return `<div class="cv-conversation-actions cv-goal-preparation" data-next-step="goal"><article class="cv-message cv-assistant cv-action-message"><header><strong>资料整理</strong><span>第 2 步 · 明确整理目标</span></header><div class="cv-action-body">${r.usingOriginal?'<p>本轮依据服务端原文；本机正文修改尚未应用。</p>':''}${!r.goalTurnId&&!flow.saved.pending&&!working?'<button type="button" class="btn btn-secondary" data-cv="intake-start-goal">初读材料，建议整理目标</button>':''}${body}</div></article></div>`;
   }
   const s=flow.state,d=s.detail,next=nextConversationStep(flow),staleDraft=!flow.changes.independent&&flow.changes.state.summary?.status==='editing'&&!!flow.changes.state.summary.stale_reason;
   const step=['recovery','extracting','parsing','reading','receipt','merge','discarded','proposal','rules-ready'].includes(next)?next:staleDraft?'draft':s.inspectCard||next;
@@ -86,7 +87,7 @@ function conversationActions(flow) {
   else if(step==='stopped')body='<p>当前处理已停止或来源已变化，请选择可用材料后继续。</p>';
   if(!body)return '';
   if(flow.intake.record?.usingOriginal)body='<p>本轮依据服务端原文；本机正文修改尚未应用。</p>'+body;
-  return `<div class="cv-conversation-actions" data-next-step="${esc(step)}" aria-label="当前材料操作卡片"><article class="cv-message cv-assistant cv-action-message"><header><span class="cv-assistant-icon" aria-hidden="true">✧</span><strong>整理助手</strong><span>${esc(s.intents.find(i=>i.id===d?.id)?.original_name||'当前会话')}</span></header>${hints[step]?`<p class="cv-action-intro">${hints[step]}</p>`:''}<div class="cv-action-body"><div class="cv-card-heading"><strong>${titles[step]||'当前操作'}</strong><small>${['extracting','parsing','reading','receipt'].includes(step)?'处理中':step==='published'?'已生效':'待核对'}</small></div>${body}</div>${s.inspectCard&&step===s.inspectCard?'<button class="btn btn-secondary" data-cv="next-action">返回当前待办</button>':''}</article></div>`;
+  return `<div class="cv-conversation-actions" data-next-step="${esc(step)}" aria-label="当前材料操作卡片"><article class="cv-message cv-assistant cv-action-message"><header><span class="cv-assistant-icon" aria-hidden="true">✧</span><strong>资料整理</strong><span>${esc(s.intents.find(i=>i.id===d?.id)?.original_name||'当前会话')}</span></header>${hints[step]?`<p class="cv-action-intro">${hints[step]}</p>`:''}<div class="cv-action-body"><div class="cv-card-heading"><strong>${titles[step]||'当前操作'}</strong><small>${['extracting','parsing','reading','receipt'].includes(step)?'处理中':step==='published'?'已生效':'待核对'}</small></div>${body}</div>${s.inspectCard&&step===s.inspectCard?'<button class="btn btn-secondary" data-cv="next-action">返回当前待办</button>':''}</article></div>`;
 }
 
 function conversationSummary(flow,currentRules) {
@@ -99,9 +100,10 @@ function conversationSummary(flow,currentRules) {
     <section class="cv-source-summary"><h2>原文依据</h2>${flow.changes.state.source?`<p>${esc(flow.changes.state.source.text)}</p>`:d?.review?.draft_id?'<p>核对事实时点击“查看原文”，在这里查看对应材料片段。</p>':'<p>初步结果会逐项展示服务端返回的原文摘录与定位；未提供依据的候选需继续核对。</p>'}</section>`;
 }
 
-export function conversationHTML(warehouse,publication=null,onboarding=null,allowReview=true,flow=null) {
-  if(warehouse?.state==='import_failed') return '<div class="empty"><h2>这座知识仓迁入未完成</h2><p>迁入流程尚未全部完成，暂时无法读取材料与知识。仓库卡片上的数量表示已写入的数据，不能表示迁入成功。</p><button class="btn btn-secondary" data-view="data">到数据管理查看失败原因</button></div>';
-  if(!warehouse || warehouse.state!=='active') return '<div class="empty">请先选择一座可用的知识仓。</div>';
+export function conversationHTML(warehouse,publication=null,onboarding=null,allowReview=true,flow=null,building=false) {
+  if(flow?.readerOnly)return materialReaderHTML(warehouse,allowReview,flow);
+  if(warehouse?.state==='import_failed') return '<div class="empty"><h2>这张星图尚未完成迁入</h2><p>迁入流程尚未全部完成，暂时无法读取材料与知识。星图卡片上的数量表示已写入的数据，不能表示迁入成功。</p><button class="btn btn-secondary" data-view="data">到数据管理查看失败原因</button></div>';
+  if(!warehouse || warehouse.state!=='active') return '<div class="empty">请先选择一张可用的星图。</div>';
   if(allowReview&&flow?.state.materialPage==='import')return materialImportHTML(flow,welcomeHTML(flow));
   if(allowReview&&flow?.state.librarySelection)return materialLibraryHTML(flow);
   if(onboarding && !onboarding.loading && !onboarding.error)publication=onboarding.publication;
@@ -118,12 +120,34 @@ export function conversationHTML(warehouse,publication=null,onboarding=null,allo
   const currentStep=nextConversationStep(flow);
   const claim=currentDraftClaim(flow);
   const actionHint=hasChangeConflicts(flow?.instructions?.open?flow.instructions.step?.preview?.result:proposal?.result)?changeConflictNotice:flow?.instructions?.open?(flow.instructions.plan?.interpretation?.summary||'请核对本轮建议。确认后才保存修改，发布需另行确认。'):claim?claim.notice:flow?.changes.record.changeTarget==='rules'&&['proposal','rules','rules-ready'].includes(currentStep)?ruleStageHint(flow):currentStep==='proposal'?(proposal?.status==='needs_clarification'?'请直接回答上方问题；也可以取消本轮建议，返回材料继续核对。':proposal?.status==='generating'?'正在生成修改预览，完成后可核对并确认应用。':'请核对中间的修改差异，确认应用后再继续核对发布。'):currentStep==='draft'?'可继续修改当前材料；没有其他修改时，核对整份材料并进入发布预览。':actions?'在中间核对后继续；也可以直接提问，或发送“下一步”“重新抽取”“对话调整”。':pendingProposal?'本轮修改的答复与确认操作在上方助手消息中，差异展示在左侧工作区。':'先添加一份材料，我会引导你逐步完成整理。';
-  return `<div class="material-workspace"><aside class="mw-library" aria-label="材料列表">${materialListHTML(flow)}</aside>
+  const sourceStep=building&&['candidates','merge','draft','publication'].includes(currentStep);
+  const detail=flow?.state.detail;
+  const original=flow?.intake.source?.version?.id===detail?.document_version_id?flow?.intake.source:null;
+  const context=flow?.changes.state.source;
+  const evidence=flow?.state.candidates?.items.find(item=>item.kind==='relation'&&item.evidence?.some(e=>e.excerpt))?.evidence?.find(e=>e.excerpt);
+  const source=sourceStep?`<aside class="starlink-setup-source" aria-label="原文与候选对照"><h2>原文对照</h2>
+    ${context?.text?`<blockquote>${esc(context.text)}</blockquote>`:evidence?.excerpt?`<blockquote>${esc(evidence.excerpt)}</blockquote>`:
+    original?`<blockquote>${esc(original.segments[0]?.text?.slice(0,1100))}</blockquote>`:'<p>点候选中的原文依据，可以核对对应的片段。</p>'}</aside>`:'';
+  return `<div class="material-workspace${building?(sourceStep?' starlink-first-review':' starlink-first-material'):''}">${building?source:`<aside class="mw-library" aria-label="材料列表">${materialListHTML(flow)}</aside>`}
     <section class="mw-review" aria-label="材料核对工作区"><header><div><small>当前材料</small><h2>${esc(name||'从第一份材料开始')}</h2></div><div class="mw-material-tools">${materialRoundHistoryButton(flow)}<button class="btn btn-secondary" data-cv="refresh" ${!flow||flow.state.busy?'disabled':''}>读取进度</button>${flow?.state.detail?.document_id?`<button class="btn btn-secondary" data-cv="material-delete" ${canDeleteMaterial(flow)?'':'disabled'}>删除材料</button>`:''}</div></header>
       ${flow?.state.deletionNotice?`<p class="mw-delete-notice" role="status">${esc(flow.state.deletionNotice)}</p>`:''}
       ${materialStatusHTML(flow)}<div class="mw-review-content">${materialRoundsHTML(flow)}${materialAgentTools(flow)}${evidencePickerHTML(flow)}${actions||pendingProposal||welcomeHTML(flow)}
-      ${flow?.state.detail?`<details class="mw-reference" data-cv-disclosure="material-reference"><summary>目标与适用规则</summary>${background?`<section class="cv-background"><div><small>建仓信息 · 已保存</small><p>${esc(background)}</p></div></section>`:''}${conversationSummary(flow,currentRules)}</details>`:''}
+      ${flow?.state.detail?`<details class="mw-reference" data-cv-disclosure="material-reference"><summary>目标与适用规则</summary>${background?`<section class="cv-background"><div><small>星图目标 · 已保存</small><p>${esc(background)}</p></div></section>`:''}${conversationSummary(flow,currentRules)}</details>`:''}
       </div></section>
-    <section class="conversation-thread mw-assistant" aria-label="材料助手"><header><span class="cv-assistant-icon" aria-hidden="true">✧</span><div><strong>材料助手</strong><small title="${esc(name)}">${esc(name||'上传材料后开始对话')}</small><span class="mw-assistant-status">${flow?.state.busy?'正在处理本轮请求':'当前材料独立对话'}</span></div>${flow?.state.materialPage==='dialogue'?`<button class="btn btn-secondary mw-close-chat" data-cv="import-close-dialogue" ${flow.state.busy||flow.importer.blocked?'disabled':''} title="返回材料处理页，保留已保存的草稿；不会自动发布或停止服务端任务">退出对话模式</button>`:''}</header>
-      ${conversationThread(flow,'',materialAgentFeedback(flow)+`<section class="mw-confirm-card"><strong>当前操作</strong><p>${actionHint}</p><div class="mw-confirm-actions"><p class="mw-no-action">处理进度和待核对内容会随服务端回执更新。</p></div></section>`)}</section></div>`;
+    <section class="conversation-thread mw-assistant" aria-label="整理资料">
+      ${starxiaotuWorkflowHeader('整理资料', name || (flow?.state.busy ? '正在处理本轮请求' : ''), flow?.state.materialPage==='dialogue'?`<button class="btn btn-secondary mw-close-chat" data-cv="import-close-dialogue" ${flow.state.busy||flow.importer.blocked?'disabled':''}>返回资料</button>`:'')}
+      <div data-sx-task-body>${conversationThread(flow,'',materialAgentFeedback(flow)+`<section class="mw-confirm-card"><strong>当前操作</strong><p>${actionHint}</p><div class="mw-confirm-actions"><p class="mw-no-action">处理进度和待核对内容会随服务端回执更新。</p></div></section>`)}</div>
+      </section></div>`;
+}
+
+export function materialReaderHTML(warehouse,allowReview,flow){
+  if(warehouse?.state==='import_failed')return conversationHTML(warehouse);
+  if(warehouse?.state!=='active')return '<div class="empty">请先选择一张可用的星图。</div>';
+  if(!allowReview)return '<div class="empty">当前通道尚不支持资料库。</div>';
+  if(!flow)return '<p role="status">正在读取资料库…</p>';
+  const hasMaterials=flow.state.warehouseMaterials?.length || flow.state.warehouseMaterialTotal>0;
+  const welcome=flow.state.warehouseMaterialError?'<p role="status">资料列表暂不可读，请重新读取。</p>':hasMaterials
+    ? '<p>从左侧选择一份资料，查看正文和处理进度。</p>'
+    : '<section class="mw-welcome"><h3>导入第一份资料</h3><p>导入后可在这里核对正文，并用当前生效的本体整理知识。</p><button type="button" class="btn btn-primary" data-action="import">导入资料</button></section>';
+  return materialImportHTML(flow,welcome);
 }

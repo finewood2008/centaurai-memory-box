@@ -27,6 +27,9 @@ export function createDriveRouting({catalog, scope, send}) {
     if(parts[1])params.id=parts[1];
     let action;
     if(parts[0]==='files')action=parts[2]==='content'?'read':parts[2]==='previous'?'previous':parts[1]?({GET:'stat',PATCH:'move',DELETE:'trash'}[method]):'list';
+    if(parts[0]==='files'&&parts[2]==='edit-uploads'&&method==='POST'){
+      action='edit-create'; params.upload_id=body.id;
+    }
     if(parts[0]==='folders')action='mkdir';
     if(parts[0]==='trash')action=parts[2]==='restore'?'restore':'purge';
     if(parts[0]==='uploads'){

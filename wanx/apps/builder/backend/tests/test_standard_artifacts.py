@@ -25,9 +25,9 @@ async def standard(tmp_path,request):
  p['appId']='dev.wanx.synthetic.a12345678'
  p['solution']['capabilities']=[]
  expert={'schemaVersion':1,'profile':'wanx-expert-app-v1','revision':1,'template':{'resourceId':'synthetic-expert','version':'0.0.0+sha.'+'a'*12,'digest':'sha256:'+'a'*64},'verification':{'schemaVersion':1,'checks':[{'id':'text-roundtrip','input':{'text':'Synthetic'},'expected':{'contains':'Synthetic'}}]}} if getattr(request,'param',None)=='expert' else None
- if expert:p['deploymentExpert']=expert;p['solution']['capabilities']=['data','foundation']
+ if expert:p['deploymentExpert']=expert;p['solution']['capabilities']=['wanx.expert-app.v1']
  p['confirmation']={'hash':digest(p['solution']),'at':1}
- p['preparation'].update(phase='acp',handoff={'contracts':{'foundation':{'expertDeployment':expert}} if expert else {}})
+ p['preparation'].update(phase='acp',handoff={'contracts':{'wanx.expert-app.v1':{'expertDeployment':expert}} if expert else {}})
  p['preparation']['interview'].update(state='completed',sync='saved')
  tid=uuid4().hex
  p['tasks']=[{'id':tid,'state':'running','solutionHash':digest(p['solution']),'instruction':'Synthetic developer result','events':[],'question':None,'buildFormat':'wanx-app-dev-kit'}]
@@ -90,17 +90,17 @@ async def test_standard_adopted_transfer_preserves_frozen_version(standard):
 async def test_standard_snapshot_tamper_is_detected(standard,field):
  svc,p=standard;a=deepcopy(svc.store.get('alice',p['id'])['artifacts'][-1])
  if field=='snapshot':a['snapshot']['decisions']['new']='Changed'
- else:a['snapshot']['contracts']['foundation']={'expertDeployment':{'profile':'wanx-expert-app-v1'}}
+ else:a['snapshot']['contracts']['wanx.expert-app.v1']={'expertDeployment':{'profile':'wanx-expert-app-v1'}}
  with pytest.raises(StudioError,match='ARTIFACT_INTEGRITY_FAILED'):verify(a)
 
 @pytest.mark.parametrize('standard',['expert'],indirect=True)
 async def test_standard_expert_contract_is_frozen_and_hash_bound(standard):
  svc,p=standard;a=svc.store.get('alice',p['id'])['artifacts'][-1]
- frozen=deepcopy(a['snapshot']['contracts']['foundation']['expertDeployment'])
+ frozen=deepcopy(a['snapshot']['contracts']['wanx.expert-app.v1']['expertDeployment'])
  assert a['expertContractDigest']==digest(frozen)
  assert a['manifest']['capabilities']==['identity.read','http.request']
  q=svc.store.get('alice',p['id']);q['deploymentExpert']['revision']=99;svc.store.save(q)
- assert a['snapshot']['contracts']['foundation']['expertDeployment']==frozen
+ assert a['snapshot']['contracts']['wanx.expert-app.v1']['expertDeployment']==frozen
  verify(a)
 
 async def test_standard_restore_reuses_immutable_package_version(standard):
@@ -131,7 +131,7 @@ async def test_standard_runner_keeps_fixed_expert_instruction(standard,monkeypat
  with pytest.raises(StopAtDispatch):await Runner(svc).execute('alice',p,tid,'Synthetic runner check')
  contract=captured['material']['contract']
  assert contract['expertInstruction']==instruction(p)
- assert contract['expertDeployment']==p['artifacts'][-1]['snapshot']['contracts']['foundation']['expertDeployment']
+ assert contract['expertDeployment']==p['artifacts'][-1]['snapshot']['contracts']['wanx.expert-app.v1']['expertDeployment']
  assert {'app/host.mjs','app/host.html'} <= set(contract['mutableFiles'])
  assert contract['mutableRoots']==['app/']
  assert 'modelMethod' not in contract

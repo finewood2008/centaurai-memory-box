@@ -21,6 +21,29 @@ class BootstrapContractTests(unittest.TestCase):
                 self.assertEqual(contract.operation_name('POST', path), operation)
                 self.assertEqual(contract.validate_body('POST', path, body), body['operation_id'])
 
+    def test_profiles_are_bounded_business_data_for_both_creation_paths(self):
+        contract = self.contract()
+        for path, body in (('/warehouses', {}), ('/modeling/onboarding/test/warehouse', {'expected_revision': 1})):
+            body = {'operation_id': 'create', 'name': '检修仓', **body}
+            profile = {'occupation': '运维', 'service_objects': ['生产部门'], 'focus_objects': ['A 产线']}
+            self.assertEqual(contract.validate_body('POST', path, {**body, 'warehouse_scope': profile}), 'create')
+            for bad in ({'workspace_id': 'foreign'}, {'focus_objects': ['  ']}, {'service_objects': ['A'] * 7}):
+                with self.assertRaises(ValueError):
+                    contract.validate_body('POST', path, {**body, 'warehouse_scope': bad})
+
+    def test_guided_creation_accepts_existing_context_fields_alongside_focus_objects(self):
+        contract = self.contract()
+        profile = {'industry':'制造业', 'background':'厂区维护', 'material_types':'检修单',
+                   'questions':'哪些设备反复停机', 'focus_objects':['A 产线']}
+        body = {'operation_id':'create', 'name':'检修仓', 'warehouse_scope':profile}
+        guided = '/modeling/onboarding/test/warehouse'
+        self.assertEqual(contract.validate_body('POST', guided, {**body,'expected_revision':1}), 'create')
+        with self.assertRaises(ValueError):
+            contract.validate_body('POST', '/warehouses', body)
+        with self.assertRaises(ValueError):
+            contract.validate_body('POST', guided, {**body, 'expected_revision':1,
+                'warehouse_scope':{**profile,'industry':'业'*201}})
+
     def test_literal_warehouse_runtime_is_a_read_not_a_warehouse_identifier(self):
         contract = self.contract()
         self.assertEqual(contract.operation_name('GET', '/warehouses/runtime'), 'get_warehouse_runtime')

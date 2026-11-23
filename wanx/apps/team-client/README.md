@@ -37,6 +37,8 @@ npm run test:team-client
 
 以上命令均从仓库根目录执行；跨工程测试还需分别准备 `octop/` 与 `server/bridge/` 的 Python 虚拟环境。
 
+开物根据确认的 PRD 和万象 App Kit 构建标准应用包。需求、构建与客户端交付流程见[开物改造计划](../../docs/plans/kaiwu-app-kit-standard-only.md)。
+
 macOS 应用目录：`npm run package:studio:mac`；Windows 安装包：`npm run package:studio:windows`。macOS 正式签名、公证入口统一为：
 
 ```sh

@@ -1,6 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {proposalView} from '../ui/onboarding-result.mjs';
+import {suggestionResultHTML} from '../ui/onboarding-suggestion-view.mjs';
+
+test('a completed initial suggestion can be regenerated until a review draft is saved',()=>{
+  const proposal={id:'first',status:'succeeded',valid:true,result:{outcome:'ready',questions:[],suggestions:[{kind:'entity',name:'FEATURE'}]}};
+  const state={warehouse:{name:'产品仓'},context:{},proposal};
+  const button=(action,label)=>`<button data-action="${action}">${label}</button>`;
+  const render=()=>suggestionResultHTML(state,{button});
+  assert.match(render(),/data-action="generate">重新生成初始本体/);
+  assert.match(render(),/data-action="rules">核对本体/);
+  state.context.rule_review={id:'draft',proposal_id:'first'};
+  assert.doesNotMatch(render(),/data-action="generate"/);
+  assert.match(render(),/data-action="rules">继续核对本体/);
+});
 
 test('server can_review denies new review even with candidates; old receipts remain compatible',()=>{
   const p={status:'succeeded',valid:true,result:{outcome:'needs_clarification',questions:['用途？'],suggestions:[{kind:'entity',name:'CONTRACT'}]}};

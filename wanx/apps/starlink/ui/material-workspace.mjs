@@ -8,9 +8,9 @@ const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const labels={awaiting_upload:'等待上传',parsing:'正在解析',awaiting_goal:'核对正文与目标',ready_for_confirmation:'待确认计划',queued:'排队中',running:'抽取中',awaiting_review:'待核对知识',failed:'处理失败',cancelled:'已停止',stale:'来源已变化'};
 export function materialListHTML(flow,reader=false){
   if(!flow)return '<p>正在读取材料…</p>';
-  const s=flow.state,off=s.busy||!s.loaded||!!flow.saved.pending||!!flow.saved.upload||!!flow.saved.intakeSubmission||!!flow.saved.roundOpening;
+  const s=flow.state,off=s.busy||!s.loaded||!!(flow.saved.pending||flow.saved.upload||flow.saved.intakeSubmission||flow.saved.roundOpening||flow.importer?.sourceEdit);
   const groups={...s.materialIndex,[flow.saved.conversationId]:s.intents};
-  const placeholders=Object.entries(groups).flatMap(([conversationId,items])=>visibleMaterialIntents(flow,items||[]).filter(i=>!i.document_id&&!materialSourceRemoved(i)).map(i=>({...i,conversationId})));
+  const placeholders=flow.readerOnly?[]:Object.entries(groups).flatMap(([conversationId,items])=>visibleMaterialIntents(flow,items||[]).filter(i=>!i.document_id&&!materialSourceRemoved(i)).map(i=>({...i,conversationId})));
   const entries=warehouseMaterialEntries(flow).map(row=>{
     const links=row.links.filter(link=>!flow.saved.resumedIntents?.[link.intent.id]);
     const link=links.find(link=>link.conversationId===flow.saved.conversationId&&link.intent.id===s.selectedIntent)||links[0];
@@ -26,7 +26,7 @@ export function materialListHTML(flow,reader=false){
     return ['cancelled','stale','failed'].includes(i.status)?labels[i.status]:selected&&knowledgeCurrent(s.detail,s.knowledge)?'已发布 · 已读取生效知识':i.publication_effective||publicationCurrent(i)?'服务端已发布':flow.saved.materialContinuations?.[i.id]?.mode==='draft'?'继续核对草稿':labels[i.status]||i.status||'待处理';
   };
   const empty = !s.loaded ? s.error ? '资料列表暂不可读' : '正在读取资料列表…'
-    : s.warehouseMaterialError ? '资料列表暂不可读' : '这个仓还没有资料';
+    : s.warehouseMaterialError ? '资料列表暂不可读' : '这张星图还没有资料';
   const query=reader?String(s.readerQuery||'').trim().toLocaleLowerCase():'';
   const visible=query?entries.filter(i=>String(i.original_name||'').toLocaleLowerCase().includes(query)):[...entries];
   if(reader&&s.readerSort==='name')visible.sort((a,b)=>String(a.original_name||'').localeCompare(String(b.original_name||''),'zh-CN',{numeric:true}));
@@ -45,10 +45,10 @@ export function materialListHTML(flow,reader=false){
     ${tools}
     ${flow.saved.materialDeletion?`<p role="alert">材料删除结果尚未确认。</p><button class="btn btn-secondary" data-cv="material-delete" ${s.busy?'disabled':''}>恢复删除请求</button>`:''}
     <div class="mw-material-list">${visible.map(rowHTML).join('')||`<p class="mw-list-empty">${query?'没有匹配的资料':empty}</p>`}</div>
-    ${s.warehouseMaterialError?'<p role="alert">全仓材料列表读取失败，当前仅保留已读取的材料。</p><button class="btn btn-secondary" data-cv="material-refresh">重试读取材料</button>':''}
-    ${s.warehouseMaterialMore?'<button class="btn btn-secondary" data-cv="library-more">加载更多仓库材料</button>':''}
+    ${s.warehouseMaterialError?'<p role="alert">星图资料列表读取失败，当前仅保留已读取的材料。</p><button class="btn btn-secondary" data-cv="material-refresh">重试读取材料</button>':''}
+    ${s.warehouseMaterialMore?'<button class="btn btn-secondary" data-cv="library-more">加载更多资料</button>':''}
     ${s.materialIndexError?'<p role="alert">部分材料列表未读取成功。</p><button class="btn btn-secondary" data-cv="material-refresh">重试读取列表</button>':''}
-    ${s.hasMore?'<button class="btn btn-secondary" data-cv="material-more">加载更多材料</button>':''}
+    ${!flow.readerOnly&&s.hasMore?'<button class="btn btn-secondary" data-cv="material-more">加载更多材料</button>':''}
     `;
 }
 
@@ -57,16 +57,16 @@ export function materialLibraryHTML(flow){
   const d=selected.document,w=d.workflow,links=w?.conversations?.filter(l=>l.conversation_status==='active').map(l=>({conversationId:l.conversation_id,intent:{id:l.intent_id}}))||[],off=flow.state.busy;
   const destination=(view,label)=>`<button class="btn btn-secondary" data-warehouse-id="${esc(flow.warehouseId)}" data-warehouse-view="${view}">${label}</button>`;
   return `<div class="material-workspace"><aside class="mw-library" aria-label="材料列表">${materialListHTML(flow)}</aside>
-    <section class="mw-review" aria-label="材料状态"><header><div><small>当前仓库材料</small><h2>${esc(d.original_name||d.id)}</h2></div><div class="mw-material-tools"><button class="btn btn-secondary" data-cv="library-select" data-id="${esc(d.id)}" ${off?'disabled':''}>读取最新状态</button><button class="btn btn-secondary" data-cv="material-delete" ${canDeleteMaterial(flow)?'':'disabled'}>删除材料</button></div></header>
+    <section class="mw-review" aria-label="材料状态"><header><div><small>当前星图的资料</small><h2>${esc(d.original_name||d.id)}</h2></div><div class="mw-material-tools"><button class="btn btn-secondary" data-cv="library-select" data-id="${esc(d.id)}" ${off?'disabled':''}>读取最新状态</button><button class="btn btn-secondary" data-cv="material-delete" ${canDeleteMaterial(flow)?'':'disabled'}>删除材料</button></div></header>
     <div class="mw-review-content">${materialAgentTools(flow)}${materialAutomaticCard(flow)}<h3>${esc(w?.label||'材料状态待确认')}</h3>
       ${w?`<p>${w.processing_mode==='dialogue'?'对话核对 · 确认后发布':'自动处理'}${w.publication?' · 当前正文已有已发布结果':''}</p>${w.tasks.map(t=>`<p>${esc(t.stage)} · ${esc(t.completed_units)} / ${t.total_units??'待确定'} 单元</p>`).join('')}`:''}
       <p>正文解析状态不代表知识已发布。处理任务和已发布结果可在下方查看。</p><div class="conversation-toolbar">${destination('tasks','查看处理任务')}${destination('graph','查看已发布知识')}</div>
-      ${links.length?`<h3>已有材料会话</h3><p>选择需要继续的会话，恢复其目标、草稿与处理进度。</p>${links.map(({conversationId,intent})=>`<p><button class="btn btn-secondary" data-cv="material-select" data-session="${esc(conversationId)}" data-id="${esc(intent.id)}" ${off?'disabled':''}>继续会话 · ${esc(d.original_name||'当前材料')}</button></p>`).join('')}`:w?.actions.start_dialogue.allowed?'<p>开始对话后先核对正文与目标，确认处理计划后才开始抽取。</p><button class="btn btn-primary" data-cv="library-start" '+(off?'disabled':'')+'>开始对话核对</button>':`<p>${esc(w?.actions.start_dialogue.reason||'请读取最新材料状态')}</p>`}
+      ${links.length?`<h3>已有材料会话</h3><p>选择需要继续的会话，恢复其目标、草稿与处理进度。</p>${links.map(({conversationId,intent})=>`<p><button class="btn btn-secondary" data-cv="material-select" data-session="${esc(conversationId)}" data-id="${esc(intent.id)}" ${off?'disabled':''}>继续整理 · ${esc(d.original_name||'当前材料')}</button></p>`).join('')}`:w?.actions.start_dialogue.allowed?'<p>开始对话后先核对正文与目标，确认处理计划后才开始抽取。</p><button class="btn btn-primary" data-cv="library-start" '+(off?'disabled':'')+'>开始对话整理</button>':`<p>${esc(w?.actions.start_dialogue.reason||'请读取最新材料状态')}</p>`}
       ${w?.publication?'<p>开始对话将基于当前原文核对目标；现有发布结果会保留，新结果需确认后才生效。</p>':''}
       ${w?.draft&&!links.length?'<p>这份材料已有核对草稿，可在材料编辑器中读取并恢复编辑权。</p><button class="btn btn-secondary" data-cv="library-review" '+(off?'disabled':'')+'>查看现有材料草稿</button>':''}
       ${flow.state.hasMore?'<button class="btn btn-secondary" data-cv="material-more">读取更多材料会话</button>':''}
       ${flow.state.error?`<p role="alert">${esc(flow.state.error)}</p>`:''}</div></section>
-    <section class="mw-assistant"><header><strong>材料助手</strong></header><div class="mw-review-content">${materialAgentFeedback(flow)}<p>查看材料不会自动启动抽取、创建草稿或发布知识。</p><p>进入已有材料会话后，可继续对话核对。</p></div></section></div>`;
+    <section class="mw-assistant"><header><strong>整理进度</strong></header><div class="mw-review-content">${materialAgentFeedback(flow)}<p>查看材料不会自动启动抽取、创建草稿或发布知识。</p></div></section></div>`;
 }
 
 // Move the real confirmation controls, preserving their handlers and disabled state.
@@ -74,7 +74,9 @@ export function materialLibraryHTML(flow){
 export function mountMaterialWorkspace(root){
   const review=root.querySelector('.mw-review-content'),actions=root.querySelector('.mw-confirm-actions');
   if(!review)return;
-  const session=root.querySelector('.conversation-session');if(session){session.querySelector('[data-cv="new"]')?.remove();root.querySelector('.mw-library').append(session);}
+  const session=root.querySelector('.conversation-session'),library=root.querySelector('.mw-library');
+  if(session&&library){session.querySelector('[data-cv="new"]')?.remove();library.append(session);}
+  else session?.remove();
   const operations=root.querySelector('.cv-materials');
   if(operations){
     if(operations.querySelector('.cv-material')){
@@ -130,7 +132,7 @@ export function openMaterialUpload(flow){
   function render(){
     const s=flow.state,staged=flow.intake.staged,busy=working;
     dialog.innerHTML=`<header><div><h2 id="mw-upload-title">导入材料</h2><p>选择一份材料，导入后先解析并核对正文。</p></div><button type="button" class="btn btn-secondary" data-upload="cancel" ${busy?'disabled':''}>关闭</button></header>
-      <div class="mw-upload-body"><div class="mw-upload-zone"><span aria-hidden="true">↑</span><strong>${staged?esc(staged.name):'关联当前仓已有材料'}</strong><p>新文件请通过页面右上角从万象空间导入。</p><button class="btn btn-secondary" data-upload="documents" ${busy?'disabled':''}>关联已有材料</button></div>
+      <div class="mw-upload-body"><div class="mw-upload-zone"><span aria-hidden="true">↑</span><strong>${staged?esc(staged.name):'关联当前星图已有资料'}</strong><p>新文件请通过页面右上角从万象空间导入。</p><button class="btn btn-secondary" data-upload="documents" ${busy?'disabled':''}>关联已有材料</button></div>
       ${s.documents.length?`<div class="mw-link-list">${s.documents.map(d=>`<button class="btn btn-secondary" data-document="${esc(d.id)}" ${busy?'disabled':''}>${esc(d.original_name||d.id)}</button>`).join('')}${s.documentMore?'<button class="btn btn-secondary" data-upload="more">加载更多</button>':''}</div>`:''}
       <label for="mw-upload-note">材料说明（选填）</label><textarea id="mw-upload-note" rows="3" maxlength="8000" placeholder="例如：这是一份采购合同，重点关注付款与违约责任。" ${busy?'disabled':''}>${esc(note)}</textarea>
       ${s.error?`<p role="alert">${esc(s.error)}</p>`:''}</div><footer><button class="btn btn-secondary" data-upload="cancel" ${busy?'disabled':''}>取消</button><button class="btn btn-primary" data-upload="submit" ${busy||!staged?'disabled':''}>${staged?.kind==='document'?'关联并开始核对':'上传并解析'}</button></footer>`;

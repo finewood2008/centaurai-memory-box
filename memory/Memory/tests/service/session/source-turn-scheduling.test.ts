@@ -94,6 +94,19 @@ describe("native source-turn historical scheduling through MemoryService", () =>
     expect(jobs(h.db, older.l1MemoryId)[0]).toMatchObject({ job_type: "trace_summary", queue_lane: "import" });
   });
 
+  it("keeps a historical episode open while its turns are being replayed", async () => {
+    const h = harness();
+    const first = await capture(h, turn(1));
+    await h.service.runWorkerOnce(30);
+    const episodeId = assignedEpisodeId(h.service, first);
+    expect(h.repos.runtime.getEpisode(episodeId)?.status).toBe("open");
+
+    const second = await capture(h, turn(2));
+    await h.service.runWorkerOnce(30);
+    expect(assignedEpisodeId(h.service, second)).toBe(episodeId);
+    expect(h.repos.runtime.getEpisode(episodeId)?.status).toBe("open");
+  });
+
   it.each(["history", "current"] as const)("runs the real %s trace summarizer and inherits provenance in the generated embedding", async kind => {
     const h = harness();
     const result = await capture(h, kind === "history" ? turn(1) : current(1));

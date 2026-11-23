@@ -44,3 +44,17 @@ test('bundle qualification rejects an installed CLI that differs from the releas
   await symlink(path.join(root,'node_modules'),path.join(directory,'node_modules'),'dir');
   await assert.rejects(verifyBundledCodex(directory),/CODEX_BUNDLE_VERSION_MISMATCH/);
 });
+
+test('bundle qualification rejects a separate CLI resolved by the ACP adapter',unix,async t=>{
+  const manifest=JSON.parse(await readFile(path.join(root,'package.json'),'utf8'));
+  const directory=await fixture(t,manifest.dependencies['@openai/codex']);
+  const modules=path.join(directory,'node_modules');
+  const adapter=path.join(modules,'@agentclientprotocol','codex-acp');
+  const nested=path.join(adapter,'node_modules','@openai','codex','bin');
+  await mkdir(nested,{recursive:true});
+  await mkdir(path.join(modules,'.bin'));
+  await symlink(path.join(root,'node_modules','.bin','codex'),path.join(modules,'.bin','codex'));
+  await writeFile(path.join(adapter,'index.js'),'');
+  await writeFile(path.join(nested,'codex.js'),'');
+  await assert.rejects(verifyBundledCodex(directory),/CODEX_ACP_BUNDLE_DUPLICATE/);
+});

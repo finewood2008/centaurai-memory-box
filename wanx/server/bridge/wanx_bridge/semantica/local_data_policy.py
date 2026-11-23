@@ -37,6 +37,7 @@ SEMANTICA_RULES = (
     ("GET", SOURCE_ANNOTATION, "get_source_annotation", "read"),
     ("PUT", SOURCE_ANNOTATION, "save_source_annotation", "write"),
     ("PUT", rf"/documents/{ID}/text", "replace_text_document", "write"),
+    ("POST", rf"/documents/{ID}/correction", "correct_document", "write"),
     ("POST", rf"/documents/{ID}/extraction", "reextract_document", "write"),
     ("DELETE", rf"/documents/{ID}", "delete_document", "write"),
     ("GET", rf"/operations/{ID}", "get_operation_result", "read"),
@@ -106,6 +107,8 @@ def route_policy(context, observation, *, result, native=False):
         method = observation["method"]
         operation = starlink_workbench.operation_name(method, suffix)
         need(operation is not None, "LOCAL_DATA_ROUTE_DENIED")
+        if operation in {"get_sensitive_settings", "save_sensitive_settings", "preview_sensitive"}:
+            need(workbench is not None and not selected, "LOCAL_DATA_SCOPE_DENIED")
         try:
             starlink_workbench.validate_query(method, suffix, query)
         except ValueError as exc:
@@ -284,6 +287,12 @@ async def validate_staged(sessions, operation, staging, *, business_object):
         body = business_object(await staging.read(2 * MIB)) if method != "GET" else None
         try:
             annotation_contract.validate(method, body, query_values(route["upstreamPath"]))
+        except ValueError as exc:
+            raise DataProtocolError("LOCAL_DATA_ROUTE_DENIED") from exc
+    if route["audience"] == "semantica" and route["serviceContext"].get("operation") == "correct_document":
+        need(not query_values(route["upstreamPath"]), "LOCAL_DATA_ROUTE_DENIED")
+        try:
+            starlink_workbench.validate_source_correction(business_object(await staging.read(2 * MIB)))
         except ValueError as exc:
             raise DataProtocolError("LOCAL_DATA_ROUTE_DENIED") from exc
     if route["audience"] == "semantica" and path.startswith("/api/integration/workbench/"):

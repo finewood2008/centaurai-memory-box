@@ -46,7 +46,7 @@ test('required processing uses the selected warehouse signed path and preserves 
   await f.service.call('check-models', { warehouseId: warehouse, config: check });
   await f.service.call('save-models', { warehouseId: warehouse, config: save });
   assert.deepEqual(f.seen.map(value => [value.method, value.endpoint]), [
-    ['GET', `/api/semantica/warehouses/${warehouse}/processing`],
+    ['GET', `/api/semantica/warehouses/${warehouse}/processing?warehouse_id=${warehouse}`],
     ['GET', `/api/semantica/warehouses/${warehouse}/processing/catalog`],
     ['POST', `/api/semantica/warehouses/${warehouse}/processing/check`],
     ['PUT', `/api/semantica/warehouses/${warehouse}/processing`],
@@ -83,7 +83,7 @@ test('required processing rejects malformed or conflicting selectors and caller 
   await assert.rejects(f.service.call('check-models', { warehouseId: warehouse, config: { warehouse_id: other } }), { code: 'INVALID_RESOURCE' });
   assert.equal(f.seen.length, 0);
   await f.service.call('processing', { warehouseId: warehouse, local_data_gate_mode: 'legacy', required: false });
-  assert.equal(f.seen[0].endpoint, `/api/semantica/warehouses/${warehouse}/processing`);
+  assert.equal(f.seen[0].endpoint, `/api/semantica/warehouses/${warehouse}/processing?warehouse_id=${warehouse}`);
   f.revoke();
   await assert.rejects(f.service.call('processing', { warehouseId: warehouse }), { code: 'HOST_SESSION_EXPIRED' });
   assert.equal(f.seen.length, 1);
@@ -100,5 +100,5 @@ test('legacy processing retains its existing query/body routes and a fresh verif
   assert.equal(f.seen[2].body.warehouse_id, 'warehouse-a');
   f.mode('required'); await f.service.call('initialize'); f.seen.length = 0;
   await f.service.call('processing', { warehouseId: warehouse });
-  assert.equal(f.seen[0].endpoint, `/api/semantica/warehouses/${warehouse}/processing`);
+  assert.equal(f.seen[0].endpoint, `/api/semantica/warehouses/${warehouse}/processing?warehouse_id=${warehouse}`);
 });

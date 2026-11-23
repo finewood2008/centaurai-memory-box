@@ -1,6 +1,6 @@
 import type {DisplayNode,DisplayEdge} from './graph.js';
 export interface MotionGraph {nodes:DisplayNode[];edges:DisplayEdge[]}
-export interface MotionSize {counts:Map<string,{relations:number}>;metric:'relations';max:number}
+export interface MotionSize {counts:Map<string,{relations:number}>;metric:'relations';max:number;autoRotate?:boolean;spatial?:boolean}
 export interface GraphMotion {
   schedule(graph:MotionGraph,key:string,sizeBy:MotionSize):void;
   reset():void;

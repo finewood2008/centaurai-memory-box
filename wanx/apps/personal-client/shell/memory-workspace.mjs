@@ -50,8 +50,7 @@ function accountScope(state) {
   return account?.phase === "authenticated" && account.accountId ? `account:${account.accountId}:${account.clientId}` : null;
 }
 
-function status(code, message) {
-  const errorCode = code === "invalid_request" ? "invalid_argument" : code === "unavailable" ? "memory_layer_unavailable" : code;
+function status(code, message, errorCode = code === "invalid_request" ? "invalid_argument" : code === "unavailable" ? "memory_layer_unavailable" : code) {
   return Response.json({ error: { code: errorCode, message, requestId: randomUUID() } }, {
     status: code === "forbidden" ? 403 : code === "invalid_request" ? 400 : 503,
   });
@@ -67,7 +66,7 @@ export function resolveMemoryRuntimeFile(env = process.env, home = homedir(), ma
 
 export function createMemoryWorkspace({
   assets, getState, fetchAsset, request = fetch, client, serviceURL, preferenceFile, protectFile,
-  localStorage, backup, myAiTask, memoryTransfer, runtime, agentVisibilityStore, agentAccess, manageAgentSync = Boolean(runtime),
+  localStorage, backup, myAiTask, memoryTransfer, claudeChatImport, runtime, agentVisibilityStore, agentAccess, manageAgentSync = Boolean(runtime),
   onPipelineBlockers,
   runtimeFile = resolveMemoryRuntimeFile(),
 }) {
@@ -234,7 +233,7 @@ export function createMemoryWorkspace({
       ["GET", "PUT"].includes(method);
     const backupRoute = memoryBackup && url.pathname === "/api/wanx-memory/backup" && ["GET", "POST"].includes(method);
     const reconnect = runtime && url.pathname === "/api/wanx-memory/reconnect" && method === "POST";
-    const taskAction = (myAiTask || memoryTransfer) && (/^\/api\/wanx-memory\/my-ai\/(status|warehouses|optimize|handoff|copy|launch|download|install|uninstall|hide-agent|show-agent|agent-access\/(?:status|connect|disconnect)|agent-context\/(?:status|catalog|selection|configuration)|memory-transfer\/(?:status|export|preview|import|rollback)|codex-context\/(?:status|catalog|connect|disconnect))$/.exec(url.pathname)?.[1]);
+    const taskAction = (myAiTask || memoryTransfer || claudeChatImport) && (/^\/api\/wanx-memory\/my-ai\/(status|warehouses|optimize|handoff|copy|launch|download|install|uninstall|hide-agent|show-agent|agent-access\/(?:status|connect|test|disconnect|output|copy-removal-command)|agent-context\/(?:status|catalog|selection|configuration)|memory-transfer\/(?:status|export|preview|import|rollback)|claude-chat-import\/(?:preview|commit)|codex-context\/(?:status|catalog|connect|disconnect))$/.exec(url.pathname)?.[1]);
     const taskRoute = taskAction && method === (["status", "warehouses", "agent-access/status", "codex-context/status"].includes(taskAction) ? "GET" : "POST");
     if ((!backupRoute && !reconnect && !taskRoute && !modelSettings && !routes[method]?.some(rule => rule.test(url.pathname))) ||
         /%(?:2f|5c|00)/i.test(url.pathname)) return status("forbidden", "此记忆服务操作不可用。");
@@ -295,6 +294,10 @@ export function createMemoryWorkspace({
         if (taskAction.startsWith("memory-transfer/")) {
           if (!memoryTransfer) return status("unavailable", "本机记忆传输尚不可用。");
           result = await memoryTransfer.action(taskAction.slice("memory-transfer/".length), data, assertScope);
+        } else if (taskAction.startsWith("claude-chat-import/")) {
+          if (!claudeChatImport) return status("unavailable", "Claude 历史导入尚不可用。");
+          if (backup?.library && backup.library.id !== "legacy") return status("forbidden", "当前记忆库的范围不包含 Claude Chat。");
+          result = await claudeChatImport.action(taskAction.slice("claude-chat-import/".length), data, assertScope, input.signal);
         } else if (taskAction === "hide-agent" || taskAction === "show-agent") {
           if (!isAgentPreferenceId(data.agent)) return status("invalid_request", "智能体标识无效。");
           const integration = contextAgent(data.agent, data.mode);
@@ -325,6 +328,7 @@ export function createMemoryWorkspace({
         return Response.json(result, { headers: { "cache-control": "no-store" } });
       } catch (error) {
         if (error.status === 403) return status("forbidden", error.message);
+        if (error.code === "CLAUDE_MCP_MANUAL_REPAIR") return status("invalid_request", error.message, "claude_mcp_manual_repair");
         if (error.status === 400) return status("invalid_request", error.message);
         if (["BOX_CONNECTION_REQUIRED", "DIALOGUE_CONTEXT_CHANGED", "HOST_SESSION_EXPIRED"].includes(error.code))
           return status("unavailable", "请确认盒子已连接后重试。");
@@ -336,6 +340,7 @@ export function createMemoryWorkspace({
           uninstall: "暂时无法打开系统应用管理。",
           "hide-agent": "暂时无法解除接入，请检查本机记忆服务后重试。",
           "show-agent": "暂时无法重新接入，请检查本机记忆服务后重试。",
+          "agent-access/test": "未能完成连接测试，请稍后重试。",
           "codex-context/status": "暂时无法读取 Codex 接入状态。",
           "codex-context/catalog": "暂时无法读取空间或星图，请检查盒子连接。",
           "codex-context/connect": "暂时无法连接 Codex 的资料工具，请检查 Codex 安装后重试。",

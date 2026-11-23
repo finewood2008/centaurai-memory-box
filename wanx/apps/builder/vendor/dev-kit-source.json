@@ -4,5 +4,14 @@
   "revision": "ae87e55ddfba5b14cca1422592e56cf2f231f9d5",
   "archive": "dev-kit-source.tar.gz",
   "sha256": "b45c5e024160c6c6d5c6bbe503b713b56edff084ebae00d1a98465def61f7275",
-  "kitVersion": "0.3.0"
+  "kitVersion": "0.3.0",
+  "appKit": {
+    "sdkSha256": "3fa9dc8064cc0d75c6fe4f8285a36e3f1a2127fbee221b4f9e270fa1269f0c3b",
+    "contractSha256": "4ad122d92ecd88ec1cf7e401787eaed8dbade34bfee3a4d1b4daec4324441979",
+    "packageSha256": "eabcdbd0265992d80ab65ab8069b0d4fd0aec93315b959d755dd80251aa684d8",
+    "manifestSha256": "d633a767ff863c12e5b13fdee535cfdcefbc8aefef5f2ee3f8fcacfc4e0bc736",
+    "releaseTag": "wanx-app-kit-0.3.0",
+    "archive": "wanx-app-kit-0.3.0-d633a767ff86.tar.gz",
+    "archiveSha256": "678ba39b1362c55f9ff63c3bc8b96344adb230bea989d3fa6f66f3a0823f2880"
+  }
 }

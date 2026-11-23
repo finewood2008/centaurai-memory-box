@@ -18,6 +18,37 @@ test('all home templates fill editable inputs without a service write and surviv
   m.applyTemplate(dialogueTemplates[0]);assert.equal(m.saved.name,'自定义研发知识仓');
 });
 
+test('guided warehouse replays the original structured profile after its receipt is lost',async()=>{
+  const f=dialogueFixture({guidance:true}), storage=memory();
+  const make=()=>new OnboardingDialogue({...f,identity,storage});
+  const scope={industry:'制造业',occupation:'设备主管',service_objects:['生产部'],focus_objects:['A 产线'],background:'负责巡检'};
+  let m=make();await m.load();m.setName('生产知识仓');m.setPurpose('跟踪故障');
+  f.db.lose='onboarding-create';await m.create(scope);m.dispose();
+  m=make();await m.load();await m.recover();
+  const writes=f.calls.filter(c=>c.action==='onboarding-create');
+  assert.equal(writes.length,2);
+  assert.deepEqual(writes[0].input,writes[1].input);
+  assert.deepEqual(writes[0].input.body.warehouse_scope,scope);
+});
+
+test('an invalid creation profile cannot reserve an operation or be replayed from storage',async()=>{
+  const f=dialogueFixture(), storage=memory();
+  const make=()=>new OnboardingDialogue({...f,identity,storage});
+  const m=make();await m.load();m.setName('生产知识仓');
+  const invalid={focus_objects:'设备'};
+  const before=f.calls.length;
+  await m.create(invalid);
+  assert.equal(m.state.errorCode,'MODELING_INVALID_REQUEST');
+  assert.equal(m.saved.creation,null);
+  assert.equal(f.calls.length,before);
+  for(const changes of [{profileInputs:[]},{creation:{name:'生产知识仓',operationId:'restore',warehouseScope:invalid}}]){
+    storage.setItem(m.key,JSON.stringify({...m.saved,...changes}));
+    const restored=make();
+    assert.throws(()=>restored.restore(),{code:'MODELING_LOCAL_RECORD_INVALID'});
+    assert.equal(f.calls.length,before);
+  }
+});
+
 test('definite session refusal preserves the warehouse and retries with a new operation after reload',async()=>{
   const f=dialogueFixture({guidance:true}),storage=memory();let reject=true,n=0;
   const call=async(action,input)=>{

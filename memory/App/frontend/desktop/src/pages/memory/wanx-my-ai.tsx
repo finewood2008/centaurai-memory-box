@@ -12,12 +12,13 @@ import { MemorySourcesContent, visibleAgentSources } from "../memory-sources-pag
 
 import { formatBackupInterval, MemorySyncSummary, type BackupStatus } from "./wanx-memory-backup.js";
 import { AgentSources } from "./wanx-agent-sources.js";
-import { accessStatusText, contextAgentId, managedAgentIds, modeCapabilities, type Agent, type AgentAccessStatus, type MyAiRequest, type TaskSources } from "./wanx-my-ai-model.js";
+import { connectionProgress, contextAgentId, managedAgentIds, modeCapabilities, type Agent, type AgentAccessStatus, type ConnectionActivity, type ConnectionOperation, type MyAiRequest, type TaskSources } from "./wanx-my-ai-model.js";
 
 type AppAction = "launch" | "download" | "install" | "uninstall" | "hide-agent" | "show-agent";
 interface AppFeedback { section: "catalog" | "agent" | "list"; text: string; error?: boolean }
 interface OptimizedPrompt { agentId: string; text: string }
 interface MyAiProps { sessionToken: string; memoryError: boolean; retryMemory: () => void }
+interface ClaudeHistoryPreview { previewId: string; name: string; conversationCount: number; messageCount: number; recordCount: number; skippedMessages: number }
 
 export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiProps) {
   const { clients } = useApiClients();
@@ -31,6 +32,8 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
   const [apps, setApps] = useState<Agent[]>([]);
   const [hiddenAgents, setHiddenAgents] = useState<string[]>([]);
   const [agentAccess, setAgentAccess] = useState<Record<string, AgentAccessStatus>>({});
+  const [connectionActivity, setConnectionActivity] = useState<ConnectionActivity | undefined>();
+  const accessRevision = useRef(0);
   const [integrationUnavailable, setIntegrationUnavailable] = useState("");
   const [chooserOpen, setChooserOpen] = useState(false);
   const [appActionsAgent, setAppActionsAgent] = useState<string | null>(null);
@@ -38,11 +41,13 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
   const [appFeedback, setAppFeedback] = useState<AppFeedback | null>(null);
   const [target, setTarget] = useState<string | null>(null);
   const [mode, setMode] = useState("chat");
-  const [workspacePath, setWorkspacePath] = useState("");
   const [uninstallTarget, setUninstallTarget] = useState<Agent | null>(null);
   const [configuration, setConfiguration] = useState<string | null>(null);
   const [connectionDetails, setConnectionDetails] = useState(false);
+  const [confirmPersonalRead, setConfirmPersonalRead] = useState(false);
+  const [restartNotice, setRestartNotice] = useState<{ name: string; terminal: boolean; codexCli: boolean } | null>(null);
   const [collectionView, setCollectionView] = useState<"agent" | "all" | null>(null);
+  const [claudeHistory, setClaudeHistory] = useState<ClaudeHistoryPreview | null>(null);
   const [draft, setDraft] = useState("");
   const [optimizedPrompt, setOptimizedPrompt] = useState<OptimizedPrompt | null>(null);
   const [taskSources, setTaskSources] = useState<TaskSources>({ memoryEnabled: false });
@@ -73,7 +78,7 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
       body: data && JSON.stringify(data), signal,
     });
     const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error?.message || "任务操作未完成，请重试。");
+    if (!response.ok) throw Object.assign(new Error(payload.error?.message || "任务操作未完成，请重试。"), { code: payload.error?.code });
     return payload as T;
   }, [sessionToken]);
 
@@ -112,13 +117,13 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
     currentAppAction.current = false;
     setInstalled(null);
     setAgentAccess({});
+    setConnectionActivity(undefined);
     setIntegrationUnavailable("");
     setApps([]);
     setHiddenAgents([]);
     setTarget(null);
     setMode("chat");
     setDraft("");
-    setWorkspacePath("");
     setOptimizedPrompt(null);
     setTaskSources({ memoryEnabled: false });
     setReadySourceKey("");
@@ -128,7 +133,9 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
     setAppBusy(null);
     setConfiguration(null);
     setConnectionDetails(false);
+    setRestartNotice(null);
     setCollectionView(null);
+    setClaudeHistory(null);
     setUninstallTarget(null);
     setMessage("");
     setError("");
@@ -166,13 +173,14 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
   }, [agentSources, dispatch]);
 
   const detected = new Map<string, Agent>((installed ?? []).map(agent => [agent.id, agent]));
+  const chooserApps = new Map(apps.map(entry => [entry.id, entry]));
   const sources = new Map(visibleAgentSources(state.agentSources.items).map(source => [normalizeAgentSourceId(source.sourceId), source]));
   for (const [id, source] of sources) {
-    if (source.builtin && managedAgentIds.has(id) && !detected.has(id)) detected.set(id, { id, name: source.displayName, prefill: false, installed: false });
+    if (source.builtin && managedAgentIds.has(id) && !detected.has(id))
+      detected.set(id, chooserApps.get(id) ?? { id, name: source.displayName, prefill: false, installed: false });
   }
   const hidden = new Set(hiddenAgents.map(normalizeAgentSourceId));
   const catalog = new Map([...detected].filter(([id]) => !hidden.has(id)));
-  const chooserApps = new Map(apps.map(entry => [entry.id, entry]));
   for (const hiddenId of hiddenAgents) {
     const id = normalizeAgentSourceId(hiddenId);
     if (!managedAgentIds.has(id)) continue;
@@ -187,23 +195,46 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
   const collectionId = active && activeContextId
     ? normalizeAgentSourceId(taskMode === "code" ? activeContextId : active.sourceId ?? activeContextId)
     : undefined;
+  const claudeChat = taskMode === "chat";
+  const claudeChatCollectionNote = integrationUnavailable
+    ? "当前记忆库未开放资料工具。"
+    : "连接智能体后，可在 Chat 对话中指定要保存的内容。旧对话可从 Claude 导出后批量导入。";
   const currentSource = collectionId ? sources.get(collectionId) : undefined;
   const activeKey = active ? active.id + ":" + (active.id === "claude_desktop" ? mode : "default") : "";
-  const connectionLabel = activeAccess?.retrievalVerified ? "检索已验证" : activeAccess?.loaded ? "工具已加载"
-    : activeAccess?.configured || activeAccess?.connected ? "等待客户端加载" : "未授权读取资料";
   useEffect(() => {
     setConnectionDetails(false);
+    setConfirmPersonalRead(false);
     setCollectionView(view => view === "agent" ? null : view);
+    setClaudeHistory(null);
   }, [activeKey]);
   const capabilities = modeCapabilities(active, mode);
   const delivery = capabilities?.delivery ?? (active?.prefill ? "draft" : "copy-open");
   const result = optimizedPrompt?.agentId === activeKey ? optimizedPrompt?.text ?? null : null;
   const appActionsOpen = Boolean(active && appActionsAgent === active.id);
   const pending = Boolean(busy) || sourcesSaving;
-  const agentContext = integrationUnavailable || (active?.id === "claude_desktop" && mode === "cowork") ? undefined
+  const agentContext = integrationUnavailable || !activeContextId ? undefined
     : { folderId: taskSources.folder?.id, warehouseId: taskSources.warehouse?.id, memoryEnabled: taskSources.memoryEnabled === true,
       ...(taskSources.memoryAgent !== undefined && { memoryAgent: taskSources.memoryAgent }) };
   const invalidateResult = () => { setOptimizedPrompt(null); setMessage(""); setError(""); };
+
+  function selectClaudeHistory() {
+    void run("claude-history-preview", async signal => {
+      setClaudeHistory(null);
+      const result = await request<ClaudeHistoryPreview | { canceled: true }>("claude-chat-import/preview", signal, {});
+      if (!signal.aborted && "previewId" in result) setClaudeHistory(result);
+    });
+  }
+
+  function importClaudeHistory(previewId: string) {
+    void run("claude-history-import", async signal => {
+      const result = await request<{ imported: number; skipped: number; remaining: number }>("claude-chat-import/commit", signal, { previewId });
+      if (signal.aborted) return;
+      setSourceRefresh(value => value + 1);
+      const counts = `新增 ${result.imported} 条，跳过 ${result.skipped} 条已有记录。`;
+      if (result.remaining) setError(`${counts}还有 ${result.remaining} 条未确认，请重试。`);
+      else { setClaudeHistory(null); setMessage(`Claude 历史导入完成。${counts}`); }
+    });
+  }
 
   useEffect(() => {
     const controller = new AbortController();
@@ -211,9 +242,10 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
     const refreshAccess = async () => {
       if (reading || currentAppAction.current || document.hidden) return;
       reading = true;
+      const revision = accessRevision.current;
       try {
         const connections = await request<Record<string, AgentAccessStatus>>("agent-access/status", controller.signal);
-        if (!controller.signal.aborted && !currentAppAction.current) setAgentAccess(connections);
+        if (!controller.signal.aborted && !currentAppAction.current && accessRevision.current === revision) setAgentAccess(connections);
       } catch { /* Show the last known state until the client reconnects. */ }
       finally { reading = false; }
     };
@@ -221,23 +253,45 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
     return () => { window.clearInterval(timer); controller.abort(); };
   }, [request]);
 
-  async function updateAgentAccess(agent: Agent, connect: boolean) {
+  async function updateAgentAccess(agent: Agent, operation: ConnectionOperation, allPersonalReadOnly = false) {
     const signal = lifecycle.current?.signal;
     if (!signal || signal.aborted || currentAppAction.current || currentAction.current || sourcesSavingRef.current) return;
     const id = contextAgentId(agent.id, mode);
     if (!id || integrationUnavailable) return;
+    accessRevision.current++;
     currentAppAction.current = true;
     setAppBusy(agent.id);
+    let stage = operation;
+    setConnectionActivity({ source: id, operation: stage });
+    setAppFeedback(previous => previous?.section === "agent" ? null : previous);
     setError("");
     setMessage("");
     try {
-      const access = await request<AgentAccessStatus>(connect ? "agent-access/connect" : "agent-access/disconnect", signal, { agent: agent.id, mode: agent.id === "claude_desktop" ? mode : undefined });
+      const input = { agent: agent.id, mode: agent.id === "claude_desktop" ? mode : undefined };
+      const access = await request<AgentAccessStatus>("agent-access/" + operation, signal,
+        allPersonalReadOnly ? { ...input, allPersonalReadOnly: true } : input);
       if (signal.aborted) return;
       setAgentAccess(previous => ({ ...previous, [id]: access }));
-      setSourceRefresh(value => value + 1);
-      setMessage(connect ? "资料连接已保存。" : "资料连接已断开。");
+      if (operation !== "test") setSourceRefresh(value => value + 1);
+      if (operation === "connect") {
+        if (modeCapabilities(agent, mode)?.configuration === "guided") setConnectionDetails(true);
+        stage = "test";
+        setConnectionActivity({ source: id, operation: stage });
+        const tested = await request<AgentAccessStatus>("agent-access/test", signal, input);
+        if (signal.aborted) return;
+        if (tested.connectionTested !== true) throw new Error("尚未收到本机工具的测试回执，请重新测试。");
+        setAgentAccess(previous => ({ ...previous, [id]: tested }));
+        if (access.configurationChanged && !tested.loaded) setRestartNotice({
+          name: agent.name, terminal: modeCapabilities(agent, mode)?.delivery === "terminal-confirm", codexCli: agent.id === "codex_cli",
+        });
+      } else if (operation === "test" && access.connectionTested !== true) {
+        throw new Error("尚未收到本机工具的测试回执，请重新测试。");
+      }
+      setConnectionActivity(undefined);
     } catch (cause) {
-      if (!signal.aborted) setError(cause instanceof Error ? cause.message : "资料连接操作未完成，请重试。");
+      if (!signal.aborted) setConnectionActivity({ source: id, operation: stage,
+        error: cause instanceof Error ? cause.message : "连接操作未完成，请重试。",
+        errorCode: cause instanceof Error && "code" in cause && typeof cause.code === "string" ? cause.code : undefined });
     } finally {
       if (lifecycle.current?.signal === signal) {
         currentAppAction.current = false;
@@ -285,7 +339,7 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
         return;
       }
       const reply = await request<{ opened?: boolean; prepared?: boolean; installed?: boolean; uninstalled?: boolean; guided?: boolean; pending?: boolean; message?: string }>(action, signal, {
-        agent: agent.id, mode: agent.id === "claude_desktop" ? mode : undefined, ...(workspacePath.trim() && { workspacePath: workspacePath.trim() }),
+        agent: agent.id, mode: agent.id === "claude_desktop" ? mode : undefined,
       });
       if (signal.aborted) return;
       if (!reply.opened && !reply.prepared && !reply.installed && !reply.uninstalled && !reply.guided && !reply.pending)
@@ -331,7 +385,7 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
     if (!active || !result?.trim()) return;
     return run("handoff", async signal => {
       const response = await request<{ opened?: boolean; prepared?: boolean; copied?: boolean; delivery?: string; reason?: string }>("handoff", signal, {
-        agent: active.id, mode: taskMode, text: result, agentContext, ...(workspacePath.trim() && { workspacePath: workspacePath.trim() }),
+        agent: active.id, mode: taskMode, text: result, agentContext,
       });
       if (signal.aborted) return;
       if (response.prepared) setMessage("终端已准备任务。请核对提示词、工作目录和资料范围，按回车后才会开始执行。");
@@ -346,6 +400,7 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
   function collectionLabel(id: string | undefined, profile: { id: string } | null | undefined) {
     if (memoryError) return "记忆服务暂不可用";
     if (!clients || !profile) return "正在读取采集状态…";
+    if (id === "claude_desktop") return integrationUnavailable ? "当前记忆库未开放资料工具" : "在对话中指定要保存的内容";
     if (!id) return "当前模式采集未验证";
     if (profile.id !== "legacy" && (id !== "codex" || !["codex-desktop", "codex-cli"].includes(profile.id))) {
       return "不在当前记忆库的采集范围内";
@@ -381,6 +436,21 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
     const boxConnected = backup?.connected || activeAccess?.boxReady === true;
     const boxDisconnected = !boxConnected && (backup?.connected === false || activeAccess?.boxReady === false);
     const boxContextLabel = boxConnected ? "盒子已连接" : boxDisconnected ? "盒子未连接" : "正在检查盒子连接…";
+    const guided = capabilities?.configuration === "guided";
+    const supportsConnection = !integrationUnavailable && Boolean(activeContextId) && capabilities?.configuration !== "unsupported";
+    const hasConnection = Boolean(activeAccess?.configured || activeAccess?.connected || activeAccess?.serviceReady || (guided && activeAccess?.authorized));
+    const canConnect = Boolean(active?.installed || active?.connectionAvailable);
+    const isCodex = activeContextId === "codex";
+    const canDisconnect = activeAccess?.authorized === true || (hasConnection && !boxDisconnected);
+    const revokedAccess = activeAccess?.revokedAccess;
+    const codexReload = "请完全退出并重新打开 Codex 客户端，或退出当前 Codex CLI 后重新启动。";
+    const activity = connectionActivity?.source === activeContextId ? connectionActivity : undefined;
+    const manualClaudeRepair = activeContextId === "claude_code" && activity?.errorCode === "claude_mcp_manual_repair";
+    const repairClaude = activeContextId === "claude_code" && (manualClaudeRepair ||
+      (!hasConnection && activeAccess?.authorized === true));
+    const progress = connectionProgress(activeAccess, activity, { hasConnection, boxDisconnected, guided, terminal: delivery === "terminal-confirm" });
+    const connectionBusy = pending || Boolean(appBusy);
+    const authorizationBusy = connectionBusy || boxDisconnected;
     return <div className="my-ai-workbench">
       <aside className="my-ai-agents" aria-labelledby="my-ai-agent-title">
         <div className="my-ai-section-heading">
@@ -397,9 +467,9 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
         </div>
         {installed && catalog.size ? <div className="my-ai-agent-list">{[...catalog.values()].map(agent => {
           const logo = agentSourceLogoUrl(agent.id);
-          const sourceId = normalizeAgentSourceId(agent.sourceId ?? contextAgentId(agent.id) ?? agent.id);
-          const memoryLabel = collectionLabel(sourceId, collectionProfile);
           const isActive = active?.id === agent.id;
+          const sourceId = isActive ? collectionId : normalizeAgentSourceId(agent.sourceId ?? contextAgentId(agent.id) ?? agent.id);
+          const memoryLabel = collectionLabel(sourceId, collectionProfile);
           return <div key={agent.id} className="my-ai-agent-row">
             <button type="button" className="my-ai-agent" disabled={pending || Boolean(appBusy)}
               aria-label={agent.name} aria-describedby={"my-ai-source-state-" + agent.id} aria-pressed={isActive} onClick={() => {
@@ -467,12 +537,13 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
               <FlowPath title="保存记忆" steps={[
                 {
                   icon: MessagesSquare,
-                  label: "会话采集",
+                  label: claudeChat ? "按需保存" : "会话采集",
                   detail: collectionLabel(collectionId, collectionProfile),
+                  secondaryDetail: collectionId === "claude_code" ? "桌面 Code 与 Claude Code CLI 共用采集来源" : undefined,
                   action: collectionId && <button type="button" className="my-ai-button my-ai-flow-step-action"
                     aria-controls="my-ai-collection-settings" aria-expanded={collectionView === "agent"}
                     onClick={() => setCollectionView(view => view === "agent" ? null : "agent")}>
-                    <Settings2 size={13} aria-hidden="true" />管理采集
+                    <Settings2 size={13} aria-hidden="true" />{claudeChat ? "历史导入与保存" : "管理采集"}
                   </button>,
                 },
                 { icon: Database, label: "本机记忆库", detail: currentSource?.lastScannedAt
@@ -518,39 +589,71 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
                 {
                   icon: !integrationUnavailable && activeContextId && capabilities?.configuration !== "unsupported"
                     && (activeAccess?.loaded || activeAccess?.retrievalVerified) ? LockKeyholeOpen : LockKeyhole,
-                  label: "读取授权",
+                  label: "连接智能体",
                   detail: integrationUnavailable
                     ? "当前记忆库未开放资料接入"
-                    : !activeContextId || capabilities?.configuration === "unsupported" ? "当前模式暂不支持读取" : connectionLabel,
-                  action: !integrationUnavailable && active.installed && capabilities?.configuration !== "unsupported"
-                    && activeContextId && !activeAccess?.configured && !activeAccess?.connected &&
-                    <button type="button" className="my-ai-button my-ai-flow-step-action" disabled={pending || Boolean(appBusy)}
-                      onClick={() => void updateAgentAccess(active, true)}>
-                      <Link2 size={13} aria-hidden="true" />{appBusy === active.id ? "正在配置…" : capabilities?.configuration === "guided" ? "授权资料接入" : "配置资料工具"}
+                    : !supportsConnection ? "当前模式暂不支持连接" : activeAccess?.retrievalVerified ? "检索已验证" : activeAccess?.loaded ? "工具已加载" : undefined,
+                  action: supportsConnection && !revokedAccess && (canConnect || hasConnection) && progress.tone !== "success" &&
+                    <button type="button" className="my-ai-button my-ai-flow-step-action"
+                      disabled={connectionBusy || (boxDisconnected && (!hasConnection || repairClaude)) || (repairClaude && !canConnect)}
+                      onClick={() => void updateAgentAccess(active, hasConnection && !repairClaude ? "test" : "connect")}>
+                      <Link2 size={13} aria-hidden="true" />{repairClaude ? "修复连接" : hasConnection ? "测试连接" : "连接智能体"}
                     </button>,
                 },
               ]} />
             </section>
           </div>
           <div className="my-ai-flow-controls my-ai-flow--context">
+            {supportsConnection && <div className="my-ai-connection-status" data-tone={progress.tone} aria-label="智能体连接状态">
+              <div role="status" className="my-ai-connection-result">
+                {progress.tone === "success" ? <Check size={16} aria-hidden="true" />
+                  : progress.tone === "working" ? <LoaderCircle className="animate-spin" size={16} aria-hidden="true" /> : null}
+                <div><strong>{progress.title}</strong>{progress.hint && <p>{progress.hint}</p>}</div>
+              </div>
+              <div className="my-ai-connection-meter">
+                <progress max={3} value={progress.step} aria-label="智能体连接进度" />
+                <div aria-hidden="true"><span>配置连接</span><span>本机连通</span><span>智能体加载</span></div>
+              </div>
+              {manualClaudeRepair && <button type="button" className="my-ai-button" disabled={pending || Boolean(appBusy)}
+                onClick={() => void run("copy-removal-command", async signal => {
+                  const input = { agent: active.id, mode: active.id === "claude_desktop" ? mode : undefined };
+                  try {
+                    await request("agent-access/copy-removal-command", signal, input);
+                    if (!signal.aborted) setAppFeedback({ section: "agent", text: "已复制移除命令。请在终端粘贴执行，然后点击「修复连接」。" });
+                  } catch {
+                    if (!signal.aborted) setAppFeedback({ section: "agent", text: "复制失败，请重试。", error: true });
+                  }
+                })}>复制移除命令</button>}
+              {!repairClaude && activity?.error && activity.operation !== "disconnect" && hasConnection && canConnect && <button type="button" className="my-ai-button"
+                disabled={authorizationBusy} onClick={() => void updateAgentAccess(active, "connect")}>{activeContextId === "claude_code" ? "修复连接" : "重新连接"}</button>}
+            </div>}
             <div className="my-ai-flow-toolbar">
               {collectionId === "codex" && <p className="my-ai-flow-note my-ai-flow--capture">Codex 客户端与 CLI 共用同一采集来源。</p>}
+              {isCodex && supportsConnection && (canConnect || canDisconnect) && (
+                activeAccess?.allPersonalReadOnly ? <span className="my-ai-help">已授权全部个人资料 · 只读</span>
+                  : <button type="button" className="my-ai-button" disabled={authorizationBusy}
+                    onClick={() => setConfirmPersonalRead(true)}>授权全部个人资料</button>
+              )}
               <button type="button" className="my-ai-connection-toggle" aria-expanded={connectionDetails} aria-controls="my-ai-connection-details"
                 onClick={() => setConnectionDetails(value => !value)}>连接详情<ChevronDown size={14} aria-hidden="true" /></button>
             </div>
             {integrationUnavailable && <p className="my-ai-flow-note">{integrationUnavailable}</p>}
-            {connectionDetails && <div id="my-ai-connection-details" className="my-ai-connection-details" aria-label="当前入口能力">
-              {!integrationUnavailable && <p>{accessStatusText(activeAccess)}</p>}
+            {connectionDetails && <div id="my-ai-connection-details" className="my-ai-connection-details" aria-label="连接详情">
+              {supportsConnection && <p>智能体连接本机记忆盒子客户端，由客户端通过 P2P 读取盒端授权资料。</p>}
               <p>{delivery === "draft" ? "任务将带入客户端，核对后发送。" : delivery === "terminal-confirm" ? "任务将在终端展示，按回车开始执行。" : "复制提示词后，在应用中粘贴发送。"}</p>
               <p>{capabilities?.autoMemory === "hook" ? "支持配置逐轮采集，启用后需在客户端验证。"
                 : capabilities?.autoMemory === "scan" ? "支持本机会话采集，结果见「保存记忆」。"
                 : capabilities?.autoMemory === "explicit" ? "可通过显式保存写入记忆。" : "自动采集尚未验证。"}</p>
               {capabilities?.limitations?.map(note => <p key={note}>{note}</p>)}
-              {active.id === "claude_desktop" && mode === "cowork" && <p>Cowork 暂支持草稿预填，资料工具与自动采集尚未验证。</p>}
-              {!integrationUnavailable && active.installed && capabilities?.configuration !== "unsupported" && !(active.id === "claude_desktop" && mode === "cowork") &&
+              {supportsConnection && isCodex && canDisconnect && <p>撤销成功后，Codex 客户端和 CLI 会立即停止通过此连接读取盒子资料。若仍看到旧工具，{codexReload}</p>}
+              {supportsConnection && revokedAccess && <p>盒子资料读取已停止。{isCodex && `重新连接后，${codexReload}然后回到「我的 AI」测试连接。`}</p>}
+              {supportsConnection && (canConnect || canDisconnect || revokedAccess) &&
                 <div className="my-ai-actions">
-                  {(activeAccess?.configured || activeAccess?.connected) && <button type="button" className="my-ai-button" disabled={pending || Boolean(appBusy)}
-                    onClick={() => void updateAgentAccess(active, false)}><Unlink2 size={14} aria-hidden="true" />断开资料</button>}
+                  {canDisconnect && <button type="button" className="my-ai-button" disabled={pending || Boolean(appBusy)}
+                    onClick={() => void updateAgentAccess(active, "disconnect")}><Unlink2 size={14} aria-hidden="true" />{isCodex ? "撤销授权" : "断开连接"}</button>}
+                  {revokedAccess && <button type="button" className="my-ai-button" disabled={authorizationBusy || !canConnect}
+                    onClick={() => void updateAgentAccess(active, "connect")}>{manualClaudeRepair ? "修复连接"
+                      : isCodex ? "连接所选资料" : "重新连接"}</button>}
                   {capabilities?.configuration === "guided" && <button type="button" className="my-ai-button" disabled={pending || Boolean(appBusy)}
                     onClick={() => void run("configuration", async signal => {
                       const reply = await request<{ config?: object; configuration?: object }>("agent-context/configuration", signal, { agent: active.id, mode: taskMode });
@@ -561,11 +664,32 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
           </div>
         </section>}
         <section ref={collectionSettings} id="my-ai-collection-settings" className="my-ai-collection-settings" hidden={!collectionView}
-          aria-label={collectionView === "agent" ? "当前智能体的采集设置" : "全部来源与采集设置"}>
-          <h3>{collectionView === "agent" ? active?.name + " · 采集设置" : "全部来源与采集设置"}</h3>
-          {clients ? <MemorySourcesContent embedded surface="my-ai" sourceRefresh={sourceRefresh} collectionProfile={collectionProfile}
+          aria-label={collectionView === "agent" ? claudeChat ? "Claude Chat 的保存方式" : "当前智能体的采集设置" : "全部来源与采集设置"}>
+          <h3>{collectionView === "agent" ? active?.name + (claudeChat ? " · Chat 记忆" : " · 采集设置") : "全部来源与采集设置"}</h3>
+          {clients && collectionView === "agent" && claudeChat ? <>
+            <p className="my-ai-help">{claudeChatCollectionNote}</p>
+            {collectionProfile?.id === "legacy" ? <>
+              <p className="my-ai-help">在 Claude 的「设置 → 隐私 → 导出数据」获取 ZIP 或对话 JSON。导入文本到本机记忆库，保留原消息时间。</p>
+              <button type="button" className="my-ai-button" disabled={pending || Boolean(appBusy)} onClick={selectClaudeHistory}>
+                {busy === "claude-history-preview" ? "正在读取导出文件…" : "选择 Claude 历史导出文件"}
+              </button>
+              {claudeHistory && <div aria-label="Claude 历史导入预览">
+                <p>{claudeHistory.name} · {claudeHistory.conversationCount} 个对话 · {claudeHistory.messageCount} 条文本消息</p>
+                {claudeHistory.recordCount > claudeHistory.messageCount && <p className="my-ai-help">长消息会分成多条，共 {claudeHistory.recordCount} 条记忆。</p>}
+                {claudeHistory.skippedMessages > 0 && <p className="my-ai-help">另有 {claudeHistory.skippedMessages} 条无可见文本的消息将跳过。</p>}
+                <p className="my-ai-help">已导入的记录会跳过。附件和工具日志仅保留在原导出包中。</p>
+                <div className="my-ai-actions">
+                  <button type="button" className="my-ai-button primary" disabled={pending || Boolean(appBusy)}
+                    onClick={() => importClaudeHistory(claudeHistory.previewId)}>{busy === "claude-history-import" ? "正在导入…" : "确认导入 Claude 历史"}</button>
+                  <button type="button" className="my-ai-button" disabled={pending} onClick={() => setClaudeHistory(null)}>取消导入</button>
+                </div>
+              </div>}
+            </> : <p className="my-ai-help">{collectionProfile ? "当前记忆库的范围不包含 Claude Chat。" : "正在读取记忆库状态…"}</p>}
+          </>
+          : clients ? <MemorySourcesContent embedded surface="my-ai" sourceRefresh={sourceRefresh} collectionProfile={collectionProfile}
             focusedSourceId={collectionView === "agent" ? collectionId : undefined}
-            localAgents={collectionView === "agent" && active && collectionId ? [{ id: collectionId, name: active.name }] : [...catalog.values()]}
+            localAgents={collectionView === "agent" && active && collectionId ? [{ id: collectionId, name: collectionId === "claude_code" ? "Claude Code" : active.name }]
+              : [...catalog.values()].map(agent => agent.id === "claude_desktop" ? { ...agent, collectionNote: claudeChatCollectionNote } : agent)}
             disconnectedLocalAgentIds={new Set([
               ...hidden, ...state.agentSources.items.filter(source => source.builtin && !managedAgentIds.has(normalizeAgentSourceId(source.sourceId)))
                 .map(source => normalizeAgentSourceId(source.sourceId)),
@@ -576,10 +700,6 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
         </section>
         {active && <section className="my-ai-composer" aria-labelledby="my-ai-task-title">
           <h3 id="my-ai-task-title">发起一个任务</h3>
-          {(delivery === "terminal-confirm" || (active?.id === "claude_desktop" && mode === "code")) && <label className="my-ai-text-field">
-            <span>工作目录（绝对路径）</span><input aria-label="工作目录" value={workspacePath} disabled={pending || Boolean(appBusy)}
-              placeholder="/Users/你的用户名/项目" onChange={event => { setWorkspacePath(event.target.value); invalidateResult(); }} />
-          </label>}
           <div className="my-ai-prompt-box">
             <label className="my-ai-text-field">
               <span className="sr-only">任务草稿</span>
@@ -600,7 +720,7 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
                   disabled={pending || Boolean(appBusy)} />
               </div>}
               <button type="button" className="my-ai-button primary" disabled={pending || Boolean(appBusy) || !installed || !active || !draft.trim()
-                || (!integrationUnavailable && !(active.id === "claude_desktop" && mode === "cowork") && readySourceKey !== activeKey)} onClick={() => void optimize()}>
+                || (!integrationUnavailable && Boolean(activeContextId) && readySourceKey !== activeKey)} onClick={() => void optimize()}>
                 {busy === "optimize" ? <LoaderCircle className="animate-spin" size={16} /> : <Sparkles size={16} aria-hidden="true" />}
                 {busy === "optimize" ? "正在优化…" : "优化提示词"}
               </button>
@@ -662,6 +782,26 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
       {appFeedback?.section === "catalog" && <p className={"my-ai-feedback" + (appFeedback.error ? " error" : "")}
         role={appFeedback.error ? "alert" : "status"}>{appFeedback.text}</p>}
     </Modal>
+    <Modal open={confirmPersonalRead && activeContextId === "codex"} title="授权 Codex 读取全部个人资料"
+      subtitle="授权范围为当前账号连接的盒子，包括个人空间及子目录、历史记忆和你有权读取的个人星图仓库。"
+      closeLabel="取消授权" onClose={() => setConfirmPersonalRead(false)} closeContent={<X size={18} />}>
+      <p className="my-ai-help">Codex 客户端和 CLI 可在普通会话中按需读取，包含此后加入个人空间的资料。可在「连接详情」随时撤销。</p>
+      <div className="my-ai-actions">
+        <button type="button" className="my-ai-button" onClick={() => setConfirmPersonalRead(false)}>取消</button>
+        <button type="button" className="my-ai-button primary" disabled={pending || Boolean(appBusy) || activeAccess?.boxReady === false}
+          onClick={() => { setConfirmPersonalRead(false); if (active) void updateAgentAccess(active, "connect", true); }}>确认只读授权</button>
+      </div>
+    </Modal>
+    <Modal open={restartNotice !== null} title={(restartNotice?.terminal ? "请重新启动 " : "请重新打开 ") + (restartNotice?.name ?? "智能体")}
+      subtitle="资料授权与连接配置已保存，等待智能体加载新配置。"
+      closeLabel="关闭重新打开提示" onClose={() => setRestartNotice(null)} closeContent={<X size={18} />}
+      footer={<button type="button" className="my-ai-button primary" onClick={() => setRestartNotice(null)}>我知道了</button>}>
+      <p className="my-ai-help">{restartNotice?.terminal
+        ? `请先完成当前任务，退出 ${restartNotice.name} 的当前会话，再从终端重新启动。`
+        : `请先完成当前任务，然后完全退出并重新打开 ${restartNotice?.name ?? "智能体客户端"}。`}</p>
+      {restartNotice?.codexCli && <p className="my-ai-help">输入 <code>/quit</code> 退出，再运行 <code>codex resume --last</code> 继续原会话。</p>}
+      <p className="my-ai-help">保持万象运行并连接盒子。重新打开智能体后，可回到此页查看连接状态。</p>
+    </Modal>
     <Modal open={uninstallTarget !== null} title={"管理卸载 " + (uninstallTarget?.name ?? "")}
       subtitle="卸载程序与解除资料接入分别处理。MemoBox 已采集的历史记忆会保留。"
       closeLabel="取消卸载" onClose={() => setUninstallTarget(null)} closeContent={<X size={18} />}>
@@ -670,7 +810,7 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
         const agent = uninstallTarget; setUninstallTarget(null); if (agent) void runAppAction("uninstall", agent);
       }}>确认管理卸载</button>
     </Modal>
-    <Modal open={configuration !== null} title="资料工具接入配置" subtitle="在目标应用的连接器设置中导入或粘贴配置，然后新建会话验证检索。"
+    <Modal open={configuration !== null} title="资料工具接入配置" subtitle="在目标应用的自定义连接器中导入下方 STDIO 配置，再新建会话验证。使用时请保持本机记忆盒子客户端运行。"
       closeLabel="关闭接入配置" onClose={() => setConfiguration(null)} closeContent={<X size={18} />}>
       <label className="my-ai-text-field"><span>接入配置（点击全选）</span>
         <textarea aria-label="接入配置" readOnly rows={12} value={configuration ?? ""} onFocus={event => event.currentTarget.select()} />
@@ -695,7 +835,7 @@ function openFlowDestination(destination: "backup" | "boxes") {
 function FlowPath({ title, reverse = false, steps }: {
   title: string;
   reverse?: boolean;
-  steps: { icon: LucideIcon; label: string; detail: string; secondaryDetail?: string; action?: ReactNode; animating?: boolean }[];
+  steps: { icon: LucideIcon; label: string; detail?: string; secondaryDetail?: string; action?: ReactNode; animating?: boolean }[];
 }) {
   const Arrow = reverse ? ArrowLeft : ArrowRight;
   return <ol className="my-ai-flow-path" role="list" dir={reverse ? "rtl" : "ltr"}>
@@ -707,7 +847,7 @@ function FlowPath({ title, reverse = false, steps }: {
       <span className={"my-ai-flow-step-icon" + (animating ? " my-ai-flow-step-icon--busy" : "")} aria-hidden="true"><Icon size={16} /></span>
       <div className="my-ai-flow-step-caption" dir="ltr">
         <strong>{label}</strong>
-        <small title={detail}>{detail}</small>
+        {detail && <small title={detail}>{detail}</small>}
         {secondaryDetail && <small>{secondaryDetail}</small>}
         {action}
       </div>

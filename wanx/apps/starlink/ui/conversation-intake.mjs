@@ -223,5 +223,5 @@ export function intakeCard(flow){
       ${r.confirmed?'<p data-intake-confirmed role="status">正文已核对，尚未启动新的抽取。</p>':''}`;
   }
   const shown=submitting||r;
-  return `<div class="cv-conversation-actions cv-intake" data-next-step="source-review"><article class="cv-message cv-assistant cv-action-message"><header><strong>整理助手</strong><span>第 1 步 · 材料解析</span></header><div class="cv-action-body"><h3>${esc(shown?.name)}</h3>${shown?.note?`<p class="cv-intake-note">补充说明：${esc(shown.note)}</p>`:''}${body}</div></article></div>`;
+  return `<div class="cv-conversation-actions cv-intake" data-next-step="source-review"><article class="cv-message cv-assistant cv-action-message"><header><strong>资料整理</strong><span>第 1 步 · 材料解析</span></header><div class="cv-action-body"><h3>${esc(shown?.name)}</h3>${shown?.note?`<p class="cv-intake-note">补充说明：${esc(shown.note)}</p>`:''}${body}</div></article></div>`;
 }

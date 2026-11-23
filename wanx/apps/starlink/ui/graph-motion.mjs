@@ -4,6 +4,7 @@ import { edgeGeometry } from './graph.js';
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const DEFAULT_YAW = 0.24;
 const DEFAULT_PITCH = -0.18;
+const ORBIT_SPEED = 2 * Math.PI / 65000;
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
 // The simulation works on presentation coordinates. Facts and evidence stay on the graph.
@@ -110,6 +111,7 @@ function project(point, center, rotation, distance) {
 export function createGraphMotion({getSvg = () => document.querySelector('#graph-svg'), getZoomOutput} = {}) {
   let pending = 0;
   let frame = 0;
+  let orbitFrame = 0;
   let state = null;
   let key = null;
   const positions = new Map();
@@ -119,7 +121,8 @@ export function createGraphMotion({getSvg = () => document.querySelector('#graph
 
   function detach() {
     cancel(frame);
-    frame = 0;
+    cancel(orbitFrame);
+    frame = orbitFrame = 0;
     if (!state) return;
     state.abort.abort();
     state.resize?.disconnect();
@@ -160,7 +163,12 @@ export function createGraphMotion({getSvg = () => document.querySelector('#graph
       scene.region = region;
     }
     scene.rotation = orientation(camera.yaw, camera.pitch);
-    const projected = bounds(nodes.map(node => project(node, scene.center, scene.rotation, scene.distance)));
+    const views = [scene.rotation];
+    if (scene.sizeBy.autoRotate && !scene.motionPreference?.matches) {
+      // Fit the complete turn so its widest angle does not run outside the canvas.
+      for (let i = 0; i < 12; i++) views.push(orientation(i * Math.PI / 6, camera.pitch));
+    }
+    const projected = bounds(views.flatMap(view => nodes.map(node => project(node, scene.center, view, scene.distance))));
     const scale = Math.min(1.12,
       Math.max(100, width - Math.min(110, width * .24)) / (projected.right - projected.left + 58),
       Math.max(90, height - 94) / (projected.bottom - projected.top + 52));
@@ -212,7 +220,8 @@ export function createGraphMotion({getSvg = () => document.querySelector('#graph
     for (const node of nodes) {
       const point = screenPoint(scene, node);
       const value = sizeBy.counts.get(node.id)?.[sizeBy.metric] ?? 0;
-      point.r = Math.sqrt(12 + 110 * value / sizeBy.max) * clamp(viewport.width / 650, .7, 1) * camera.zoom;
+      const depthScale = sizeBy.spatial ? clamp(point.perspective, .72, 1.35) : 1;
+      point.r = Math.sqrt(12 + 110 * value / sizeBy.max) * clamp(viewport.width / 650, .7, 1) * camera.zoom * depthScale;
       points.set(node.id, point);
     }
     scene.points = points;
@@ -324,7 +333,31 @@ export function createGraphMotion({getSvg = () => document.querySelector('#graph
       }
     }
     const output = zoomOutput(scene.svg);
-    if (output) output.textContent = Math.round(camera.zoom * 100) + '%';
+    const zoomText = Math.round(camera.zoom * 100) + '%';
+    if (output && output.textContent !== zoomText) output.textContent = zoomText;
+  }
+
+  function syncOrbit(scene) {
+    cancel(orbitFrame);
+    orbitFrame = 0;
+    if (!scene.sizeBy.autoRotate || scene.nodes.length < 2 || document.hidden || scene.motionPreference?.matches) return;
+    let previous;
+    function tick(now) {
+      orbitFrame = 0;
+      if (state !== scene || !scene.svg.isConnected || document.hidden) return;
+      previous ??= now;
+      const elapsed = now - previous;
+      if (elapsed >= 32) {
+        previous = now;
+        if (scene.viewport && !scene.pointer && !scene.hoverNode && !scene.hoveredEdge &&
+            now >= scene.orbitPausedUntil && !scene.svg.contains(document.activeElement) &&
+            !document.querySelector('dialog[open]')) {
+          rotate(Math.min(elapsed, 75) * ORBIT_SPEED);
+        }
+      }
+      orbitFrame = raf(tick);
+    }
+    orbitFrame = raf(tick);
   }
 
   function wake(scene) {
@@ -375,7 +408,12 @@ export function createGraphMotion({getSvg = () => document.querySelector('#graph
 
   function mount(svg, graph, sizeBy) {
     if (state?.svg === svg && state.graph === graph && state.nodeLayer === svg.querySelector('.graph-space-nodes')) {
+      const orbitChanged = !!state.sizeBy.autoRotate !== !!sizeBy.autoRotate;
       state.sizeBy = sizeBy;
+      if (orbitChanged) {
+        reframe(state);
+        syncOrbit(state);
+      }
       state.selected = state.nodeLayer.querySelector('.selected')?.dataset.node;
       state.ranked.sort((a,b) => Number(b.id===state.selected)-Number(a.id===state.selected) ||
         (sizeBy.counts.get(b.id)?.relations ?? 0)-(sizeBy.counts.get(a.id)?.relations ?? 0) || b.degree-a.degree);
@@ -387,15 +425,18 @@ export function createGraphMotion({getSvg = () => document.querySelector('#graph
     const preserve = sameGraph || Boolean(previous && sizeBy.expansion && sizeBy.expansion !== previous.sizeBy.expansion);
     detach();
     if (!preserve) positions.clear();
-    const initial = { yaw: previous?.camera.yaw ?? DEFAULT_YAW, pitch: previous?.camera.pitch ?? DEFAULT_PITCH, zoom: 1, panX: 0, panY: 0 };
+    const initial = { yaw: previous?.camera.yaw ?? (sizeBy.spatial ? .36 : DEFAULT_YAW), pitch: previous?.camera.pitch ?? (sizeBy.spatial ? -.26 : DEFAULT_PITCH), zoom: 1, panX: 0, panY: 0 };
+    const depth = sizeBy.spatial ? clamp(130 + graph.nodes.length * 3.2, 140, 310) : clamp(76 + graph.nodes.length * 2.7, 80, 232);
     const nodes = graph.nodes.map((node, i) => {
       if (!positions.has(node.id)) {
-        // Spread the stable 2D layout along a third axis to make rotation informative.
         const parent = preserve && positions.get(sizeBy.parents?.get(node.id));
         const angle = i * 2.39996;
-        const z = parent ? parent.z + 70*Math.sin(angle) : Math.sin(angle) * clamp(76 + graph.nodes.length * 2.7, 80, 232);
+        // Keep related neighborhoods in the existing layout while staggering height and distance.
+        const phase = angle + (sizeBy.spatial ? .9 : 0);
+        const z = parent ? parent.z + (sizeBy.spatial ? 108 : 70) * Math.sin(phase) : depth * Math.sin(phase);
         const x = parent ? parent.x + (155+16*Math.sqrt(i))*Math.cos(angle) : node.x;
-        const y = parent ? parent.y + (125+13*Math.sqrt(i))*Math.sin(angle) : node.y;
+        const y = parent ? parent.y + (125+13*Math.sqrt(i))*Math.sin(angle)
+          : node.y + (sizeBy.spatial ? depth * .34 * Math.cos(phase) : 0);
         positions.set(node.id, { ...node, x, y, z, homeX:x, homeY:y, homeZ:z });
       }
       return Object.assign(positions.get(node.id), { r: node.r, labelWidth: node.labelWidth, lines: node.lines });
@@ -442,6 +483,8 @@ export function createGraphMotion({getSvg = () => document.querySelector('#graph
       rotation: preserve ? previous.rotation : null,
       viewport: preserve ? previous.viewport : null,
       abort: new AbortController(), pointer: null, suppress: false, heat: 0, hoveredEdge: null,
+      motionPreference: globalThis.matchMedia?.('(prefers-reduced-motion: reduce)'),
+      orbitPausedUntil: 0, hoverNode: null,
     };
     if (!nodes.length) {
       const output = zoomOutput(svg);
@@ -451,7 +494,16 @@ export function createGraphMotion({getSvg = () => document.querySelector('#graph
 
     const listen = (type, fn, extra = {}) => svg.addEventListener(type, fn, { signal: scene.abort.signal, ...extra });
     if (!scene.viewport) reframe(scene, true);
+    else if (Boolean(previous?.sizeBy.autoRotate) !== Boolean(sizeBy.autoRotate)) reframe(scene);
     paint(scene);
+    const orbitVisibility = () => syncOrbit(scene);
+    document.addEventListener('visibilitychange', orbitVisibility, {signal: scene.abort.signal});
+    scene.motionPreference?.addEventListener('change', () => {
+      reframe(scene);
+      paint(scene);
+      syncOrbit(scene);
+    }, {signal: scene.abort.signal});
+    syncOrbit(scene);
     if (typeof ResizeObserver === 'function') {
       scene.resize = new ResizeObserver(() => {
         if (svg.clientWidth === scene.viewport?.width && svg.clientHeight === scene.viewport?.height) return;
@@ -507,6 +559,7 @@ export function createGraphMotion({getSvg = () => document.querySelector('#graph
       const pointer = scene.pointer;
       if (!pointer || pointer.id !== event.pointerId) return;
       scene.pointer = null;
+      if (pointer.moved) scene.orbitPausedUntil = performance.now() + 650;
       scene.suppress = pointer.moved;
       svg.classList.remove('is-dragging');
       if (pointer.capture.hasPointerCapture(pointer.id)) pointer.capture.releasePointerCapture(pointer.id);
@@ -524,6 +577,7 @@ export function createGraphMotion({getSvg = () => document.querySelector('#graph
     listen('wheel', event => {
       event.preventDefault();
       if (scene.pointer) return;
+      scene.orbitPausedUntil = performance.now() + 650;
       const rect = svg.getBoundingClientRect();
       zoomAt(scene, Math.exp(-clamp(event.deltaY, -100, 100) * .003), event.clientX - rect.x, event.clientY - rect.y);
     }, { passive: false });
@@ -542,11 +596,13 @@ export function createGraphMotion({getSvg = () => document.querySelector('#graph
       elements.forEach((el, nodeId) => el.classList.toggle('is-neighbor', adjacent.has(nodeId)));
     };
     listen('pointerover', event => {
-      highlight(event.target.closest('.graph-node')?.dataset.node);
+      scene.hoverNode = event.target.closest('.graph-node')?.dataset.node;
+      highlight(scene.hoverNode);
       const next = event.target.closest('g')?.querySelector('.graph-edge-hit')?.dataset.edge ?? null;
       if (scene.hoveredEdge !== next) { scene.hoveredEdge = next; paint(scene); }
     });
     listen('pointerleave', () => {
+      scene.hoverNode = null;
       highlight(null);
       if (scene.hoveredEdge !== null) { scene.hoveredEdge = null; paint(scene); }
     });

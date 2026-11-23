@@ -1,8 +1,4 @@
-"""Standard wanx-app-dev-kit workspace and pipeline adapter.
-
-The adapter is opt-in through the private ``devKit`` project marker. Legacy
-projects never enter this module and retain their miniapp build/export path.
-"""
+"""Build, validate and package standard Host workspaces."""
 from __future__ import annotations
 
 import base64
@@ -95,6 +91,8 @@ def _set_host_capabilities(workspace: Path, project: dict[str, Any]) -> dict[str
     mapping = resolve(solution.get("capabilities") or [], expert=bool(devkit.project_spec(project)["expert"].get("enabled")), backend=devkit.project_spec(project).get("backend"))
     manifest_path = workspace / "application.manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if name := (project.get("name") or "").strip():
+        manifest["name"] = name
     manifest["capabilities"] = mapping["hostCapabilities"]
     backend = devkit.project_spec(project).get("backend") or {"mode": "none"}
     contract_ref = backend.get("connectionRef") if backend.get("mode") == "existing" else backend.get("contractRef")
@@ -140,13 +138,15 @@ def validate_host_runtime(workspace: Path) -> list[dict[str, str]]:
                 errors.extend({**error, "path": "/" + relative} for error in inline_style_errors(content))
     return errors
 
-def create_workspace(project: dict[str, Any], project_root: Path, parent: Path, *, version: str = "0.1.0") -> dict[str, Any]:
+def create_workspace(project: dict[str, Any], project_root: Path, parent: Path, *, version: str = "0.1.0", frozen=None) -> dict[str, Any]:
     kit_root = devkit._kit_root(project_root)
     if kit_root is None:
         raise StudioError("DEVKIT_ROOT_NOT_CONFIGURED", 503)
     info=devkit.kit_info(project_root)
     if not info["available"]:raise StudioError(info["code"] or "DEVKIT_CONTRACT_UNAVAILABLE",503)
-    spec = devkit.project_spec(project)
+    if frozen is not None and frozen != devkit.build_input(project, project_root):
+        raise StudioError("BUILD_INPUT_CHANGED",409)
+    spec = frozen["projectSpec"] if frozen is not None else devkit.project_spec(project)
     errors = devkit.validate_project_spec(spec)
     if (project.get("solution") or {}).get("dependencies") and spec["backend"].get("mode") == "none":
         errors.append({"code": "BACKEND_CONTRACT_REQUIRED", "path": "/backend"})
@@ -232,7 +232,7 @@ def create_iteration_workspace(project: dict[str, Any], project_root: Path, pare
                 if len(source)>256 or sum(map(len,source.values()))>8*1024*1024:
                     raise StudioError('DEVKIT_SOURCE_LIMIT',422)
         except (KeyError,UnicodeError):raise StudioError('ARTIFACT_INTEGRITY_FAILED',409) from None
-    workspace=create_workspace(project,project_root,parent,version=version)
+    workspace=create_workspace(project,project_root,parent,version=version,frozen=task.get("buildInput"))
     try:
         if source is not None:
             # Restore the complete app tree, including opaque images/fonts. Do

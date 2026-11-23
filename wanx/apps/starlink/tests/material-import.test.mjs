@@ -1,24 +1,54 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {ConversationFlow} from '../ui/conversation-state.mjs';
+import {materialReaderHTML} from '../ui/conversation.js';
 import {materialIndexState,materialImportHTML} from '../ui/material-import.mjs';
 import {materialAutomaticCard,materialAgentTools,materialRecoveryHTML} from '../ui/material-agent.mjs';
 const index=(version='v')=>({embedding_configured:true,compatible:true,fresh:true,document_coverage:[{document_id:'d',version_id:version,indexed:true}],items:[]});
 function fixture(store=new Map()){
-  let version='v',failIndex=null,failDocument=null,indexReady=true,textReply=null,workflowExtra={},knowledge=null,sourcePages=null;const calls=[];
+  let version='v',failIndex=null,failDocument=null,indexReady=true,textReply=null,workflowExtra={},correct=null,knowledge=null,documentPageLimit=100,ontologySuggestion=null;
+  let body=[{id:'s',text:'完整正文 <实体>'}];const calls=[];
+  const detail=(id,offset=0,limit=100)=>({document:{id,segment_count:body.length},version:{id:version},segments:body.slice(offset,offset+limit)});
   const f=new ConversationFlow({warehouseId:'w',identity:{boxId:'b',user:{id:1}},storage:{getItem:k=>store.get(k),setItem:(k,v)=>store.set(k,v)},call:async(action,input)=>{
     calls.push({action,input});
     if(action==='conversation-list')return {items:[],has_more:false};
     if(action==='conversation-ontologies')return {items:[]};
-    if(action==='document'){if(failDocument===input.id)throw Object.assign(Error('offline'),{status:503});return {document:{id:input.id,segment_count:sourcePages?.length||1},version:{id:version},segments:sourcePages?.slice(input.offset,input.offset+1)||[{id:'s',text:'完整正文 <实体>'}]};}
+    if(action==='document'){if(failDocument===input.id)throw Object.assign(Error('offline'),{status:503});return detail(input.id,input.offset,documentPageLimit);}
     if(action==='conversation-material-workflow')return {document_id:input.documentId,document:{id:input.documentId,status:'ready',original_name:'资料.txt'},document_version_id:version,tasks:[],conversations:[],actions:{start_dialogue:{allowed:true},prepare_automatic:{allowed:true}},label:'正文已解析',...workflowExtra};
     if(action==='conversation-published-run')return knowledge;
-    if(action==='workbench-request'){if(input.url.includes('/text?'))return textReply;if(failIndex)throw failIndex;return {...index(version),fresh:indexReady};}
+    if(action==='workbench-request'){
+      if(input.method==='PATCH')return correct(JSON.parse(input.body));
+      const target=new URL(input.url,'http://fixture.invalid');
+      if(target.pathname==='/api/ontology-suggestions/materials')return {items:ontologySuggestion?[ontologySuggestion]:[]};
+      if(target.pathname==='/api/ontology-suggestions/materials/d/schedule'){
+        assert.equal(input.method,'POST');
+        assert.deepEqual(JSON.parse(input.body),{task_id:ontologySuggestion.task_id});
+        return ontologySuggestion={...ontologySuggestion,status:'queued',can_retry:false};
+      }
+      if(target.pathname.endsWith('/text'))return textReply;
+      if(target.pathname.startsWith('/api/documents/'))return detail(target.pathname.split('/').at(-1),Number(target.searchParams.get('segment_offset')),Number(target.searchParams.get('segment_limit')));
+      if(failIndex)throw failIndex;
+      return {...index(version),fresh:indexReady};
+    }
     throw Error(action);
   }});
   f.state.loaded=true;f.state.materialPage='import';f.state.warehouseMaterials=[{id:'d'},{id:'second'}];
-  return {f,calls,store,changeVersion:v=>version=v,failIndex:e=>failIndex=e,failDocument:id=>failDocument=id,indexReady:value=>indexReady=value,textReply:value=>textReply=value,workflow:value=>workflowExtra=value,knowledge:value=>knowledge=value,sourcePages:value=>sourcePages=value};
+  return {f,calls,store,changeVersion:v=>version=v,failIndex:e=>failIndex=e,failDocument:id=>failDocument=id,indexReady:value=>indexReady=value,textReply:value=>textReply=value,workflow:value=>workflowExtra=value,body:value=>body=value,onCorrect:value=>correct=value,knowledge:value=>knowledge=value,ontology:value=>ontologySuggestion=value,sourcePages:value=>{body=value;documentPageLimit=1;},detail};
 }
+
+test('only the current failed document suggestion may be rescheduled from the reader',async()=>{
+  const h=fixture(),f=h.f;
+  const status={document_id:'d',document_version_id:'v',task_id:'suggestion',status:'failed'};
+  h.ontology(status);await f.importer.first();
+  assert.doesNotMatch(materialImportHTML(f,''),/重新生成本体建议/);
+  h.ontology({...status,can_retry:true});await f.importer.refresh();
+  assert.match(materialImportHTML(f,''),/重新生成本体建议/);
+  await f.importer.retryOntologySuggestions();
+  assert.match(materialImportHTML(f,''),/正在构建本体建议/);
+  assert.doesNotMatch(materialImportHTML(f,''),/重新生成本体建议/);
+  await f.importer.retryOntologySuggestions();
+  assert.equal(h.calls.filter(c=>c.input?.method==='POST').length,1);
+});
 
 test('the reader hides the knowledge column by default and reads the current publication on demand',async()=>{
   const h=fixture(),f=h.f;
@@ -160,6 +190,40 @@ test('opening and reloading material management without chats never creates a co
   }
 });
 
+test('reader-only library opens directly to import and preexisting sessions cannot mount a composer',async()=>{
+  const {f,store,calls}=fixture();f.readerOnly=true;f.state.loaded=false;
+  store.set(f.key,JSON.stringify({conversationId:'old',materialComposers:{'old:old-intent':{input:'原草稿'}}}));
+  await f.load();
+  assert.equal(f.state.loaded,true);assert.equal(f.saved.conversationId,'old');
+  assert.deepEqual(calls.map(request=>request.action),['conversation-ontologies']);
+  f.state.warehouseMaterials=[];f.state.materialPage='dialogue';
+  const html=materialReaderHTML({state:'active'},true,f);
+  assert.match(html,/阅读台[\s\S]*data-action="import">导入资料/);
+  assert.doesNotMatch(html,/conversation-composer|cv-message-form|开始对话整理|对话调整/);
+  assert.equal(f.saved.materialComposers['old:old-intent'].input,'原草稿');
+});
+
+test('reader-only materials open legacy drafts in the manual editor and preserve the old conversation as history',async()=>{
+  const h=fixture(),f=h.f;f.readerOnly=true;
+  h.workflow({processing_mode:'dialogue',stage:'draft',draft:{status:'editing'},conversations:[{conversation_id:'old',intent_id:'i',conversation_status:'active'}]});
+  f.saved.dialogueRounds={old:{status:'open',intentId:'i'}};await f.importer.first();
+  const opened=[];await f.importer.review((...args)=>opened.push(args));
+  assert.deepEqual(opened,[['d',undefined]]);assert.equal(f.rounds.choice,null);
+  assert.match(materialImportHTML(f,''),/查看历史记录/);
+  assert.doesNotMatch(materialImportHTML(f,''),/data-cv="round-resume"|data-cv="round-start"|cv-message-form/);
+  assert.equal(f.saved.dialogueRounds.old.status,'open');
+});
+
+test('reader-only candidate review keeps the current result bound instead of starting a new conversation',async()=>{
+  const h=fixture(),f=h.f;f.readerOnly=true;
+  h.workflow({processing_mode:'dialogue',stage:'awaiting_review',extraction_review:{run_id:'current'},
+    conversations:[{conversation_id:'old',intent_id:'i',conversation_status:'active',execution_status:'awaiting_review'}]});
+  await f.importer.first();
+  const opened=[];await f.importer.review((...args)=>opened.push(args));
+  assert.deepEqual(opened,[['d','current-extraction']]);assert.equal(f.rounds.choice,null);
+  assert.equal(h.calls.some(({action})=>/create|send|confirm|publish$/.test(action)),false);
+});
+
 test('review uses one refreshed workflow and cannot create a new round after results change',async()=>{
   const h=fixture(),f=h.f;
   h.workflow({processing_mode:'dialogue',stage:'awaiting_review',conversations:[{conversation_id:'c',intent_id:'i',conversation_status:'active',execution_status:'awaiting_review'}]});
@@ -247,7 +311,7 @@ test('re-extraction replaces preparation-only steps with current task progress a
   assert.match(top(),/本次自动抽取流程/);assert.match(top(),/aria-current="step"[^]*?<strong>抽取知识<\/strong>/);
   assert.match(top(),/value="4"/);assert.match(top(),/已完成 4 \/ 10 单元/);assert.match(top(),/发布知识[^]*?未开始/);
   assert.equal((materialImportHTML(f,'').match(/aria-label="自动处理进度"/g)||[]).length,1);
-  assert.match(top(),/data-cv="import-auto" disabled/);
+  assert.doesNotMatch(top(),/data-cv="import-auto"/);
   operation.progress.completed_units=7;assert.match(top(),/已完成 7 \/ 10 单元/);
   operation.current.stage='publishing';assert.match(top(),/正在自动发布/);assert.doesNotMatch(top(),/mw-step-status">已发布/);
   operation.current.stage='awaiting_review';assert.match(top(),/核对并发布/);assert.match(top(),/待核对/);
@@ -314,9 +378,124 @@ test('entry reads first material body without starting a dialogue or extraction;
   const h=fixture(),f=h.f;await f.importer.first();assert.equal(f.importer.view.documentId,'d');assert.equal(f.importer.complete,false);
   const before=materialImportHTML(f,'<p>本体图谱</p>');assert.match(before,/完整正文 &lt;实体&gt;/);assert.doesNotMatch(before,/mw-assistant|data-cv="import-auto"/);
   await f.importer.confirm();assert.equal(f.importer.complete,true);
-  assert.match(materialImportHTML(f,''),/材料处理完成/);assert.doesNotMatch(materialImportHTML(f,''),/data-cv="(?:import|material)-dialogue"/);
+  assert.match(materialImportHTML(f,''),/正文与索引已就绪/);assert.doesNotMatch(materialImportHTML(f,''),/data-cv="(?:import|material)-dialogue"/);
   assert.equal(h.calls.some(c=>/create|confirm|analyze|send/.test(c.action)),false);
   h.changeVersion('new');await f.importer.select('d');assert.equal(f.importer.confirmed,false);assert.equal(f.importer.complete,false);
+});
+test('the library edits the displayed body independently of knowledge review and source confirmation',async()=>{
+  const h=fixture(),f=h.f;await f.importer.first();
+  assert.equal(f.importer.confirmed,false);
+  assert.match(materialImportHTML(f,''),/<h3>材料正文<\/h3><button[^>]*data-cv="import-edit-source"[^>]*>编辑正文<\/button>/);
+  const pending={operationId:'knowledge-write'};
+  f.changes.record.pending=pending;
+  await f.importer.editSource();
+  assert.match(materialImportHTML(f,''),/<textarea[^>]*data-inline-source="0"[^>]*>[\s\S]*完整正文 &lt;实体&gt;/);
+  assert.match(materialImportHTML(f,''),/原文件保持不变/);
+  f.importer.changeSource(0,'未保存正文');
+  assert.equal(f.importer.canLeaveSource(),false);
+  await f.importer.cancelSource();
+  assert.equal(f.importer.canLeaveSource(),true);
+  assert.equal(f.changes.record.pending,pending);
+  assert.equal(f.importer.view.source.segments[0].text,'完整正文 <实体>');
+  f.changes.record.pending=null;
+  f.state.busy=true;
+  assert.match(materialImportHTML(f,''),/data-cv="import-edit-source" disabled/);
+  await f.importer.editSource();assert.equal(f.importer.sourceEdit,null);
+  f.state.busy=false;
+  h.changeVersion(null);await f.importer.select('d');
+  assert.doesNotMatch(materialImportHTML(f,''),/data-cv="import-edit-source"/);
+  await f.importer.editSource();assert.equal(f.importer.sourceEdit,null);
+});
+test('a published extraction stays collapsed so its fact cards do not displace the body editor',async()=>{
+  const h=fixture(),f=h.f;
+  await f.importer.first();await f.importer.confirm();
+  f.state.materialOperation={documentId:'d',receipt:{document_id:'d',document_version_id:'v',transition_id:'published-work'},
+    current:{stage:'published',is_current:true,publication_performed:true}};
+  const html=materialImportHTML(f,'');
+  assert.match(html,/<details class="mw-published-results" data-cv-disclosure="published-published-work">\s*<summary>查看本次发布的知识<\/summary>[\s\S]*已发布知识[\s\S]*<\/details>\s*<section class="mw-import-source mw-reader-source">/);
+  assert.match(html,/<h3>材料正文<\/h3><button[^>]*data-cv="import-edit-source"/);
+  await f.importer.select('second');
+  assert.doesNotMatch(materialImportHTML(f,''),/mw-published-results/);
+  assert.match(materialImportHTML(f,''),/data-cv="import-edit-source"/);
+});
+test('inline body edit rejects a changed base without losing the current material',async()=>{
+  const h=fixture(),f=h.f;await f.importer.first();
+  h.changeVersion('new');await f.importer.editSource();
+  assert.match(materialImportHTML(f,''),/材料正文已更新/);
+  assert.doesNotMatch(materialImportHTML(f,''),/<textarea/);
+  await f.importer.cancelSource();
+  assert.equal(f.importer.view.source.version.id,'new');
+  assert.match(materialImportHTML(f,''),/编辑正文/);
+});
+test('inline save writes every segment and retries the same request after an unknown result',async()=>{
+  const h=fixture(),f=h.f;
+  h.body(Array.from({length:201},(_,i)=>({id:'s'+i,text:'片段'+i})));
+  await f.importer.first();await f.importer.editSource();
+  let saves=0;
+  h.onCorrect(request=>{
+    assert.equal(request.base_version_id,'v');assert.equal(request.segments.length,201);
+    assert.equal(request.segments[0].text,'已修订');assert.equal(request.segments[200].text,'页尾修订');
+    if(++saves===1)throw Object.assign(Error('connection lost'),{status:0});
+    h.changeVersion('saved');h.body(request.segments);return h.detail('d');
+  });
+  f.importer.changeSource(0,'已修订');
+  f.importer.pageSource(1);f.importer.pageSource(1);
+  f.importer.changeSource(200,'页尾修订');
+  await f.importer.saveSource();
+  assert.match(materialImportHTML(f,''),/重试保存/);
+  f.importer.changeSource(200,'any later change');
+  await f.importer.saveSource();
+  const writes=h.calls.filter(c=>c.input.method==='PATCH');
+  assert.equal(writes.length,2);assert.equal(writes[0].input.body,writes[1].input.body);
+  assert.equal(f.importer.sourceEdit,null);assert.equal(f.importer.view.source.version.id,'saved');
+  assert.match(materialImportHTML(f,''),/已修订/);
+  assert.ok(h.calls.every(c=>['document','conversation-material-workflow','workbench-request'].includes(c.action)));
+});
+test('one click submits the displayed version and shows the queued extraction waiting for index retry',async()=>{
+  const h=fixture(),f=h.f,requests=[];
+  const actions={start_dialogue:{allowed:false},process_source:{allowed:true},prepare_automatic:{allowed:false}};
+  const initial={workflow_revision:1,actions,preparation:{source_review:{status:'unconfirmed'},
+    indexing:{document_version_id:'v',status:'not_started'},ready:false}};
+  h.workflow(initial);
+  const call=f.call;
+  let receipt;
+  f.call=async(action,input)=>{
+    if(action==='conversation-processing-start'){
+      requests.push(input);
+      receipt={operation_id:input.operationId,document_id:'d',document_version_id:'v',transition_id:'transition',
+        target_mode:'automatic',job_id:'extract',waits_for_source_index:true};
+      h.workflow({...initial,actions:{...actions,process_source:{allowed:false}},workflow_revision:2,latest_transition_id:'transition',
+        tasks:[{id:'extract',kind:'knowledge_extract',status:'queued'}],preparation:{source_review:{status:'confirmed',confirmed_version_id:'v',confirmation_id:'confirmed'},
+          indexing:{document_version_id:'v',status:'failed',retryable:true},ready:false}});
+      return {receipt};
+    }
+    if(action==='conversation-processing-status')return {receipt,current:{stage:'queued',is_current:true}};
+    return call(action,input);
+  };
+  await f.importer.first();
+  assert.match(materialImportHTML(f,''),/data-cv="import-process-source"[^>]*>确认正文并处理/);
+  assert.match(materialImportHTML(f,''),/<strong>核对正文<\/strong>[\s\S]*<strong>自动处理<\/strong>/);
+  assert.doesNotMatch(materialImportHTML(f,''),/<strong>建立索引<\/strong>/);
+  assert.doesNotMatch(materialImportHTML(f,''),/data-cv="import-confirm"/);
+  f.saved.materialOperations={d:{preview:{document_id:'d',snapshot:{document_version_id:'old-version'}}}};
+  assert.equal(f.importer.canProcessSource,true);
+  await f.importer.startProcessing();
+  assert.equal(requests.length,1);
+  assert.equal(requests[0].documentVersionId,'v');
+  assert.equal(requests[0].workflowRevision,1);
+  const html=materialImportHTML(f,'');
+  assert.match(html,/索引未完成，等待重试/);
+  assert.match(html,/data-cv="import-index-retry"/);
+  assert.doesNotMatch(html,/data-cv="import-process-source"|正在自动抽取/);
+});
+test('one click does not confirm a newer version that replaced the displayed body',async()=>{
+  const h=fixture(),f=h.f;
+  h.workflow({workflow_revision:1,actions:{start_dialogue:{allowed:false},process_source:{allowed:true}}});
+  await f.importer.first();
+  h.changeVersion('newer');
+  await f.importer.startProcessing();
+  assert.equal(f.state.errorCode,'MODELING_SOURCE_CHANGED');
+  assert.equal(h.calls.some(call=>call.action==='conversation-processing-start'),false);
 });
 test('index service failure removes completion but preserves authorized body; authorization failure clears it',async()=>{
   const h=fixture();await h.f.importer.first();await h.f.importer.confirm();
@@ -390,7 +569,7 @@ test('processing locks the automatic entry and preserves workflow guards, then t
   for(const stage of ['queued','running','generating','publishing']){
     f.state.materialOperation={documentId:'d',current:{is_current:true,stage}};
     const html=materialImportHTML(f,'');
-    for(const command of ['import-auto'])assert.match(html,new RegExp(`data-cv="${command}" disabled`));
+    assert.doesNotMatch(html,/data-cv="import-auto"/);
     assert.match(html,/材料正在处理中/);
     await f.importer.automatic();await f.importer.dialogue();assert.equal(starts,0);
     assert.equal(f.state.errorCode,'MODELING_MATERIAL_BUSY');
@@ -403,7 +582,7 @@ test('processing locks the automatic entry and preserves workflow guards, then t
   f.state.materialOperation={documentId:'another',current:{is_current:true,stage:'running'}};
   assert.doesNotMatch(materialImportHTML(f,''),/data-cv="import-auto" disabled/);
   f.importer.view.workflow.tasks=[{status:'running'}];
-  assert.match(materialImportHTML(f,''),/data-cv="import-auto" disabled/);
+  assert.doesNotMatch(materialImportHTML(f,''),/data-cv="import-auto"/);
   assert.doesNotMatch(materialImportHTML(f,''),/data-cv="(?:import|material)-dialogue"/);
 });
 

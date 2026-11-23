@@ -98,6 +98,7 @@ async def test_native_assistant_local_owner_isolation_and_no_cloud_fallback(
 
     response = await request("/api/assistant/profile", "POST")
     assert response.status_code == 200, response.text
+    assert response.json()["sidebar_conversation_modes"] is not team_session
     aid = response.json()["agent_id"]
     owner, context = identities[-1]
     assert owner.local_data and not owner.is_admin
@@ -124,8 +125,29 @@ async def test_native_assistant_local_owner_isolation_and_no_cloud_fallback(
     response = await request(f"/api/assistant/conversations/{tid}")
     assert response.status_code == 200, response.text
     revision = response.json()["revision"]
+    assert response.json()["conversation_mode"] is None
+    conversation = f"/api/assistant/conversations/{tid}"
+    memory = "/api/assistant/sidebar-memory"
+    write = {
+        "action": "remember",
+        "requestId": str(uuid4()),
+        "text": "合成知君记忆",
+        "threadId": tid,
+        "conversation_id": tid,
+        "conversation_mode": "craft",
+    }
+    denied = await request(memory, "POST", write)
+    assert denied.status_code == 403
+    if not team_session:
+        assert denied.json()["detail"]["code"] == "ZHIJUN_ADVANCED_REQUIRED"
+    else:
+        assert (
+            await request(
+                conversation, "PATCH", {"revision": revision, "conversation_mode": "craft"}
+            )
+        ).status_code == 404
     response = await request(
-        f"/api/assistant/conversations/{tid}",
+        conversation,
         "PATCH",
         {
             "revision": revision,
@@ -133,25 +155,22 @@ async def test_native_assistant_local_owner_isolation_and_no_cloud_fallback(
                 "space": {"enabled": False},
                 "knowledge": {"enabled": False, "data_scope": "personal"},
             },
+            **({"conversation_mode": "craft"} if not team_session else {}),
         },
     )
     assert response.status_code == 200, response.text
+    assert response.json()["conversation_mode"] == (None if team_session else "craft")
+    if not team_session:
+        assert (
+            await request(conversation, "PATCH", {"revision": revision, "conversation_mode": "ask"})
+        ).status_code == 409
+        assert (await request(conversation)).json()["conversation_mode"] == "craft"
     assert (
         await request(f"/api/agents/{aid}/threads/{tid}/history?limit=25&offset=0")
     ).status_code == 200
     assert (await request("/api/assistant/conversations")).json()["items"][0]["thread_id"] == tid
 
-    memory = "/api/assistant/sidebar-memory"
-    save = await request(
-        memory,
-        "POST",
-        {
-            "action": "remember",
-            "requestId": str(uuid4()),
-            "text": "合成知君记忆",
-            "threadId": tid,
-        },
-    )
+    save = await request(memory, "POST", write)
     if team_session:
         assert save.status_code == 403
         assert (await request(memory)).status_code == 403
@@ -197,7 +216,8 @@ async def test_native_assistant_local_owner_isolation_and_no_cloud_fallback(
                     "thread_id": tid,
                     "model": "openai/gpt-4o",
                     "mcp_servers": [],
-                    "conversation_mode": "craft",
+                    "conversation_mode": "craft" if team_session else "ask",
+                    **({"assistant_persona": "zhijun"} if not team_session else {}),
                     "messages": [{"role": "user", "content": [{"type": "text", "text": "hello"}]}],
                 }
             )
@@ -211,6 +231,7 @@ async def test_native_assistant_local_owner_isolation_and_no_cloud_fallback(
                     break
         assert any(frame.get("type") == "token" for frame in frames), frames
         assert frames[-1]["type"] == "done", frames
+        assert frames[-1]["conversation_mode"] == ("ask" if team_session else "craft")
 
     other_claims = dict(context.claims)
     other_claims["principalId"] = "other-local-owner"

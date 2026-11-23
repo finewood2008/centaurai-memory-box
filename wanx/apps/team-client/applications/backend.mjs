@@ -246,6 +246,7 @@ export function createApplicationBackend({ client, account, clientVersion }) {
     }
     const fixed = await fixedConnection(manifest.applicationId, compatibility);
     const candidate = Boolean(bindingSetId);
+    const localInstall = manifest.installationSource === "local" && !manifest.envelope && !manifest.descriptor;
     const prepared = phase === "launch" && !candidate && compatibility.resourceDependencies?.length
       ? await prepare({ manifest, descriptor }, fixed) : null;
     if (prepared?.status === "blocked") throw fail(prepared.code);
@@ -262,7 +263,7 @@ export function createApplicationBackend({ client, account, clientVersion }) {
       // on its already authenticated Host connection when that exact legacy
       // error is returned. The signed backend contract remains the source of
       // capability evidence; no resource binding is manufactured.
-      if (candidate || compatibility.resourceDependencies?.length || error?.code !== "RESOURCE_PUBLICATION_UNAVAILABLE") throw error;
+      if (localInstall || candidate || compatibility.resourceDependencies?.length || error?.code !== "RESOURCE_PUBLICATION_UNAVAILABLE") throw error;
       const observedAt = new Date().toISOString();
       result.backend = {
         schemaVersion: 1, productId: compatibility.backendProductId, deviceId: fixed.current.boxId,
@@ -270,7 +271,12 @@ export function createApplicationBackend({ client, account, clientVersion }) {
         contracts: compatibility.backendContracts.map(contract => ({ id: contract.id, version: contract.range.replace(/^[<>= ]+/, "").split(" ")[0], features: [...contract.features] })),
       };
     }
-    if (!candidate && !compatibility.resourceDependencies?.length &&
+    if (localInstall && (result.backend?.applicationId !== manifest.applicationId || result.backend.status !== "ready" ||
+        !Array.isArray(result.backend.checks) || result.backend.checks.length)) {
+      const reason = result.backend?.authorization?.code || result.backend?.checks?.[0]?.code;
+      throw fail(safeCode(reason) ? reason : "APPLICATION_PREPARATION_INVALID");
+    }
+    if (!localInstall && !candidate && !compatibility.resourceDependencies?.length &&
         result.backend?.status === "blocked" && Array.isArray(result.backend.checks) &&
         result.backend.checks.length > 0 && result.backend.checks.every(check => check?.code === "BACKEND_CONTRACT_INCOMPATIBLE")) {
       result.backend = {

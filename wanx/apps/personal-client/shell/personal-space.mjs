@@ -6,10 +6,13 @@ import { dataOwnerKey, dataInteractionKey } from "../device-trust/data-context.m
 import { walkUploads, importSummaries, validUploadName, sourceError, IMPORT_PAGE, IMPORT_WINDOW, MAX_UPLOAD_BYTES } from "./space-upload-imports.mjs";
 import { createSpaceAnnotationService } from "./space-annotation-service.mjs";
 import { createAnnotationWorkbench } from "./space-annotation-workbench.mjs";
+import { extractAnnotationContent } from "./annotation-content.mjs";
 
 const PREFIX = "/api/personal-space";
 const CHUNK = 4 * 1024 * 1024;
 const RECOVERY_CHUNK = 1024 * 1024;
+const TEXT_EDIT_LIMIT = 16 * 1024 * 1024;
+const TEXT_EXTENSIONS = new Set([".txt", ".md", ".json", ".log", ".csv"]);
 // Match the client's existing binary MB display. Applies to new UI batches only.
 export { MAX_UPLOAD_BYTES };
 const transientCodes = new Set(["ECONNRESET", "ECONNREFUSED", "EPIPE", "ETIMEDOUT", "EHOSTUNREACH", "ENETUNREACH", "ENETDOWN", "EAI_AGAIN", "CONNECT_TIMEOUT", "SESSION_CLOSED", "GATEWAY_CLOSED", "NETWORK_CHANGED", "NETWORK_NOT_READY", "BOX_CONNECTION_REQUIRED", "SPACE_CONNECTION_TIMEOUT", "SPACE_CHUNK_STALLED", "SPACE_NETWORK_WAIT", "SPACE_UPLOAD_OFFSET", "tunnel_timeout", "tunnel_rejected", "network_unavailable", "network_recovering", "netbird_peer_disconnected"]);
@@ -22,12 +25,13 @@ const id = value => { if (typeof value !== "string" || !/^[a-f0-9]{32}$/.test(va
 const folder = value => value === "" ? "" : id(value);
 const name = value => { if (typeof value !== "string" || !value.trim() || value.length > 240) throw fail("SPACE_INVALID_NAME"); return value; };
 const hash = data => createHash("sha256").update(data).digest("hex");
+const fileVersion = entry => JSON.stringify([entry.id, entry.kind, entry.space_id, entry.parent, entry.name, entry.digest, entry.size, entry.version, entry.modified]);
 const stamp = info => info ? `${info.size}:${info.mtimeMs}:${info.ino}` : null;
 const fileStat = file => stat(file).catch(error => { if (error.code === "ENOENT") return null; throw error; });
 
 // Lives in the main process. Local paths come from a native picker or preload's
 // File conversion; credentials, remote URLs and user ids never come from the renderer.
-export async function createPersonalSpace({ client, store, annotationStore, workbenchStore, annotationAI, annotationExtract, serviceURL, chooseUploads, chooseDownload, chooseDownloadDirectory, driveCatalog, onChanged = () => {}, onEvent = () => {}, retryBaseMs = 1000, maxRetries = 6, recoveryCooldownMs = 30_000, random = Math.random }) {
+export async function createPersonalSpace({ client, store, annotationStore, workbenchStore, redactionStore, enableTextEditing = false, annotationAI, annotationExtract, serviceURL, chooseUploads, chooseDownload, chooseDownloadDirectory, driveCatalog, onChanged = () => {}, onEvent = () => {}, retryBaseMs = 1000, maxRetries = 6, recoveryCooldownMs = 30_000, random = Math.random }) {
   let restored = [], storageError = null;
   try { restored = await store.load() || []; if (!Array.isArray(restored)) throw new Error("Invalid transfer records"); }
   catch { storageError = "SECURE_STORAGE_READ_FAILED"; restored = []; }
@@ -37,6 +41,7 @@ export async function createPersonalSpace({ client, store, annotationStore, work
   let overview = null, phase = "disconnected", error = null;
   const running = new Map(), scans = new Map(), scanKnown = new Map(), parentWaiters = new Set(), taskIndex = new Map(tasks.map(t => [t.id, t]));
   const annotationJobs = new Map();
+  let redactionJob;
   let annotationTimer = null;
   let dispatchCursor = 0;
   let lastCheckpoint = 0, checkpointTimer = null, lastNotify = 0, notifyTimer = null;
@@ -44,6 +49,9 @@ export async function createPersonalSpace({ client, store, annotationStore, work
   let boundAccount = null, boundBox = null, wasReady = false, interaction = null;
   const event = (task, action, details = {}) => { taskIndex.set(task.id, task); try { onEvent({ taskId: task.id, batchId: task.batchId, action, phase: task.phase, offset: task.offset, size: task.size, attempt: task.attempt || 0, ...details }); } catch {} };
   const accountKey = () => dataOwnerKey(client.snapshot(), serviceURL);
+  // The team build also assembles this transfer service. Redaction policy is
+  // provided by the personal client's composition root.
+  const redactionRules = redactionStore && (await import("./space-redaction-rules.mjs")).createSpaceRedactionRules({ store: redactionStore, currentOwner: () => closed ? null : accountKey() });
   // A route going offline is not an account/box change. Retain its identity,
   // but never dispatch while the live connection is not ready for that box.
   const scopeKey = () => {
@@ -67,7 +75,7 @@ export async function createPersonalSpace({ client, store, annotationStore, work
   };
   function snapshot() {
     const scope = scopeKey();
-    return { phase, error, storageError, annotationAvailable: !!annotationStore, annotationWorkbenchAvailable: !!workbenchStore, overview, scope, dataOwnerId: accountKey(), dataContextId: dataInteractionKey(client.snapshot(), serviceURL), accountId: client.snapshot().account?.accountId, boxId: client.snapshot().connection?.deviceId || boundBox, imports: importSummaries(tasks, scope), tasks: tasks.filter(t => t.scope === scope && t.direction !== "import").map(({ localPath, partialPath, localStamp, destinationStamp, digest, ...publicTask }) => publicTask) };
+    return { phase, error, storageError, annotationAvailable: !!annotationStore, annotationWorkbenchAvailable: !!workbenchStore, redactionAvailable: !!redactionStore, textEditingAvailable: enableTextEditing && overview?.textEditing === true, overview, scope, dataOwnerId: accountKey(), dataContextId: dataInteractionKey(client.snapshot(), serviceURL), accountId: client.snapshot().account?.accountId, boxId: client.snapshot().connection?.deviceId || boundBox, imports: importSummaries(tasks, scope), tasks: tasks.filter(t => t.scope === scope && t.direction !== "import").map(({ localPath, partialPath, localStamp, destinationStamp, digest, ...publicTask }) => publicTask) };
   }
   function schedulePump(ms = 0) {
     clearTimeout(wakeTimer);
@@ -95,6 +103,7 @@ export async function createPersonalSpace({ client, store, annotationStore, work
       event(task, "connection");
     }
     for (const job of running.values()) job.controller.abort(fail(changed ? "SPACE_CONTEXT_CHANGED" : "SPACE_NETWORK_WAIT"));
+    redactionJob?.controller.abort(fail("SPACE_CONTEXT_CHANGED"));
     workbench?.contextChanged();
     void persist().catch(() => {});
     notify(); schedulePump();
@@ -185,8 +194,15 @@ export async function createPersonalSpace({ client, store, annotationStore, work
     return snapshot();
   }
   async function operation(action, input = {}) {
+    if (action === "open-text-edit" || action === "save-text-edit") return editTextFile(action, input);
     if (action === "annotation-workbench") return workbench.run(input);
     if (["annotation-stage-import", "annotation-pending-imports"].includes(action)) return annotations.localOperation(action, input);
+    if (["redaction-rules", "save-redaction-rules", "redact"].includes(action)) {
+      if (!redactionRules) throw fail("SPACE_REDACTION_RULES_UNAVAILABLE");
+      if (action === "redaction-rules") return redactionRules.get(input);
+      if (action === "save-redaction-rules") return redactionRules.save(input);
+      return redact(input);
+    }
     const connection = await connect();
     if (["annotation", "set-annotation", "auto-annotate", "search-annotations", "annotation-bind", "annotation-imports"].includes(action)) return annotations.operation(connection, action, input);
     const spaceId = input.space_id || "personal";
@@ -203,20 +219,206 @@ export async function createPersonalSpace({ client, store, annotationStore, work
     }
   }
   async function metadata(connection, itemId, spaceId) { return request(connection, `/files/${id(itemId)}`, {spaceId}); }
-  async function annotationBytes(entry, spaceId, signal) {
+  async function editTextFile(action, input) {
+    sync();
+    if (!enableTextEditing || overview?.textEditing !== true) throw fail("SPACE_TEXT_EDIT_UNAVAILABLE");
+    if (!ready()) throw fail("BOX_CONNECTION_REQUIRED");
+    const epoch = generation;
+    const check = () => {
+      if (closed || epoch !== generation || !input?.scope || input.scope !== scopeKey() || input.dataContextId !== dataInteractionKey(client.snapshot(), serviceURL))
+        throw fail("SPACE_CONTEXT_CHANGED");
+    };
+    check();
+    const itemId = id(input.id), spaceId = input.space_id === "personal" ? "personal" : id(input.space_id);
+    if (spaceId !== "personal") {
+      const disks = await driveCatalog?.();
+      check();
+      if (!disks?.some(disk => disk.id === spaceId && disk.writable === true)) throw fail("MCP_DRIVE_READ_ONLY");
+    }
+    const connection = await connect();
+    check();
+    const entry = await metadata(connection, itemId, spaceId);
+    check();
+    if (entry?.id !== itemId || (entry.space_id ?? "personal") !== spaceId || entry.trashed != null) throw fail("SPACE_NOT_FOUND");
+    const ext = path.extname(entry.name).toLowerCase();
+    if (entry.kind !== "file" || !TEXT_EXTENSIONS.has(ext)) throw fail("SPACE_TEXT_UNSUPPORTED");
+    if (!Number.isSafeInteger(entry.size) || entry.size < 0 || entry.size > TEXT_EDIT_LIMIT) throw fail("SPACE_TEXT_TOO_LARGE");
+
+    if (action === "open-text-edit") {
+      const bytes = await annotationBytes(entry, spaceId, undefined, RECOVERY_CHUNK);
+      check();
+      let decoded;
+      try { decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+      catch { throw fail("SPACE_TEXT_INVALID"); }
+      if (decoded.includes("\0")) throw fail("SPACE_TEXT_INVALID");
+      return { file: entry, text: decoded.replace(/\r\n?/g, "\n"), eol: decoded.match(/\r\n|[\n\r]/)?.[0] || "\n",
+        bom: bytes.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf])), editId: randomUUID().replaceAll("-", "") };
+    }
+
+    const { expected, text, eol, bom } = input;
+    const editId = id(input.editId);
+    if (!Number.isSafeInteger(expected) || expected < 1 || expected >= Number.MAX_SAFE_INTEGER || typeof text !== "string" ||
+        !["\n", "\r\n", "\r"].includes(eol) || typeof bom !== "boolean" || /[\0\r]|[\uD800-\uDFFF]/u.test(text)) throw fail("SPACE_TEXT_INVALID");
+    if (text.length > TEXT_EDIT_LIMIT) throw fail("SPACE_TEXT_TOO_LARGE");
+    const bytes = Buffer.from(`${bom ? "\uFEFF" : ""}${text.replaceAll("\n", eol)}`);
+    if (bytes.length > TEXT_EDIT_LIMIT) throw fail("SPACE_TEXT_TOO_LARGE");
+    if (ext === ".json") {
+      try { JSON.parse(text); } catch { throw fail("SPACE_TEXT_JSON_INVALID"); }
+    }
+    const digest = hash(bytes), uploadId = hash(JSON.stringify([editId, itemId, expected, digest])).slice(0, 32);
+    const route = `/uploads/${uploadId}`;
+    const send = (target, options) => { check(); return request(connection, target, { ...options, spaceId }); };
+    let reserved = false;
+    async function save() {
+      const state = await send(`/files/${itemId}/edit-uploads`, { method: "POST", body: { id: uploadId, expected, digest, size: bytes.length } });
+      reserved = true;
+      if (!Number.isSafeInteger(state?.offset) || state.offset < 0 || state.offset > bytes.length || !["pending", "complete"].includes(state.state))
+        throw fail("SPACE_UPLOAD_OFFSET_INVALID");
+      for (let offset = state.offset; offset < bytes.length; offset += RECOVERY_CHUNK) {
+        const chunk = bytes.subarray(offset, offset + RECOVERY_CHUNK);
+        const receipt = await send(`${route}?offset=${offset}`, { method: "PUT", body: chunk, headers: { "content-type": "application/octet-stream", "x-content-sha256": hash(chunk) } });
+        if (receipt?.offset !== offset + chunk.length) throw fail("SPACE_UPLOAD_OFFSET_INVALID");
+      }
+      const file = await send(`${route}/complete`, { method: "POST", body: { digest } });
+      check();
+      if (file?.id !== itemId || file.version !== expected + 1 || file.digest !== digest) throw fail("SPACE_VERSION_CONFLICT");
+      return annotations.decorate(connection, file, spaceId);
+    }
+    try {
+      try { return await save(); }
+      catch (cause) { if (!transient(cause)) throw cause; return await save(); }
+    } catch (cause) {
+      check();
+      if (reserved && !transient(cause)) await send(route, { method: "DELETE", signal: AbortSignal.timeout(3000) }).catch(() => {});
+      check();
+      throw cause;
+    }
+  }
+  async function annotationBytes(entry, spaceId, signal, chunkSize = CHUNK) {
     if (entry.kind !== "file" || !Number.isSafeInteger(entry.size) || entry.size < 0 || entry.size > 64 * 1024 * 1024) throw fail("SPACE_ANNOTATION_CONTENT_TOO_LARGE");
     const connection = await connect(), context = generation, parts = [];
     const current = () => { connection.context(); if (closed || context !== generation || signal?.aborted) throw fail("SPACE_CONTEXT_CHANGED"); };
-    const version = value => JSON.stringify([value.id, value.parent, value.name, value.digest, value.size, value.version, value.modified]);
-    current(); if (version(await metadata(connection, entry.id, spaceId)) !== version(entry)) throw fail("SPACE_REMOTE_FILE_CHANGED");
+    current(); if (fileVersion(await metadata(connection, entry.id, spaceId)) !== fileVersion(entry)) throw fail("SPACE_REMOTE_FILE_CHANGED");
     for (let offset = 0; offset < entry.size;) {
-      const result = await request(connection, `/files/${id(entry.id)}/content?offset=${offset}&length=${Math.min(CHUNK, entry.size - offset)}`, { raw: true, spaceId, signal }); current();
-      if (!result.bytes.length || result.bytes.length > Math.min(CHUNK, entry.size - offset) || result.headers?.["x-content-sha256"] && hash(result.bytes) !== result.headers["x-content-sha256"]) throw fail("SPACE_CHUNK_INVALID");
+      const length = Math.min(chunkSize, entry.size - offset);
+      const result = await request(connection, `/files/${id(entry.id)}/content?offset=${offset}&length=${length}`, { raw: true, spaceId, signal }); current();
+      if (!result.bytes.length || result.bytes.length > length || result.headers?.["x-content-sha256"] && hash(result.bytes) !== result.headers["x-content-sha256"]) throw fail("SPACE_CHUNK_INVALID");
       parts.push(result.bytes); offset += result.bytes.length;
     }
     const bytes = Buffer.concat(parts); current();
-    if (entry.digest && hash(bytes) !== entry.digest || version(await metadata(connection, entry.id, spaceId)) !== version(entry)) throw fail("SPACE_REMOTE_FILE_CHANGED");
+    if (entry.digest && hash(bytes) !== entry.digest || fileVersion(await metadata(connection, entry.id, spaceId)) !== fileVersion(entry)) throw fail("SPACE_REMOTE_FILE_CHANGED");
     current(); return bytes;
+  }
+  // Internal main-process reader: obtain original, version-checked bytes;
+  // document parsing never receives a local path, remote URL or credentials.
+  async function readDocument(entry, { signal, check = () => {} } = {}) {
+    check();
+    const bytes = await annotationBytes(entry, "personal", signal);
+    check();
+    const extracted = await extractAnnotationContent({ entry, bytes, signal });
+    check();
+    return extracted;
+  }
+
+  function redact(input) {
+    sync();
+    if (!ready()) throw fail("BOX_CONNECTION_REQUIRED");
+    const scope = scopeKey();
+    if (input?.scope !== scope || input.dataContextId !== interaction) throw fail("SPACE_CONTEXT_CHANGED");
+    if (redactionJob) throw fail("SPACE_REDACTION_BUSY");
+    const itemId = id(input.id), spaceId = input.space_id === "personal" ? "personal" : id(input.space_id);
+    const controller = new AbortController(), { signal } = controller, epoch = generation;
+    const check = () => {
+      if (closed || signal.aborted || epoch !== generation || scope !== scopeKey() || input.dataContextId !== dataInteractionKey(client.snapshot(), serviceURL))
+        throw fail("SPACE_CONTEXT_CHANGED");
+    };
+    const promise = runRedaction(itemId, spaceId, scope, signal, check)
+      .catch(cause => { check(); throw cause; })
+      .finally(() => { redactionJob = undefined; });
+    redactionJob = { controller, promise };
+    return promise;
+  }
+  async function runRedaction(itemId, spaceId, scope, signal, check) {
+    const rules = await redactionRules.get();
+    const { redactSpaceFile, redactionSource } = await import("./space-redaction.mjs");
+    check();
+    if (!rules.builtins.some(rule => rule.enabled) && !rules.customRules.length) throw fail("SPACE_REDACTION_NO_RULES");
+    if (spaceId !== "personal") {
+      const disks = await driveCatalog?.();
+      check();
+      if (!disks?.some(disk => disk.id === spaceId && disk.writable === true)) throw fail("SPACE_REDACTION_READ_ONLY");
+    }
+    const connection = await connect();
+    check();
+    const recordUpload = uploadId => redactionRules.recordUpload(rules.owner, scope, spaceId, uploadId);
+    const discardUpload = async uploadId => {
+      check();
+      try {
+        await request(connection, `/uploads/${uploadId}`, { method: "DELETE", spaceId, signal: AbortSignal.any([signal, AbortSignal.timeout(3000)]) });
+      } catch (cause) {
+        if (cause.status !== 404) throw cause;
+      }
+      check();
+      await recordUpload(null);
+    };
+    const pending = await redactionRules.pendingUpload(rules.owner, scope, spaceId);
+    if (pending) {
+      try { await discardUpload(pending); }
+      catch { check(); throw fail("SPACE_REDACTION_WRITE_FAILED"); }
+    }
+    check();
+    const readMetadata = () => request(connection, `/files/${itemId}`, { spaceId, signal });
+    const entry = await readMetadata();
+    check();
+    if (entry?.id !== itemId || (entry.space_id ?? "personal") !== spaceId || entry.trashed != null) throw fail("SPACE_NOT_FOUND");
+    const source = redactionSource(entry);
+    const bytes = await annotationBytes(entry, spaceId, signal, RECOVERY_CHUNK);
+    check();
+    const output = await redactSpaceFile({ entry, source, bytes, rules, signal });
+    check();
+    if (!output.matches) return { file: null, matches: 0 };
+
+    const uploadId = randomUUID().replaceAll("-", ""), route = `/uploads/${uploadId}`;
+    const send = (path, options) => { check(); return request(connection, path, { ...options, spaceId, signal }); };
+    const assertUnchanged = async () => {
+      const current = await readMetadata();
+      check();
+      if (fileVersion(current) !== fileVersion(entry)) throw fail("SPACE_REMOTE_FILE_CHANGED");
+    };
+    await assertUnchanged();
+    await recordUpload(uploadId);
+    try {
+      const size = output.bytes.length;
+      const status = await send("/uploads", { method: "POST", body: { id: uploadId, parent: folder(entry.parent), name: output.name, size, space_id: spaceId } });
+      if (status?.offset !== 0 || status.state !== "pending") throw fail("SPACE_UPLOAD_OFFSET_INVALID");
+      for (let offset = 0; offset < size; offset += RECOVERY_CHUNK) {
+        const chunk = output.bytes.subarray(offset, offset + RECOVERY_CHUNK);
+        const result = await send(`${route}?offset=${offset}`, { method: "PUT", body: chunk, headers: { "content-type": "application/octet-stream", "x-content-sha256": hash(chunk) } });
+        if (result?.offset !== offset + chunk.length) throw fail("SPACE_UPLOAD_OFFSET_INVALID");
+      }
+      await assertUnchanged();
+      const commit = { method: "POST", body: { digest: hash(output.bytes) } };
+      let file;
+      try { file = await send(`${route}/complete`, commit); }
+      catch (cause) {
+        if (!transient(cause)) throw cause;
+        file = await send(`${route}/complete`, commit);
+      }
+      check();
+      if (file?.id !== uploadId || file.kind !== "file" || file.digest !== commit.body.digest) throw fail("SPACE_REDACTION_WRITE_FAILED");
+      await recordUpload(null).catch(() => {});
+      check();
+      return { file, matches: output.matches };
+    } catch (cause) {
+      check();
+      // DELETE only discards pending bytes. A successful commit remains visible
+      // if both attempts lose their receipt.
+      await discardUpload(uploadId).catch(() => {});
+      check();
+      if (["SPACE_REMOTE_FILE_CHANGED", "SPACE_DISK_FULL", "SPACE_NOT_FOUND", "SPACE_CONTEXT_CHANGED"].includes(cause.code)) throw cause;
+      if (cause.code === "MCP_DRIVE_READ_ONLY" || cause.status === 403) throw fail("SPACE_REDACTION_READ_ONLY");
+      throw fail("SPACE_REDACTION_WRITE_FAILED");
+    }
   }
   async function digestFile(file, signal) {
     const digest = createHash("sha256");
@@ -681,7 +883,7 @@ export async function createPersonalSpace({ client, store, annotationStore, work
       if (hash(bytes) !== state.digest || bytes.subarray(0, 5).toString() !== "%PDF-") throw fail("SPACE_CHUNK_INVALID");
       return { name: entry.name, type: "application/pdf", converted: true, data: bytes.toString("base64") };
     }
-    const type = ({ ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".pdf": "application/pdf" })[ext] || ([".txt", ".md", ".csv", ".json", ".log"].includes(ext) ? "text/plain" : null);
+    const type = ({ ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".pdf": "application/pdf" })[ext] || (TEXT_EXTENSIONS.has(ext) ? "text/plain" : null);
     if (!type || entry.size > (ext === ".pdf" ? 64 : 16) * 1024 * 1024) throw fail(ext === ".pdf" ? "SPACE_PREVIEW_TOO_LARGE" : "SPACE_PREVIEW_DOWNLOAD");
     const chunks = [];
     for (let offset = 0; offset < entry.size; offset += CHUNK) {
@@ -704,6 +906,6 @@ export async function createPersonalSpace({ client, store, annotationStore, work
     if (bound !== scopeKey()) throw fail("SPACE_CONTEXT_CHANGED");
     return result;
   }
-  return { snapshot, refresh, operation, uploads, download, downloads, transfer, preview, cancelPreview, clipboardRequest,
-    async close() { closed = true; clearTimeout(wakeTimer); clearTimeout(annotationTimer); clearTimeout(checkpointTimer); clearTimeout(notifyTimer); generation++; unsubscribe(); for (const job of running.values()) job.controller.abort(); await workbench.close(); await Promise.allSettled([...running.values()].map(j => j.promise)); await Promise.allSettled([...annotationJobs.values()]); for (const iterator of scans.values()) await iterator.return().catch(() => {}); scans.clear(); for (const t of tasks) if (t.phase === "queued") { t.phase = t.autoResume ? "waiting" : "paused"; t.pauseReason = "restart"; } if (!storageError) await persist(); await annotations.close(); } };
+  return { snapshot, refresh, operation, uploads, download, downloads, transfer, preview, readDocument, cancelPreview, clipboardRequest,
+    async close() { closed = true; clearTimeout(wakeTimer); clearTimeout(annotationTimer); clearTimeout(checkpointTimer); clearTimeout(notifyTimer); generation++; unsubscribe(); for (const job of running.values()) job.controller.abort(); redactionJob?.controller.abort(fail("SPACE_CONTEXT_CHANGED")); await Promise.allSettled([redactionJob?.promise, redactionRules?.close()]); await workbench.close(); await Promise.allSettled([...running.values()].map(j => j.promise)); await Promise.allSettled([...annotationJobs.values()]); for (const iterator of scans.values()) await iterator.return().catch(() => {}); scans.clear(); for (const t of tasks) if (t.phase === "queued") { t.phase = t.autoResume ? "waiting" : "paused"; t.pauseReason = "restart"; } if (!storageError) await persist(); await annotations.close(); } };
 }

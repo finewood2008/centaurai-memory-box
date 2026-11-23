@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from test_studio import svc, seeded, op
 from test_iterative import start
 from test_versions import candidate
+from standard_build_fixture import historical_records
 from wanx_studio.contracts import StudioError
 from wanx_studio.store import public
 from wanx_studio.visual_review import VisualReview, authorize_visual
@@ -58,13 +59,13 @@ async def test_visual_input_rejects_non_images_oversize_and_outside_regions(svc)
 async def test_restore_previous_unadopted_version_archives_iteration_and_preserves_data(svc):
     p=await seeded(svc);old=p['artifacts'][0]['hash'];p=await candidate(svc,p)
     current=p['artifacts'][-1]['hash'];draft=deepcopy(p['solution'])
-    session=svc.open_runtime('alice',p['id'],current,'preview')['session']
-    row=await svc.invoke('alice',session,'data.put',{'collection':'items','value':{'title':'试用数据'}})
+    scope=historical_records(p)
+    row=svc.data(scope,'data.put',{'collection':'items','value':{'title':'试用数据'}})
     check=svc.versions.restore_check('alice',p['id'],old)
     result=svc.versions.restore('alice',p['id'],{'operationId':op(),'expectedRevision':check['expectedRevision'],'artifactHash':old,'checkHash':check['checkHash'],'confirmedByUser':True})
-    assert len(result['artifacts'])==3 and result['artifacts'][-1]['restoredFrom']==old
+    assert result['artifacts']==p['artifacts'] and result['versioning']['adoptedHash']==old
     assert result['versioning']['iteration'] is None and result['versioning']['iterations'][-1]['state']=='abandoned'
     stored=svc.store.get('alice',p['id'])
     assert stored['versioning']['iterations'][-1]['draft']['solution']==draft
     assert {old,current}<=set(a['hash'] for a in stored['artifacts'])
-    assert (await svc.invoke('alice',session,'data.get',{'collection':'items','id':row['_id']}))['title']=='试用数据'
+    assert (svc.data(scope,'data.get',{'collection':'items','id':row['_id']}))['title']=='试用数据'

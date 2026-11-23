@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 from httpx import ASGITransport,AsyncClient
 
+from test_discovery import confirmed_standard
 from wanx_studio.contracts import StudioError
 from wanx_studio.local import build_local
 from wanx_studio.runner import Runner
@@ -119,10 +120,8 @@ async def test_codex_startup_failure_is_persisted_in_process_history(tmp_path,mo
 async def test_slow_preflight_returns_saved_task_immediately_and_retry_does_not_duplicate(tmp_path,monkeypatch):
     svc=StudioService(tmp_path,ROOT);svc.runner=Runner(svc)
     try:
-        p=svc.store.create('alice','启动检查较慢','目标',uuid4().hex)
-        p=await svc.runner.example('alice',p['id'],uuid4().hex)
-        other=svc.store.create('alice','另一个项目','目标',uuid4().hex)
-        other=await svc.runner.example('alice',other['id'],uuid4().hex)
+        p=confirmed_standard(svc,'启动检查较慢')
+        other=confirmed_standard(svc,'另一个项目')
         entered=asyncio.Event();release=asyncio.Event();executed=[]
         async def preflight(**kwargs):
             entered.set();await release.wait();return {'available':True}
@@ -149,8 +148,7 @@ async def test_slow_preflight_returns_saved_task_immediately_and_retry_does_not_
 async def test_cancel_during_preflight_never_starts_codex(tmp_path,monkeypatch,wait_for_probe):
     svc=StudioService(tmp_path,ROOT);svc.runner=Runner(svc)
     try:
-        p=svc.store.create('alice','检查时停止','目标',uuid4().hex)
-        p=await svc.runner.example('alice',p['id'],uuid4().hex)
+        p=confirmed_standard(svc,'检查时停止')
         entered=asyncio.Event();stopped=asyncio.Event();executed=[]
         async def preflight(**kwargs):
             entered.set()
@@ -171,8 +169,7 @@ async def test_cancel_during_preflight_never_starts_codex(tmp_path,monkeypatch,w
 async def test_expired_workbench_during_preflight_never_starts_codex(tmp_path,monkeypatch):
     svc=StudioService(tmp_path,ROOT);svc.runner=Runner(svc)
     try:
-        p=svc.store.create('alice','检查时断开','目标',uuid4().hex)
-        p=await svc.runner.example('alice',p['id'],uuid4().hex)
+        p=confirmed_standard(svc,'检查时断开')
         executed=[]
         async def preflight(**kwargs):
             svc.runner.leases[('alice',p['id'])]=0

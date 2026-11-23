@@ -1,9 +1,10 @@
-// WANX registered material-free onboarding routes; never accept actor or editor credentials.
+// WANX registered onboarding routes; never accept actor or editor credentials.
 const base='/workbench/conversations/:c/onboarding';
 const routes={get:['GET',base,['offset','limit']],turn:['GET',base+'/turns/:t',[]],
   start:['POST',base+'/start',['revision','draftDigest']],
   send:['POST',base+'/turns',['revision','draftDigest','content','questionActions']],
   preview:['POST',base+'/preview',['revision','draftDigest','name']],
+  trial:['POST',base+'/trial',['revision','draftDigest','documentId','documentVersionId']],
   publish:['POST',base+'/publish',['previewId','previewDigest','confirmed']]};
 export const dialogueActions=new Set(Object.keys(routes).map(k=>'conversation-onboarding-'+k));
 const id=v=>typeof v==='string'&&/^[A-Za-z0-9_-]{1,120}$/.test(v);
@@ -42,6 +43,10 @@ export function dialogueRequest(action,input={}){
       if(typeof content!=='string'||!content.trim()&&!actions.length||[...content].length+actions.reduce((n,a)=>n+[...(a.answer||'')].length,0)>8000)invalid();
       if(input.content!==undefined)body.content=content;
       if(input.questionActions!==undefined)body.question_actions=structuredClone(actions);
+    }
+    if(fields.includes('documentId')){
+      if(!id(input.documentId)||!id(input.documentVersionId))invalid();
+      Object.assign(body,{document_id:input.documentId,document_version_id:input.documentVersionId});
     }
     if(fields.includes('previewId')){if(!id(input.previewId)||!digest(input.previewDigest)||input.confirmed!==true)invalid();Object.assign(body,{preview_id:input.previewId,preview_digest:input.previewDigest,confirmed:true});}
   }

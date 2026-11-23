@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from wanx_studio.prd import ProductRequirement
 from wanx_studio.contracts import StudioError
 from wanx_studio.discovery import (INTERVIEW_OUTPUT_TOKENS, INTERVIEW_REPAIR_TOKENS,
     InterviewOutputError, interview_prompt, parse_interview_response, response_schema)
@@ -18,6 +19,7 @@ def reply(value, finish='stop'):
 
 def rich_response():
     value=solution()
+    value['prd']=ProductRequirement.model_validate(value['prd']).model_dump(exclude_none=True)
     value['prd']['rules']=[f'规则{i}：只有本人确认才写入。'+('保留完整业务细节及异常分支。'*40) for i in range(23)]
     value['prd']['exceptions']=[f'异常{i}：失败保留输入，不代替用户作决定。' for i in range(15)]
     value['prd']['tests']=[{'title':f'验收{i}','given':'独立测试资料已准备','when':'执行对应流程','then':f'第{i}项结果可见，刷新仍存在'} for i in range(21)]

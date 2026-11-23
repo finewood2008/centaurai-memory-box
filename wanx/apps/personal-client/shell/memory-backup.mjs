@@ -10,6 +10,7 @@ import { backupSourceId } from "./memory-backup-identity.mjs";
 
 const storageRoute = "/api/local-data/wanx-storage";
 const interval = 60 * 60_000;
+const retainedSnapshots = 3;
 const managedFolderName = "半人马AI记忆备份";
 const entryId = /^[a-f0-9]{32}$/;
 const legacyName = /^半人马AI-记忆备份-([a-f0-9]{32})-[a-f0-9]{32}\.sqlite(?:\.gz)?$/;
@@ -31,6 +32,12 @@ function snapshotSource(name) {
   if (current) return { id: `v2-${current[2]}`, profile: "legacy", name: `${platforms[current[1]]} · ${current[2].slice(0, 8)}` };
   const legacy = legacyName.exec(name);
   return legacy ? { id: `legacy-${legacy[1]}`, profile: "legacy", name: `旧版备份来源 · ${legacy[1].slice(0, 8)}` } : null;
+}
+
+function matchesSnapshot(item, snapshot, version = snapshot.version) {
+  return item?.kind === "file" && item.id === snapshot.id && item.parent === snapshot.parent &&
+    item.name === snapshot.name && item.digest === snapshot.digest && item.size === snapshot.size &&
+    item.modified === snapshot.modified && item.version === version;
 }
 
 export function createMemoryBackup({ client, space, sourceBinding, store, stagingRoot, protect, localRequest,
@@ -214,6 +221,69 @@ export function createMemoryBackup({ client, space, sourceBinding, store, stagin
     return matches[0]?.id;
   }
 
+  async function retainRecentSnapshots(drive, current, parent, confirmed, signal) {
+    if (await managedParent(drive, signal) !== parent) return;
+    const { backups } = await folder(drive, parent, signal);
+    if (!backups.some(item => matchesSnapshot(item, confirmed))) return;
+    const counts = new Map();
+    const excess = [];
+    for (const item of backups) {
+      if (item.version !== 1) continue;
+      const count = (counts.get(item.source.id) || 0) + 1;
+      counts.set(item.source.id, count);
+      if (count > retainedSnapshots) {
+        const { id, name, digest, size, modified, version } = item;
+        excess.push({ id, parent, name, digest, size, modified, version });
+      }
+    }
+    const record = (await preferences)[recordKey(current)];
+    const retention = record?.retention;
+    const pending = retention?.parent === parent && Array.isArray(retention.items) ? retention.items : [];
+    if (!excess.length && !pending.length) return;
+    const retired = pending.length ? (await drive.list({ trash: true, signal })).items : [];
+    const candidates = new Map(excess.map(item => [item.id, item]));
+    for (const item of pending) {
+      if (item?.parent === parent && item.version === 1 && entryId.test(item.id) &&
+          digestPattern.test(item.digest) && snapshotSource(item.name) &&
+          retired.some(entry => entry.trashed && matchesSnapshot(entry, item, item.version + 1))) {
+        candidates.set(item.id, item);
+      }
+    }
+    // Persist the exact files before trashing them so a lost response can be
+    // reconciled without touching backups that the user moved to trash.
+    await save(current, { ...record, retention: { parent, items: [...candidates.values()] } }, signal);
+    for (const item of excess) {
+      const active = await drive.stat(item.id, { signal }).catch(error => {
+        if (error?.code !== "SPACE_NOT_FOUND") throw error;
+      });
+      if (!matchesSnapshot(active, item)) continue;
+      await drive.trash(item.id, { signal }).catch(error => {
+        if (error?.code !== "SPACE_NOT_FOUND") throw error;
+      });
+    }
+    const remaining = [];
+    const { backups: activeBackups } = await folder(drive, parent, signal);
+    counts.clear();
+    for (const item of activeBackups) {
+      if (item.version === 1) counts.set(item.source.id, (counts.get(item.source.id) || 0) + 1);
+    }
+    const { items: trash } = await drive.list({ trash: true, signal });
+    for (const entry of trash) {
+      const item = candidates.get(entry.id);
+      if (item && entry.trashed && matchesSnapshot(entry, item, item.version + 1)) {
+        if (counts.get(snapshotSource(item.name).id) >= retainedSnapshots) {
+          await drive.purge(item.id, { signal }).catch(error => {
+            if (!["SPACE_NOT_FOUND", "SPACE_NOT_IN_TRASH"].includes(error?.code)) throw error;
+          });
+        } else {
+          remaining.push(item);
+        }
+      }
+    }
+    const { retention: _, ...saved } = record;
+    await save(current, remaining.length ? { ...saved, retention: { parent, items: remaining } } : saved, signal);
+  }
+
   async function availableSnapshots(drive, data, current, signal) {
     const parent = await managedParent(drive, signal);
     const backups = parent ? (await folder(drive, parent, signal)).backups : [];
@@ -297,7 +367,7 @@ export function createMemoryBackup({ client, space, sourceBinding, store, stagin
     const remember = entry => save(current, {
       ...previous, v2: { sourceId: installation.id, backupId: entry.id, lastBackup: entry.modified },
     }, signal);
-    await withStaging(async directory => {
+    const confirmed = await withStaging(async directory => {
       const result = await localRequest(storageRoute + "/snapshot", { directory }, { signal, timeout: 125_000 });
       if (typeof result?.path !== "string" || path.dirname(result.path) !== directory) throw fail("未能生成本机记忆快照。");
       const archive = path.join(directory, "snapshot.sqlite.gz");
@@ -306,17 +376,17 @@ export function createMemoryBackup({ client, space, sourceBinding, store, stagin
       for await (const bytes of createReadStream(archive, { signal })) checksum.update(bytes);
       const digest = checksum.digest("hex");
       if (latest?.digest === digest) {
-        if (previous?.v2?.backupId !== latest.id) await remember(latest);
-        phase = "ready";
-        return;
+        return latest;
       }
       const fileName = installation.prefix + randomUUID().replaceAll("-", "") + ".sqlite.gz";
       const { size } = await stat(archive);
       const entry = await uploadSnapshot(drive, { parent, name: fileName, file: archive, size, digest, signal });
       if (entry.digest !== digest || entry.name !== fileName || entry.parent !== parent) throw fail("盒端备份校验失败。");
-      await remember(entry);
-      phase = "ready";
+      return entry;
     });
+    if (previous?.v2?.backupId !== confirmed.id) await remember(confirmed);
+    await retainRecentSnapshots(drive, current, parent, confirmed, signal);
+    phase = "ready";
   }
 
   async function localLibraryStatus(signal) {

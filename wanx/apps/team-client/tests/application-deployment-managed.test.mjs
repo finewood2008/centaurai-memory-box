@@ -4,7 +4,7 @@ import {mkdtemp,mkdir,writeFile,readFile,rm} from 'node:fs/promises';
 import path from 'node:path';import os from 'node:os';
 import {EventEmitter} from 'node:events';
 import {createApplicationManager} from '../build/app/applications/manager.mjs';
-import {writeMiniappPackage} from '../../builder/core/package.mjs';
+import {writeMiniappPackage} from '../../builder/tests/fixtures/miniapp-package.mjs';
 
 test('team main-process managed installation survives launch pruning and rejects ordinary mutations',async t=>{
  const root=await mkdtemp(path.join(os.tmpdir(),'team-managed-manager-'));t.after(()=>rm(root,{recursive:true,force:true}));

@@ -5,13 +5,22 @@ export type OntologySuggestion = {
   definition?: string;
   owner_kind?: 'entity' | 'relation'; owner_name?: string; source_types?: string[]; target_types?: string[];
   comparison: 'existing' | 'new'; similar_to: Array<{ name: string; label: string; direction?: 'same' | 'compatible' | 'reversed' | 'different' }>;
-  reuse_target?: string; allow_new_type?: boolean; policy_note?: string; existing_gap?: string; business_need?: string;
-  evidence: { document_id: string; version_id: string; document_name: string; segment_id: string; quote: string };
-  additional_evidence?: Array<{document_id:string;version_id:string;document_name:string;segment_id:string;quote:string}>;
+  reuse_target?: string; allow_new_type?: boolean; policy_note?: string; scope_target?: string; existing_gap?: string; business_need?: string;
+  evidence: { scope_target?: string; proposed_definition?: string; existing_gap?: string; business_need?: string; source_char_start?: number; document_id: string; version_id: string; document_name: string; segment_id: string; quote: string };
+  additional_evidence?: Array<{scope_target?:string;proposed_definition?:string;existing_gap?:string;business_need?:string;source_char_start?:number;document_id:string;version_id:string;document_name:string;segment_id:string;quote:string}>;
 };
+export type MaterialCoverage = {mode: string; segments: number; total: number; partial: boolean; empty_segments?: number};
+
+export function materialCoverageText(coverage: MaterialCoverage): string {
+  const kind = coverage.mode === 'full_text' ? '全文分析' : '历史取样';
+  const blanks = coverage.empty_segments ? `，其中 ${coverage.empty_segments} 个为空白片段` : '';
+  return `${kind}已读取 ${coverage.segments}/${coverage.total} 个正文片段${blanks}${coverage.partial ? '，部分正文未覆盖' : ''}。`;
+}
+
 export type SuggestionPreview = {
+  coverage_mode?: string; material_task_ids?: string[]; review_summary?: string; context_mode?: string; review_calls?: number;
   id: string; base_ontology_id: string; expires_at: number; suggestions: OntologySuggestion[]; rejected_count: number;
-  documents: Array<{ id: string; version_id: string; name: string; sampled_segments: number; total_segments: number; truncated: boolean }>;
+  documents: Array<{ id: string; version_id: string; name: string; sampled_segments: number; total_segments: number; truncated: boolean; empty_segments?: number; coverage_mode?: string }>;
 };
 export type TypeMappings = { entity: Record<string, string>; relation: Record<string, string> };
 export type OntologyTypeChange = { kind: 'entity' | 'relation'; previous: string; next: string | null };

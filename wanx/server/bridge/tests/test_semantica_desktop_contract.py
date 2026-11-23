@@ -437,6 +437,47 @@ async def test_native_document_detail_rejects_get_body_before_upstream(desktop):
     assert seen == []
 
 
+async def test_failure_feed_forwards_only_the_read_grant_for_the_selected_warehouse(desktop):
+    client, _, _, seen, reply, _ = desktop
+    feed = {"feed_id": "feed-a", "items": [], "next_cursor": 25, "has_more": False}
+    reply["value"] = feed
+    response = await client.get(BASE + W + "/failure-events?after=25&limit=100", headers=AUTH)
+
+    assert response.status_code == 200
+    assert response.json() == feed
+    assert response.headers["cache-control"] == "no-store"
+    (outgoing,) = seen
+    assert outgoing.url.path == "/api/integration/failure-events"
+    assert dict(outgoing.url.params) == {"after": "25", "limit": "100"}
+    grant = claims(outgoing)
+    assert grant["permissions"] == ["read"]
+    assert grant["workspace_bindings"] == {
+        grant["workspace_id"]: f"personal:wanx:7:warehouse:{WAREHOUSE}"
+    }
+
+
+@pytest.mark.parametrize(
+    "method,path,status",
+    [
+        ("GET", "/failure-events", 404),
+        ("GET", "/open/v1/failure-events", 404),
+        ("POST", W + "/failure-events", 405),
+        ("GET", W + "/failure-events?workspace_id=foreign", 422),
+        ("GET", W + "/failure-events?after=0&after=1", 422),
+        ("GET", W + "/failure-events?after=-1", 422),
+        ("GET", W + "/failure-events?after=9007199254740992", 422),
+        ("GET", W + "/failure-events?limit=0", 422),
+        ("GET", W + "/failure-events?limit=501", 422),
+    ],
+)
+async def test_failure_feed_rejects_unscoped_or_invalid_requests(desktop, method, path, status):
+    client, _, _, seen, _, _ = desktop
+    response = await client.request(method, BASE + path, headers=AUTH)
+
+    assert response.status_code == status
+    assert seen == []
+
+
 async def test_native_document_detail_preserves_selected_warehouse_read_and_resource_denial(
     desktop,
 ):

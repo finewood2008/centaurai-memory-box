@@ -570,6 +570,30 @@ body[data-memory-surface="my-ai"] {
   background: #fffdf8;
 }
 .my-ai-flow-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 10px; }
+.my-ai-connection-status {
+  --connection-accent: #345d73;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  padding: 9px 11px;
+  border: 1px solid var(--flow-border);
+  border-radius: 8px;
+  background: #fff;
+}
+.my-ai-connection-status[data-tone="success"] { --connection-accent: #2d6048; }
+.my-ai-connection-status[data-tone="error"] { --connection-accent: #984730; }
+.my-ai-connection-result { display: flex; align-items: flex-start; gap: 6px; flex: 2 1 225px; min-width: 0; color: var(--connection-accent); }
+.my-ai-connection-result svg { flex: none; margin-top: 1px; }
+.my-ai-connection-result strong { font-size: 12px; font-weight: 650; }
+.my-ai-connection-result p { margin: 2px 0 0; color: #62574d; font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+.my-ai-connection-meter { display: grid; flex: 1 1 180px; gap: 4px; }
+.my-ai-connection-meter progress { appearance: none; width: 100%; height: 5px; border: 0; border-radius: 4px; background: #ece5dc; }
+.my-ai-connection-meter progress::-webkit-progress-bar { border-radius: 4px; background: #ece5dc; }
+.my-ai-connection-meter progress::-webkit-progress-value { border-radius: 4px; background: var(--connection-accent); }
+.my-ai-connection-meter div { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; color: #62574d; font-size: 10px; }
+.my-ai-connection-meter span:nth-child(2) { text-align: center; }
+.my-ai-connection-meter span:last-child { text-align: end; }
 .my-ai-flow-controls .my-ai-connection-details { margin: 0; background: #fff; border-color: var(--flow-border); }
 .my-ai-flow-note { margin: 0; font-size: 11px; color: var(--flow-ink); }
 .my-ai-collection-settings { margin-top: 12px; padding: 12px; border: 1px solid var(--color-border-stone); border-radius: 12px; }

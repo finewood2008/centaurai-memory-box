@@ -115,7 +115,7 @@ export interface MemorySourcesContentProps {
   surface?: "workspace" | "settings" | "my-ai";
   onOpenSettings?: () => void;
   sourceRefresh?: number;
-  localAgents?: readonly { id: string; name: string }[];
+  localAgents?: readonly { id: string; name: string; collectionNote?: string }[];
   disconnectedLocalAgentIds?: ReadonlySet<string>;
   collectionProfile?: { id: string; name: string } | null;
   focusedSourceId?: string;
@@ -517,8 +517,8 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
     scanSources(resolveScanContinueSourceId(scanProgress), scanProgress?.mode);
   }
 
-  function openFullScanConfirm() {
-    setFullScanTargetSourceId("");
+  function openFullScanConfirm(sourceId = "") {
+    setFullScanTargetSourceId(sourceId);
     setShowFullScanConfirm(true);
   }
 
@@ -1031,6 +1031,12 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
                       completed={sourceScanButtonState === "completed"}
                       title={!source.available ? t("memory.agentNotDetectedScanHint", { agent: source.displayName }) : undefined}
                     />
+                    {isMyAi && focusedSourceId === "claude_code" && source.sourceId === focusedSourceId && source.available && <ActionBtn
+                      icon={<Radar size={13} />}
+                      label={t("memory.deepScanOpen")}
+                      onClick={() => openFullScanConfirm(source.sourceId)}
+                      disabled={sourceScanDisabled}
+                    />}
                   </>
                 ) : (
                   <>
@@ -1072,7 +1078,7 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
             <AgentSourceLogo source={{ sourceId: agent.id, displayName: agent.name }} />
             <div className="flex-1 min-w-0">
               <div className="text-sm font-normal text-text-ink/80">{agent.name}</div>
-              <p className="mt-1 text-xs text-text-ink/65">{language === "en-US" ? "Waiting for the first detectable conversation" : "等待首次检测到会话"}</p>
+              <p className="mt-1 text-xs text-text-ink/65">{agent.collectionNote ?? (language === "en-US" ? "Waiting for the first detectable conversation" : "等待首次检测到会话")}</p>
             </div>
           </article>
         ))}
@@ -1093,7 +1099,7 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
           <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
             <button
               type="button"
-              onClick={openFullScanConfirm}
+              onClick={() => openFullScanConfirm()}
               disabled={isScanning || scanCancelling || scanControlBusy || (collectionProfilePending || (isMyAi && !visibleSources.length))}
               className="flex items-start gap-3 rounded-card border-content-panel bg-background-paper/70 p-3 text-left transition-all hover:bg-background-paper disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer outline-none focus:outline-none focus-visible:ring-2 focus-visible:ring-status-error/20"
             >
@@ -1284,7 +1290,7 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
         )}
       </Modal>}
 
-      {!focusedSourceId && showFullScanConfirm && (
+      {showFullScanConfirm && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center px-4" onClick={() => setShowFullScanConfirm(false)}>
           <div className="bg-background-paper rounded-card-lg shadow-xl border border-border-stone/30 p-6 w-full max-w-lg" onClick={(event) => event.stopPropagation()}>
             <div className="mx-auto w-full max-w-md">
@@ -1295,7 +1301,7 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
                 <h3 className="text-base font-semibold text-text-ink">{t("memory.deepScanConfirmTitle")}</h3>
               </div>
               <p className="mt-2 text-xs text-text-ink/65 leading-relaxed">{t("memory.deepScanConfirmBody")}</p>
-              <div className="mt-4">
+              {focusedSourceId ? <p className="mt-2 text-xs text-text-ink/70">{visibleSources.find(source => source.sourceId === focusedSourceId)?.displayName}</p> : <div className="mt-4">
                 <div className="mb-2 text-xs font-normal text-text-ink/70">{t("memory.deepScanTargetLabel")}</div>
                 <div className="max-h-72 overflow-y-auto rounded-card border border-border-stone/30 bg-canvas-oat/40 p-1.5" role="radiogroup" aria-label={t("memory.deepScanTargetLabel")}>
                   <FullScanTargetOption
@@ -1314,7 +1320,7 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
                     />
                   ))}
                 </div>
-              </div>
+              </div>}
               <div className="flex justify-end gap-2 mt-5">
                 <button type="button" onClick={() => setShowFullScanConfirm(false)} className="px-4 py-2 text-sm text-text-ink/70 bg-canvas-oat border border-border-stone/40 rounded-btn hover:bg-canvas-oat/80 transition-colors cursor-pointer">
                   {t("common.cancel")}
@@ -1322,7 +1328,7 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
                 <button
                   type="button"
                   onClick={startFullScan}
-                  disabled={!fullScanTargetSourceId || isScanning || scanCancelling || scanControlBusy}
+                  disabled={!fullScanTargetSourceId || (focusedSourceId !== undefined && focusedSourceId !== fullScanTargetSourceId) || isScanning || scanCancelling || scanControlBusy}
                   className="px-4 py-2 text-sm text-white bg-status-error rounded-btn hover:bg-status-error/85 transition-all cursor-pointer shadow-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                 >
                   <Radar size={14} />

@@ -200,7 +200,7 @@ const actions = {
   ].map(([product, method]) => [`updates.${product}.${method}`, input => ipcRenderer.invoke(`wanx-client:updates-${product}-${method}`, input)])),
 };
 
-for (const method of ["snapshot", "refresh", "stat", "list", "mkdir", "move", "trash", "restore", "purge", "uploads", "download", "downloads", "transfer", "preview", "cancel-preview", "restore-version", "annotation", "set-annotation", "auto-annotate", "search-annotations"])
+for (const method of ["snapshot", "refresh", "stat", "list", "mkdir", "move", "trash", "restore", "purge", "uploads", "download", "downloads", "transfer", "preview", "cancel-preview", "open-text-edit", "save-text-edit", "restore-version", "annotation", "set-annotation", "auto-annotate", "search-annotations", "redaction-rules", "save-redaction-rules", "redact"])
   actions[`space.${method}`] = input => ipcRenderer.invoke(`wanx-client:space-${method}`, input);
 
 // Fetch the fixed operation contract from the trusted main process once;
@@ -225,9 +225,14 @@ async function action(name, input = {}) {
     return { ok: false, code: "UNKNOWN_CLIENT_ACTION", state: await getLocalState() };
   try {
     const value = await handler(input);
+    if (name === "space.preview" && value?.previewRejection) {
+      return { ok: false, code: value.previewRejection, state: await getLocalState() };
+    }
     return { ok: true, value, state: await getLocalState() };
   } catch (error) {
     let rawCode = errorCode(error);
+    if (["space.redaction-rules", "space.save-redaction-rules", "space.redact", "space.open-text-edit", "space.save-text-edit"].includes(name))
+      rawCode = rawCode.match(/(?:^|Error: )((?:SPACE|BOX|ACCOUNT|MCP_DRIVE)_[A-Z0-9_]+)$/)?.[1] || "SPACE_REQUEST_FAILED";
     if (name === "help.faq") rawCode = rawCode.match(/(?:^|Error: )(FAQ_RATE_LIMITED|FAQ_UNAVAILABLE|FAQ_INVALID_RESPONSE|ACCOUNT_NETWORK_ERROR|ACCOUNT_CANCELLED|ACCOUNT_INVALID_INPUT)$/)?.[1] || "FAQ_UNAVAILABLE";
     if (name === "help.feedback") rawCode = rawCode.match(/(?:^|Error: )((?:FAQ_FEEDBACK_[A-Z_]+|ACCOUNT_(?:NETWORK_ERROR|CANCELLED|INVALID_INPUT|INVALID_RESPONSE|REDIRECT_REJECTED)))$/)?.[1] || "FAQ_FEEDBACK_UNAVAILABLE";
     const clipboardCode = rawCode.match(/(?:^|Error: )((?:CLIPBOARD|SPACE|BOX|ACCOUNT|SECURE_STORAGE)_[A-Z0-9_]+)$/)?.[1];

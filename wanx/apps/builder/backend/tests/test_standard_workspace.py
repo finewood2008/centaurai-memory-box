@@ -66,7 +66,7 @@ async def test_standard_iteration_rebuilds_selected_baseline_and_starts_fresh_na
 async def test_standard_workspace_rejects_untrusted_or_foreign_baseline_before_creation(standard,tmp_path,damage):
  svc,p=standard;q=svc.store.get('alice',p['id']);a=q['artifacts'][0];base=a['hash']
  if damage=='package':a['devKitPackage']['packageBase64']='Y2hhbmdlZA=='
- elif damage=='expert-seal':a['snapshot']['contracts']['foundation']['expertDeployment']['template']['digest']='sha256:'+'b'*64
+ elif damage=='expert-seal':a['snapshot']['contracts']['wanx.expert-app.v1']['expertDeployment']['template']['digest']='sha256:'+'b'*64
  elif damage=='unknown-base':base='f'*64
  else:q['appId']='dev.wanx.foreign.a12345678'
  expected='ARTIFACT_NOT_FOUND' if damage=='unknown-base' else 'STANDARD_CONTRACT_CHANGED' if damage=='wrong-application' else 'ARTIFACT_INTEGRITY_FAILED'

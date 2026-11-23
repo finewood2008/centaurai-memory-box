@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import path from 'node:path';import vm from 'node:vm';
-import {validatePortable} from '../core/package.mjs';
+import {validatePortable} from './fixtures/miniapp-package.mjs';
 const source=readFileSync(new URL('../shell/runtime-main.cjs',import.meta.url),'utf8');
 function runtime(runtimeNamespace){
  const payload={applicationId:'ai.wanx.selfmade.'+'a'.repeat(32),artifactHash:'b'.repeat(64),manifest:{schemaVersion:1,capabilities:['foundation']},deployment:{environment:'dev',generation:1},...(runtimeNamespace===undefined?{}:{runtimeNamespace})};

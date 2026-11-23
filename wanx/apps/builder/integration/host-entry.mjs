@@ -43,7 +43,7 @@ export function createStudioEntry({ createConnection, applications, assets, open
   function clearDelivery(){unsubscribe?.();unsubscribe=null;authorized=null;delivery?.invalidate()}
   function close(){if(closed)return;closed=true;authorizationRevision++;destination=null;unsubscribeConnection?.();unsubscribeConnection=null;clearDelivery();delivery?.close()}
   async function enableDelivery(s,revision){
-    if(!deploymentRoot||!applications.installDeployment)return;
+    if(!deploymentRoot)return;
     // /context is also readable by published-app users. Only this server-side
     // management check can authorize the main-process deployment worker.
     let capability;

@@ -51,6 +51,7 @@ test('WANX Space streams bounded chunks and retries from the acknowledged offset
     f.failChunk=true;await assert.rejects(f.upload(selected.handle));assert.equal(f.offset,1024*1024);
     f.failCommit=true;assert.equal((await f.upload(selected.handle)).document.id,'test-document');
     assert.deepEqual(f.begins[0],f.begins[1]);assert.match(f.begins[0].external_document_id,/^wanx-space:[a-f0-9]{64}:[a-f0-9]{32}:[a-f0-9]{64}:[a-f0-9-]{36}$/);
+    assert.equal(f.begins[0].source_review_required,true);
     assert.equal(f.begins[0].sha256,f.entry.digest);assert.deepEqual(Buffer.concat(f.chunks),f.data);
     assert.equal(f.commits,1);await f.upload(selected.handle);assert.equal(f.commits,1);
   }finally{f.service.close();}

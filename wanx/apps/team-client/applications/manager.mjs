@@ -18,7 +18,22 @@ import { inspectZhijunData } from "./zhijun-data.mjs";
 import { inspectAiBrowserData } from "./ai-browser-data.mjs";
 import { inspectCentaurloopData } from "./centaurloop-data.mjs";
 import { applicationProfilePath, localApplicationProfile } from "./data-profile.mjs";
-import {isStandardDeployment,verifyStandardDeploymentInstallation} from './standard-deployment.mjs';
+import { isStandardDeployment, standardArtifactId, standardDeploymentFiles, standardSha, verifyStandardDeploymentInstallation } from "./standard-deployment.mjs";
+import { readApplicationManifest, validateApplicationManifest } from "./manifest.mjs";
+
+async function localReadinessDescriptor(record) {
+  if (record.installationSource !== "local" || record.protocolVersion !== 3 || record.launchMode !== "shared" ||
+      record.envelope || record.descriptor || record.releaseAccess || record.deployment || record.bindingSetId ||
+      record.compatibility.resourceDependencies.length) return undefined;
+  // The picker retains the extracted payload, including for pre-existing installs.
+  // Its content identity is local to the Host and grants no market or resource rights.
+  const manifest = await readApplicationManifest(path.join(record.installPath, "application.manifest.json"));
+  if (JSON.stringify(manifest) !== JSON.stringify(validateApplicationManifest(record)))
+    throw Object.assign(new Error("APPLICATION_MANIFEST_MISMATCH"), { code: "APPLICATION_MANIFEST_MISMATCH" });
+  const files = await standardDeploymentFiles(record.installPath, { installed: true, includePackageFile: true });
+  const digest = standardSha(JSON.stringify(files));
+  return { schemaVersion: 3, applicationId: manifest.applicationId, artifactId: standardArtifactId(digest), manifest };
+}
 
 export async function createApplicationManager({
   applicationRoot,
@@ -281,7 +296,7 @@ export async function createApplicationManager({
       if (record.protocolVersion < 2) return {...record,launchContext:typeof input === "object" ? input.launchContext : undefined};
       // Derive identity from the envelope again, not the mutable descriptor
       // copy in the local install record.
-      const descriptor = record.envelope ? verifyEnvelope(record.envelope, trustedKeys) : record.descriptor;
+      const descriptor = record.envelope ? verifyEnvelope(record.envelope, trustedKeys) : record.descriptor ?? await localReadinessDescriptor(record);
       const controlled = record.releaseAccess === "account";
       if (controlled) {
         if (!descriptor || !authorizeRelease) throw Object.assign(new Error("MARKET_RELEASE_ACCESS_REQUIRED"), { code: "MARKET_RELEASE_ACCESS_REQUIRED" });
@@ -457,7 +472,7 @@ export async function createApplicationManager({
         check();
         const managed=isStandardDeployment(current);
         if(managed)await verifyStandardDeploymentInstallation(current,{active:true,assertSession:check});
-        const descriptor = current.envelope ? verifyEnvelope(current.envelope, trustedKeys) : managed?current.descriptor:undefined;
+        const descriptor = current.envelope ? verifyEnvelope(current.envelope, trustedKeys) : managed ? current.descriptor : await localReadinessDescriptor(current);
         const observed=input=>compatibilityContext({...input,...(managed?{managedDeployment:current}:{})});
         const continuity = sameWriter(await readDataAccess(id), writerFor(descriptor));
         check();

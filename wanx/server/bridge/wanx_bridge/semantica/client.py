@@ -23,7 +23,9 @@ from wanx_bridge.semantica import desktop_workbench as starlink_legacy_workbench
 from wanx_bridge.semantica.document_contract import BLOCK_QUERY, validate_block_page
 from wanx_bridge.semantica import annotation_contract
 from wanx_bridge.semantica.maintenance import MaintenanceError, request_guard
-from wanx_bridge.semantica.transport_contract import grant_ttl, operation_timeout, owner_error, private_import_error, private_search_error
+from wanx_bridge.semantica.transport_contract import (
+    grant_ttl, operation_timeout, owner_error, owner_error_message, private_import_error, private_search_error,
+)
 
 _NAMESPACE = uuid.UUID("8ae54f40-4054-4bba-a2e2-06e1c43d7514")
 _READ = re.compile(
@@ -234,6 +236,24 @@ class SemanticaClient:
                 raise SemanticaError("SEMANTICA_INVALID_REQUEST", 422) from exc
         if not managed and (scoped := _SCOPED.fullmatch(path)):
             warehouse_id, path = scoped["warehouse"], scoped["path"]
+        scoped_modeling = False
+        if warehouse_id is not None and path.startswith("/modeling/"):
+            scoped_path = f"/modeling/warehouses/{warehouse_id}" + path.removeprefix("/modeling")
+            scoped_modeling = semantica_bootstrap.operation_name(method, scoped_path) in {
+                "classify_assistant_intent",
+                "get_modeling_suggestion_context", "publish_warehouse_scope",
+                "confirm_modeling_answers", "generate_modeling_suggestions",
+                "get_modeling_suggestion", "get_modeling_suggestion_rules",
+                "prepare_modeling_rules", "publish_modeling_rules",
+            }
+            if scoped_modeling:
+                if self.team:
+                    raise SemanticaError("MODELING_HOST_CREATION_REQUIRED", 403)
+                try:
+                    semantica_bootstrap.validate_query(method, scoped_path, query or {})
+                    semantica_bootstrap.validate_body(method, scoped_path, payload)
+                except ValueError as exc:
+                    raise SemanticaError("MODELING_INVALID_REQUEST", 422) from exc
         # This legacy scoped HTTP adapter retains correction transport checks;
         # Semantica still owns the domain DTO/revision validation and errors.
         # Required gateway requests independently use the full shared contract
@@ -253,12 +273,18 @@ class SemanticaClient:
         # older workbench tables, including source confirmation/index retries.
         conversation_route = (
             conversation_contract.entry(method, path)
-            if warehouse_id is not None and not native_workbench
+            if warehouse_id is not None and not native_workbench and not scoped_modeling
             else None
         )
+        if self.team and (
+            conversation_route is not None
+            or (
+                shared_workbench
+                and starlink_workbench.operation_name(method, path) in starlink_workbench.PERSONAL_PROCESSING_OPERATIONS
+            )
+        ):
+            raise SemanticaError("MODELING_HOST_CREATION_REQUIRED", 403)
         if conversation_route is not None:
-            if self.team:
-                raise SemanticaError("MODELING_HOST_CREATION_REQUIRED", 403)
             try:
                 conversation_contract.prepare(method, path, payload, query or {})
             except PermissionError as exc:
@@ -303,6 +329,7 @@ class SemanticaClient:
             and not deleting_document
             and not native_workbench
             and not annotation_route
+            and not scoped_modeling
             and not (_WRITE if write else _READ).fullmatch(path)
         ):
             raise SemanticaError("SEMANTICA_OPERATION_NOT_ALLOWED", 404)
@@ -385,7 +412,9 @@ class SemanticaClient:
             path.startswith("/imports/") or path.startswith("/warehouses/imports/")
         ):
             body.pop("operation_id")
-        timeout = operation_timeout(path)
+        timeout = 285 if scoped_modeling and method == "POST" and path == "/modeling/answer-suggestions" else operation_timeout(path)
+        headers = self.headers(operation, warehouse_id, owner_view=path == "/owner/graph", ttl=grant_ttl(timeout))
+        upstream_path = modeling_contract.upstream_path(path, headers) if scoped_modeling else path
         try:
             async with (
                 asyncio.timeout(timeout),
@@ -397,13 +426,8 @@ class SemanticaClient:
             ):
                 response = await client.request(
                     method,
-                    self.base_url + "/api/integration" + path,
-                    headers=self.headers(
-                        operation,
-                        warehouse_id,
-                        owner_view=path == "/owner/graph",
-                        ttl=grant_ttl(timeout),
-                    ),
+                    self.base_url + "/api/integration" + upstream_path,
+                    headers=headers,
                     params=query,
                     json=body if method != "GET" else None,
                 )
@@ -413,7 +437,7 @@ class SemanticaClient:
             raise SemanticaError("SEMANTICA_SERVICE_UNAVAILABLE") from None
         if renaming and response.status_code == 405:
             raise SemanticaError("SEMANTICA_UPGRADE_REQUIRED", 409)
-        return self.decode(response, native_workbench=native_workbench or onboarding_root)
+        return self.decode(response, native_workbench=native_workbench or onboarding_root or scoped_modeling)
 
     async def search(self, payload: dict[str, Any]) -> dict[str, Any]:
         return await self.request("POST", "/search", payload=payload)
@@ -510,9 +534,7 @@ class SemanticaClient:
                 if code == "MODELING_CONFIRMATION_REQUIRED":
                     raise SemanticaError(code, 409)
                 if native_workbench and owner_error(code) and 400 <= response.status_code < 600:
-                    # Native UI maps registered domain codes to static wording;
-                    # upstream diagnostics remain inside the service.
-                    raise SemanticaError(code, response.status_code)
+                    raise SemanticaError(code, response.status_code, owner_error_message(code, error.get("message")))
                 if isinstance(code, str) and re.fullmatch(
                     r"(?:WAREHOUSE|MIGRATION|ACCESS_KEY|MODEL|SKILL|REASONING)_[A-Z_]+", code
                 ):

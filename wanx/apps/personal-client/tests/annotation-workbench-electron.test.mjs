@@ -26,6 +26,7 @@ test("real sandboxed Electron IPC persists 1000 workbench annotations across pro
     });
     const marker = stdout.split("\n").find(line => line.startsWith("ANNOTATION_WORKBENCH_ELECTRON_PASS "));
     assert.ok(marker, stderr || stdout);
+    assert.doesNotMatch(stderr, /Error occurred in handler for 'wanx-client:space-preview'/);
     results.push(JSON.parse(marker.slice("ANNOTATION_WORKBENCH_ELECTRON_PASS ".length)));
   }
   assert.deepEqual(results.map(result => result.phase), ["write", "read"]);

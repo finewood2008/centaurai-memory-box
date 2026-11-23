@@ -22,6 +22,34 @@ from wanx_bridge.semantica.desktop import resolve
 from wanx_bridge.server import create_app
 
 
+async def test_onboarding_trial_is_bound_to_the_signed_warehouse_and_draft(desktop):
+    client, _, _, seen, reply, _ = desktop
+    path = "/workbench/conversations/guide-a/onboarding/trial"
+    body = {
+        "operation_id": "try-guide",
+        "_native_operation_id": "try-guide",
+        "expected_revision": 1,
+        "draft_digest": "a" * 64,
+        "document_id": "document-a",
+        "document_version_id": "version-a",
+    }
+    reply["value"] = {
+        "conversation_id": "guide-a", "draft_digest": "a" * 64, "document_id": "document-a",
+        "document_version_id": "version-a", "title": "合成资料", "source": {"id": "segment-a", "text": "合成原文"},
+        "entities": [], "relations": [], "partial_results": False, "publication_performed": False,
+    }
+    response = await client.post(BASE + W + path, headers=AUTH, json=body)
+    assert response.status_code == 200, response.text
+    assert response.json() == reply["value"]
+    assert seen[-1].url.path == "/api/integration" + path
+    assert json.loads(seen[-1].content) == body
+    assert claims(seen[-1])["operation_id"] == "try-guide"
+    seen.clear()
+    refused = await client.post(BASE + W + path, headers=AUTH, json={**body, "document_id": "branch/a"})
+    assert refused.status_code == 422, refused.text
+    assert not seen
+
+
 @pytest.mark.parametrize(
     "method,path,body",
     [
@@ -94,17 +122,23 @@ async def test_workbench_is_signed_for_the_existing_user_and_selected_warehouse(
 
 
 @pytest.mark.parametrize(
-    "path",
+    "path,body",
     [
-        "/ontology-suggestions/generate",
-        "/ontology-suggestions/materials/doc-a/review",
+        (
+            "/ontology-suggestions/generate",
+            {
+                "document_ids": ["doc-a"],
+                "base_ontology_id": "rule-a",
+                "schema": {},
+                "_native_operation_id": "generate",
+            },
+        ),
+        ("/ontology-suggestions/materials/doc-a/review", {"_native_operation_id": "review"}),
     ],
 )
-async def test_synchronous_workbench_models_get_the_existing_long_grant_budget(desktop, path):
+async def test_synchronous_workbench_models_get_the_existing_long_grant_budget(desktop, path, body):
     client, _, _, seen, _, _ = desktop
-    response = await client.post(
-        BASE + W + "/workbench" + path, json={"_native_operation_id": "generate"}, headers=AUTH
-    )
+    response = await client.post(BASE + W + "/workbench" + path, json=body, headers=AUTH)
     assert response.status_code == 200
     assert resolve("POST", W + "/workbench" + path).timeout == 285
     assert seen[0].extensions["timeout"]["read"] == 285

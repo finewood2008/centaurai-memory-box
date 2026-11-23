@@ -15,7 +15,7 @@ for (const lost of ['create', 'entry']) test(`quick creation with lost ${lost} r
   const identity = { accountId: 'actor', boxId: 'box', user: { id: 'user' } };
   const seen = [];
   let fail = true;
-  const options = { storage, identity, name: '测试仓', description: '合成资料',
+  const options = { storage, identity, name: '测试仓', description: '合成资料', warehouseScope: {occupation: '运维', focus_objects: ['A 产线']},
     async call(action, input) {
       assert.equal(action, 'create-warehouse'); seen.push(input);
       if (lost === 'create' && fail) { fail = false; throw Error('response lost'); }
@@ -30,7 +30,8 @@ for (const lost of ['create', 'entry']) test(`quick creation with lost ${lost} r
   await assert.rejects(quickCreateWarehouse(options));
   assert.equal(readQuickCreation(storage, identity).input.operationId, seen[0].operationId);
   assert.equal(readQuickCreation(storage, { ...identity, boxId: 'other' }), null);
-  await quickCreateWarehouse({ ...options, name: '不同名称' });
+  await quickCreateWarehouse({ ...options, name: '不同名称', warehouseScope: {occupation: '采购'} });
+  assert.deepEqual(seen[0].warehouseScope, options.warehouseScope);
   assert.equal(seen.length, lost === 'create' ? 2 : 1);
   if (lost === 'create') assert.deepEqual(seen[0], seen[1]);
   assert.equal(readQuickCreation(storage, identity), null);
@@ -61,7 +62,7 @@ test('batch retry skips confirmed batches and reuses the uncertain batch even af
       if(input.documents[0].id==='d100'&&fail){fail=false;throw Error('second batch response lost')}
       return{job_ids:[]};
     }};
-  vm.createContext(h);vm.runInContext(source.slice(source.indexOf('const reprocessPlans ='),source.indexOf('$("#model-scope").addEventListener')),h);
+  vm.createContext(h);vm.runInContext(source.slice(source.indexOf('const reprocessPlans ='),source.indexOf('$("#model-mode").addEventListener')),h);
   const pending=h.reprocessModels(true);await drain();
   await h.reprocessModels(true);assert.equal(seen.length,1);release();await pending;
   await h.reprocessModels(true);
@@ -80,7 +81,7 @@ test('definite rejection refreshes only unaccepted materials before reconfirmati
       seen.push(input);if(input.documents[0].id==='d100'&&reject){reject=false;throw Object.assign(Error('config changed'),{status:409})}
       return{job_ids:[]};
     }};
-  vm.createContext(h);vm.runInContext(source.slice(source.indexOf('const reprocessPlans ='),source.indexOf('$("#model-scope").addEventListener')),h);
+  vm.createContext(h);vm.runInContext(source.slice(source.indexOf('const reprocessPlans ='),source.indexOf('$("#model-mode").addEventListener')),h);
   await h.reprocessModels(true);h.state.processing.signature='new';documents[100].active_version_id='new-version';
   await h.reprocessModels(true);
   assert.deepEqual(seen.map(b=>b.documents[0].id),['d0','d100','d100']);

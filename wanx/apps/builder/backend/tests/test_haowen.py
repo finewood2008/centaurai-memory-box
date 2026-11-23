@@ -9,7 +9,7 @@ from test_studio import ROOT, op
 from test_workshop_model import DefaultModels, reply
 from wanx_studio.contracts import StudioError, digest
 from wanx_studio.haowen import HaoWen, check_answer
-from wanx_studio.haowen_channels import audience, dispatch, file_request, native, save_policy
+from wanx_studio.haowen_channels import audience, bound_session, dispatch, file_request, save_policy
 from wanx_studio.workshop import PersonalWorkshop
 
 
@@ -105,16 +105,16 @@ class Space:
 async def configured(tmp_path):
     model, space = Models(), Space()
     service = PersonalWorkshop(tmp_path, ROOT, model)
-    source = json.loads((ROOT / "templates/knowledge-qa/wanx.editable.json").read_text())
-    p = await service.copy_source(
-        "wanx:1", {"operationId": op(), "name": "好问合成", "source": source}
-    )
-    a = p["artifacts"][0]
-    raw = service.store.get("wanx:1", p["id"])
-    raw["installed"] = {"artifactHash": a["hash"], "version": a["version"]}
-    service.store.save(raw)
-    token = service.open_runtime("wanx:1", p["id"], a["hash"], "preview")["session"]
-    session = service.runtime("wanx:1", token)
+    # The gateway may receive messages for an existing installed channel.
+    # Seed its persisted binding; opening or copying an old application is retired.
+    project = service.store.create("wanx:1", "已有好问通道", "历史安装记录", op())
+    project = service.store.get("wanx:1", project["id"])
+    project["appId"] = "ai.wanx.selfmade." + project["id"]
+    artifact_hash = "a" * 64
+    project["installed"] = {"artifactHash": artifact_hash, "version": "0.3.0"}
+    project["artifacts"] = [{"hash": artifact_hash, "manifest": {"capabilities": ["dialogue"]}}]
+    project["_haowen"] = {"production": {"agentId": "haowen-test"}}
+    service.store.save(project)
     channel = SimpleNamespace(
         channel_id="c1",
         agent_id="haowen-test",
@@ -126,17 +126,19 @@ async def configured(tmp_path):
     )
     gateway = SimpleNamespace(
         get_channel=lambda key: channel if key == "c1" else None,
-        list_channels=lambda aid: [channel],
+        list_channels=lambda aid: [channel] if aid == channel.agent_id else [],
         runtime_status_to_dict=lambda key: {"connected": True},
     )
+    users = {1: SimpleNamespace(disabled=False)}
     server = SimpleNamespace(
         services=SimpleNamespace(
-            user_repo=SimpleNamespace(get=lambda uid: SimpleNamespace(disabled=False))
+            user_repo=SimpleNamespace(get=users.get)
         ),
         app_runtime=SimpleNamespace(gateway=gateway),
     )
     svc = HaoWen(service, server, lambda _: space)
     service.haowen = svc
+    session = bound_session(svc, channel.agent_id)
     grant = await svc.select(session, [{"kind": "folder", "id": "folder"}])
     await svc.save(
         session,
@@ -148,21 +150,13 @@ async def configured(tmp_path):
             "cloudAllowed": True,
         },
     )
-    yield svc, session, service, model, space, channel, token
+    yield svc, session, service, model, space, channel
     await service.close()
 
 
 async def test_shared_app_settings_and_live_folder_membership(configured):
-    svc, s, service, model, space, _, token = configured
-    result = await service.invoke(
-        s["owner"],
-        token,
-        "dialogue.invoke",
-        {
-            "operation": "ask",
-            "input": {"conversationId": "a", "question": "合成验收码是什么", "requestId": "r1"},
-        },
-    )
+    svc, s, _, model, space, _ = configured
+    result = await svc.answer(s, "dm", "合成验收码是什么", "r1", policy(svc, s))
     assert "LANTERN-7304" in result["content"]
     assert result["evidence"][0]["sourceId"] == "file"
     assert "hidden" not in model.prompts[-1]
@@ -173,14 +167,14 @@ async def test_shared_app_settings_and_live_folder_membership(configured):
 
 
 async def test_owner_app_environment_and_trusted_selection_isolation(configured):
-    svc, s, service, _, _, _, token = configured
-    with pytest.raises(StudioError, match="RUNTIME_SESSION_EXPIRED"):
-        await service.invoke("wanx:2", token, "dialogue.invoke", {"operation": "read", "input": {}})
-    prod = {**s, "environment": "production"}
-    assert not svc.state(prod)["sources"]
+    svc, s, service, *_ = configured
+    with pytest.raises(StudioError, match="PROJECT_NOT_FOUND"):
+        svc.state({**s, "owner": "wanx:2"})
+    preview = {**s, "environment": "preview"}
+    assert not svc.state(preview)["sources"]
     with pytest.raises(StudioError, match="HAOWEN_SOURCE_NOT_SELECTED"):
         await svc.save(
-            prod,
+            preview,
             {
                 "revision": 0,
                 "name": "好问",
@@ -189,14 +183,7 @@ async def test_owner_app_environment_and_trusted_selection_isolation(configured)
                 "sources": [{"kind": "file", "id": "file"}],
             },
         )
-    other = await service.copy_source(
-        s["owner"],
-        {
-            "operationId": op(),
-            "name": "另一个",
-            "source": json.loads((ROOT / "templates/knowledge-qa/wanx.editable.json").read_text()),
-        },
-    )
+    other = service.store.create(s["owner"], "另一个项目", "独立资料授权", op())
     other_session = {**s, "project": other["id"], "app": other["appId"]}
     assert not svc.state(other_session)["sources"]
     with pytest.raises(StudioError, match="HAOWEN_SOURCE_NOT_SELECTED"):
@@ -213,7 +200,7 @@ async def test_owner_app_environment_and_trusted_selection_isolation(configured)
 
 
 async def test_no_model_call_without_explicit_source_processing_consent(configured):
-    svc, s, _, model, _, _, _ = configured
+    svc, s, _, model, _, _ = configured
     cfg = svc.state(s)
     svc.write(s, {"cloudAllowed": False}, cfg["revision"])
     with pytest.raises(StudioError, match="HAOWEN_MODEL_CONSENT_REQUIRED"):
@@ -222,7 +209,7 @@ async def test_no_model_call_without_explicit_source_processing_consent(configur
 
 
 async def test_inflight_config_and_file_revocation_discard_generated_answer(configured):
-    svc, s, _, model, space, _, _ = configured
+    svc, s, _, model, space, _ = configured
     model.after = lambda: svc.write(s, {"sources": []}, svc.state(s)["revision"])
     with pytest.raises(StudioError, match="HAOWEN_CONFIG_CHANGED"):
         await svc.answer(s, "dm", "合成验收码", "r")
@@ -249,7 +236,7 @@ async def test_inflight_config_and_file_revocation_discard_generated_answer(conf
 
 
 async def test_failure_retry_idempotency_and_context_not_replaying_old_evidence(configured):
-    svc, s, _, model, _, _, _ = configured
+    svc, s, _, model, _, _ = configured
     model.fail = True
     with pytest.raises(StudioError, match="MODEL_UPSTREAM_FAILED"):
         await svc.answer(s, "dm", "合成验收码", "r1")
@@ -312,11 +299,11 @@ async def test_channel_audience_session_keys_and_deny_unknown_identity(configure
 
 
 async def test_policy_requires_audience_and_subset_and_production(configured):
-    svc, s, _, _, _, _, _ = configured
+    svc, s, _, _, _, _ = configured
     with pytest.raises(StudioError, match="HAOWEN_CHANNEL_DELEGATION_REQUIRED"):
         await save_policy(
             svc,
-            s,
+            {**s, "environment": "preview"},
             {
                 "revision": 1,
                 "id": "c1",
@@ -327,7 +314,6 @@ async def test_policy_requires_audience_and_subset_and_production(configured):
                 "sources": [],
             },
         )
-    s = {**s, "environment": "production"}
     policy(svc, s)
     cfg = svc.state(s)
     value = {
@@ -351,7 +337,7 @@ async def test_policy_requires_audience_and_subset_and_production(configured):
 
 
 async def test_original_file_export_respects_switch_scope_credential_and_live_move(configured):
-    svc, s, _, _, space, channel, _ = configured
+    svc, s, _, _, space, channel = configured
     p = policy(svc, s)
     denied = await file_request(svc, s, {**p, "allowFiles": False}, "/文件 合成.txt")
     assert "未开放" in denied.content[0].text
@@ -366,11 +352,10 @@ async def test_original_file_export_respects_switch_scope_credential_and_live_mo
 
 
 async def test_dispatch_uses_registered_app_policy_and_not_generic_agent_tools(configured):
-    svc, s, service, model, _, _, _ = configured
-    s = {**s, "environment": "production"}
+    svc, s, service, model, _, _ = configured
     grant = await svc.select(s, [{"kind": "file", "id": "file"}])
     await svc.save(
-        s, {"revision": 0, "name": "好问", "style": "简洁", "cloudAllowed": True, "sources": grant}
+        s, {"revision": svc.state(s)["revision"], "name": "好问", "style": "简洁", "cloudAllowed": True, "sources": grant}
     )
     p = policy(svc, s)
     svc.write(s, {"channels": {"c1": p}}, svc.state(s)["revision"])
@@ -401,10 +386,9 @@ def test_fabricated_citations_are_not_rendered():
     assert not content and not evidence
 
 
-async def test_actual_gateway_intercepts_before_slash_and_model_tools(configured):
+async def test_actual_gateway_intercepts_before_slash_and_model_tools():
     from octop.infra.gateway.process.processor import GlobalProcessor
 
-    svc, s, _, _, _, _, _ = configured
     row = SimpleNamespace(agent_id="haowen-test")
     processor = SimpleNamespace(
         loop_message_interceptor=None,
@@ -426,15 +410,18 @@ async def test_actual_gateway_intercepts_before_slash_and_model_tools(configured
     assert events[0].content[0].text == "scoped handler"
 
 
-async def test_channel_credential_ui_never_returns_secrets(configured):
-    svc, s, _, _, _, _, _ = configured
-    s = {**s, "environment": "production"}
-    policy(svc, s)
-    detail = await native(svc, s, {"action": "channel-detail", "id": "c1"})
-    assert "secret" in detail["configured"]
-    assert "secret" not in detail["values"]
-    assert "synthetic-only" not in json.dumps(detail)
-    with pytest.raises(StudioError, match="HAOWEN_NATIVE_OPERATION_DENIED"):
-        await native(svc, s, {"action": "channel-detail", "id": "c1", "owner": "wanx:2"})
-    with pytest.raises(StudioError, match="HAOWEN_CHANNEL_NOT_FOUND"):
-        await native(svc, s, {"action": "channel-detail", "id": "other"})
+async def test_foreign_agent_cannot_use_bound_channel_or_read_private_credentials(configured):
+    svc, session, _, model, *_ = configured
+    policy_data = policy(svc, session)
+    svc.write(session, {"channels": {"c1": policy_data}}, svc.state(session)["revision"])
+    public = json.dumps(svc.public(session))
+    assert "synthetic-only" not in public and policy_data["credentialRevision"] not in public
+    forged = SimpleNamespace(agent_id="haowen-test", user_id=2, description="WANX HaoWen " + session["app"])
+    events = [event async for event in dispatch(svc, msg(), forged)]
+    assert not model.prompts
+    assert not svc.history(session, audience(msg(), policy_data)[0])
+    assert events[0].content[0].text == "好问暂时无法处理，请检查应用配置、通道状态与资料授权后重试。"
+    svc.server.services.user_repo.get(1).disabled = True
+    with pytest.raises(StudioError, match="HAOWEN_OWNER_UNAVAILABLE"):
+        await svc.answer(session, "dm", "合成验收码", "revoked", policy_data)
+    assert not model.prompts and not svc.history(session, "dm")

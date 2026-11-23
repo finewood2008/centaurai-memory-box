@@ -2215,6 +2215,36 @@ function sourceTurnCaptureFromSql(row: Record<string, unknown>): SourceTurnCaptu
   };
 }
 
+// Turn-start events can arrive before a raw turn exists. Scope recall activity
+// to the proposed episode so a draft in another task does not hold it open.
+const EPISODE_LAST_ACTIVITY_SQL = `MAX(
+  episodes.updated_at,
+  COALESCE(
+    (SELECT MAX(MAX(
+       raw_turns.created_at,
+       COALESCE(json_extract(raw_turns.message_payload_json, '$.turn_complete.completed_at'), raw_turns.created_at),
+       COALESCE(json_extract(raw_turns.message_payload_json, '$.last_observation.observed_at'), raw_turns.created_at)
+     ))
+     FROM raw_turns
+     WHERE raw_turns.episode_id = episodes.id),
+    episodes.opened_at
+  ),
+  COALESCE(
+    (SELECT created_at FROM recall_events
+     WHERE session_id = episodes.session_id AND episode_id = episodes.id
+       AND created_at > episodes.updated_at
+       AND json_extract(request_json, '$.retrievalMode') = 'turn_start'
+     ORDER BY created_at DESC LIMIT 1),
+    episodes.updated_at
+  )
+)`;
+
+const EPISODE_IDLE_TIMER_PREFIX = "episode_idle_close:timer:";
+
+export function episodeIdleTimerKey(episodeId: string): string {
+  return EPISODE_IDLE_TIMER_PREFIX + episodeId;
+}
+
 export class RuntimeRepository {
   readonly scheduling: QueueSchedulingStore;
   private readonly leaseOwner = newId("worker");
@@ -2537,25 +2567,7 @@ export class RuntimeRepository {
   ): EpisodeRecord[] {
     const clauses = [
       "episodes.status != 'closed'",
-      `MAX(
-        episodes.updated_at,
-        COALESCE(
-          (SELECT MAX(MAX(
-             raw_turns.created_at,
-             COALESCE(
-               json_extract(raw_turns.message_payload_json, '$.turn_complete.completed_at'),
-               raw_turns.created_at
-             ),
-             COALESCE(
-               json_extract(raw_turns.message_payload_json, '$.last_observation.observed_at'),
-               raw_turns.created_at
-             )
-           ))
-           FROM raw_turns
-           WHERE raw_turns.episode_id = episodes.id),
-          episodes.opened_at
-        )
-      ) < ?`
+      `${EPISODE_LAST_ACTIVITY_SQL} < ?`
     ];
     const params: SqlValue[] = [inactiveBefore];
     if (excludeEpisodeId) {
@@ -2570,6 +2582,25 @@ export class RuntimeRepository {
          ORDER BY episodes.opened_at ASC, episodes.id ASC`
       )
       .all(...params) as SqlEpisodeRow[];
+    return rows.map(episodeFromSql);
+  }
+
+  episodeIdleActivityAt(episodeId: string): string | undefined {
+    const row = this.db.prepare(`SELECT ${EPISODE_LAST_ACTIVITY_SQL} AS last_activity_at
+      FROM episodes WHERE id = ? AND status != 'closed'`)
+      .get(episodeId) as { last_activity_at: string } | undefined;
+    return row?.last_activity_at;
+  }
+
+  listEpisodesWithoutIdleTimer(limit: number): EpisodeRecord[] {
+    const rows = this.db.prepare(`SELECT * FROM episodes
+      WHERE status != 'closed'
+        AND EXISTS(SELECT 1 FROM raw_turns WHERE episode_id = episodes.id AND deleted_at IS NULL AND redacted_at IS NULL)
+        AND ? || id NOT IN (
+          SELECT dedupe_key FROM evolution_jobs
+          WHERE job_type = 'episode_idle_close' AND dedupe_key IS NOT NULL AND status IN ('queued', 'leased', 'failed')
+        )
+      ORDER BY updated_at, id LIMIT ?`).all(EPISODE_IDLE_TIMER_PREFIX, limit) as SqlEpisodeRow[];
     return rows.map(episodeFromSql);
   }
 
@@ -3157,8 +3188,9 @@ export class RuntimeRepository {
       .all(rawTurnId, rawTurnId) as Array<{ id: string }>).map(r => r.id);
   }
 
-  hasUnassignedTurns(sessionId: string): boolean {
+  hasUnassignedTurns(sessionId: string, { completedOnly = false } = {}): boolean {
     return Boolean(this.db.prepare(`SELECT 1 FROM raw_turns WHERE session_id = ? AND deleted_at IS NULL AND redacted_at IS NULL
+      ${completedOnly ? "AND json_type(message_payload_json, '$.turn_complete') = 'object'" : ""}
       AND (episode_id IS NULL OR json_extract(message_payload_json, '$.episode_assignment.status') IN ('pending', 'selected', 'applying')) LIMIT 1`).get(sessionId));
   }
 

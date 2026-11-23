@@ -2,7 +2,7 @@ import { access, cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename,
 import { renameSync } from "node:fs";
 import { verifyEnvelope, marketFailure } from "./descriptor.mjs";
 import { extractApplicationArchive as extractVerifiedArchive, verifyPackageHash } from "./verified-archive.mjs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { setTimeout } from "node:timers/promises";
 import path from "node:path";
 import semver from "semver";
@@ -220,6 +220,23 @@ export function createApplicationInstaller({ rootDir, now = () => Date.now(), co
 
   async function install({ archivePath, sourceDir, ...options } = {}, { signal } = {}) {
     signal?.throwIfAborted();
+    if (archivePath !== undefined && options.standardArtifactHash !== undefined) {
+      const {standardArtifactHash, manifest: expected, ...extra} = options;
+      if (sourceDir || typeof archivePath !== "string" || Object.keys(extra).length || !/^[a-f0-9]{64}$/.test(standardArtifactHash) || expected?.protocolVersion !== 3) throw fail("APPLICATION_SOURCE_REQUIRED");
+      await mkdir(rootDir, {recursive:true, mode:0o700});
+      const staging = await mkdtemp(path.join(await realpath(rootDir), ".unpacking-"));
+      try {
+        const bytes = await readFile(archivePath);
+        if (createHash("sha256").update(bytes).digest("hex") !== standardArtifactHash) throw fail("APPLICATION_ARTIFACT_INVALID");
+        const frozen = path.join(staging,"application.zip"), destination = path.join(staging,"content");
+        await writeFile(frozen,bytes,{flag:"wx",mode:0o600});
+        await mkdir(destination);
+        const source = await extractApplicationArchive(frozen,destination);
+        const manifest = await readApplicationManifest(path.join(source,"application.manifest.json"));
+        if (JSON.stringify(manifest) !== JSON.stringify(validateApplicationManifest(expected))) throw fail("APPLICATION_MANIFEST_MISMATCH");
+        return await installDirectory({sourceDir:source,manifest},signal,standardArtifactHash);
+      } finally { await rm(staging,{recursive:true,force:true}); }
+    }
     if (archivePath !== undefined) {
       if (typeof archivePath !== "string" || !archivePath || sourceDir || Object.keys(options).length)
         throw fail("APPLICATION_SOURCE_REQUIRED");
@@ -232,7 +249,7 @@ export function createApplicationInstaller({ rootDir, now = () => Date.now(), co
     }
     return installDirectory({ sourceDir, ...options }, signal);
   }
-  async function installDirectory({ sourceDir, manifest: suppliedManifest, manifestPath }, signal) {
+  async function installDirectory({ sourceDir, manifest: suppliedManifest, manifestPath }, signal, packageSha256) {
     if (typeof sourceDir !== "string" || !sourceDir) throw fail("APPLICATION_SOURCE_REQUIRED");
     let source;
     try { source = await stat(sourceDir); } catch { throw fail("APPLICATION_SOURCE_NOT_FOUND"); }
@@ -258,7 +275,7 @@ export function createApplicationInstaller({ rootDir, now = () => Date.now(), co
       catch (error) { if (error.code !== "ENOENT") throw error; }
       const staging = await mkdtemp(path.join(path.dirname(target), ".installing-"));
       const temporary = path.join(staging, "content");
-      const record = { ...manifest, installPath: target, installedAt: now(), installationSource: "local" };
+      const record = { ...manifest, installPath: target, installedAt: now(), installationSource: "local", ...(packageSha256 ? {packageSha256} : {}) };
       let committed = false;
       try {
         await copy(sourceDir, temporary, { recursive: true, errorOnExist: true, force: false, verbatimSymlinks: true });

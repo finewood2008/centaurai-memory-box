@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {createPersonalDataService,personalStarlinkTarget} from '../integration/personal-client/data-service.mjs';
 const wid='12345678-1234-1234-1234-123456789abc';
-function setup({applications,starlinkPackageDir,keyItems=[]}={}){
+function setup({applications,starlinkPackageDir,keyItems=[],keyGrant}={}){
   let state={phase:'ready',account:{phase:'authenticated',accountId:'owner',clientId:'client'},connection:{deviceId:'box',gatewayURL:'http://peer'}},deferred=null,denied=false;
   const listeners=new Set(),requests=[],opened=[],connections=[];
   const client={snapshot:()=>state,subscribe:f=>(listeners.add(f),()=>listeners.delete(f)),applicationConnection:async id=>{
@@ -17,7 +17,7 @@ function setup({applications,starlinkPackageDir,keyItems=[]}={}){
       close(){closed=true;},
       request:async input=>{
         live();requests.push(input);if(deferred)return deferred;
-        const value=denied?{code:'SEMANTICA_RESOURCE_FORBIDDEN'}:input.path.endsWith('/warehouses')?{items:[{id:wid,name:'个人资料'}]}:input.path.endsWith('/keys')?{items:keyItems}:{id:wid,name:'个人资料'};
+        const value=denied?{code:'SEMANTICA_RESOURCE_FORBIDDEN'}:input.path.endsWith('/warehouses')?{items:[{id:wid,name:'个人资料'}]}:input.path.endsWith('/keys')?(input.method==='POST'?keyGrant:{items:keyItems}):{id:wid,name:'个人资料'};
         return {status:denied?403:200,headers:{},body:Buffer.from(JSON.stringify(value))};
       },
     };
@@ -30,6 +30,23 @@ test('ordinary account reads personal warehouses without Team selector or admini
   await s.service.action('graph',{warehouseId:wid});
   assert.deepEqual(s.connections,['centaurai.wanx.semantica']);
   assert(s.requests.every(r=>r.path.startsWith('/api/semantica/')&&!r.headers['x-wanx-data-context']));s.service.close();
+});
+
+test('internal MCP key is warehouse bound, expires in a day, revokes, and is unavailable to renderer actions',async()=>{
+  const expires=Math.floor(Date.now()/1000)+86400;
+  const s=setup({keyGrant:{token:'xg_'+ 'a'.repeat(40),key:{id:'key_1',expires_at:expires}}});
+  try{
+    const lease=await s.service.createMcpKey(wid);
+    assert.equal(lease.expiresAt,expires*1000);
+    const request=s.requests.find(r=>r.method==='POST'),body=JSON.parse(request.body);
+    assert.equal(request.path,`/api/semantica/warehouses/${wid}/keys`);
+    assert.equal(body.days,1);assert.deepEqual(body.scopes,['documents','evidence','graph','search','reasoning']);
+    assert.equal(body.name,'MemoBox 本机工具临时连接');assert.match(body.operation_id,/^[a-f0-9-]{36}$/);
+    await assert.rejects(s.service.action('createMcpKey',{warehouseId:wid}),{code:'TEAM_DATA_ACTION_DENIED'});
+    await lease.revoke();assert.equal(s.requests.at(-1).path,`/api/semantica/warehouses/${wid}/keys/key_1/revoke`);
+    const count=s.requests.length;s.switch();
+    await assert.rejects(lease.revoke(),{code:'HOST_SESSION_EXPIRED'});assert.equal(s.requests.length,count);
+  }finally{s.service.close()}
 });
 for(const previousVersion of [null,'0.2.25','0.3.4']) test(`personal Starlink ${previousVersion??'missing'} uses latest bundled package before opening`,async t=>{
   const source=await mkdtemp(path.join(os.tmpdir(),'wanx-starlink-fixture-'));

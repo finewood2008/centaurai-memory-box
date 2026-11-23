@@ -207,6 +207,37 @@ test('automatic generation response loss keeps warehouse and recovers without an
   assert.equal(f.calls.filter(c=>c.action==='onboarding-generate').length,1);
 });
 
+test('submitted form resumes its scoped generation after a lost response without starting a dialogue',async()=>{
+  const f=fixture();
+  await prepared(f);await f.flow.create();
+  const warehouse=f.backend.items[0], make=()=>f.make({warehouseId:warehouse.id});
+  f.backend.context.answers.background='已保存在本仓的背景';
+  f.backend.lose='onboarding-generate';
+  const start=f.calls.length;
+  const flow=make();
+  await flow.openSuggestions(warehouse,true);
+  assert.equal(flow.state.pending.action,'onboarding-generate');
+  assert.equal(f.calls.find(c=>c.action==='onboarding-confirm').input.body.answers.background,'已保存在本仓的背景');
+  flow.reset();
+  const reopened=make();
+  await reopened.openSuggestions(warehouse,true);
+  assert.equal(reopened.state.pending,null);
+  assert.equal(reopened.state.proposal.valid,true);
+  assert.deepEqual(f.calls.slice(start).map(c=>c.action),['onboarding-context','onboarding-confirm','onboarding-generate','onboarding-context','onboarding-suggestion']);
+});
+
+test('reopening a changed warehouse or browsing its suggestions waits for an explicit generation',async()=>{
+  const f=fixture();
+  await prepared(f);await f.flow.create();
+  const warehouse=f.backend.items[0], flow=f.make({warehouseId:warehouse.id});
+  await flow.openSuggestions(warehouse);
+  f.backend.context.purpose_revision++;
+  await flow.openSuggestions(warehouse,true);
+  assert.equal(f.calls.some(c=>c.action==='onboarding-confirm'),false);
+  await flow.generate();
+  assert.equal(f.calls.filter(c=>c.action==='onboarding-generate').length,1);
+});
+
 test('automatic generation stops on changed answers, revisions or concurrent confirmation',async()=>{
   for(const change of [
     c=>{c.answers.background='Changed elsewhere';},

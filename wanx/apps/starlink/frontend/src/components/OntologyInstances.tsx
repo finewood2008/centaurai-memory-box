@@ -4,6 +4,7 @@ import {bridgeHosted,embeddedHost} from '../nativeHost';
 import {graphUrl,readGraphSources,type GraphResult,type GraphSources} from '../graphTransport';
 import {instancePage} from '../graphExploration';
 import {nodeId,edgeId,sourceLabel,detectionNotice,type GraphEdge} from '../graph';
+import StarxiaotuTerm from './StarxiaotuTerm';
 import {InstanceProperties} from './KnowledgeInstanceView';
 
 function InstanceSources({edge,active}:{edge:GraphEdge;active:boolean}) {
@@ -80,7 +81,7 @@ export default function OntologyInstances({type,label,kind='entity',active,relat
     </div>;
   }
   return <section className="instance-detail-bottom rules-instances" aria-label="类型实例列表">
-    <div className="section-title"><h3>{kind==='entity'?'资料中的实例':'资料中的关系'}</h3><button onClick={()=>setEpoch(value=>value+1)}>刷新实例</button></div>
+    <div className="section-title"><h3>{kind==='entity'?'资料中的实例':'资料中的关系'}<StarxiaotuTerm name={kind==='entity'?'instance':'relation'} /></h3><button onClick={()=>setEpoch(value=>value+1)}>刷新实例</button></div>
     {error?<p role="alert">{error}</p>:!result?<p role="status">正在读取实例…</p>:<>
       <p className="muted">{label} · 当前图谱范围 {count} 条。<span> 仅显示已发布知识。</span></p>
       {kind==='entity'?current.items.map(node=>{

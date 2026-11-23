@@ -62,7 +62,7 @@ def verify(*, pipeline: bool = False) -> None:
                 "name": "Release check",
                 "appId": "dev.wanx.release-check",
                 "devKit": True,
-                "solution": {"capabilities": ["data", "foundation"]},
+                "solution": {"capabilities": ["wanx.expert-app.v1"]},
                 "deploymentExpert": {"profile": "wanx-expert-app-v1"},
             }
             result = create_workspace(project, root, temporary / "project")

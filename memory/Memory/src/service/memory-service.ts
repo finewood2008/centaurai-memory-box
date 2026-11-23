@@ -3581,7 +3581,9 @@ export class MemoryService {
 
   reconcileWorkerStartup(limit = 10000): ReturnType<WorkerRunner["reconcileWorkerStartup"]> {
     const result = this.workerRunner.reconcileWorkerStartup(limit);
-    this.reconcileAutomaticHistorySkills(nowIso(), limit);
+    const at = nowIso();
+    if (this.memoryAddEnabled()) this.workerHandlers.reconcileEpisodeIdleTimers(limit, at);
+    this.reconcileAutomaticHistorySkills(at, limit);
     return result;
   }
 

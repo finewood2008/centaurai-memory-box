@@ -171,6 +171,20 @@ test('failure after linking preserves the opening and blocks another round or na
   assert.equal(h.sessions.length,2);assert.equal(h.intents.length,2);
 });
 
+test('reader-only clients recover a previously accepted association directly into the file reader',async()=>{
+  const h=fixture(),{f}=h;await h.init();h.db.failAfterLink=true;
+  await f.importer.dialogue();assert.ok(f.saved.roundOpening);assert.equal(f.saved.pending,null);
+  const reader=h.make();reader.readerOnly=true;reader.state.materialPage='import';
+  await reader.load();
+  assert.match(materialImportHTML(reader,''),/恢复材料/);
+  assert.doesNotMatch(materialImportHTML(reader,''),/开始新一轮对话|继续上轮对话|cv-message-form/);
+  const count=h.calls.length;
+  await reader.rounds.finish();
+  assert.equal(reader.state.materialPage,'import');assert.equal(reader.importer.view.documentId,'doc');
+  assert.equal(reader.saved.roundOpening,undefined);assert.equal(reader.state.error,'');
+  assert.equal(h.calls.slice(count).some(c=>/create|conversation-messages|analyze|send|publish$/.test(c.action)),false);
+});
+
 test('workflow order cannot hide a valid continuation behind an obsolete intent in the same conversation',async()=>{
   const h=fixture(),{f}=h;await h.init();h.db.published=false;
   const w=h.workflow(),valid=w.conversations[0];

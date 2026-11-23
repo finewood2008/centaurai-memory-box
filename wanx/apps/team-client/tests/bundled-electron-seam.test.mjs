@@ -1,3 +1,4 @@
+import { fromEnvironment } from "../../personal-client/host-sdk/index.cjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { cp, lstat, mkdir, mkdtemp, readdir, readlink, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
@@ -59,7 +60,7 @@ test("real Electron installs, opens and reactivates all four installation combin
   const base = { name: "应用安装验证", version: "1.0.0", protocolVersion: 1, runtime: "electron" };
   const shared = { ...base, applicationId: "test.shared", entrypoint: "main.cjs" };
   await mkdir(path.join(sharedSource, "node_modules/@centaurai"), { recursive: true });
-  await cp(path.join(clientRoot, "..", "wanx-client", "host-sdk"), path.join(sharedSource, "node_modules/@centaurai/wanx-host-sdk"), { recursive: true });
+  await cp(path.join(clientRoot, "..", "personal-client", "host-sdk"), path.join(sharedSource, "node_modules/@centaurai/wanx-host-sdk"), { recursive: true });
   await cp(path.join(clientRoot, "node_modules/ws"), path.join(sharedSource, "node_modules/ws"), { recursive: true });
   await cp(new URL("./support/electron-application.cjs", import.meta.url), path.join(sharedSource, "main.cjs"));
   await writeFile(path.join(sharedSource, "package.json"), JSON.stringify({ name: "wanx-install-fixture", version: "1.0.0", main: "main.cjs" }));
@@ -81,12 +82,12 @@ test("real Electron installs, opens and reactivates all four installation combin
   const bundledZip = path.join(root, "bundled.zip");
   await zipDirectory(bundledSource, bundledZip);
 
-  let live = true, activeCase, opened;
+  let live = true, activeCase, opened, probe;
   const listeners = new Set(), calls = [], results = [];
   manager = await createApplicationManager({
     applicationRoot: path.join(profile, "applications"), applicationId: "test-host",
     electronPath: packagedHost || path.join(electronApp, "Contents/MacOS/Electron"),
-    runtimeArgs: [...(packagedHost ? [] : [clientRoot]), `--user-data-dir=${profile}`],
+    runtimeArgs: [...(packagedHost ? [] : [path.join(clientRoot, "build/app")]), `--user-data-dir=${profile}`],
     createConnection: async () => ({
       context() { if (!live) throw Error("NETWORK_CHANGED"); return { boxId: "fixture", user: { id: 1 }, connection: "ready" }; },
       request(input) { calls.push({ case: activeCase.name, path: input.path }); return { status: 200, headers: { "content-type": "application/json" }, body: Buffer.from('{"ok":true}') }; },
@@ -96,6 +97,8 @@ test("real Electron installs, opens and reactivates all four installation combin
       const child = spawn(file, args, { ...options, env: { ...options.env,
         WANX_TEST_MODE: activeCase.mode, WANX_TEST_CASE: activeCase.name, WANX_TEST_EVIDENCE_DIR: evidence,
       } });
+      probe = fromEnvironment(options.env);
+      t.after(probe.close);
       children.push(child); opened = messageFrom(child, "test:opened");
       // The launch promise may reject before this test-only ready event arrives.
       opened.catch(() => {});
@@ -141,12 +144,16 @@ test("real Electron installs, opens and reactivates all four installation combin
         assert.equal(reactivatedView.visible, true);
         assert.equal(reactivatedView.windowCount, 1);
         assert.equal(children.length, before + 1);
-        const revoked = messageFrom(child, "test:invalidated");
-        live = false; for (const listener of listeners) listener(); await revoked;
-        const revokedView = messageFrom(child, "test:inspected"); child.send({ type: "test:inspect" });
-        assert.equal((await revokedView).revokedRequest, "HOST_SESSION_EXPIRED");
+        await probe.context();
+        const revoked = new Promise(resolve => probe.onSessionInvalidated(resolve));
         const exited = new Promise(resolve => child.once("exit", resolve));
-        await manager.stop(manifest.applicationId); await exited;
+        live = false;
+        for (const listener of listeners) listener();
+        await revoked;
+        await assert.rejects(probe.request("/api/test"), { code: "HOST_SESSION_EXPIRED" });
+        await exited;
+        probe.close();
+        await manager.stop(manifest.applicationId);
         results.push({ case: activeCase.name, version, installed: true, launched: true, visible: true,
           pageLoaded: true, gateway: true, reactivated: true, revoked: true, stopped: true, screenshot: view.screenshot });
       });

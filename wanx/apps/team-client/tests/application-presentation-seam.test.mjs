@@ -31,7 +31,18 @@ async function installedPair(t){
 }
 async function broadcast(create,records){
  let value,resolvePopulated;const errors=[];const populated=new Promise(resolve=>resolvePopulated=resolve);
- const b=create({client:{snapshot:()=>({account:{phase:'authenticated',accountId:'owner'},connection:{deviceId:'synthetic-box',mode:'local'}})},applications:{listInstalled:async()=>records},uiState:{snapshot:()=>({})},startup:{get:()=>({})},windows:()=>[{isDestroyed:()=>false,webContents:{isDestroyed:()=>false,send(_channel,state){value=state;if(state.applications?.length)resolvePopulated();}}}],onError:e=>errors.push(e)});
+ const frame = {
+  isDestroyed: () => false,
+  send(_channel, state) {
+   value = state;
+   if (state.applications?.length) resolvePopulated();
+  },
+ };
+ const window = {
+  isDestroyed: () => false,
+  webContents: { isDestroyed: () => false, isCrashed: () => false, mainFrame: frame, send: frame.send },
+ };
+ const b=create({client:{snapshot:()=>({account:{phase:'authenticated',accountId:'owner'},connection:{deviceId:'synthetic-box',mode:'local'}})},applications:{listInstalled:async()=>records},uiState:{snapshot:()=>({})},startup:{get:()=>({})},windows:()=>[window],onError:e=>errors.push(e)});
  let timer;try{b.publish();await Promise.race([populated,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('UI projection timeout')),5000)})]);}finally{clearTimeout(timer);b.dispose()}assert.deepEqual(errors,[]);return value.applications;
 }
 test('real same-name managed ZIP installations acquire distinct safe environment presentation at the team UI boundary',async t=>{
@@ -83,7 +94,14 @@ test('catalog presentation cannot turn an ordinary panel app into a managed depl
  for(const edition of ['personal-client','team-client']){
   const record={applicationId:'ordinary.dev.app',name:'ordinary'};
   const h=await panel(edition,[record],[{applicationId:record.applicationId,name:'<unsafe>',presentation:{environment:'dev',label:'联调'},deployment:{environment:'prod'}}]);
-  assert.ok(h.html.includes('&lt;unsafe&gt;'));assert.ok(!h.html.includes('data-environment='));
+  if (edition === 'personal-client') {
+   assert.match(h.html, /data-page="memory"/);
+   assert.ok(!h.html.includes(record.applicationId));
+  } else {
+   assert.ok(h.html.includes('&lt;unsafe&gt;'));
+  }
+  assert.ok(!h.html.includes('<unsafe>'));
+  assert.ok(!h.html.includes('data-environment='));
  }
 });
 test('the installed team UI bundle matches the canonical presentation source and keep its whitelist closed',async()=>{

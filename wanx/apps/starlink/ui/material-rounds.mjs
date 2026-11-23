@@ -57,7 +57,7 @@ export class MaterialRounds{
     if(f.saved.conversationId!==item.conversationId||f.state.selectedIntent!==item.intentId||d?.id!==item.intentId||d.document_id!==item.documentId||d.document_version_id!==item.versionId||!materialSourceUsable(d)||f.state.overview?.status!=='active')throw fail('MODELING_SNAPSHOT_CHANGED');
   }
   async enter(){
-    const f=this.f;if(!await f.importer.refreshReady(true))return;
+    const f=this.f;if(f.readerOnly||!await f.importer.refreshReady(true))return;
     const w=f.importer.view.workflow;
     if(active(w)||materialProcessingActive(f,w))return f.run(async()=>{throw fail('MODELING_MATERIAL_BUSY');});
     const previous=unfinishedRound(f,w);
@@ -70,7 +70,7 @@ export class MaterialRounds{
     this.f.emit();
   }
   async start(){
-    const f=this.f,c=this.choice;if(!c||f.state.busy||f.importer.blocked)return;
+    const f=this.f,c=this.choice;if(f.readerOnly||!c||f.state.busy||f.importer.blocked)return;
     let w;
     await f.run(async()=>{await f.ready();w=await this.validate(c);f.state.documents=[w.document];});
     if(!w||f.state.error)return;
@@ -94,6 +94,16 @@ export class MaterialRounds{
       // be forbidden; completing navigation only requires the existing binding.
       const w=await this.validate(r,{creating:false});
       if(!w.conversations.some(l=>l.conversation_id===r.conversationId&&l.intent_id===r.intentId&&l.conversation_status==='active'&&l.round_read_only!==true))throw fail('MODELING_SNAPSHOT_CHANGED');
+      if(f.readerOnly){
+        // An old accepted association can still be recovered into the reader.
+        await f.importer.read(r.documentId);
+        if(f.importer.view?.source.version?.id!==r.versionId)throw fail('MODELING_SNAPSHOT_CHANGED');
+        await f.agent.sync();
+        delete f.saved.roundOpening;
+        try{f.persist();}catch(e){f.saved.roundOpening=r;throw e;}
+        f.state.loaded=true;this.choice=null;
+        return;
+      }
       await f.snapshot();this.bound(r);
       f.state.librarySelection=null;f.state.importDocumentId=null;
       f.agent.clearAutomaticContext();f.state.dialogueExitNotice=null;
@@ -106,10 +116,10 @@ export class MaterialRounds{
       try{f.persist();}catch(e){f.saved.roundOpening=r;throw e;}
       f.state.loaded=true;f.state.materialPage='dialogue';this.choice=null;
     });
-    if(!f.state.error&&pendingMaterialDraft(f.state.dialogueWorkflow))await f.changes.openDraft();
+    if(!f.readerOnly&&!f.state.error&&pendingMaterialDraft(f.state.dialogueWorkflow))await f.changes.openDraft();
   }
   async resume(){
-    const f=this.f,c=this.choice,l=c?.previous;if(!l||f.state.busy||f.importer.blocked)return;
+    const f=this.f,c=this.choice,l=c?.previous;if(f.readerOnly||!l||f.state.busy||f.importer.blocked)return;
     let verified=false;
     await f.run(async()=>{
       const w=await this.validate(c,{creating:false}),latest=unfinishedRound(f,w);
@@ -186,13 +196,21 @@ export class MaterialRounds{
 }
 export function materialRoundHistoryButton(f){return f?.agent?.documentId&&f.state.materialPage!=='import'?button('round-history','历史对话',f.state.busy||!f.state.loaded):'';}
 
+function materialRoundHistoryHTML(f){
+  const h=f.rounds?.history;
+  return h&&h.documentId===f.agent.documentId?`<section class="mw-round-history"><header><h3>历史对话 · 只读</h3>${button('round-history-close','收起历史',f.state.busy)}</header><p>这里只读展示聊天消息，不会切换当前会话或作为本轮指令。旧会话可能包含多份材料。</p>${h.links.map((l,i)=>button('round-history-view',`${i+1}. ${esc(time(f.saved.dialogueRounds?.[l.conversation_id]?.createdAt)||'历史记录')}`,f.state.busy,l.conversation_id)).join('')||'<p>暂无历史对话。</p>'}${h.messages?`<div class="mw-round-transcript">${h.messages.map(m=>`<article><strong>${m.role==='user'?'你':'资料整理'}</strong><small> ${esc(time(m.created_at))}</small><p>${esc(historyText(m))}</p></article>`).join('')||'<p>该记录尚无消息。</p>'}</div>`:''}</section>`:'';
+}
+
 export function materialRoundsHTML(f){
-  const r=f?.rounds;if(!r)return '';const off=f.state.busy||f.importer.blocked,c=r.choice,h=r.history;
-  const choice=c&&c.documentId===f.agent.documentId?`<section class="mw-round-choice cv-notice"><h3>继续上轮，还是开始新一轮？</h3><p>${c.draft?'当前材料有未发布草稿，开始新一轮仍保留草稿内容；编辑前需要确认接管。':'上轮尚有未完成工作。继续上轮会恢复该轮对话；新一轮会隔离旧消息和旧意图。'}开始新一轮不会自动发布、抽取或丢弃草稿。</p>${c.previous?button('round-resume','继续上轮对话',off):''}${button('round-start',c.draft?'保留草稿，开始新一轮':'开始新一轮对话',off)}${button('round-cancel','暂不进入',off)}</section>`:'';
-  const history=h&&h.documentId===f.agent.documentId?`<section class="mw-round-history"><header><h3>历史对话 · 只读</h3>${button('round-history-close','收起历史',f.state.busy)}</header><p>这里只读展示聊天消息，不会切换当前会话或作为本轮指令。旧会话可能包含多份材料。</p>${h.links.map((l,i)=>button('round-history-view',`${i+1}. ${esc(time(f.saved.dialogueRounds?.[l.conversation_id]?.createdAt)||'材料对话')} · ${l.conversation_id===f.saved.conversationId?'当前轮':'历史轮'}`,f.state.busy,l.conversation_id)).join('')||'<p>暂无历史对话。</p>'}${h.messages?`<div class="mw-round-transcript">${h.messages.map(m=>`<article><strong>${m.role==='user'?'你':'整理助手'}</strong><small> ${esc(time(m.created_at))}</small><p>${esc(historyText(m))}</p></article>`).join('')||'<p>该会话尚无消息记录。</p>'}</div>`:''}</section>`:'';
+  const r=f?.rounds;if(!r)return '';const off=f.state.busy||f.importer.blocked,c=r.choice;
   const opening=f.saved.roundOpening||f.saved.intakeSubmission?.newRound;
+  if(f.readerOnly){
+    const recovery=opening&&!f.saved.pending?`<p class="cv-notice">上次材料操作尚未完成。${f.saved.roundOpening?button('round-finish','恢复材料',f.state.busy):''}${button('round-abandon','返回资料库',f.state.busy)}</p>`:'';
+    return recovery+materialRoundHistoryHTML(f);
+  }
+  const choice=c&&c.documentId===f.agent.documentId?`<section class="mw-round-choice cv-notice"><h3>继续上轮，还是开始新一轮？</h3><p>${c.draft?'当前材料有未发布草稿，开始新一轮仍保留草稿内容；编辑前需要确认接管。':'上轮尚有未完成工作。继续上轮会恢复该轮对话；新一轮会隔离旧消息和旧意图。'}开始新一轮不会自动发布、抽取或丢弃草稿。</p>${c.previous?button('round-resume','继续上轮对话',off):''}${button('round-start',c.draft?'保留草稿，开始新一轮':'开始新一轮对话',off)}${button('round-cancel','暂不进入',off)}</section>`:'';
   const recovery=opening&&!f.saved.pending?`<p class="cv-notice">新一轮对话尚未进入。${button('round-finish','继续进入',f.state.busy)}${button('round-abandon','返回材料处理',f.state.busy)}</p>`:'';
-  return recovery+choice+history;
+  return recovery+choice+materialRoundHistoryHTML(f);
 }
 function historyText(message){
   const content=message.content;

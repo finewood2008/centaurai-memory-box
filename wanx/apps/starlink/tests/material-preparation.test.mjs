@@ -6,12 +6,13 @@ import {conversationRequest} from '../shared/conversation-contract.mjs';
 
 function harness(){
   const store=new Map(),calls=[],receipts=new Map();let sequence=0;
-  const db={version:'v',lose:false,wrongReceipt:false,confirmationCount:0,retryCount:0,publication:null,draft:null,stage:'source_ready',
+  const db={suggestions:[],version:'v',lose:false,wrongReceipt:false,confirmationCount:0,retryCount:0,publication:null,draft:null,stage:'source_ready',
     preparation:{status:'awaiting_confirmation',ready:false,source_review:{status:'unconfirmed',confirmation_id:null,confirmed_version_id:null},indexing:{document_version_id:'v',status:'not_started',retryable:false}}};
   const f=new ConversationFlow({warehouseId:'w',identity:{boxId:'b',user:{id:1}},uuid:()=>`op-${++sequence}`,storage:{getItem:k=>store.get(k),setItem:(k,v)=>store.set(k,v)},call:async(action,input)=>{
     calls.push({action,input:structuredClone(input)});
     if(action==='document')return {document:{id:'d',segment_count:1},version:{id:db.version},segments:[{id:'s',text:'正文'}]};
     if(action==='conversation-material-workflow')return structuredClone({document_id:'d',document_version_id:db.version,document:{id:'d',status:'ready'},stage:db.stage,draft:db.draft,publication:db.publication,tasks:[],conversations:[],preparation:db.preparation});
+    if(action==='workbench-request'&&input.method==='GET'&&input.url==='/api/ontology-suggestions/materials')return {items:db.suggestions};
     if(['conversation-source-confirm','conversation-index-retry'].includes(action)){
       assert.equal(input.documentVersionId,db.version);
       let result=receipts.get(input.operationId);
@@ -53,7 +54,7 @@ test('local confirmation cannot fake server confirmation; durable confirmation s
   assert.match(materialImportHTML(f,''),/索引任务正在排队/);assert.equal(f.importer.complete,false);
   delete f.saved.importReviews;await f.importer.read('d');assert.equal(f.importer.confirmed,true);
   db.preparation.ready=true;db.preparation.indexing.status='ready';await f.importer.read('d');assert.equal(f.importer.complete,true);
-  assert.equal(calls.some(c=>c.action==='workbench-request'||c.action==='conversation-processing-confirm'),false);
+  assert.equal(calls.some(c=>c.action==='workbench-request'&&c.input.method!=='GET'||c.action==='conversation-processing-confirm'),false);
 });
 
 test('server-exempt historical material stays ready across reopening without local confirmation or writes',async()=>{
@@ -83,9 +84,9 @@ test('a shared index update preserves published material and never starts anothe
     assert.match(html,/不会重新抽取当前材料/);assert.doesNotMatch(html,/服务端正在建立索引/);
     assert.equal(f.importer.complete,false);
   }
-  assert.ok(calls.every(call=>['document','conversation-material-workflow'].includes(call.action)));
+  assert.ok(calls.every(call=>['document','conversation-material-workflow'].includes(call.action)||call.action==='workbench-request'&&call.input.method==='GET'));
   db.preparation.indexing.status='ready';db.preparation.ready=true;await f.importer.read('d');
-  assert.equal(f.importer.complete,true);assert.doesNotMatch(materialImportHTML(f,''),/数据仓检索索引正在更新/);
+  assert.equal(f.importer.complete,true);assert.doesNotMatch(materialImportHTML(f,''),/星图检索索引正在更新/);
 });
 
 test('a publication for an older body version does not label a first index build as maintenance',async()=>{
@@ -142,4 +143,20 @@ test('fresh publication removes the pending review entry; a genuine new draft pr
   assert.doesNotMatch(materialImportHTML(f,''),/有未发布修改/);
   db.draft.has_changes=true;await f.importer.read('d');
   assert.match(materialImportHTML(f,''),/已发布 · 有未发布修改/);
+});
+
+test('reading material shows background suggestions for its current version without generating them',async()=>{
+  const {f,db,calls}=harness();
+  db.suggestions=[{document_id:'d',document_version_id:'v',status:'running',count:0}];
+  await f.importer.read('d');
+  assert.match(materialImportHTML(f,''),/正在构建本体建议/);
+  f.importer.view.ontologyCheckedAt=0;
+  db.suggestions[0]={...db.suggestions[0],status:'completed',count:2};
+  await f.importer.read('d');
+  assert.match(materialImportHTML(f,''),/核对本体建议（2）/);
+  assert.equal(f.importer.confirmed,false);
+  db.version='v-new';
+  await f.importer.read('d');
+  assert.doesNotMatch(materialImportHTML(f,''),/核对本体建议（2）/);
+  assert.ok(calls.filter(c=>c.action==='workbench-request').every(c=>c.input.method==='GET'));
 });

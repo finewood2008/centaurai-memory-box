@@ -6,6 +6,7 @@ import { workbenchFailure } from './workbench-errors.mjs';
 import { onboardingActions, onboardingRequest, identityKey } from '../shared/onboarding-contract.mjs';
 import {ontologyDialogueRequest} from '../shared/ontology-dialogue-contract.mjs';
 import {conversationActions,conversationRequest,uploadBinding} from '../shared/conversation-contract.mjs';
+import {starxiaotuIntentRequest,validateStarxiaotuDecision} from '../shared/starxiaotu-intent.mjs';
 
 const fail = (code, message) =>
   Object.assign(new Error(message || code), { code, publicMessage: message });
@@ -346,7 +347,7 @@ export class SemanticaService {
         filename: file.name,
         size_bytes: file.size,
         sha256: digest,
-        ...(binding||{}),
+        ...(binding || { source_review_required: true }),
       },
     });
     if (begun.document) {
@@ -482,6 +483,20 @@ export class SemanticaService {
   }
   async call(action, input = {}) {
     this.assertLive();
+    if(action==='assistant-intent') {
+      const {path,...options}=starxiaotuIntentRequest(input);
+      const generation=this.warehouseGeneration;
+      const before=await this.host.context();
+      this.assertLive();
+      if(generation!==this.warehouseGeneration)throw fail('WAREHOUSE_CHANGED');
+      if(this.context && identityKey(before)!==identityKey(this.context)){this.invalidate();throw fail('HOST_SESSION_EXPIRED');}
+      const result=await this.api(path,{...options,workbench:true});
+      const after=await this.host.context();
+      this.assertLive();
+      if(identityKey(before)!==identityKey(after)){this.invalidate();throw fail('HOST_SESSION_EXPIRED');}
+      if(generation!==this.warehouseGeneration)throw fail('WAREHOUSE_CHANGED');
+      return validateStarxiaotuDecision(result);
+    }
     if (onboardingActions.has(action) || conversationActions.has(action)) {
       const request = onboardingActions.has(action)?onboardingRequest(action, input):conversationRequest(action,input);
       const generation = this.warehouseGeneration;
@@ -521,6 +536,10 @@ export class SemanticaService {
       if (!warehouse || !/^\/api\/[A-Za-z0-9_/?=&%.,:+-]+$/.test(input.url || "")) throw fail("INVALID_RESOURCE");
       const url = new URL(input.url, "http://localhost"); url.searchParams.delete("workspace_id");
       const method = input.method || "GET";
+      if (input.operationId !== undefined && (method !== "POST" || url.search || input.editor !== undefined ||
+          !/^\/api\/ontologies(?:\/[A-Za-z0-9_-]{1,128}\/publish)?$/.test(url.pathname) ||
+          typeof input.operationId !== "string" || !/^[A-Za-z0-9_-]{1,120}$/.test(input.operationId)))
+        throw fail("INVALID_RESOURCE");
       const ontologyDialogue=ontologyDialogueRequest(url,method,input);
       if(ontologyDialogue){
         const generation=this.warehouseGeneration;
@@ -594,6 +613,17 @@ export class SemanticaService {
         }
       }
       const body = input.body ? JSON.parse(input.body) : {}; delete body.workspace_id;
+      const jobRetry = method === 'POST' && /^\/api\/jobs\/([A-Za-z0-9_-]{1,128})\/retry$/.exec(url.pathname);
+      if (jobRetry) {
+        if (url.search || Object.keys(body).some(key => key !== 'operation_id') || input.editor !== undefined) throw fail('INVALID_RESOURCE');
+        const operationId = body.operation_id === undefined ? randomUUID() : resource(body.operation_id);
+        const generation = this.warehouseGeneration;
+        const result = await api('/jobs/' + jobRetry[1] + '/retry', {
+          method, body: { operation_id: operationId }, workbench: true,
+        });
+        if (generation !== this.warehouseGeneration) throw fail('WAREHOUSE_CHANGED');
+        return result;
+      }
       const editor = input.editor;
       const editorTarget = /^\/api\/documents\/[A-Za-z0-9_-]+\/corrections(?:\/[A-Za-z0-9_/-]+)?$/.test(url.pathname) ||
         method === 'POST' && /^\/api\/knowledge-releases\/[A-Za-z0-9_-]+\/documents\/[A-Za-z0-9_-]+\/restore$/.test(url.pathname);
@@ -610,7 +640,11 @@ export class SemanticaService {
         return result;
       }
       if (editor) body._native_editor = editor;
-      if(method !== "GET") body._native_operation_id = body.operation_id || randomUUID();
+      if (input.operationId !== undefined &&
+          Object.keys(body).sort().join(',') !== (url.pathname === '/api/ontologies' ? 'name,schema' : ''))
+        throw fail("INVALID_RESOURCE");
+      if (method !== "GET") body._native_operation_id = input.operationId || body.operation_id || randomUUID();
+      if (url.pathname === '/api/sensitive/settings') delete body.operation_id;
       const generation = this.warehouseGeneration;
       // The workbench automatically reads a selected ready material on every view.
       // Reuse the existing scoped typed read; do not widen the workbench facade.
@@ -653,7 +687,9 @@ export class SemanticaService {
       case "delete-skill":
         return api("/skills/" + resource(input.id) + "/delete", {method:"POST",body:{...input.confirmation,operation_id:input.operationId || randomUUID()}});
       case "processing":
-        return this.api(processingEndpoint() + (this.localDataGateMode === 'required' || input.scope === "default" || !warehouse ? "" : "?warehouse_id=" + warehouse));
+        // The box validates this selector against the signed path in required mode.
+        // Semantica uses it to select the project profile rather than the owner default.
+        return this.api(processingEndpoint() + (input.scope === "default" || !warehouse ? "" : "?warehouse_id=" + warehouse));
       case "model-catalog":
         return this.api(processingEndpoint('/catalog'));
       case "check-models":
@@ -700,6 +736,7 @@ export class SemanticaService {
             operation_id: resource(input.operationId),
             name: input.name,
             description: input.description || "",
+            ...(input.warehouseScope ? {warehouse_scope: input.warehouseScope} : {}),
           },
         });
       case "warehouse":

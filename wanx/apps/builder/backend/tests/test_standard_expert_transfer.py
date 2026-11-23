@@ -18,7 +18,7 @@ async def test_verified_expert_transfer_can_be_adopted_and_edited_under_current_
     original=deepcopy(svc.store.get('alice',p['id'])['artifacts'][-1])
     svc.versions.adopt('alice',p['id'],{'operationId':uuid4().hex,'expectedRevision':p['versioning']['revision'],'artifactHash':original['hash'],'confirmedByUser':True})
     bundle=svc.export_standard_version('alice',p['id'],original['hash'])
-    frozen=original['snapshot']['contracts']['foundation']['expertDeployment']
+    frozen=original['snapshot']['contracts']['wanx.expert-app.v1']['expertDeployment']
     # These editable/export-side assertions are not the frozen source contract.
     bundle['project']['deploymentExpert']={'profile':'wanx-expert-app-v1','revision':999,'template':{'resourceId':'other'}}
     bundle['project']['expertBinding']={'agentId':'foreign','owner':'alice'}

@@ -14,8 +14,12 @@ test('import preview distinguishes absent, pending and review annotations and es
 test('annotation materials render separately without inventing evidence or quoting document starts', () => {
   assert.equal(relatedMaterialsHTML({items:[{id:'evidence'}]}), '');
   const html = relatedMaterialsHTML({annotationDocuments:[{documentId:'doc1',title:'资料',text:'不是问题证据',annotation:{tags:['项目']}},
+    {documentId:'doc2',versionId:'version2',title:'标注命中',annotationMatch:{tags:['甲,乙'],description:'说明内容'}},
     {documentId:'invalid/path',title:'不能打开'}]});
   assert.match(html, /相关材料/); assert.match(html, /data-source="doc1"/);
+  assert.match(html, /标签命中 · <span class="pill">甲,乙<\/span>/);
+  assert.match(html, /说明命中 · 说明内容/);
+  assert.match(html, /data-source="doc2" data-source-version="version2"/);
   assert.ok(!html.includes('不是问题证据')); assert.ok(!html.includes('invalid/path'));
 });
 

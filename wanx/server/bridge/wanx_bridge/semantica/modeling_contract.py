@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import re
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -19,6 +19,7 @@ ROOT_RULES = [
     ("POST", rf"/modeling/onboarding/{ID}/warehouse", frozenset()),
 ]
 WAREHOUSE_RULES = [
+    ("POST", r"/modeling/assistant-intent", frozenset()),
     ("GET", r"/modeling/suggestion-context", frozenset()),
     ("POST", r"/modeling/warehouse-scope/publish", frozenset()),
     ("POST", r"/modeling/answer-confirmations", frozenset()),
@@ -44,6 +45,10 @@ ERROR_CODES = frozenset(
         "MODELING_SUGGESTION_BUSY",
         "MODELING_SUGGESTION_TIMEOUT",
         "MODELING_SUGGESTION_FAILED",
+        "MODELING_INTENT_INVALID",
+        "MODELING_INTENT_UNAVAILABLE",
+        "MODELING_INTENT_DEPENDENCY_MISSING",
+        "MODELING_INTENT_TIMEOUT",
     }
 )
 
@@ -83,7 +88,16 @@ class SaveOnboarding(Revision):
     status: Literal["in_progress", "skipped", "completed"] = "in_progress"
 
 
-class WarehouseScope(StrictBody):
+ScopeObject = Annotated[str, Field(min_length=1, max_length=300, pattern=r"\S")]
+
+
+class CreationProfile(StrictBody):
+    occupation: str = Field(default="", max_length=200)
+    service_objects: list[ScopeObject] = Field(default_factory=list, max_length=6)
+    focus_objects: list[ScopeObject] = Field(default_factory=list, max_length=6)
+
+
+class WarehouseScope(CreationProfile):
     industry: str = Field(
         default="", max_length=200, description="Warehouse industry/business domain"
     )
@@ -120,7 +134,18 @@ class GenerateSuggestions(Operation):
     base_ontology_id: str = Field(min_length=1, max_length=120)
 
 
+class AssistantIntent(Operation):
+    version: Literal[2]
+    text: str = Field(min_length=1, max_length=2000)
+    page: str = Field(min_length=1, max_length=40)
+    context: dict
+    history: list[dict] = Field(max_length=4)
+    ontology_conversation: bool
+
+
 def body_model(path: str) -> type[BaseModel]:
+    if path == '/modeling/assistant-intent':
+        return AssistantIntent
     if path == "/modeling/onboarding":
         return SaveOnboarding
     if re.fullmatch(rf"/modeling/onboarding/{ID}/warehouse", path):
@@ -149,6 +174,9 @@ def prepare(method, path, body, query):
     if method == "GET":
         return None, None
     parsed = body_model(path).model_validate(body)
+    if isinstance(parsed, AssistantIntent):
+        from centuarai_local_data_gate.starxiaotu_intent import validate_request
+        validate_request(body)
     # Do not fill omitted optional fields: the owner stores request digests.
     if isinstance(parsed, PublishWarehouseScope):
         from centuarai_local_data_gate.semantica_bootstrap import validate_scope_changes
@@ -169,6 +197,7 @@ def upstream_path(path: str, headers: dict[str, str]) -> str:
 
 # Explicit OpenAPI entries, sharing the authenticated desktop handler.
 API_ROUTES = [
+    ('POST', '/warehouses/{warehouse_id}/modeling/assistant-intent', 'Classify a bounded assistant request without executing it', AssistantIntent),
     ("GET", "/modeling/onboarding", "Read the current user's onboarding answers", None),
     (
         "POST",

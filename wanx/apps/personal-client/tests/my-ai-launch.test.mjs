@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -9,6 +9,8 @@ import test from "node:test";
 import { createMyAiLauncher, openWindowsTerminal } from "../shell/my-ai-launch.mjs";
 import { runLaunchReview } from "../shell/my-ai-launch-review.mjs";
 import { resolveWindowsCli } from "../shell/my-ai-windows-cli.mjs";
+import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 
 async function fixture(t, options = {}) {
   const root = await mkdtemp(path.join(tmpdir(), "my-ai-launch-"));
@@ -51,6 +53,7 @@ test("launcher stages a private literal payload and does not start any CLI befor
   const answer = new Promise(resolve => { release = resolve; });
   const spawned = [], output = [];
   const run = runLaunchReview(file, {
+    platform: "darwin", env: { PATH: "/usr/bin:/bin", ELECTRON_RUN_AS_NODE: "1" },
     question: async () => answer, output: { write: value => { output.push(value); } },
     spawnChild(...args) { spawned.push(args); return successfulChild(); },
   });
@@ -61,6 +64,7 @@ test("launcher stages a private literal payload and does not start any CLI befor
   assert.deepEqual(spawned[0][1], ["--", h.prompt]);
   assert.equal(spawned[0][2].shell, false);
   assert.equal(spawned[0][2].env.ELECTRON_RUN_AS_NODE, undefined);
+  assert.ok(spawned[0][2].env.PATH.split(":").includes("/opt/homebrew/bin"));
   assert.doesNotMatch(output.join(""), /\u001b/);
   await assert.rejects(readFile(file), { code: "ENOENT" });
 });
@@ -135,6 +139,12 @@ test("Windows resolves global and workspace npm shims without passing arguments 
     assert.deepEqual(command.args.slice(1), args);
     assert.equal(command.runAsNode, true);
     assert.equal(path.basename(command.args[0]), "cli.js");
+    const consoleRuntime = path.join(prefix, "Node runtime");
+    await mkdir(consoleRuntime);
+    const node = path.join(consoleRuntime, "node.exe");
+    await writeFile(node, "fixture, never executed");
+    assert.equal((await resolveWindowsCli(shim, args, { node: null, env: { PATH: consoleRuntime } })).executable, node);
+    await assert.rejects(resolveWindowsCli(shim, args, { node: null, env: { PATH: "" } }), /需要 Node.js/);
     await writeFile(path.join(moduleRoot, "package.json"), JSON.stringify({ name: "@google/gemini-cli", bin: { gemini: "../outside.js" } }));
     await assert.rejects(resolveWindowsCli(shim, args), /程序入口/);
   }
@@ -152,7 +162,7 @@ test("Windows confirmation rejects a changed account or box and removes the pend
   await assert.rejects(readFile(script), { code: "ENOENT" });
 });
 
-for (const runtime of ["node", "electron"]) test(`Windows PowerShell executes the ${runtime} review and npm CLI with literal multiline arguments`, { skip: process.platform !== "win32" }, async t => {
+for (const runtime of ["node", "electron"]) for (const confirm of [true, false]) test(`Windows PowerShell ${runtime} ${confirm ? "confirms literal multiline arguments" : "rejects closed input without starting the CLI"}`, { skip: process.platform !== "win32", timeout: 20000 }, async t => {
   const root = await mkdtemp(path.join(tmpdir(), "任务 ' & $启动-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const moduleRoot = path.join(root, "node_modules", "@google", "gemini-cli");
@@ -162,20 +172,28 @@ for (const runtime of ["node", "electron"]) test(`Windows PowerShell executes th
   const shim = path.join(root, "gemini.cmd");
   await writeFile(shim, "@echo must-not-execute\r\nexit /b 1\r\n");
   const prompt = '你好 "quoted" & | %PATH% $(Write-Output bad) `echo bad`\nline two';
-  let child;
+  let child, completed;
   let stdout = "", stderr = "";
   const executable = runtime === "electron" ? createRequire(import.meta.url)("electron") : process.execPath;
   const launcher = createMyAiLauncher({ directory: path.join(root, "待确认"), executable, platform: "win32",
     getScope: () => "synthetic/owner/box", openTerminal: async file => {
       const powershell = path.join(process.env.SystemRoot, "System32/WindowsPowerShell/v1.0/powershell.exe");
       child = spawn(powershell, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", file], { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+      completed = new Promise((resolve, reject) => { child.once("error", reject); child.once("exit", resolve); });
       child.stdout.on("data", bytes => { stdout += bytes; });
       child.stderr.on("data", bytes => { stderr += bytes; });
     } });
   t.after(() => { child?.kill(); return launcher.close(); });
   await launcher.prepare({ agent: "Gemini CLI", executable: shim, args: ["--prompt-interactive", prompt], prompt, cwd: root });
-  child.stdin.end("\n");
-  const code = await new Promise((resolve, reject) => { child.once("error", reject); child.once("exit", resolve); });
+  child.stdin.end(confirm ? "\n" : "");
+  const code = await completed;
+  if (!confirm) {
+    assert.equal(code, 1);
+    assert.match(stderr, /终端输入已关闭，任务未启动/);
+    assert.equal(await stat(path.join(root, "argv.json")).catch(() => null), null);
+    assert.deepEqual(await readdir(path.join(root, "待确认")), []);
+    return;
+  }
   assert.equal(code, 0, stderr);
   assert.match(stdout, /核对后按 Enter/, stderr);
   assert.equal((await stat(path.join(root, "argv.json")).catch(() => null))?.isFile(), true, JSON.stringify({ stdout, stderr }));
@@ -194,6 +212,51 @@ test("Windows terminal uses ShellExecute and only reports ready after the review
   const h = await fixture(t, { platform: "win32", terminalTimeoutMs: 70, openTerminal: async () => {} });
   await assert.rejects(h.prepare(), /核对窗口未就绪/);
   assert.deepEqual(await readdir(path.join(h.root, "pending")), []);
+});
+
+for (const mode of ["native", "npm", "cancel"]) test(`Windows Electron ${mode} review and CLI read real console keys without stdin pipes`, { skip: process.platform !== "win32" || process.env.WANX_TEST_CONSOLE !== "1", timeout: 35000 }, async t => {
+  const root = await mkdtemp(path.join(tmpdir(), "my-ai-real-console-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const driver = path.join(root, "console.exe");
+  const framework = path.join(process.env.SystemRoot, "Microsoft.NET/Framework64/v4.0.30319/csc.exe");
+  await promisify(execFile)(framework, ["/nologo", "/target:exe", "/out:" + driver,
+    fileURLToPath(new URL("./fixtures/hidden-console.cs", import.meta.url))]);
+  const packageRoot = path.join(root, "node_modules", "@google", "gemini-cli");
+  await mkdir(packageRoot, { recursive: true });
+  const entry = path.join(packageRoot, "cli.cjs"), result = path.join(root, "result.json");
+  await writeFile(path.join(packageRoot, "package.json"), JSON.stringify({ name: "@google/gemini-cli", bin: { gemini: "cli.cjs" } }));
+  const shim = path.join(root, "gemini.cmd");
+  await writeFile(shim, "@echo must-not-execute\r\nexit /b 1\r\n");
+  const send = path.join(root, "send-input");
+  await writeFile(entry, `const fs=require('node:fs'); const readline=require('node:readline');
+    const result={tty:[!!process.stdin.isTTY,!!process.stdout.isTTY,!!process.stderr.isTTY],args:process.argv.slice(2)};
+    fs.writeFileSync(${JSON.stringify(result)},JSON.stringify(result));
+    const rl=readline.createInterface({input:process.stdin,output:process.stdout});
+    rl.question('CLI second confirmation: ', answer=>{result.answer=answer;fs.writeFileSync(${JSON.stringify(result)},JSON.stringify(result));rl.close();});`);
+  let child, completed;
+  const launcher = createMyAiLauncher({ directory: path.join(root, "pending"), platform: "win32",
+    executable: createRequire(import.meta.url)("electron"), getScope: () => "isolated/console/session",
+    openTerminal: async script => {
+      child = spawn(driver, [path.join(process.env.SystemRoot, "System32/WindowsPowerShell/v1.0/powershell.exe"),
+        script, send, mode === "cancel" ? "cancel\r" : "\r", ...(mode === "cancel" ? [] : [result, "console input\r"])], { windowsHide: true, stdio: "ignore" });
+      completed = new Promise((resolve, reject) => { child.once("error", reject); child.once("exit", resolve); });
+    } });
+  t.after(() => { child?.kill(); return launcher.close(); });
+  const prompt = '中文 "quoted" & | $(Write-Output bad)\nline two';
+  await launcher.prepare({ agent: "Fixture CLI", executable: mode === "npm" ? shim : process.execPath,
+    cwd: root, args: mode === "npm" ? ["--prompt-interactive", prompt] : [entry, prompt], prompt });
+  await writeFile(send, "ready");
+  const code = await completed;
+  const value = JSON.parse(await readFile(result, "utf8").catch(() => "{}"));
+  assert.equal(code, 0, JSON.stringify(value));
+  if (mode === "cancel") {
+    assert.deepEqual(value, {});
+    assert.deepEqual(await readdir(path.join(root, "pending")), []);
+    return;
+  }
+  assert.deepEqual(value.tty, [true, true, true]);
+  assert.equal(value.answer, "console input");
+  assert.deepEqual(value.args, mode === "npm" ? ["--prompt-interactive", prompt] : [prompt]);
 });
 
 test("long Chinese drafts survive serialization, and oversized tasks fail before opening a terminal", async t => {

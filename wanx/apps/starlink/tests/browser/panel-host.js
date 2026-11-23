@@ -34,10 +34,15 @@ if (document.documentElement.dataset.sample === "true") {
   }
 }
 const fixtureModel = { id: 'fixture-model', name: '验收模型', location: 'local', route: 'wanx', available: true, revision: 1, inference_options: { thinking_modes: ['auto'] } };
-const fixtureProcessing = { revision: 1, inherit: false, stages: [], affected_warehouses: [],
+const fixtureProcessing = { revision: 1, inherit: false, affected_warehouses: [],
+  stages: [{ role: 'embedding', name: '验收向量模型', location: 'external', available: true }],
   effective: { mode: 'automatic', extraction: fixtureModel, inference_options: { thinking_mode: 'auto' } } };
 const fixtureJob = { id: 'failed-job', kind: 'search_index', status: 'failed', stage: 'failed', document_name: '测试材料.txt',
   updated_at: '2026-11-17T00:00:00Z', error_message: '合成失败原因', completed_units: 2, total_units: 5 };
+const sensitivePolicies = new Map();
+const defaultPolicy = { enabled: true, semantic_enabled: false, revision: 0, rules: [], builtin_defaults: [],
+  rule_capacity: { max_custom: 30, prompt_limit: 5000 }, scan: { status: 'not_started' } };
+window.fixtureSensitivePolicies = sensitivePolicies;
 window.fixtureWarehouses = [warehouse, { ...warehouse, id: 'second', name: '第二验收仓' }];
 window.fixtureLaunchTarget = { requestId: 'fixture', target: { warehouseId: warehouse.id, view: 'search' } };
 window.fixtureCalls = [];
@@ -74,10 +79,46 @@ window.fixturePanel = window.createStarlinkPanelView({
     else if (action === 'document') value = { document: { id: input.id, original_name: '测试材料.txt', document_format: 'txt', size_bytes: 16, segment_count: 1 },
       version: { id: 'fixture-version', version_number: 1 }, segments: [{ id: 'fixture-segment', text: '校对前正文' }] };
     else if (action === 'workbench-request') {
-      if (input.url === '/api/ontologies' && input.method === 'POST') {
+      if (input.url.startsWith('/api/ontology-suggestions/materials?') || input.url === '/api/ontology-suggestions/materials') {
+        value = {items:window.fixtureOntologyTask ? [{document_id:'doc',document_version_id:'cited-version',
+          status:window.fixtureOntologyTask,count:window.fixtureOntologyTask==='completed'?1:0}] : []};
+      }
+      else if (input.url === '/api/ontology-suggestions/materials/doc/review' && input.method === 'POST') {
+        value = {id:'material-preview', base_ontology_id:'sample-schema', documents:[
+          {id:'doc',version_id:'cited-version',name:'引用测试.txt',sampled_segments:1,total_segments:1,truncated:false}
+        ],suggestions:[{id:'auto-type',kind:'entity',name:'FEATURE',label:'功能',definition:'资料中描述的功能',reason:'原文说明了功能',
+          similar_to:[],evidence:{document_id:'doc',version_id:'cited-version',segment_id:'cited-segment',
+            document_name:'引用测试.txt',quote:'引用版正文'}}]};
+      }
+      else if (input.url.startsWith('/api/sensitive/settings')) {
+        const policy = sensitivePolicies.get(input.warehouseId) || defaultPolicy;
+        value = policy;
+        if (input.method === 'POST') {
+          if (window.fixturePauseSensitiveSave) await new Promise(resolve => { window.fixtureReleaseSensitiveSave = resolve; });
+          const { expected_revision, enabled, semantic_enabled, rules } = JSON.parse(input.body);
+          if (expected_revision !== policy.revision) return { ok: false, code: 'SENSITIVE_REVISION_CONFLICT', status: 409 };
+          value = { ...policy, revision: policy.revision + 1, enabled, semantic_enabled, rules };
+          sensitivePolicies.set(input.warehouseId, value);
+        }
+      }
+      else if (input.url === '/api/sensitive/preview') {
+        const { text, expected_revision } = JSON.parse(input.body);
+        const policy = sensitivePolicies.get(input.warehouseId) || defaultPolicy;
+        if (expected_revision !== policy.revision) return { ok: false, code: 'SENSITIVE_REVISION_CONFLICT', status: 409 };
+        const savedRule = policy.rules[0];
+        value = savedRule ? { text: text.replace(savedRule.name, savedRule.mask), status: 'masked' } : { text, status: 'clean' };
+      }
+      else if (input.url === '/api/ontologies' && input.method === 'POST') {
         const { name, schema } = JSON.parse(input.body);
         value = { id: 'sample-draft', name, schema, status: 'draft', version_number: 2 };
         ontologyVersions.unshift(value);
+      }
+      else if (input.url === '/api/ontologies/sample-draft/publish' && input.method === 'POST') {
+        const draft = ontologyVersions.find(item => item.id === 'sample-draft');
+        const current = ontologyVersions.find(item => item.status === 'published');
+        if (current) current.status = 'superseded';
+        draft.status = 'published';
+        value = draft;
       }
       else if (input.url.includes('ontologies')) value = { items: ontologyVersions };
       else if (input.url.includes('settings/status')) value = { version: 'fixture', phase: 'ready', native_owner_management: true, document_formats: [], local_models: {} };
@@ -139,4 +180,3 @@ window.fixturePanel = window.createStarlinkPanelView({
 });
 window.fixturePanel.sync({ canLaunchApplications: true, account: { accountId: 'fixture' }, connection: { deviceId: 'fixture-box' } }, true, true);
 window.fixturePanel.mount();
-document.getElementById('starlink-banner-create').addEventListener('click', () => window.fixturePanel.action('new-warehouse'));

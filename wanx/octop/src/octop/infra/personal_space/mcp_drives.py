@@ -191,6 +191,7 @@ class McpDrives(AgentHub):
             "restore",
             "purge",
             "previous",
+            "edit-create",
             "upload-create",
             "upload-chunk",
             "upload-complete",
@@ -246,6 +247,10 @@ class McpDrives(AgentHub):
                     return {"ok": True}
                 if action == "previous":
                     return store.restore_version(item, p["expected"])
+                if action == "edit-create":
+                    return store.begin_text_edit(
+                        item, p["expected"], p["upload_id"], p["size"], p["digest"]
+                    )
                 if action == "upload-create":
                     return store.upload_create(parent, p["name"], p["size"], item, d["id"])
                 if action == "upload-status":

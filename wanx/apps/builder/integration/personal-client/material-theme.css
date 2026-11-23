@@ -258,3 +258,9 @@ body[data-wanx-surface] :is(.button.primary,.ai-collapsed-new,.ai-send,.ai-conne
 @media(max-width:760px){
  .ai-assistant-workbench,.ai-dialogue.history-collapsed .ai-assistant-workbench{grid-template-columns:minmax(0,1fr)}
 }
+.starlink-banner-actions .button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.starlink-banner-project-name { max-width: clamp(60px, 16vw, 205px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.starlink-banner-caret { width: 7px; height: 7px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: translateY(-2px) rotate(45deg); }
+@media (max-width: 680px) {
+  .starlink-banner-actions { flex-wrap: wrap; }
+}

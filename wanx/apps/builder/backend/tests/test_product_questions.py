@@ -8,6 +8,7 @@ import pytest
 from test_preparation import env, op
 from test_continuous_conversation import ready
 from test_discovery import solution
+from test_prd_completeness import assess, prepared
 from wanx_studio.contracts import StudioError, digest
 from wanx_studio.iterative import proposal
 from wanx_studio.product_questions import add_question, pending_choices
@@ -98,9 +99,18 @@ async def test_legacy_single_question_blocks_initial_review_but_preserves_direct
     assert not pending_choices(p)
 
 
+async def reviewed_project(env):
+    svc, pid = await prepared(env)
+    assert (await assess(svc, pid))['complete']
+    p = svc.store.get('alice', pid)
+    interview = p['preparation']['interview']
+    interview['state'] = interview['turns'][0]['state'] = 'completed'
+    svc.store.save(p)
+    return svc, p
+
+
 async def test_first_build_requires_full_prd_before_confirmation(env):
-    svc,pid,_=env;p=svc.store.get('alice',pid)
-    p['solution']=solution();p['solution']['capabilities']=[]
+    _, p = await reviewed_project(env)
     assert proposal(p)['ready']
     p['solution']['prd']['pages']=[]
     assert not proposal(p)['ready']
@@ -108,9 +118,8 @@ async def test_first_build_requires_full_prd_before_confirmation(env):
 
 
 async def test_public_readiness_does_not_claim_pending_choices_are_complete(env):
-    svc,pid,_=env;p=svc.store.get('alice',pid)
-    p['solution']=solution();p['solution']['capabilities']=[];p['preparation']['phase']='acp'
-    p['preparation']['interview'].update(state='completed',sync='saved')
+    svc, p = await reviewed_project(env)
+    pid = p['id']
     p['confirmation']={'hash':digest(p['solution'])}
     p['messages'].append({'id':'pending','role':'assistant','text':'请共同核对','questions':[question(1),question(2)]})
     svc.store.save(p);svc.preparation.valid_report=lambda *a,**kw:True

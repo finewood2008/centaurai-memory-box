@@ -3,7 +3,7 @@ from copy import deepcopy
 
 import pytest
 from test_studio import ROOT, op
-from test_workshop import source
+from standard_build_fixture import seeded, workspace_files
 from wanx_studio.contracts import StudioError
 from wanx_studio.service import StudioService
 from wanx_studio.versions import next_version, state
@@ -47,24 +47,37 @@ async def test_project_trash_preserves_files_until_purge_reclaims_disk_bytes(sam
 
 @pytest.fixture
 async def sample(tmp_path):
-    original = StudioService(tmp_path / "original", ROOT)
-    from wanx_studio.runner import Runner
-
-    original.runner = Runner(original)
     service = PersonalWorkshop(tmp_path / "workshop", ROOT)
-    p = await service.copy_source(
-        "alice", {"operationId": op(), "name": "管理验证", "source": await source(original)}
-    )
-    # Restore creates genuine immutable compiled copies, without model/network use.
-    for _ in range(3):
-        p = service.store.get("alice", p["id"])
-        check = service.versions.restore_check("alice", p["id"], p["artifacts"][-1]["hash"])
-        service.versions.restore(
-            "alice", p["id"], {**check, "operationId": op(), "confirmedByUser": True}, trial=True
-        )
-    yield service, service.store.get("alice", p["id"])
-    await service.close()
-    await original.close()
+    try:
+        builder = StudioService(tmp_path / "builder", ROOT)
+        try:
+            # Use a stable slug across import, which allocates a new project ID.
+            built = await seeded(builder, name="case-manager")
+            first = built["artifacts"][0]["hash"]
+            builder.versions.adopt("alice", built["id"], {
+                "expectedRevision": built["versioning"]["revision"], "operationId": op(),
+                "artifactHash": first, "confirmedByUser": True,
+            })
+            bundle = builder.export_standard_version("alice", built["id"], first)
+            project = service.import_standard_version("alice", bundle, op())
+        finally:
+            await builder.close()
+        for version in range(1, 4):
+            project = service.store.get("alice", project["id"])
+            task = {
+                "id": op(), "state": "running", "solutionHash": project["confirmation"]["hash"],
+                "buildInput": project["confirmation"]["buildInput"], "events": [], "question": None,
+                "baseHash": project["artifacts"][-1]["hash"], "instruction": f"Revision {version}",
+            }
+            project["tasks"].append(task)
+            service.store.save(project)
+            files = workspace_files(service, "alice", project, task["id"])
+            files["app/host.mjs"] += f"\n// revision {version}\n"
+            await service.add_artifact("alice", project["id"], task["id"], files)
+        await service.edits.activate("alice", project["id"])
+        yield service, service.store.get("alice", project["id"])
+    finally:
+        await service.close()
 
 
 def request(p, action, **extra):
@@ -81,7 +94,7 @@ async def test_prune_disk_sources_retries_monotonic_and_data_preserved(sample):
     svc, p = sample
     a = p["artifacts"][1]
     folder = svc.store.root / "tasks" / a["taskId"]
-    folder.mkdir(parents=True)
+    folder.mkdir(parents=True, exist_ok=True)
     (folder / "sources.json").write_text("large source")
     svc.store.db.execute(
         "INSERT INTO records VALUES(?,?,?,?,?,?,?)",
@@ -94,9 +107,8 @@ async def test_prune_disk_sources_retries_monotonic_and_data_preserved(sample):
     assert not folder.exists() and token not in svc.runtime_sessions
     assert manage(svc, "alice", p["id"], body)["cleanedBytes"] == result["cleanedBytes"]
     after = svc.store.get("alice", p["id"])
-    assert next_version(after) == "0.1.4"
     assert svc.store.db.execute("SELECT count(*) FROM records").fetchone()[0] == 1
-    assert a["files"]["src/app.js"] not in json.dumps(after["_cleanedVersions"])
+    assert a["files"]["app/host.mjs"] not in json.dumps(after["_cleanedVersions"])
     assert svc.versions.read("alice", p["id"], p["artifacts"][2]["hash"])["changes"][
         "baselineCleaned"
     ]
@@ -109,6 +121,8 @@ async def test_prune_disk_sources_retries_monotonic_and_data_preserved(sample):
     )
     with pytest.raises(StudioError, match="OPERATION_CONFLICT"):
         manage(svc, "alice", p["id"], {**body, "artifactHash": p["artifacts"][0]["hash"]})
+
+    assert next_version(after) == "0.1.4"
 
 
 async def test_protect_latest_adopted_installed_retry_and_active(sample):
@@ -142,12 +156,11 @@ async def test_archive_restore_and_purge_are_owner_scoped_and_preserve_records(s
     p = svc.store.get("alice", p["id"])
     p["installed"] = {"artifactHash": baseline[0]["hash"], "version": "0.1.0"}
     svc.store.save(p)
-    token = svc.open_installed_runtime("alice", p["appId"], baseline[0]["hash"], "production")[
-        "session"
-    ]
-    await svc.invoke(
-        "alice", token, "data.put", {"collection": "items", "value": {"title": "保留"}}
-    )
+    opened = svc.open_installed_runtime("alice", p["appId"], baseline[0]["hash"], "production")
+    assert opened["packageSha256"] == baseline[0]["packageSha256"]
+    # A historical business record on disk must survive maintenance of its project.
+    stored_row = ("alice", p["appId"], "production", "items", "item", 1, '{"title":"keep"}')
+    svc.store.db.execute("INSERT INTO records VALUES(?,?,?,?,?,?,?)", stored_row)
     with pytest.raises(StudioError, match="WORKSHOP_INSTALLED_PROJECT"):
         manage(svc, "alice", p["id"], request(p, "purge"))
     restored = manage(svc, "alice", p["id"], request(p, "restore"))["project"]
@@ -164,14 +177,15 @@ async def test_archive_restore_and_purge_are_owner_scoped_and_preserve_records(s
     assert svc.store.list("alice") == []
     assert svc.store.db.execute("SELECT count(*) FROM records").fetchone()[0] == 1
     assert not svc.runtime_sessions
-    # A delayed source-copy retry is a tombstone, never a new duplicate project.
+    assert tuple(svc.store.db.execute("SELECT * FROM records").fetchone()) == stored_row
+    # A delayed operation retry is a tombstone, never a new duplicate project.
     assert all(
         json.loads(r[0]).get("purged")
         for r in svc.store.db.execute("SELECT result FROM operations")
     )
 
 
-async def test_stale_revision_and_confirmation_and_schema_audit(sample):
+async def test_cleanup_requires_current_revision_and_confirmation_and_keeps_manifest_audit(sample):
     svc, p = sample
     a = p["artifacts"][0]
     with pytest.raises(StudioError, match="VERSION_CHANGED"):
@@ -188,9 +202,8 @@ async def test_stale_revision_and_confirmation_and_schema_audit(sample):
     )
     svc.store.save(p)
     manage(svc, "alice", p["id"], request(p, "clean-version", artifactHash=a["hash"]))
-    from wanx_studio.versions import compatible_restore
-
     after = svc.store.get("alice", p["id"])
-    bad = deepcopy(after["artifacts"][-1]["manifest"])
-    bad["collections"]["items"]["title"] = "number"
-    assert not compatible_restore(after, bad)
+    assert after["_cleanedVersions"] == [{
+        key: a[key] for key in ("hash", "version", "manifest", "baseHash")
+    }]
+    assert svc.versions.restore_check("alice", p["id"], after["artifacts"][-1]["hash"])["artifactHash"] == after["artifacts"][-1]["hash"]

@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { link, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
@@ -41,7 +41,14 @@ export function createMyAiLauncher({ directory, executable = process.execPath, o
     if (!request || entry.claimed) return;
     entry.claimed = true;
     const approved = !closed && request === id && entry.expires > now() && entry.scope && getScope() === entry.scope;
-    await writeFile(file + ".approved", JSON.stringify({ id, approved }), { flag: "wx", mode: 0o600 }).catch(() => {});
+    const staged = file + ".approved.tmp";
+    try {
+      await writeFile(staged, JSON.stringify({ id, approved }), { flag: "wx", mode: 0o600 });
+      // Publish only a complete response, preserving exclusive creation.
+      await link(staged, file + ".approved");
+    } finally {
+      await rm(staged, { force: true });
+    }
     pending.delete(id);
   }
 
@@ -85,9 +92,13 @@ export function createMyAiLauncher({ directory, executable = process.execPath, o
       await writeFile(file, serialized, { flag: "wx", mode: 0o600 });
       const script = platform === "win32"
         ? "\uFEFF$ErrorActionPreference = 'Stop'\r\n$env:ELECTRON_RUN_AS_NODE = '1'\r\n"
+          + "[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)\r\n"
+          + "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\r\n"
+          + "$OutputEncoding = [Console]::OutputEncoding\r\n"
+          + "$launchArguments = @(" + [helper, file].map(value => powershellQuote('"' + value + '"')).join(", ") + ")\r\n"
           + "$launchProcess = Start-Process -FilePath " + powershellQuote(executable)
-          + " -ArgumentList " + [helper, file].map(value => powershellQuote('"' + value + '"')).join(", ")
-          + " -NoNewWindow -Wait -PassThru\r\nif ($launchProcess.ExitCode -ne 0) { throw '终端任务未正常完成，请检查上方提示。' }\r\n"
+          + " -ArgumentList $launchArguments -NoNewWindow -Wait -PassThru\r\n"
+          + "if ($launchProcess.ExitCode -ne 0) { throw '终端任务未正常完成，请检查上方提示。' }\r\n"
         : "#!/bin/sh\nexec /usr/bin/env ELECTRON_RUN_AS_NODE=1 " + [executable, helper, file].map(quote).join(" ") + "\n";
       await writeFile(commandFile, script, { flag: "wx", mode: 0o700 });
       pending.set(id, { scope, expires, claimed: false });

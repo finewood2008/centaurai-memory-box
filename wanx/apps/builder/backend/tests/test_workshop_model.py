@@ -4,9 +4,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 from test_edits import body, wait
-from test_studio import ROOT, op
-from test_workshop import source
-from test_workshop import svc as svc
+from test_studio import ROOT
+from test_standard_artifacts import standard
 from wanx_studio.contracts import StudioError
 from wanx_studio.workshop import PersonalWorkshop
 
@@ -75,7 +74,10 @@ class DefaultModels:
                 return reply(
                     "not json"
                     if self.invalid
-                    else json.dumps({"outcome": "ready", "summary": "修改页面配色"})
+                    else json.dumps({"outcome": "ready", "summary": "修改页面配色",
+                                      "patch": {"summary": {"workflow": "打开应用，查看配色"},
+                                                "upsert": [{"section": "tests", "value": {"title": "配色", "given": "打开页面", "when": "查看标题", "then": "显示新配色"}}]},
+                                      "runtimeIntent": {"capabilities": [], "execution": "host"}})
                 )
             step = sum(m["role"] == "assistant" for m in request["messages"])
             if step == 0:
@@ -83,7 +85,7 @@ class DefaultModels:
                     calls=[
                         call("list_sources", {}, "list"),
                         call("read_material", {}, "material"),
-                        call("read_source", {"path": "src/styles.css"}, "read"),
+                        call("read_source", {"path": "app/host.mjs"}, "read"),
                     ]
                 )
             if step == 1:
@@ -92,7 +94,7 @@ class DefaultModels:
                         m["content"] for m in request["messages"] if m.get("tool_call_id") == "read"
                     )
                 )["text"]
-                target = "../../outside.js" if self.bad_source else "src/styles.css"
+                target = "../../outside.js" if self.bad_source else "app/host.mjs"
                 return reply(
                     calls=[
                         call(
@@ -129,15 +131,18 @@ async def model_service(tmp_path):
     await service.close()
 
 
-async def copied(svc, service):
-    return await service.copy_source(
-        "alice", {"operationId": op(), "name": "默认模型定制", "source": await source(svc)}
-    )
+def standard_project(standard, service):
+    origin, public = standard
+    project = origin.store.get("alice", public["id"])
+    if service.model:
+        service.engines.bind("alice", project, "wanx-default")
+    service.store.save(project)
+    return project
 
 
-async def test_default_model_tools_compile_and_keep_old_version_without_codex(svc, model_service):
+async def test_default_model_tools_compile_and_keep_old_version_without_codex(standard, model_service):
     service, models = model_service
-    p = await copied(svc, service)
+    p = standard_project(standard, service)
     assert p["engine"]["id"] == "wanx-default"
     await service.edits.submit("alice", p["id"], body(p, "改成浅色"))
     result = await wait(service, p["id"])
@@ -151,10 +156,10 @@ async def test_default_model_tools_compile_and_keep_old_version_without_codex(sv
     service.native_codex.acquire.assert_not_called()
 
 
-async def test_one_round_freezes_default_and_next_round_follows_new_default(svc, model_service):
+async def test_one_round_freezes_default_and_next_round_follows_new_default(standard, model_service):
     service, models = model_service
     models.change_after_plan = True
-    p = await copied(svc, service)
+    p = standard_project(standard, service)
     await service.edits.submit("alice", p["id"], body(p, "第一处修改"))
     first = await wait(service, p["id"])
     assert first["items"][0]["state"] == "completed", first["items"][0].get("error")
@@ -164,7 +169,7 @@ async def test_one_round_freezes_default_and_next_round_follows_new_default(svc,
     second = await wait(service, p["id"])
     assert [e["state"] for e in second["items"]] == ["completed", "completed"]
     assert models.used[-1] == "default-b"
-    css = service.store.get("alice", p["id"])["artifacts"][-1]["files"]["src/styles.css"]
+    css = service.store.get("alice", p["id"])["artifacts"][-1]["files"]["app/host.mjs"]
     assert "default-a" in css and "default-b" in css
 
 
@@ -173,10 +178,10 @@ async def test_one_round_freezes_default_and_next_round_follows_new_default(svc,
     [("invalid", "WORKSHOP_MODEL_RESPONSE_INVALID"), ("fail", "MODEL_UPSTREAM_FAILED")],
 )
 async def test_invalid_or_unavailable_model_keeps_old_version_and_input(
-    svc, model_service, mode, code
+    standard, model_service, mode, code
 ):
     service, models = model_service
-    p = await copied(svc, service)
+    p = standard_project(standard, service)
     setattr(models, mode, True)
     await service.edits.submit("alice", p["id"], body(p, "原话保留"))
     result = await wait(service, p["id"])
@@ -188,9 +193,9 @@ async def test_invalid_or_unavailable_model_keeps_old_version_and_input(
     service.native_codex.acquire.assert_not_called()
 
 
-async def test_tool_cannot_write_outside_source_and_keeps_baseline(svc, model_service):
+async def test_tool_cannot_write_outside_source_and_keeps_baseline(standard, model_service):
     service, models = model_service
-    p = await copied(svc, service)
+    p = standard_project(standard, service)
     models.bad_source = True
     await service.edits.submit("alice", p["id"], body(p, "修改颜色"))
     result = await wait(service, p["id"])
@@ -200,11 +205,11 @@ async def test_tool_cannot_write_outside_source_and_keeps_baseline(svc, model_se
     service.native_codex.acquire.assert_not_called()
 
 
-async def test_missing_default_does_not_fall_back_to_saved_codex(svc, tmp_path):
+async def test_missing_default_does_not_fall_back_to_saved_codex(standard, tmp_path):
     service = PersonalWorkshop(tmp_path / "unconfigured", ROOT)
     service.native_codex.acquire = AsyncMock(side_effect=AssertionError("ACP must not start"))
     try:
-        p = await copied(svc, service)
+        p = standard_project(standard, service)
         q = service.store.get("alice", p["id"])
         q["engine"] = {
             "id": "codex",

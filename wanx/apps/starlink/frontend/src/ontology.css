@@ -45,6 +45,9 @@
 .ontology-drawer h2 { margin: 0 0 6px; font-size: 20px; }
 .ontology-drawer-body { padding: 24px; overflow-y: auto; display: grid; gap: 18px; flex: 1; align-content: start; min-height: 0; }
 .ontology-fields, .ontology-property { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+.ontology-field { display:grid; gap:7px; min-width:0; }
+.ontology-field > div { display:flex; align-items:center; min-height:24px; }
+.ontology-field label { font-size:13px; color:var(--wb-muted); }
 .ontology-drawer label { display: grid; gap: 7px; font-size: 13px; color: #56655e; }
 .ontology-drawer input:not([type="checkbox"]) { box-sizing: border-box; width: 100%; min-width: 0; padding: 10px; border: 1px solid #aebbb5; background: #fff; color: #263832; }
 .ontology-drawer label.ontology-check { display: flex; align-items: center; gap: 7px; }

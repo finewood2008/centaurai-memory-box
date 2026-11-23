@@ -70,6 +70,7 @@ try{
   const key=async code=>{win.webContents.sendInputEvent({type:'keyDown',keyCode:code});win.webContents.sendInputEvent({type:'char',keyCode:code});win.webContents.sendInputEvent({type:'keyUp',keyCode:code});await pause(25);};
   await click('[data-action="show-space"]');
   await js(`until(()=>!!document.querySelector('[data-action="space-folder"][data-space="${spaceA}"]'))`);
+  await js(`until(()=>!!document.querySelector('[data-agent-hub-open]'))`);
   assert.equal(await js(`document.querySelector('.space-tree > section').getAttribute('aria-label')`),'我的空间');
   assert.equal(await js(`Array.from(document.querySelectorAll('.space-tree-toggle')).every(e=>e.getAttribute('aria-expanded')==='false')`),true);
   console.log('SPACES: create'); await click('[data-action="space-mkdir"]');
@@ -160,8 +161,10 @@ try{
   assert.equal(await js(`document.querySelectorAll('.space-file-row.is-selected').length`),2);
   await click(`[data-workspace-action="menu"][data-id="${child}"]`);
   assert.equal(await js(`document.querySelector('.space-workspace').inert`),false);
+  assert.equal(await js(`Boolean(document.querySelector('.space-sidebar-menu'))`),true);
   await click('.space-status-count');
   assert.equal(await js(`Boolean(document.querySelector('.space-sidebar-menu'))`),false);
+  assert.equal(await js(`document.querySelectorAll('.space-file-row.is-selected').length`),2);
   await click(`[data-workspace-action="menu"][data-id="${child}"]`);
   await click('[data-workspace-action="menu-command"][data-command="rename"]');
   assert.equal(await js(`document.querySelector('#space-name').value`),'资料');await click('[data-action="space-dialog-close"]');

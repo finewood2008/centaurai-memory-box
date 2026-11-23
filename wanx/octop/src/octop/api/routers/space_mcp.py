@@ -143,6 +143,7 @@ class Rotate(Input):
 
 class FileParams(Input):
     id: str = Field(default="", pattern=r"^([a-f0-9]{32})?$")
+    upload_id: str = Field(default="", pattern=r"^([a-f0-9]{32})?$")
     parent: str = Field(default="", pattern=r"^([a-f0-9]{32})?$")
     space_id: str = Field(default="", max_length=40)
     name: str = Field(default="", max_length=240)
@@ -166,6 +167,7 @@ class DriveFiles(Input):
         "restore",
         "purge",
         "previous",
+        "edit-create",
         "upload-create",
         "upload-status",
         "upload-chunk",

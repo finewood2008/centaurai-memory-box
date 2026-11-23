@@ -6,7 +6,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {createApplicationManager} from '../build/app/applications/manager.mjs';
 import {writeApplicationZip} from './support/application-zip.mjs';
-import {writeMiniappPackage} from '../../builder/core/package.mjs';
+import {writeMiniappPackage} from '../../builder/tests/fixtures/miniapp-package.mjs';
 
 test('local uninstall cancels an already admitted deployment; a later explicit deployment can install', {timeout:10000}, async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'local-uninstall-inflight-'));

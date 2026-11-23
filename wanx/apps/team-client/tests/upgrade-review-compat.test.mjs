@@ -285,6 +285,7 @@ test("review: real Electron v2 preserves its profile across Host restart and blo
 }, async t => {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "wanx-review-electron-")));
   const profile = path.join(root, "isolated-profile"), applicationRoot = path.join(profile, "applications");
+  await mkdir(profile, { mode: 0o700 });
   const runner = path.join(root, "runner.mjs"), children = [];
   const provider = await shellProvider({ snapshot: () => ({ phase: "ready", connection: { deviceId: "review-box" } }),
     applicationRequest: async () => ({ status: 200, body: Buffer.from(JSON.stringify(backend())) }) });
@@ -329,6 +330,14 @@ test("review: real Electron v2 preserves its profile across Host restart and blo
   await current.stop(applicationId);
   assert.ok(children.every(child => child.exitCode !== null || child.signalCode !== null));
   await current.uninstall(applicationId);
+  const incompatible = await artifact(root, "1.0.0", { ...compatibility,
+    localDataSchema: { readRange: "<1.0.0", writeVersion: "0.9.0" } });
+  await assert.rejects(current.installVerifiedPackage(incompatible), { code: "APPLICATION_DATA_SCHEMA_INCOMPATIBLE" });
+  // A legacy writer receipt has no schema evidence for a different artifact.
+  const receipt = path.join(applicationRoot, ".data-access", applicationId + ".json");
+  const { writer } = JSON.parse(await readFile(receipt, "utf8"));
+  await writeFile(receipt, JSON.stringify({ schemaVersion: 1, applicationId, writer }));
+  await rm(path.join(data, ".data-schema.json"));
   await assert.rejects(current.installVerifiedPackage(await artifact(root, "1.0.0")), { code: "APPLICATION_DATA_COMPATIBILITY_UNKNOWN" });
   assert.equal(JSON.parse(await readFile(path.join(data, "review-launches.json"), "utf8")).launches, 2);
   assert.equal(JSON.parse(await readFile(path.join(applicationRoot, ".data-access", `${applicationId}.json`), "utf8")).writer.artifactId, value.descriptor.artifactId);

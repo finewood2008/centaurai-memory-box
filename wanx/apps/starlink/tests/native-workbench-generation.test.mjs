@@ -18,7 +18,7 @@ for(const page of ['import','dialogue'])test(`detailed review from ${page} prese
   await vm.runInContext(fn+"\nopenConversationReview('doc')",context);
   assert.deepEqual(calls,['doc']);
   if(page==='import'){assert.match(dialog.innerHTML,/返回资料管理/);assert.doesNotMatch(dialog.innerHTML,/继续对话|返回材料对话/);}
-  else assert.match(dialog.innerHTML,/返回材料对话/);
+  else assert.match(dialog.innerHTML,/返回资料库/);
   canLeave=false;listeners.click();await new Promise(resolve=>setImmediate(resolve));assert.deepEqual(calls,['doc']);
   canLeave=true;listeners.click();await new Promise(resolve=>setImmediate(resolve));
   assert.deepEqual(calls,page==='import'?['doc','close','refresh','material-refresh']:['doc','close','refresh','dialogue-draft']);
@@ -31,6 +31,24 @@ test('returning to a cached graph page and material deletion both refresh its da
   host.show('ontology');window.starlinkWorkbench.register(frame.contentWindow,{view:'ontology',navigate:()=>true,refreshGraph:()=>refreshes++});
   host.show('ontology');assert.equal(refreshes,1);host.invalidateGraph();assert.equal(refreshes,2);
   host.reset();host.invalidateGraph();assert.equal(refreshes,2);
+});
+
+test('a saved delivery policy invalidates the selected warehouse search results',async()=>{
+  let frame, changed=0, reply={ok:true,value:{revision:2}};
+  globalThis.window={};
+  globalThis.document={baseURI:'http://synthetic.invalid/ui/index.html',createElement:()=>({contentWindow:{},setAttribute(){},remove(){}})};
+  const host=createWorkbenchHost({warehouse:()=> 'w',container:()=>({replaceChildren:value=>frame=value}),
+    onView(){},call:()=>reply,onSensitivePolicyChanged:()=>{changed++;}});
+  host.show('sensitive');
+  const input={method:'POST',url:'/api/sensitive/settings'};
+  await window.starlinkWorkbench.request(frame.contentWindow,{method:'GET',url:input.url});
+  await window.starlinkWorkbench.request(frame.contentWindow,{method:'POST',url:'/api/sensitive/preview'});
+  assert.equal(changed,0);
+  await window.starlinkWorkbench.request(frame.contentWindow,input);
+  assert.equal(changed,1);
+  reply={ok:false,status:409,code:'SENSITIVE_REVISION_CONFLICT'};
+  await assert.rejects(window.starlinkWorkbench.request(frame.contentWindow,input));
+  assert.equal(changed,1);
 });
 
 test('material handoff waits for trusted registration and opens only the requested document',()=>{

@@ -115,13 +115,14 @@ export function messageReply(message){
   try{const value=JSON.parse(message.content);return value&&typeof value.answer==='string'?value:{answer:'答复格式暂不可展示。'};}catch{return {answer:'答复格式暂不可展示。'};}
 }
 export class ConversationFlow{
-  constructor({call,storage,identity,warehouseId,isCurrent=()=>true,onChange=()=>{},uuid=()=>crypto.randomUUID()}){
-    Object.assign(this,{call,storage,identity,warehouseId,isCurrent,onChange,uuid});this.live=true;
+  constructor({call,storage,identity,warehouseId,readerOnly=false,isCurrent=()=>true,onChange=()=>{},uuid=()=>crypto.randomUUID()}){
+    Object.assign(this,{call,storage,identity,warehouseId,readerOnly,isCurrent,onChange,uuid});this.live=true;
     this.key='starlink.conversation.v1.'+identityKey(identity)+'.'+warehouseId;
     this.saved={conversationId:null,pending:null,upload:null,autoRead:{},analyzed:{}};
     this.state={loaded:false,busy:false,error:'',conversations:[],hasMore:false,nextOffset:0,overview:null,messages:[],turn:null,
       intents:[],selectedIntent:null,detail:null,plan:null,candidates:null,merge:null,input:'',goal:'',instructions:'',goalDirty:false,documents:[],
       stage:1,ontology:null,acceptedOntology:null,knowledge:null,materialIndex:{}};
+    if(readerOnly)this.state.materialPage='import';
     this.changes=new ConversationChanges(this);
     this.instructions=new MaterialInstructions(this);
     this.evidence=new MaterialEvidence(this);
@@ -216,7 +217,11 @@ export class ConversationFlow{
         this.state.hasMore=value.has_more;this.state.nextOffset=value.next_offset;return;}
       offset=value.next_offset;
     }throw fail('MODELING_MESSAGE_LIMIT');}
-  load(){return this.run(async()=>{this.restore();await this.list();
+  load(){return this.run(async()=>{this.restore();
+    if(this.readerOnly&&!this.saved.pending&&!this.saved.upload&&!this.saved.intakeSubmission){
+      await this.readOntology();this.state.loaded=true;return;
+    }
+    await this.list();
     if(this.saved.conversationId&&!this.state.conversations.some(c=>c.id===this.saved.conversationId)){
       const cached=await this.read('conversation-get',{conversationId:this.saved.conversationId});
       if(cached.scenario==='onboarding'){
@@ -238,13 +243,14 @@ export class ConversationFlow{
       const next=sequence?value.next_sequence:value.next_offset;
       if(!Number.isSafeInteger(next)||next<=offset)throw fail('SEMANTICA_INVALID_RESPONSE');offset=next;
     }throw fail('MODELING_MESSAGE_LIMIT');}
+  async readOntology(){
+    this.state.ontology=null;this.state.ontologyError=false;
+    try{const rules=await this.read('conversation-ontologies');if(!Array.isArray(rules.items))throw fail('SEMANTICA_INVALID_RESPONSE');this.state.ontology=rules.items.find(o=>o.status==='published')||null;}
+    catch(error){this.check();if([401,403,404].includes(error.status))throw error;this.state.ontologyError=true;}
+  }
   async snapshot(){
-    const conversationId=this.saved.conversationId;if(!conversationId){
-      this.state.ontology=null;this.state.ontologyError=false;
-      try{const rules=await this.read('conversation-ontologies');if(!Array.isArray(rules.items))throw fail('SEMANTICA_INVALID_RESPONSE');this.state.ontology=rules.items.find(o=>o.status==='published')||null;}
-      catch(error){this.check();if([401,403,404].includes(error.status))throw error;this.state.ontologyError=true;}
-      return;
-    }
+    const conversationId=this.saved.conversationId;
+    if(!conversationId)return this.readOntology();
     for(let attempt=0;attempt<3;attempt++){
       const first=await this.read('conversation-get',{conversationId});
       if(first.scenario&&first.scenario!=='material')throw fail('MODELING_SCENARIO_MISMATCH');
@@ -278,7 +284,7 @@ export class ConversationFlow{
       const ontology=rules.items.find(o=>o.status==='published')||null;
       const last=await this.read('conversation-get',{conversationId});
       if(first.revision!==last.revision||first.source_stamp!==last.source_stamp||first.input_generation!==last.input_generation||first.latest_turn?.id!==last.latest_turn?.id)continue;
-      // Keep the last server-confirmed goal when publishing rules invalidates
+      // Keep the last server-confirmed goal when rules or warehouse scope invalidate
       // its applicability. It is restored as a draft, never as confirmation.
       const previousDetail=this.state.detail;
       const confirmed=detail?.goal?.goal?detail:previousDetail?.id===detail?.id&&previousDetail?.document_version_id===detail?.document_version_id?previousDetail:null;
@@ -303,9 +309,9 @@ export class ConversationFlow{
       if(!this.state.goalDirty){this.state.goal=detail?.goal?.goal||'';this.state.instructions=detail?.goal?.instructions||'';}
       restoreMaterialContinuation(this);
       const remembered=this.saved.confirmedGoals?.[selected];
-      if(!this.state.goalDirty&&!this.intake.record?.goalDraft&&detail?.status==='awaiting_goal'&&detail.invalid_reason==='ontology_changed'&&detail.source_status==='available'&&remembered?.conversationId===conversationId&&remembered.versionId===detail.document_version_id){
+      if(!this.state.goalDirty&&!this.intake.record?.goalDraft&&detail?.status==='awaiting_goal'&&['ontology_changed','purpose_changed'].includes(detail.invalid_reason)&&detail.source_status==='available'&&remembered?.conversationId===conversationId&&remembered.versionId===detail.document_version_id){
         Object.assign(this.state,{goal:remembered.goal,instructions:remembered.instructions,goalDirty:true,suggestedGoalStamp:null,
-          goalReviewNotice:'本体规则已更新。已保留先前确认的目标和补充说明，请重新核对并确认，再读取处理计划。'});
+          goalReviewNotice:(detail.invalid_reason==='purpose_changed'?'仓库用途或整理范围已更新。':'本体规则已更新。')+'已保留先前确认的目标和补充说明，请重新核对并确认，再读取处理计划。'});
         this.intake.saveGoalDraft();
       }
       // Resolve publication/draft state before interpreting a reply as a goal.
@@ -335,7 +341,9 @@ export class ConversationFlow{
   }
   async readMaterialIndex(){
     this.state.materialIndexError=false;
-    try{await readWarehouseMaterials(this);}catch(e){this.check();if([401,403].includes(e.status))throw e;this.state.warehouseMaterialError=true;}
+    this.state.warehouseMaterialErrorCode=null;
+    try{await readWarehouseMaterials(this);}catch(e){this.check();if([401,403].includes(e.status))throw e;this.state.warehouseMaterialError=true;this.state.warehouseMaterialErrorCode=e.code;}
+    if(this.readerOnly)return;
     if(!this.state.hasMore){const available=new Set(this.state.conversations.map(c=>c.id));for(const id of Object.keys(this.state.materialIndex))if(!available.has(id)&&id!==this.saved.conversationId)delete this.state.materialIndex[id];}
     for(const c of this.state.conversations){
       if(c.id===this.saved.conversationId){this.state.materialIndex[c.id]=copy(this.state.intents);continue;}
@@ -367,7 +375,10 @@ export class ConversationFlow{
     if(intentId)this.state.selectedIntent=intentId;
     this.persist();await this.snapshot();this.restoreMaterialComposer();this.state.stage=materialProgress(this.state.detail).stage;this.state.loaded=true;
   });}
-  refresh(){return this.run(async()=>{const restoring=!this.state.loaded;await this.list();await this.snapshot();if(restoring)this.restoreMaterialComposer();this.state.loaded=true;await this.readMaterialIndex();});}
+  refresh(){return this.run(async()=>{const restoring=!this.state.loaded;
+    if(this.readerOnly&&!this.saved.pending&&!this.saved.upload&&!this.saved.intakeSubmission)await this.readOntology();
+    else {await this.list();await this.snapshot();if(restoring)this.restoreMaterialComposer();}
+    this.state.loaded=true;await this.readMaterialIndex();});}
   more(){return this.run(()=>this.list(true));}
   select(conversationId){return this.selectMaterial(conversationId);}
   clearView(){this.rounds?.clear();if(this.importer)this.importer.view=null;this.state.openMaterialEditor=false;this.state.openDetailedEditor=false;this.intake.clear();this.changes.clear();this.reviewEditor=null;Object.assign(this.state,{dialogueWorkflow:null,dialogueKnowledge:null,dialogueFailureJob:null,baselinePage:0,automaticResultPage:0,autoSwitch:false,materialSwitchProposal:null,materialOperation:null,librarySelection:null,overview:null,messages:[],turn:null,intents:[],detail:null,selectedIntent:null,plan:null,candidates:null,merge:null,input:'',goal:'',instructions:'',goalDirty:false,suggestedGoalStamp:null,goalReviewNotice:'',recoverable:null,stage:1,ontology:null,acceptedOntology:null,knowledge:null,inspectCard:null,composerContext:null,inputNotice:'',inputRouting:null,goalEditing:false,messageMode:'auto',readWaiting:false});}
@@ -451,14 +462,18 @@ export class ConversationFlow{
     if(p.action==='conversation-analyze'||p.kind==='intake-goal-turn')await this.initialRead(p.action,p.input,p.kind);
     else await this.write(p.action,p.input,p.kind);
     await this.continueUploads();await this.snapshot();this.state.loaded=true;
-    if(['conversation-source-confirm','conversation-index-retry'].includes(p.action)&&this.state.materialPage==='import')await this.importer.read(p.input.documentId);
+    if(['conversation-source-confirm','conversation-index-retry','conversation-processing-start'].includes(p.action)&&this.state.materialPage==='import'){
+      await this.importer.read(p.input.documentId);
+      if(p.action==='conversation-processing-start')await this.agent.sync();
+    }
   });
     if(!this.state.error&&!this.saved.pending){
-      if(this.saved.intakeSubmission?.newRound)await this.intake.submit();
+      if(this.saved.intakeSubmission?.newRound&&!this.readerOnly)await this.intake.submit();
       else await this.rounds.finish();
     }
   }
-  async ready(){if(this.saved.roundOpening||this.saved.pending||this.reviewPending||this.claimPending||this.releasePending||this.changes.pending||this.changes.record.pending||this.changes.claimRequest)throw fail('MODELING_REQUEST_PENDING');if(!this.state.loaded)throw fail('MODELING_SNAPSHOT_CHANGED');await this.snapshot();}
+  async ready(){if(this.saved.roundOpening||this.saved.pending||this.reviewPending||this.claimPending||this.releasePending||this.changes.pending||this.changes.record.pending||this.changes.claimRequest)throw fail('MODELING_REQUEST_PENDING');if(!this.state.loaded)throw fail('MODELING_SNAPSHOT_CHANGED');
+    if(this.readerOnly&&this.state.librarySelection&&!this.saved.intakeSubmission)await this.readOntology();else await this.snapshot();}
   async submitInput(){
     if(this.state.busy){if(this.backgroundDone){await this.backgroundDone;return this.submitInput();}return;}
     if(this.intake.staged||this.saved.intakeSubmission)return this.intake.submit();

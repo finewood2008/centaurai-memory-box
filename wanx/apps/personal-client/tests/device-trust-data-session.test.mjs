@@ -451,7 +451,7 @@ for (const edition of ['personal-client', 'team-client']) {
     f.vault.lock();
     await assert.rejects(sdk.request(base + '/conversations'), /HOST_SESSION_EXPIRED/);
     assert.equal(f.seen.length, before, 'locked launch cannot send another proof');
-    assert.deepEqual(await readdir(f.stagingDirectory), []);
+    await until(async () => (await readdir(f.stagingDirectory)).length === 0, 'streamed request staging was not cleaned up');
   });
 }
 

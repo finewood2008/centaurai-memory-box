@@ -24,6 +24,7 @@ from . import annotation_contract
 from .transport_contract import (
     operation_timeout,
     owner_error,
+    owner_error_message,
     private_import_error,
     private_search_error,
 )
@@ -273,6 +274,10 @@ def resolve(method: str, path: str) -> Operation:
         if not root and (scoped := re.fullmatch(rf"/warehouses/(?P<id>{UUID})(?P<path>/.*)", path)):
             warehouse, path = scoped["id"], scoped["path"]
         rules = ROOT_RULES if root else RULES
+        if warehouse and path == "/failure-events":
+            if method != "GET":
+                raise DesktopError("SEMANTICA_OPERATION_NOT_ALLOWED", 405)
+            return Operation(path, frozenset({"after", "limit"}), warehouse)
         if method == "DELETE" and warehouse and re.fullmatch(rf"/documents/{ID}", path):
             return Operation(path, frozenset(), warehouse)
         if warehouse and conversation_contract.matches(path):
@@ -319,6 +324,13 @@ def prepare(
 ) -> tuple[dict[str, Any] | None, str | None]:
     if set(query) - operation.query_keys:
         raise DesktopError("SEMANTICA_QUERY_NOT_ALLOWED", 422)
+    if operation.path == "/failure-events":
+        for key, minimum, maximum in (("after", 0, 9007199254740991), ("limit", 1, 500)):
+            value = query.get(key)
+            if value is not None and (
+                not re.fullmatch(r"[0-9]{1,16}", value) or not minimum <= int(value) <= maximum
+            ):
+                raise DesktopError("SEMANTICA_INVALID_REQUEST", 422)
     if re.fullmatch(rf'/documents/{ID}/source-annotation', operation.path):
         try:
             return body, annotation_contract.validate(method, body, query)
@@ -499,9 +511,7 @@ def decode(
         ):
             raise DesktopError(code, status)
         if native_workbench and not public and owner_error(code) and 400 <= status < 600:
-            # The native client owns its safe domain wording. Never relay
-            # domain diagnostics, including a nominal message field.
-            raise DesktopError(code, status)
+            raise DesktopError(code, status, owner_error_message(code, message))
         if (
             isinstance(code, str)
             and re.fullmatch(

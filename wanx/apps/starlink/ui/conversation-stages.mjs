@@ -1,3 +1,4 @@
+import { starxiaotuTermMarker } from './term-help.mjs';
 import {materialProgress,planCurrent,publicationCurrent,extractionProgress,candidatesReady,retainedMaterialResults} from './conversation-progress.mjs';
 import {ontologyDefinitionsHTML} from './onboarding-ontology-view.mjs';
 import {candidateHTML,mergeHTML,factsHTML} from './conversation-view.mjs';
@@ -28,12 +29,12 @@ export function ontologyStage(flow){
     ${!p&&d?.goal?.goal?`<p role="status">整理目标已由服务端确认保存，尚未开始抽取。</p><h3>${esc(d.goal.goal)}</h3><p>${esc(d.goal.instructions||'未设置其他关注或排除内容')}</p>`:''}
     ${!d?.execution?btn('stage-1','开始前调整整理目标',off):''}
     ${o?`<p>适用本体：${esc(o.name)} · 生效版本 ${esc(o.version_number)}</p><details data-cv-disclosure="plan-definitions"><summary>查看实体类型、关系与属性</summary>${ontologyDefinitionsHTML(o.schema,'cv-rule')}</details>`:'<p role="alert">尚未读取到当前生效本体，请先核对并发布规则。</p>'}
-    <div class="conversation-toolbar">${!p?btn('plan','沿用当前本体，读取计划',off||!o||d?.status!=='ready_for_confirmation'||s.goalDirty):''}${btn('ontology','通过对话调整规则',off)}</div>
+    <div class="conversation-toolbar">${!p?btn('plan','沿用当前本体，读取计划',off||!o||d?.status!=='ready_for_confirmation'||s.goalDirty):''}${btn('ontology','前往本体修改',off)}</div>
     <p>当前类型不适合整理目标时，可以先让助手建议名称和含义，核对后再应用；适合时直接沿用当前本体。</p>${btn('change-suggest','根据目标建议类型与关系',off||!d?.document_version_id||d.source_status!=='available'||['queued','running','cancelled','stale'].includes(d.status))}
     <p>仅处理当前材料；规则变更不会自动重抽历史材料。</p>
     ${s.goalDirty?`<div class="cv-notice">目标卡还有未确认的修改，请先核对目标。${btn('stage-1','查看目标确认卡',off)}</div>`:''}
     ${d?.status!=='ready_for_confirmation'?`<div class="cv-notice">${d?.execution?'本次计划已提交，可查看抽取进度和材料知识。':'请先明确确认当前材料目标。规则变化后需重新确认目标。'}${btn(d?.execution?'stage-3':'stage-1',d?.execution?'查看材料处理':'查看目标确认卡',off)}</div>`:''}
-    ${p?`<section class="cv-plan"><h3>本次材料处理计划</h3><dl><dt>材料</dt><dd>${esc(s.intents.find(i=>i.id===d?.id)?.original_name||'当前材料')}</dd><dt>正文版本</dt><dd>${esc(p.document_version_id)}</dd><dt>目标</dt><dd>${esc(p.goal?.goal)}</dd><dt>补充说明</dt><dd>${esc(p.goal?.instructions||'无')}</dd><dt>适用本体</dt><dd>${esc(o?.name)} · v${esc(o?.version_number)}</dd><dt>抽取模型</dt><dd>${esc(p.processing?.extraction?.name||p.processing?.extraction?.model||'服务端确认的模型')}</dd></dl>
+    ${p?`<section class="cv-plan"><h3>本次材料处理计划${starxiaotuTermMarker('extraction-plan')}</h3><dl><dt>材料</dt><dd>${esc(s.intents.find(i=>i.id===d?.id)?.original_name||'当前材料')}</dd><dt>正文版本</dt><dd>${esc(p.document_version_id)}</dd><dt>目标</dt><dd>${esc(p.goal?.goal)}</dd><dt>补充说明</dt><dd>${esc(p.goal?.instructions||'无')}</dd><dt>适用本体${starxiaotuTermMarker('active-ontology')}</dt><dd>${esc(o?.name)} · v${esc(o?.version_number)}</dd><dt>抽取模型</dt><dd>${esc(p.processing?.extraction?.name||p.processing?.extraction?.model||'服务端确认的模型')}</dd></dl>
     <p>只抽取上述材料的候选，结果需再核对并确认发布。已有生效知识继续保留。</p>${btn('confirm-plan','确认计划，开始抽取',off||s.goalDirty||s.acceptedOntology!==p.ontology_id||!planCurrent(p,s.overview,d,o))}</section>`:''}
     ${btn('refresh','重新读取规则与进度',s.busy)}</section>`;
 }
@@ -59,7 +60,7 @@ export function knowledgeStage(flow){
     ${!e?`<p>尚未收到本材料的抽取任务回执。</p>${btn('stage-2','核对本体与计划',off)}`:`<p role="status">抽取状态：${esc({queued:'已排队',running:'正在抽取',awaiting_review:'候选已就绪，待核对',succeeded:'候选已就绪',failed:'抽取失败',cancelled:'已取消'}[e.status]||e.status)} · ${esc(e.progress?.completed_units??0)} / ${esc(e.progress?.total_units??'待确定')} 单元</p>
       ${d.status==='failed'?btn('intent-retry','重试失败抽取',off):''}${candidatesReady(d)&&!s.candidates?btn('candidates','读取抽取候选',off):''}`}
     ${extractionFailuresHTML(s.dialogueFailureJob)}${candidateHTML(flow)}${mergeHTML(flow)}
-    ${d?.status==='awaiting_review'?`<section class="cv-result-rules"><h3>本体建议与类型复用</h3><p>本轮候选依据已确认的本体抽取。可查看已有类型，或请求补充与复用建议；建议需核对，不能视为已生效规则或材料事实。</p><details data-cv-disclosure="result-rules"><summary>查看当前生效的实体、关系与属性</summary>${ontologyDefinitionsHTML(s.ontology?.schema||{},'cv-result-schema')}</details>${btn('change-suggest','查看本体建议（生成）',off)}<p>规则发布后不会自动重新抽取本材料或历史材料。</p></section>`:''}
+    ${d?.status==='awaiting_review'?`<section class="cv-result-rules"><h3>本体建议与类型复用</h3><p>本轮候选依据已确认的本体抽取。自动生成的本体建议可在资料库核对。</p><details data-cv-disclosure="result-rules"><summary>查看当前生效的实体、关系与属性</summary>${ontologyDefinitionsHTML(s.ontology?.schema||{},'cv-result-schema')}</details><p>规则发布后不会自动重新抽取本材料或历史材料。</p></section>`:''}
     ${s.recoverable?.length?`<section class="cv-notice"><h3>选择已有草稿合并</h3><p>已有修改将保留。恢复会让其他编辑页面失去编辑权，请先保存该页面的修改。认领后先预览差异，不会直接合并或发布。</p>${s.recoverable.map(r=>`<div><p>草稿修订 ${esc(r.revision)} · ${esc(r.updated_at||'')}${r.legacy_unowned?' · 历史作者未知':''}</p>${!r.legacy_unowned&&r.status==='editing'?btn('claim-review','恢复此草稿并预览合并',off,r.draft_id):btn('advanced-review','进入编辑器核对草稿归属和发布进度',off,d.document_id)}</div>`).join('')}</section>`:''}
     ${/^(CORRECTION_|MODELING_REVIEW_)/.test(s.errorCode||'')&&d?.document_id?btn('advanced-review','进入材料编辑器恢复草稿',off,d.document_id):''}
     ${d?.review?.draft_id?`<div class="cv-notice"><h3>完整材料草稿</h3><p>${progress.published?'本轮发布已完成，可查看完整草稿及发布记录。后续修改需再次核对并确认。':'在本页读取完整草稿，选中事实后通过对话修改或排除，核对原文与全部变更，再明确确认发布。本轮未涉及的旧知识继续保留。'}</p>${btn('open-review',progress.published?'查看完整草稿和发布记录':'在本页核对草稿并确认发布',off,d.document_id)}</div>`:''}

@@ -50,5 +50,5 @@ test('source dialog does not invent location, thinking defaults or configuration
 
 test('an unavailable automatic default still explains its current availability instead of claiming inference happened', () => {
   assert.equal(renderedModel({ mode: 'automatic', extraction: { name: 'WANX 默认模型', available: false, location: 'cloud' } }),
-    '实际知识处理：WANX 默认模型暂不可用，请检查万象模型设置');
+    '实际知识处理：万象底座默认模型暂不可用，请检查万象模型设置');
 });

@@ -15,6 +15,62 @@ function service(response) {
 const input = { warehouseId: 'warehouse-a', url: '/api/documents/document/corrections/draft/save?workspace_id=default', method: 'POST',
   body: JSON.stringify({ operation_id: 'same-save', expected_revision: 1 }) };
 
+test('sensitive rule saves keep the operation ID and cannot choose a different warehouse', async () => {
+  const svc = service(() => { throw Error('unexpected transport'); });
+  const requests = [];
+  svc.api = async (endpoint, options) => { requests.push({ endpoint, ...options }); return { revision: 2 }; };
+  const payload = { expected_revision: 1, enabled: true, semantic_enabled: false, rules: [] };
+  const request = { warehouseId: 'warehouse-a', url: '/api/sensitive/settings?workspace_id=foreign', method: 'POST',
+    body: JSON.stringify({ ...payload, workspace_id: 'foreign', operation_id: 'save-policy' }) };
+  await svc.call('workbench-request', request);
+  await svc.call('workbench-request', request);
+  assert.deepEqual(requests[0], requests[1]);
+  assert.equal(requests[0].endpoint, '/warehouses/warehouse-a/workbench/sensitive/settings');
+  assert.deepEqual(requests[0].body, { ...payload, _native_operation_id: 'save-policy' });
+});
+
+test('initial ontology writes send only the signed operation ID and reject using it for other routes', async () => {
+  const svc = service(() => { throw Error('unexpected transport'); });
+  const calls = [];
+  svc.api = async (endpoint, options) => { calls.push({ endpoint, ...options }); return {}; };
+  const request = {warehouseId:'fresh',url:'/api/ontologies',method:'POST',operationId:'receipt-rules'};
+  const schema = {entity_types:[],relation_types:[]};
+  for (let i=0;i<2;i++) await svc.call('workbench-request', {...request,body:JSON.stringify({name:'标准本体',schema})});
+  assert.deepEqual(calls[0], calls[1]);
+  assert.equal(calls[0].endpoint, '/warehouses/fresh/workbench/ontologies');
+  assert.deepEqual(calls[0].body, {name:'标准本体',schema,_native_operation_id:'receipt-rules'});
+  await svc.call('workbench-request', {...request,url:'/api/ontologies/draft/publish',operationId:'receipt-publish'});
+  assert.equal(calls[2].endpoint, '/warehouses/fresh/workbench/ontologies/draft/publish');
+  assert.deepEqual(calls[2].body, {_native_operation_id:'receipt-publish'});
+  for (const input of [
+    {...request,url:'/api/jobs/some-id/retry'},
+    {...request,method:'GET'},
+    {...request,operationId:'invalid/id'},
+    {...request,body:JSON.stringify({name:'标准本体',schema,operation_id:'extra'})},
+  ]) await assert.rejects(svc.call('workbench-request', input), {code:'INVALID_RESOURCE'});
+  assert.equal(calls.length,3);
+});
+
+test('similar-rule refusals preserve the rule ID and suppress arbitrary server text', () => {
+  const reply = workbenchErrorReply({ code: 'SENSITIVE_SIMILAR_RULE', status: 422, message: '规则与 custom_a 相似' });
+  assert.equal(reply.message, '规则与 custom_a 相似');
+  assert.equal(reply.status, 422);
+  assert.doesNotMatch(workbenchErrorReply({ ...reply, message: '规则与 custom_a 相似 private sample' }).message, /private/);
+});
+
+test('scan retry preserves the operation ID across an unconfirmed response', async () => {
+  const svc = service(() => { throw Error('unexpected transport'); });
+  const requests = [];
+  svc.api = async (endpoint, options) => { requests.push({ endpoint, ...options }); return { id: 'scan' }; };
+  const retry = { warehouseId: 'warehouse-a', url: '/api/jobs/scan/retry', method: 'POST',
+    body: JSON.stringify({ operation_id: 'retry-scan' }) };
+  await svc.call('workbench-request', retry);
+  await svc.call('workbench-request', retry);
+  assert.deepEqual(requests[0], requests[1]);
+  assert.equal(requests[0].endpoint, '/warehouses/warehouse-a/jobs/scan/retry');
+  assert.deepEqual(requests[0].body, { operation_id: 'retry-scan' });
+});
+
 test('correction reads preserve editor session through the scoped signed envelope', async () => {
   const svc = service(() => { throw Error('unexpected transport'); });
   const calls = [];

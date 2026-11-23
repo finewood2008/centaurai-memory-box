@@ -43,6 +43,8 @@ def validate_backend(value):
         value = json.loads(canonicalize_json(value))
         if not _SCHEMA.is_valid(value):
             raise ValueError()
+        if 'prompt' in value and (value['template']['resourceId'] != 'general-assistant' or not value['prompt'].strip()):
+            raise ValueError()
         if value['template']['version'] != '0.0.0+sha.' + value['template']['digest'][7:19]:
             raise ValueError()
     except (ValueError, TypeError, StudioError):
@@ -160,11 +162,13 @@ class ExpertRuntime:
         marker = _sha([owner, target, project_id, descriptor])
         return {'schemaVersion': 1, 'profile': PROFILE, 'owner': owner, 'target': deepcopy(target), 'projectId': project_id,
                 'slotApplicationId': self.svc.deployment_profile.slot_id(owner, target), 'descriptorDigest': _sha(descriptor),
+                **({'prompt': descriptor['prompt']} if 'prompt' in descriptor else {}),
                 'template': deepcopy(descriptor['template']), 'agentId': 'wxdep' + marker[7:39], 'marker': marker}
 
     def _assert_agent(self, owner, binding):
         user = self._user(owner)
-        descriptor = validate_backend({'schemaVersion': 1, 'format': 'wanx-expert-backend-v1', 'template': binding['template'], 'mode': 'ask'})
+        descriptor = validate_backend({'schemaVersion': 1, 'format': 'wanx-expert-backend-v1', 'template': binding['template'], 'mode': 'ask',
+                                       **({'prompt': binding['prompt']} if 'prompt' in binding else {})})
         expected = self._binding(owner, binding['target'], binding['projectId'], descriptor)
         if any(binding.get(key) != value for key, value in expected.items()):
             raise StudioError('EXPERT_BINDING_INVALID', 409)
@@ -195,6 +199,10 @@ class ExpertRuntime:
             if template != descriptor['template']:
                 raise StudioError('EXPERT_TEMPLATE_CHANGED', 409)
             binding['seedInventory'] = self._inventory(template['resourceId'], files)['files']
+            if 'prompt' in descriptor:
+                if 'SOUL.md' not in files:
+                    raise StudioError('EXPERT_TEMPLATE_CHANGED', 409)
+                files['SOUL.md'] = descriptor['prompt'].encode()
             if self.registry.get_row(binding['agentId']) is None:
                 from octop.infra.agents.experts.catalog import build_create_spec_from_expert, WORKSPACE_MANIFEST_PATH
                 backend, workspace_dir = self._expected_paths(binding['agentId'])
@@ -229,6 +237,10 @@ class ExpertRuntime:
                 actual = await workspace.adownload_bytes(WORKSPACE_MANIFEST_PATH if name == 'manifest.json' else name)
             except (OSError, KeyError, ValueError):
                 raise StudioError('EXPERT_WORKSPACE_CHANGED', 409) from None
+            if name == 'SOUL.md' and 'prompt' in binding:
+                if actual != binding['prompt'].encode():
+                    raise StudioError('EXPERT_WORKSPACE_CHANGED', 409)
+                continue
             if not isinstance(actual, bytes) or len(actual) != row['sizeBytes'] or 'sha256:' + hashlib.sha256(actual).hexdigest() != row['digest']:
                 raise StudioError('EXPERT_WORKSPACE_CHANGED', 409)
         guard()

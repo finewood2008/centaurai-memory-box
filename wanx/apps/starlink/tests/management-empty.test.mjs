@@ -25,7 +25,7 @@ function render({ warehouse = null, importFailure } = {}) {
 for (const importFailure of [null, undefined]) {
   test(`management without a warehouse or ${String(importFailure)} import failure shows the new warehouse prompt`, () => {
     const { $, processingRenders } = render({ importFailure });
-    assert.equal($('#manage-name').textContent, '从一座数据仓开始');
+    assert.equal($('#manage-name').textContent, '从一张星图开始');
     assert.equal($('#manage-status').hidden, true);
     assert.equal($('#manage-status').textContent, '');
     assert.equal($('#warehouse-stats').innerHTML, '');

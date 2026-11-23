@@ -5,7 +5,7 @@ type Controls = {
   view: string;
   navigate: (view: string, ontologyAction?: OntologyAction) => boolean;
   canLeave: () => boolean;
-  openMaterial?: (documentId: string, reviewTarget?: 'current-extraction') => boolean;
+  openMaterial?: (documentId: string, reviewTarget?: 'current-extraction' | 'ontology-suggestions') => boolean;
   refreshGraph?: () => void;
   clearOntologyAction?: () => void;
 };

@@ -38,6 +38,11 @@ def contract(p):
     base=baseline(p)
     if base and base.get('devKitPackage'):
         return planned_standard_contract(p,base)
+    if p.get('devKit'):
+        from .public_capabilities import EXPERT
+        from .deployment.standard_client import RUNTIME_CONTRACT
+        return {'format':'wanx-app-dev-kit','collections':deepcopy(RUNTIME_CONTRACT['collections']) if EXPERT in p['solution']['capabilities'] else {},
+                'capabilities':sorted(p['solution']['capabilities']),'visibility':'trusted-contract'}
     draft=p.get('_iterative',{}).get('contractDraft')
     if draft and draft['dataIntent']==data_intent(p):
         return deepcopy(draft['contract'])
@@ -64,6 +69,15 @@ def planned_standard_contract(project, base):
     from .capability_mapping import resolve
     from .devkit import project_spec
     fixed = standard_contract(base)
+    # Equivalent re-planning of an already sealed managed-expert version does
+    # not grant a backend or broaden permissions. Keep historical bytes intact.
+    from .public_capabilities import EXPERT, expert_contract
+    from .deployment.standard_client import MANIFEST_CONTRACT
+    frozen_expert=expert_contract(base.get('snapshot',{}).get('contracts',{})).get('expertDeployment')
+    if (frozen_expert and frozen_expert.get('profile')=='wanx-expert-app-v1'
+            and fixed['backendContracts']==[MANIFEST_CONTRACT]
+            and set(fixed['capabilities']) <= {'data','model','foundation'}):
+        fixed={**fixed,'capabilities':[EXPERT]}
     requested = sorted(set(project['solution']['capabilities']))
     if requested == fixed['capabilities']:
         return fixed
@@ -87,6 +101,9 @@ def proposal(p, *, require_review=True):
     missing=[]
     from .product_questions import pending_choices
     if pending_choices(p):missing.append('请先回答本轮产品选择，再阅读完整 PRD')
+    if p.get('devKit'):
+        from .prd import implementation_missing
+        missing.extend(implementation_missing(s))
     if not p['artifacts'] and readiness(s,p['decisions'])['missing']:
         missing.append('完整 PRD（流程、页面、数据与验收）')
     if not (prd.get('problem') or p['originalGoal']).strip():missing.append('要解决的问题')
@@ -102,9 +119,9 @@ def proposal(p, *, require_review=True):
     old=(standard_contract(base) if base.get('devKitPackage') else base.get('checkpoint',{}).get('contract')) if base else None
     if base and not old:
         old=standard_contract(base) if base.get('devKitPackage') else {'collections':base['manifest']['collections'],'capabilities':sorted(base['manifest']['capabilities']),'visibility':'application-access'}
-    spec={'schemaVersion':1,'hash':digest(s),'intent':p['originalGoal'],'foundationConstraints':foundation_policy(),
+    spec={'schemaVersion':1,'hash':digest(s),'intent':p['originalGoal'],'foundationConstraints':foundation_policy(p),
           'behavior':deepcopy(s),'contract':c,'decisions':deepcopy(p['decisions'])}
-    impact=digest({'spec':spec,'base':base['hash'] if base else None})
+    impact=digest({'spec':spec,'base':base['hash'] if base else None,'kitSha256':p.get('kitSha256'),'expert':p.get('deploymentExpert')})
     needs_review=False
     if require_review:
         from .prd_review import review_missing
@@ -123,6 +140,11 @@ def propose_contract(svc,owner,pid,args):
         if args['expectedHash']!=digest(p['solution']):raise StudioError('SOLUTION_CHANGED',409)
         base=baseline(p)
         if base and base.get('devKitPackage'):raise StudioError('STANDARD_CONTRACT_FIXED',409)
+        if p.get('devKit'):
+            from .public_capabilities import validate_declaration
+            validate_declaration(p['solution']['capabilities'])
+            if args['collections']!=contract(p)['collections']:raise StudioError('STANDARD_CONTRACT_FIXED',409)
+            return
         m=check_manifest({'schemaVersion':1,'name':p['name'],'entry':'src/app.js',
                           'collections':args['collections'],'capabilities':p['solution']['capabilities']})
         if bool(m['collections'])!=('data' in m['capabilities']):raise StudioError('CONTRACT_DATA_POLICY_REQUIRED',409)

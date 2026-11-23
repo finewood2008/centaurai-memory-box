@@ -1,11 +1,4 @@
-"""Read-only integration with the wanx-app-dev-kit contracts.
-
-This module is intentionally limited to the first migration milestone.  It
-does not build or package an application and it never changes the existing
-miniapp artifact path.  It projects the current product solution into the
-dev-kit ProjectSpec shape and reports which later delivery stages have not
-run yet.
-"""
+"""Resolve verified Builder inputs and project them into the standard dev-kit schema."""
 
 from __future__ import annotations
 
@@ -81,14 +74,28 @@ def _kit_root(project_root: Path | None = None) -> Path | None:
     configured = os.environ.get("WANX_APP_DEV_KIT_ROOT", "").strip()
     if configured:
         return Path(configured).expanduser().resolve()
-    if project_root is not None:
-        # Local developer layout: centaur-WANX and wanx-app-dev-kit are
-        # sibling projects.  This path is used only by the Builder process;
-        # it is never written into a generated application.
-        candidate = project_root.resolve().parents[2] / "wanx-app-dev-kit"
-        if candidate.is_dir():
-            return candidate
-    return None
+    candidate = Path(__file__).resolve().parents[4] / ".wanx-builder-runtime/dev-kit"
+    return candidate if candidate.is_dir() else None
+
+
+def _kit_manifest(root):
+    manifests = list((root / "vendor/wanx-app-kit").glob("*/wanx-app-kit.json"))
+    return manifests[0] if len(manifests) == 1 else None
+
+
+def verified_contract_root(project_root=None):
+    root = _kit_root(project_root)
+    manifest = _kit_manifest(root) if root else None
+    if not manifest:
+        raise StudioError("DEVKIT_CONTRACT_UNAVAILABLE", 503)
+    document = _read_json(manifest)
+    entries = document.get("artifacts")
+    if not isinstance(entries, list):
+        raise StudioError("DEVKIT_MANIFEST_INVALID", 503)
+    contracts = [item for item in entries if isinstance(item, dict) and item.get("kind") == "contract"]
+    if len(contracts) != 1 or contracts[0].get("path") != "contracts" or not contracts[0].get("sha256") or _sdk_tree_digest(manifest.parent, contracts[0]) != contracts[0]["sha256"]:
+        raise StudioError("DEVKIT_CONTRACT_INTEGRITY_FAILED", 503)
+    return manifest.parent / "contracts"
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -114,9 +121,9 @@ def kit_info(project_root: Path | None = None) -> dict[str, Any]:
             "sdk": None,
         }
     package_path = root / "package.json"
-    manifest_path = root / "vendor" / "wanx-app-kit" / "0.3.0" / "wanx-app-kit.json"
+    manifest_path = _kit_manifest(root)
     schema_path = root / "contracts" / "app-builder" / "project.schema.json"
-    if not package_path.is_file() or not manifest_path.is_file() or not schema_path.is_file():
+    if not package_path.is_file() or not manifest_path or not schema_path.is_file():
         return {
             "available": False,
             "code": "DEVKIT_CONTRACT_UNAVAILABLE",
@@ -128,7 +135,7 @@ def kit_info(project_root: Path | None = None) -> dict[str, Any]:
     manifest = _read_json(manifest_path)
     schema = _read_json(schema_path)
     kit_version = manifest.get("kitVersion")
-    if not isinstance(kit_version, str) or not re.fullmatch(r"\d+\.\d+\.\d+", kit_version):
+    if not isinstance(kit_version, str) or not re.fullmatch(r"\d+\.\d+\.\d+", kit_version) or manifest_path.parent.name != kit_version:
         return {"available": False, "code": "DEVKIT_MANIFEST_INVALID", "version": None, "kitSha256": None, "sdk": None}
     artifacts = manifest.get("artifacts")
     if not isinstance(artifacts, list) or not all(isinstance(item, dict) for item in artifacts):
@@ -145,7 +152,16 @@ def kit_info(project_root: Path | None = None) -> dict[str, Any]:
     if sdk_tree_hash is None or sdk_tree_hash!=sdk_artifact.get("sha256") or not _sdk_archive_matches(sdk_file,manifest_path.parent,sdk_artifact):
         return {"available":False,"code":"DEVKIT_SDK_INTEGRITY_FAILED","version":kit_version,"kitSha256":None,"sdk":None}
     contract_hash = str(next((x.get("sha256") for x in artifacts if x.get("kind") == "contract"), ""))
-    kit_hash = digest({"kitVersion": kit_version, "packageVersion": package.get("version"), "sdkSha256": sdk_hash, "schemaSha256": schema_hash, "contractSha256": contract_hash})
+    try:
+        verified_contract_root(project_root)
+    except StudioError as error:
+        return {"available":False,"code":error.code,"version":kit_version,"kitSha256":None,"sdk":None}
+    inputs = [root / name for name in ("templates", "tools", "contracts/app-builder")]
+    if not all(path.is_dir() for path in inputs) or not (root / "package-lock.json").is_file():
+        return {"available":False,"code":"DEVKIT_GENERATOR_UNAVAILABLE","version":kit_version,"kitSha256":None,"sdk":None}
+    files = [path for directory in inputs for path in directory.rglob("*") if path.is_file()]
+    generator_hash = digest({path.relative_to(root).as_posix():_sha256(path) for path in [*files, root / "package-lock.json", package_path]})
+    kit_hash = digest({"kitVersion": kit_version, "generatorSha256": generator_hash, "sdkSha256": sdk_hash, "schemaSha256": schema_hash, "contractSha256": contract_hash})
     return {
         "available": True,
         "code": None,
@@ -160,6 +176,7 @@ def kit_info(project_root: Path | None = None) -> dict[str, Any]:
             "hashMatches": sdk_tree_hash is not None and sdk_artifact.get("sha256") == sdk_tree_hash,
         },
         "projectSchemaSha256": schema_hash,
+        "generatorSha256": generator_hash,
         "contractSha256": contract_hash,
         "sourceRevision": (manifest.get("source") or {}).get("revision"),
     }
@@ -217,6 +234,23 @@ def project_spec(project: dict[str, Any]) -> dict[str, Any]:
         "expert": {"enabled":True,"definitionRef":"wanx.expert-app.v1"} if _managed_expert(project) else project.get("devKitExpert") if isinstance(project.get("devKitExpert"), dict) else {"enabled": False},
         "capabilities": capability_items,
     }
+
+
+def build_input(project, project_root):
+    info = kit_info(project_root)
+    if not info["available"]:
+        raise StudioError(info["code"], 503)
+    if project.get("kitSha256", info["kitSha256"]) != info["kitSha256"]:
+        raise StudioError("PROJECT_KIT_CHANGED", 409)
+    from .prd import implementation_missing
+    if implementation_missing(project["solution"]):
+        raise StudioError("PRD_IMPLEMENTATION_REQUIRED",409)
+    spec = project_spec(project)
+    if validate_project_spec(spec) or runtime_gaps(project["solution"].get("capabilities", []), backend=spec["backend"]):
+        raise StudioError("STANDARD_RUNTIME_CONTRACT_REQUIRED",409)
+    return {"kitSha256": info["kitSha256"], "projectSpec": spec,
+            "solutionHash": digest(project["solution"]), "decisionsHash": digest(project["decisions"]),
+            "expertHash": digest(project.get("deploymentExpert"))}
 
 
 def validate_project_spec(spec: dict[str, Any]) -> list[dict[str, str]]:

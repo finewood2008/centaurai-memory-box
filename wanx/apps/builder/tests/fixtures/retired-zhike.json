@@ -1,0 +1,12 @@
+{
+  "allowed": true,
+  "format": "wanx-miniapp-source-v1",
+  "applicationId": "centaurai.wanx.template.zhike",
+  "version": "0.12.1",
+  "origin": "local",
+  "sourceHash": "e5ef3e494f1432ee525ac63014965f993266fe5db56d731b9580ea44c2546e88",
+  "files": {
+    "miniapp.manifest.json": "{\"schemaVersion\":1,\"name\":\"知客\",\"entry\":\"src/app.js\",\"capabilities\":[\"data\",\"model\",\"files\",\"foundation\"],\"collections\":{\"customer_extensions\":{\"customerId\":\"string\",\"fields\":\"string\"},\"drafts\":{\"customerId\":\"string\",\"prompt\":\"string\",\"text\":\"string\",\"createdAt\":\"string\",\"model\":\"string\",\"archived\":\"boolean\"},\"flow_settings\":{\"name\":\"string\",\"value\":\"string\"}}}",
+    "src/app.js": "export function mount() { throw new Error(\"RETIRED_TEMPLATE_FIXTURE\"); }\n"
+  }
+}

@@ -24,7 +24,7 @@ function workspaceFixture(disks = [{ id: 'personal', name: '我的空间', root:
   return {
     current: () => current, root: () => current.root, spaces: () => disks, blocked: () => false,
     storageScope() {}, refresh: async () => {}, reconcile: async value => { current = disks.find(disk => disk.id === value.space); return value; },
-    observe: async () => {}, reset() {}, bind() {}, invalidated() {},
+    observe: async () => {}, reset() {}, bind() {}, invalidated() {}, dismissMenu() {},
     sidebar: () => '', footerNavigation: () => '', navigation: () => '', menuView: () => '', dialogView: () => '', recycled: () => '',
   };
 }
@@ -171,6 +171,92 @@ test("file and blank-space right clicks offer scoped actions and deletion retain
   assert.match(h.space.view(), /role="menu" aria-label="文件夹操作"/);
   assert.match(h.space.view(), />上传文件…</); assert.match(h.space.view(), />新建文件夹…</);
   assert.equal(prevented, 2);
+});
+function openFileContextMenu(harness, file) {
+  harness.event("contextmenu", { target: fileTarget(file), clientX: 60, clientY: 100, preventDefault() {} });
+}
+test("redaction is available only in the context menu for a single writable file", async () => {
+  const file = entry("a", "report.txt"), folder = entry("b", "资料", "folder"), copy = entry("c", "report-脱敏.txt");
+  const status = { phase: "ready", tasks: [], scope: "active-scope", dataContextId: "active-context", redactionAvailable: true };
+  const requests = [];
+  let items = [file, folder], finish;
+  const h = harness(async (action, input) => {
+    if (action === "space.refresh") return ok(status);
+    if (action === "space.redact") { requests.push({ ...input }); return new Promise(resolve => { finish = resolve; }); }
+    return ok({ items, breadcrumbs: [] });
+  });
+  h.space.hostState(connected("box")); h.space.activate(true); await tick();
+  assert.doesNotMatch(h.space.view(), /data-action="space-redact"/);
+  openFileContextMenu(h, folder);
+  assert.doesNotMatch(h.space.view(), /data-action="space-redact"/);
+  await h.click("redact", folder.id);
+  assert.equal(requests.length, 0);
+
+  await h.click("select", file.id);
+  assert.doesNotMatch(h.space.view(), /data-action="space-redact"/);
+  h.space.bind({ render() {}, compactActions: true });
+  assert.doesNotMatch(h.space.view(), /data-action="space-redact"/);
+  await h.click("more", file.id);
+  assert.doesNotMatch(h.space.view(), /data-action="space-redact"/);
+  await h.click("redact", file.id);
+  assert.equal(requests.length, 0);
+  await h.click("select", folder.id, {}, { ctrlKey: true });
+  openFileContextMenu(h, file);
+  assert.doesNotMatch(h.space.view(), /data-action="space-redact"/);
+  await h.click("redact", file.id);
+  assert.equal(requests.length, 0);
+
+  await h.click("select", file.id);
+  openFileContextMenu(h, file);
+  assert.match(h.space.view(), /role="menuitem"[^>]*data-action="space-redact"/);
+  const redacting = h.click("redact", file.id);
+  assert.deepEqual(requests, [{ id: file.id, space_id: "personal", scope: "active-scope", dataContextId: "active-context" }]);
+  assert.match(h.space.view(), /正在按已保存的空间规则脱敏/);
+  items = [...items, copy];
+  finish(ok({ file: copy, matches: 1 }));
+  await redacting;
+  assert.match(h.space.view(), /<strong>report-脱敏\.txt<\/strong> 已保存到同一文件夹/);
+  await h.click("dialog-close");
+  assert.match(h.space.view(), /data-entry-id="cccc/);
+
+  openFileContextMenu(h, file);
+  const noHits = h.click("redact", file.id);
+  finish(ok({ file: null, matches: 0 }));
+  await noHits;
+  assert.match(h.space.view(), /当前规则未匹配到敏感信息/);
+});
+
+test("redaction stays unavailable in the recycle bin and read-only drives", async () => {
+  const file = entry("a", "report.txt");
+  const actions = [];
+  const action = async name => {
+    actions.push(name);
+    return ok(name === "space.refresh" ? { phase: "ready", tasks: [], redactionAvailable: true } : { items: [file], breadcrumbs: [] });
+  };
+  const readOnly = workspaceFixture([{ id: "personal", name: "只读空间", root: "", writable: false }]);
+  const drive = harness(action, undefined, [], {}, {}, { wanxWorkspaces: readOnly });
+  const trash = harness(action);
+  drive.space.hostState(connected("box")); drive.space.activate(true);
+  trash.space.hostState(connected("box")); trash.space.activate(true);
+  await tick(); await trash.click("recycle");
+  for (const h of [drive, trash]) {
+    openFileContextMenu(h, file);
+    assert.doesNotMatch(h.space.view(), /data-action="space-redact"/);
+    await h.click("redact", file.id);
+  }
+  assert.equal(actions.includes("space.redact"), false);
+});
+test("redaction is absent when the shell does not advertise that capability", async () => {
+  const file = entry("a", "report.txt");
+  const h = harness(async name => {
+    assert.notEqual(name, "space.redact");
+    return ok(name === "space.refresh" ? { phase: "ready", tasks: [] } : { items: [file], breadcrumbs: [] });
+  });
+  h.space.hostState(connected("box")); h.space.activate(true); await tick();
+  openFileContextMenu(h, file);
+  assert.doesNotMatch(h.space.view(), /data-action="space-redact"/);
+  await h.click("redact", file.id);
+  assert.doesNotMatch(h.space.view(), /role="dialog"/);
 });
 test("trash right clicks expose recovery and purge without file upload actions, and switching boxes clears menus", async () => {
   const file = entry("a", "deleted.txt");
@@ -522,11 +608,59 @@ test('closing a loading preview prevents late content reopening the dialog', asy
 
 test('unsupported preview offers download of the same original resource and mode toggles',async()=>{
  const downloads=[];
- const h=harness(async(action,input)=>{if(action==='space.preview')return{ok:false,code:'SPACE_PREVIEW_UNSUPPORTED'};if(action==='space.download'){downloads.push(input.id);return ok();}return ok(action==='space.refresh'?{phase:'ready',tasks:[]}:listed('原文件.docx'));});
+ const h=harness(async(action,input)=>{if(action==='space.preview')return{ok:false,code:'SPACE_PREVIEW_DOWNLOAD'};if(action==='space.download'){downloads.push(input.id);return ok();}return ok(action==='space.refresh'?{phase:'ready',tasks:[]}:listed('原文件.sqlite.gz'));});
  h.space.hostState(connected('box'));h.space.activate(true);await tick();
  await h.click('preview-mode');assert.match(h.space.view(),/aria-pressed="true"/);
  await h.click('preview','a'.repeat(32));assert.match(h.space.view(),/下载原文件/);
+ assert.match(h.space.view(),/此格式或大小暂不支持预览/);
+ assert.doesNotMatch(h.space.view(),/space-preview-(retry|fullscreen)/);
  await h.click('preview-download');assert.deepEqual(downloads,['a'.repeat(32)]);
+});
+
+test('a preview timeout offers retry without showing a fullscreen control', async () => {
+ const h = harness(async action => action === 'space.preview' ? { ok:false, code:'SPACE_PREVIEW_TIMEOUT' }
+   : ok(action === 'space.refresh' ? { phase:'ready', tasks:[] } : listed('项目记录.pptx')));
+ h.space.hostState(connected('box')); h.space.activate(true); await tick();
+ await h.click('preview', 'a'.repeat(32));
+ assert.match(h.space.view(), /data-action="space-preview-retry"/);
+ assert.doesNotMatch(h.space.view(), /data-action="space-preview-fullscreen"/);
+});
+
+test("text preview edits in place and retains the draft after a version conflict", async () => {
+  const file = { ...entry("a", "sample.json"), version: 3 };
+  const status = { phase: "ready", tasks: [], accountId: "owner", boxId: "box", scope: "scope", dataContextId: "context", textEditingAvailable: true };
+  const original = '{"value":1}', draft = '{"value":2}', submissions = [];
+  let conflict = true;
+  const h = harness(async (action, input) => {
+    if (action === "space.refresh") return ok(status);
+    if (action === "space.preview") return ok({ type: "text/plain", data: Buffer.from(original).toString("base64") });
+    if (action === "space.open-text-edit") {
+      assert.equal(input.id, file.id);
+      return ok({ file, text: original, eol: "\n", bom: false, editId: "1".repeat(32) });
+    }
+    if (action === "space.save-text-edit") {
+      submissions.push({ ...input });
+      return conflict ? { ok: false, code: "SPACE_VERSION_CONFLICT" } : ok({ ...file, version: 4 });
+    }
+    return ok({ items: [file], breadcrumbs: [] });
+  });
+  h.space.hostState(connected("box")); h.space.activate(true); await tick();
+  await h.click("preview", file.id);
+  assert.match(h.space.view(), /data-action="space-preview-edit">编辑/);
+  await h.click("preview-edit");
+  assert.match(h.space.view(), /<textarea id="space-text-editor"[^>]*>\n\{&quot;value&quot;:1\}/);
+  await h.click("text-edit-save");
+  assert.equal(submissions.length, 0);
+  h.event("input", { target: { id: "space-text-editor", value: draft } });
+  await h.click("text-edit-save");
+  assert.equal(submissions[0].text, draft);
+  assert.equal(submissions[0].expected, 3);
+  assert.match(h.space.view(), /当前草稿仍在/);
+  assert.match(h.space.view(), /&quot;value&quot;:2/);
+  conflict = false;
+  await h.click("text-edit-save");
+  assert.match(h.space.view(), /已保存到盒子/);
+  assert.doesNotMatch(h.space.view(), /id="space-text-editor"/);
 });
 
 test('document preview retains its viewer during background refresh and clears on account change',async()=>{

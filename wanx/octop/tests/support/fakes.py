@@ -334,6 +334,10 @@ description: General-purpose agent
         del before
         return list(self._thread_messages.get(thread_id, []))[-limit:]
 
+    async def aappend_messages(self, thread_id: str, messages: list[Any]) -> list[Any]:
+        self._thread_messages.setdefault(thread_id, []).extend(messages)
+        return messages
+
     def seed_thread_messages(self, thread_id: str, messages: list[Any]) -> None:
         self._thread_messages[thread_id] = list(messages)
 

@@ -30,6 +30,7 @@ ROUTES = (
     ("GET", "/modeling/warehouses", frozenset(), "list_modeling_warehouses"),
     ("POST", rf"/modeling/onboarding/(?P<onboarding_id>{ID})/warehouse", frozenset(), "create_onboarding_warehouse"),
     ("GET", MODELING + "/suggestion-context", frozenset(), "get_modeling_suggestion_context"),
+    ("POST", MODELING + "/assistant-intent", frozenset(), "classify_assistant_intent"),
     ("POST", MODELING + "/warehouse-scope/publish", frozenset(), "publish_warehouse_scope"),
     ("POST", MODELING + "/answer-confirmations", frozenset(), "confirm_modeling_answers"),
     ("POST", MODELING + "/answer-suggestions", frozenset(), "generate_modeling_suggestions"),
@@ -158,7 +159,7 @@ def _impact(value, *, validate=False):
         raise ValueError("Semantica impact digest is invalid")
 
 
-_SCOPE_LIMITS = {"industry": 0, "occupation": 0, "service_objects": 6,
+_SCOPE_LIMITS = {"industry": 0, "occupation": 0, "service_objects": 6, "focus_objects": 6,
     "purposes": 6, "material_sources": 6, "questions_to_answer": 6,
     "excluded_scope": 6, "uncertain_items": 8}
 
@@ -177,12 +178,12 @@ def validate_scope_changes(value):
 
 _BODY_FIELDS = {
     "publish_warehouse_scope": ({"expected_revision", "base_ontology_id", "changes", "confirmed"}, set()),
-    "create_warehouse": ({"name"}, {"description"}),
+    "create_warehouse": ({"name"}, {"description", "warehouse_scope"}),
     "rename_warehouse": ({"name"}, set()),
     "prepare_delete_warehouse": (set(), set()),
     "delete_warehouse": ({"confirmation_token", "typed_name"}, set()),
     "save_onboarding": ({"expected_revision", "answers"}, {"status"}),
-    "create_onboarding_warehouse": ({"expected_revision", "name"}, {"purpose"}),
+    "create_onboarding_warehouse": ({"expected_revision", "name"}, {"purpose", "warehouse_scope"}),
     "confirm_modeling_answers": ({"expected_revision", "onboarding_revision", "answers"}, {"expected_confirmation_id"}),
     "generate_modeling_suggestions": ({"confirmation_id", "base_ontology_id"}, set()),
     "prepare_modeling_rules": ({"proposal_id", "name", "schema", "decisions"}, {"expected_draft_id"}),
@@ -204,6 +205,10 @@ def validate_body(method: str, path: str, body: dict[str, Any] | None) -> str | 
         if body is not None:
             raise ValueError("Semantica bootstrap read cannot carry a body")
         return None
+    if operation == 'classify_assistant_intent':
+        from .starxiaotu_intent import validate_request
+        validate_request(body)
+        return body['operation_id']
     required, optional = _BODY_FIELDS[operation]
     # Read-only impact POSTs intentionally have no mutation idempotency field.
     has_operation = operation not in {"preview_modeling_impact", "validate_modeling_impact"}
@@ -227,6 +232,16 @@ def validate_body(method: str, path: str, body: dict[str, Any] | None) -> str | 
     if operation == "rename_warehouse" and (not 1 <= len(body["name"].strip()) <= 60
             or any(unicodedata.category(char) == "Cc" for char in body["name"])):
         raise ValueError("Semantica warehouse name is invalid")
+    if "warehouse_scope" in body:
+        profile = body["warehouse_scope"]
+        profile_fields = ("occupation", "service_objects", "focus_objects")
+        guided_text = {"industry": 200, "background": 8000, "material_types": 8000, "questions": 8000} if operation == "create_onboarding_warehouse" else {}
+        _fields(profile, (), (*profile_fields, *guided_text))
+        if any(not _text(profile[k], 0, limit) for k, limit in guided_text.items() if k in profile):
+            raise ValueError("Warehouse creation context is invalid")
+        structured = {k: profile[k] for k in profile_fields if k in profile}
+        if structured:
+            validate_scope_changes(structured)
     if "description" in body and not _text(body["description"], 0, 500):
         raise ValueError("Semantica warehouse description is invalid")
     if "purpose" in body and not _text(body["purpose"], 0, 16000):

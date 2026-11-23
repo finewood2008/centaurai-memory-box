@@ -104,6 +104,12 @@ BODIES = {
     contract.OnboardingStart: {**OP, "expected_revision": 0, "draft_digest": "a" * 64},
     contract.OnboardingTurn: {**REV, "draft_digest": "a" * 64, "question_actions": [{"question_id": "audience", "action": "answer", "answer": "研发部门"}]},
     contract.OnboardingPreview: {**REV, "draft_digest": "a" * 64, "name": "研发本体"},
+    contract.OnboardingTrial: {
+        **REV,
+        "draft_digest": "a" * 64,
+        "document_id": "document",
+        "document_version_id": "version",
+    },
     contract.OnboardingPublish: {**OP, "preview_id": "preview", "preview_digest": "b" * 64, "confirmed": True},
     contract.SendMessage: {**REV, "content": "核对合同付款义务"},
     contract.NativeRevision: REV,

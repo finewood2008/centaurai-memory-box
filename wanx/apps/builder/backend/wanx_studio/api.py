@@ -20,7 +20,8 @@ from . import devkit
 class Create(Operation):
     name: str = Field(min_length=1,max_length=80)
     goal: str = Field(min_length=1,max_length=12000)
-    intake: bool = False
+    intake: bool = True
+    target: Literal["client", "expert"] = "client"
 
 class Metadata(Operation):
     action: Literal["rename","auto-name","delete","restore"]
@@ -123,10 +124,6 @@ class Handoff(Operation):
 class SelectFiles(Input):
     ids: list[str] = Field(max_length=10)
 
-class LegacyMigration(Operation):
-    confirmedByUser: Literal[True]
-
-
 def create_router(svc: StudioService, identity, *, local_preview=False, prefix='/api/app-studio'):
     router=APIRouter(prefix=prefix,tags=['Application studio'])
     from .iterative import mount
@@ -135,15 +132,15 @@ def create_router(svc: StudioService, identity, *, local_preview=False, prefix='
     mount_delivery(router, svc, identity)
     from .deployment.api import mount as mount_deployment
     mount_deployment(router, svc, identity)
-    from .deployment.miniapp_api import mount as mount_miniapp_deployment
-    mount_miniapp_deployment(router, svc, identity)
+    from .deployment.directory_api import mount as mount_directory_deployment
+    mount_directory_deployment(router, svc, identity)
     from .deployment.project_expert import mount as mount_project_expert
     mount_project_expert(router, svc, identity)
     router.add_event_handler("startup", svc.deployments.start)
 
     @router.get('/context',summary='Read authenticated studio context and capabilities')
     async def context(owner=Depends(identity)):
-        return {'protocolVersion':2,'mode':'workshop' if getattr(svc,'workshop',False) else 'local-preview' if local_preview else 'wanx','scopeId':digest({'owner':owner,'instance':str(svc.store.root.resolve())}), 'ownerLabel':'隔离验证用户' if local_preview else '万象用户','modelAvailable':bool(svc.model),'filesAvailable':svc.files is not None,'capabilities':['data','model','files',*(['reports'] if getattr(svc,'team',None) else [])],'features':{'taskPreparation':1,'codexInterview':1,'productVersions':1,'continuousWorkspace':1,'engines':1,**({'teamPublishing':1} if getattr(svc,'team',None) else {})}}
+        return {'protocolVersion':2,'mode':'workshop' if getattr(svc,'workshop',False) else 'local-preview' if local_preview else 'wanx','scopeId':digest({'owner':owner,'instance':str(svc.store.root.resolve())}), 'ownerLabel':'隔离验证用户' if local_preview else '万象用户','modelAvailable':bool(svc.model),'filesAvailable':svc.files is not None,'capabilities':list(svc.preparation.contracts({'devKit':True})),'features':{'taskPreparation':1,'codexInterview':1,'productVersions':1,'continuousWorkspace':1,'engines':1,**({'teamPublishing':1} if getattr(svc,'team',None) else {})}}
 
     @router.get('/dev-kit', summary='Read the installed wanx-app-dev-kit contract')
     async def dev_kit(owner=Depends(identity)):
@@ -153,10 +150,6 @@ def create_router(svc: StudioService, identity, *, local_preview=False, prefix='
     async def project_dev_kit(project_id: str, owner=Depends(identity)):
         project = await to_thread(svc.store.get, owner, project_id)
         return await to_thread(devkit.compatibility_report, project, svc.project_root)
-
-    @router.post('/projects/{project_id}/legacy-migration', summary='Create a new standard project from a legacy miniapp')
-    async def legacy_migration(project_id: str, body: LegacyMigration, owner=Depends(identity)):
-        return await to_thread(svc.migrate_legacy, owner, project_id, body.model_dump())
 
     @router.get('/engines')
     async def engines(owner=Depends(identity)):
@@ -186,8 +179,8 @@ def create_router(svc: StudioService, identity, *, local_preview=False, prefix='
 
     @router.get('/capabilities',summary='Read the fixed versioned runtime capability catalog')
     async def capabilities(owner=Depends(identity)):
-        from .preparation import CATALOG,CONTRACT_VERSION
-        return {'version':CONTRACT_VERSION,'items':[{'id':key,**value} for key,value in CATALOG.items()]}
+        from .public_capabilities import catalog,VERSION
+        return {'version':VERSION,'items':[{'id':key,**value} for key,value in catalog(svc.project_root).items()]}
 
     @router.get('/context/sources',summary='Metadata only; no source content or model call')
     async def context_sources(kind:str,parent:str='',owner=Depends(identity)):
@@ -254,9 +247,9 @@ def create_router(svc: StudioService, identity, *, local_preview=False, prefix='
 
     @router.post('/projects',summary='Create a private project idempotently')
     async def create(body:Create,owner=Depends(identity)):
-        if body.intake and has_credentials(body.goal):raise StudioError('INPUT_CREDENTIAL_DETECTED')
-        p=await to_thread(svc.store.create,owner,body.name,body.goal,body.operationId,dev_kit=True)
-        return svc.preparation.enable(owner,p['id']) if body.intake else p
+        if has_credentials(body.goal):raise StudioError('INPUT_CREDENTIAL_DETECTED')
+        p=await to_thread(svc.create_project,owner,body.name,body.goal,body.operationId,target=body.target)
+        return svc.preparation.enable(owner,p['id'])
 
     @router.put('/projects/{project_id}/metadata',summary='Rename or reversibly remove an owned project without changing its PRD')
     async def metadata(project_id:str,body:Metadata,owner=Depends(identity)):
@@ -407,10 +400,6 @@ def create_router(svc: StudioService, identity, *, local_preview=False, prefix='
                 await asyncio.sleep(1)
         return StreamingResponse(stream(),media_type='text/event-stream',headers={'Cache-Control':'no-store'})
 
-    if local_preview:
-        @router.post('/projects/{project_id}/example',summary='Load the explicitly labelled fixed ledger example; never claims a DSH build')
-        async def example(project_id:str,body:Operation,owner=Depends(identity)):
-            return await svc.runner.example(owner,project_id,body.operationId)
     from .client_launch import mount_client_launch
     mount_client_launch(router, svc, identity)
     from .edit_api import mount_edits

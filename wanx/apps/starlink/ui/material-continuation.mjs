@@ -12,7 +12,7 @@ export function stoppedMaterialCard(f){
   if(!canContinueMaterial(f)||retainedMaterialResults(f.state.detail))return '';
   const off=f.state.busy||!f.state.loaded||!!f.saved.pending||!!f.saved.materialDeletion||!!f.saved.upload||!!f.saved.intakeSubmission||!!f.intake.staged;
   const draft=f.state.detail.review?.draft_id||f.changes.record.draftId;
-  return `<div class="cv-conversation-actions cv-material-continuation"><article class="cv-message cv-assistant cv-action-message"><header><strong>整理助手</strong><span>继续处理当前材料</span></header><div class="cv-action-body"><h3>本次处理已停止，材料仍然保留</h3><p>${draft?'已有核对草稿，可以继续修改、核对差异并确认发布。':'可以沿用这份材料和原整理目标，在当前页面重新核对处理计划。'}</p><p>无需重新上传或选择材料，历史对话和已有结果保留。</p>${draft?`<button class="btn btn-primary" data-cv="material-resume-draft" ${off?'disabled':''}>继续核对已有草稿</button>`:''}<button class="btn btn-secondary" data-cv="material-restart" ${off?'disabled':''}>重新开始处理</button><p>重新开始后先确认目标和计划，不会立即抽取或发布。</p></div></article></div>`;
+  return `<div class="cv-conversation-actions cv-material-continuation"><article class="cv-message cv-assistant cv-action-message"><header><strong>资料整理</strong><span>继续处理当前材料</span></header><div class="cv-action-body"><h3>本次处理已停止，材料仍然保留</h3><p>${draft?'已有核对草稿，可以继续修改、核对差异并确认发布。':'可以沿用这份材料和原整理目标，在当前页面重新核对处理计划。'}</p><p>无需重新上传或选择材料，历史对话和已有结果保留。</p>${draft?`<button class="btn btn-primary" data-cv="material-resume-draft" ${off?'disabled':''}>继续核对已有草稿</button>`:''}<button class="btn btn-secondary" data-cv="material-restart" ${off?'disabled':''}>重新开始处理</button><p>重新开始后先确认目标和计划，不会立即抽取或发布。</p></div></article></div>`;
 }
 export async function continueMaterial(f,mode){
   const original=f.state.selectedIntent;

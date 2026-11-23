@@ -7,7 +7,12 @@ import path from "node:path";
 function sourcePaths(root) {
   const canonicalRoot = realpathSync(root);
   const repository = realpathSync(childProcess.execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd: root, encoding: "utf8" }).trim());
-  return [".", ...["../builder", "../team-client/applications/starlink"].filter(relative=>{
+  return [".", ...["../builder", "../starlink",
+    "../personal-client/shell/personal-space.mjs", "../personal-client/shell/space-drive-routing.mjs",
+    "../personal-client/shell/space-annotation-service.mjs", "../personal-client/shell/space-annotations.mjs",
+    "../personal-client/shell/space-annotation-workbench.mjs", "../personal-client/shell/annotation-workbench-contract.mjs",
+    "../personal-client/shell/annotation-content.mjs", "../personal-client/shell/annotation-content-worker.mjs",
+    "../personal-client/local-ui/renderer/personal-space.js", "../../tools/npm-command.mjs"].filter(relative=>{
     const absolute=path.resolve(canonicalRoot,relative), inside=path.relative(repository,absolute);
     return existsSync(absolute) && !inside.startsWith("..") && !path.isAbsolute(inside);
   })];

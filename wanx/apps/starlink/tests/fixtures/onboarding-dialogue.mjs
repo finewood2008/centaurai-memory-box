@@ -29,7 +29,7 @@ export function dialogueFixture({guidance=false}={}){
         if(opening&&!s.can_start)throw fail('MODELING_ONBOARDING_ALREADY_STARTED',409);
         const states=clone(s.draft.question_states||[]);
         for(const a of input.questionActions||[]){const q=states.find(q=>q.question_id===a.question_id);if(!q)throw fail('MODELING_ONBOARDING_QUESTION_STALE',409);Object.assign(q,{status:{answer:'answered',skip:'skipped',uncertain:'uncertain'}[a.action],answer:a.answer||''});}
-        r={resource_id:'turn-'+(++sequence),conversation_id:input.conversationId,status:'generating',kind:opening?'opening':'reply',content:input.content||'',question_actions:clone((input.questionActions||[]).map(a=>({answer:'',...a}))),publication_performed:false};s.turns.items.unshift(r);receipts.set(op,r);db.generations++;
+        r={resource_id:'turn-'+(++sequence),created_at:new Date().toISOString(),conversation_id:input.conversationId,status:'generating',kind:opening?'opening':'reply',content:input.content||'',question_actions:clone((input.questionActions||[]).map(a=>({answer:'',...a}))),publication_performed:false};s.turns.items.unshift(r);receipts.set(op,r);db.generations++;
         if(guidance){s.active_turn_id=r.resource_id;s.can_preview=false;s.can_start=false;}
         if(db.hold)await db.hold;
         if(db.failTurn||opening&&db.failOpening){db.failTurn=false;db.failOpening=false;Object.assign(r,{status:'failed',error_code:'MODELING_ONBOARDING_INVALID_OUTPUT'});if(guidance){s.can_start=s.draft.revision===0;s.can_preview=s.draft.ontology_proposed;}}

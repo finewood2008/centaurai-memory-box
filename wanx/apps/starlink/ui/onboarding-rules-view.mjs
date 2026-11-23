@@ -53,7 +53,7 @@ export function ruleReviewHTML(review) {
         }).join('')}</div>
         <details class="ob-current-definitions"><summary>查看当前生效规则（复用目标）</summary>${ontologyDefinitionsHTML(w.base_ontology.schema,'ob-current')}</details>
       </section><aside class="ob-form-card ob-rule-preview" aria-label="完整本体预览">${rulePreviewHTML(review)}</aside></div>`:''}
-    <div class="ob-footer">${button('back','返回建议',s.busy)}${button('refresh','重新读取进度',s.busy)}
+    <div class="ob-footer">${p?'':button('back','返回建议',s.busy)}${button('refresh','重新读取进度',s.busy)}
     ${s.pending?button('retry','恢复原请求',s.busy||!s.loaded):''}
     ${p?'<button class="ob-button ob-primary" data-ob="enter-created" '+disabled+'>进入知识仓整理材料</button>':''}</div>`;
 }

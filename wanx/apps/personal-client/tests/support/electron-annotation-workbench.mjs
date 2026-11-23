@@ -144,6 +144,9 @@ async function rendererTest(config) {
   assert(matches.items.length === 100 && matches.items.every(row => row.annotation.tags.includes(allTag)), "Space search must consume the same persisted label index");
   const preview = await action("space.preview", { id: ids[0] });
   assert(atob(preview.data).includes("SYNTHETIC IPC BODY 0"), "a recalled authorized file must retain its actual content");
+  const archive = first.items.find(row => row.name.endsWith(".zip"));
+  const fallback = await window.wanxClient.action("space.preview", { id: archive.id });
+  assert(!fallback.ok && fallback.code === "SPACE_PREVIEW_DOWNLOAD", "a ZIP should offer download through the normal IPC result");
   await op("undo", { jobId }); const undone = await idle(jobId);
   assert(undone.job.undone && undone.items.every(row => !row.annotation.tags.includes(allTag)), "undo must restore the latest batch after a process restart");
   const retained = await Promise.all(ids.map(id => action("space.annotation", { id })));

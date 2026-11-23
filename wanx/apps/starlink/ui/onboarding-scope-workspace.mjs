@@ -2,11 +2,11 @@ import {nextScopeQuestion,questionCardsHTML,questionStatus} from './onboarding-d
 
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 export const scopeFields={
-  industry:'行业',occupation:'职业／角色',service_objects:'服务对象',purposes:'用途',
+  industry:'行业',occupation:'职业／角色',service_objects:'服务对象',focus_objects:'关注对象',purposes:'用途',
   material_sources:'资料来源',questions_to_answer:'希望回答的问题',excluded_scope:'排除范围',uncertain_items:'未确定项',
 };
 export const scopeGroups=[
-  ['行业与角色','industry','occupation'],['服务对象','service_objects'],['用途','purposes'],
+  ['行业与角色','industry','occupation'],['服务对象','service_objects'],['关注对象','focus_objects'],['用途','purposes'],
   ['资料来源','material_sources'],['希望回答的问题','questions_to_answer'],['重点与边界','excluded_scope','uncertain_items'],
 ];
 const scopeStatus={pending:'缺失',skipped:'跳过',uncertain:'不确定',deferred:'稍后'};
@@ -85,15 +85,34 @@ export function scopeUnresolvedHTML(questions=[],items=[],deferredQuestionId=nul
   }).join('')}${items.map(item=>`<li>${esc(item)}</li>`).join('')}</ul>`:'<p class="wp-muted">暂无未决问题。</p>';
 }
 
+function changedFields(prior,scope){
+  return Object.keys(scopeFields).filter(key=>prior
+    ? JSON.stringify(values(prior[key]))!==JSON.stringify(values(scope?.[key]))
+    : values(scope?.[key]).length);
+}
+
+export function scopeChangeLabels(snapshot,scope){
+  return changedFields(baseScope(snapshot),scope).map(key=>scopeFields[key]);
+}
+
 export function scopeChangesHTML(snapshot,preview){
   const prior=baseScope(snapshot);
-  const changes=scopeGroups.flatMap(([label,...fields])=>{
-    const changed=fields.filter(key=>prior?JSON.stringify(values(prior[key]))!==JSON.stringify(values(preview.scope?.[key])):values(preview.scope?.[key]).length);
-    return changed.length?[{label,fields:changed}]:[];
-  });
+  const changes=changedFields(prior,preview.scope);
   if(!changes.length)return `<p class="od-scope-empty">${prior?'业务范围与现行一致。':'基础范围暂不可读取，本轮没有可展示的范围内容。'}</p>`;
-  return `${prior?'':'<p class="od-scope-empty" role="status">当前盒端未提供基础范围，以下显示本轮核对的范围。</p>'}
-    <div class="od-scope-review-list">${changes.map(({label,fields})=>`<article><h3>${label}</h3><div class="od-scope-columns">
-      <div><span>现行</span>${scopeValues(prior,fields)}</div><div><span>待发布</span>${scopeValues(preview.scope,fields)}</div>
-    </div></article>`).join('')}</div>`;
+  const rows = keys => `<dl class="od-scope-diff">${keys.map(key => {
+    const before = values(prior?.[key]);
+    const after = values(preview.scope?.[key]);
+    const long = before.concat(after).join('').length > 65;
+    const proposed = after.map(value=>before.length>1&&before.includes(value)
+      ? `<span class="od-scope-retained">${esc(value)}</span>`
+      : esc(value)).join('<br>');
+    return `<div><dt>${scopeFields[key]}</dt><dd${long?' class="od-scope-diff-long"':''}>
+      <span><small>现行</small>${before.map(esc).join('<br>') || (prior?'未指定':'未读取')}</span>
+      <span class="od-scope-diff-arrow" aria-hidden="true">→</span>
+      <strong><small>待发布</small>${proposed || '未指定'}</strong>
+    </dd></div>`;
+  }).join('')}</dl>`;
+  return `${prior?'':'<p class="od-scope-empty" role="status">当前盒端未提供基础范围。</p>'}
+    ${rows(changes.slice(0,4))}
+    ${changes.length>4?`<details class="od-scope-more" id="od-review-scope-more"><summary>展开其余 ${changes.length-4} 项范围变化</summary>${rows(changes.slice(4))}</details>`:''}`;
 }

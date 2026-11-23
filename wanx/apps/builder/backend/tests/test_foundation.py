@@ -2,22 +2,24 @@ import asyncio
 import pytest
 from test_preparation import env, op
 from wanx_studio.contracts import StudioError, check_manifest
-from wanx_studio.foundation import FOUNDATION_PROMPT, foundation_policy
+from wanx_studio.foundation import foundation_policy
+from wanx_studio.public_capabilities import catalog, planning_instruction
 from wanx_studio.iterative import proposal
 
 
 def test_foundation_reaches_every_planning_entry_and_is_not_project_editable():
     from wanx_studio.preparation import INTAKE_PROMPT
     from wanx_studio.product_manager import PROMPT as pm
-    from wanx_studio.edits import PROMPT as edits
+    from wanx_studio.edits import iteration_prompt
     from wanx_studio.client_launch import PROMPT as brief
     from wanx_studio.discovery import interview_prompt
-    for prompt in [INTAKE_PROMPT, pm, edits, brief, interview_prompt()]:
-        assert FOUNDATION_PROMPT in prompt
-    policy = foundation_policy()
-    assert policy['identity']['roles'] == ['admin', 'user']
-    policy['identity']['roles'].append('project-superuser')
-    assert foundation_policy()['identity']['roles'] == ['admin', 'user']
+    project = {'devKit': True}
+    for prompt in [INTAKE_PROMPT, pm, iteration_prompt(project), brief, interview_prompt()]:
+        assert planning_instruction() in prompt
+    policy = foundation_policy(project)
+    assert policy['runtimeCapabilities'] == list(catalog())
+    policy['runtimeCapabilities'].clear()
+    assert foundation_policy(project)['runtimeCapabilities'] == list(catalog())
 
 
 def test_manifests_cannot_create_a_separate_account_store():

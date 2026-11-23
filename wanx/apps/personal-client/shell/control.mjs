@@ -210,8 +210,10 @@ export function registerControlActions({
   });
   reads.add("space-annotation-workbench-contract");
   reads.add("space-annotation-workbench");
+  reads.add("space-redaction-rules");
+  reads.add("space-open-text-edit");
   register("space-annotation-workbench-contract", () => ANNOTATION_WORKBENCH_CONTRACT);
-  for (const method of ["snapshot", "refresh", "stat", "list", "mkdir", "move", "trash", "restore", "purge", "uploads", "download", "downloads", "transfer", "preview", "cancel-preview", "restore-version", "annotation", "set-annotation", "auto-annotate", "search-annotations", "annotation-workbench"]) {
+  for (const method of ["snapshot", "refresh", "stat", "list", "mkdir", "move", "trash", "restore", "purge", "uploads", "download", "downloads", "transfer", "preview", "cancel-preview", "open-text-edit", "save-text-edit", "restore-version", "annotation", "set-annotation", "auto-annotate", "search-annotations", "annotation-workbench", "redaction-rules", "save-redaction-rules", "redact"]) {
     register(`space-${method}`, async (input = {}) => {
       if (!personalSpace) throw new Error("SPACE_UNAVAILABLE");
       if (method === "annotation-workbench") return personalSpace.operation(method, validateWorkbenchInput(input));
@@ -219,7 +221,13 @@ export function registerControlActions({
       if (method === "snapshot" || method === "refresh") return personalSpace[method]();
       if (method === "downloads") return personalSpace.downloads(input.ids);
       if (method === "uploads") return uploadResult(() => personalSpace.uploads(input.parent || "", undefined, input.scope, undefined, input.space_id || "personal", input.folders === true));
-      if (method === "preview") return personalSpace.preview(input.id, {interactive: input.interactive === true});
+      if (method === "preview") {
+        try { return await personalSpace.preview(input.id, {interactive: input.interactive === true}); }
+        catch (error) {
+          if (!["SPACE_PREVIEW_DOWNLOAD", "SPACE_PREVIEW_TOO_LARGE", "SPACE_PREVIEW_UNSUPPORTED"].includes(error.code)) throw error;
+          return { previewRejection: error.code };
+        }
+      }
       if (method === "download") return personalSpace.download(input.id);
       if (method === "transfer") return personalSpace.transfer(input.action, input.id);
       if (method === "purge") {

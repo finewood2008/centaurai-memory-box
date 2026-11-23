@@ -8,10 +8,6 @@ import json
 import re
 from urllib.parse import parse_qsl, unquote, urlsplit
 
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import ec, utils
-
 SAFE_INTEGER = 2**53 - 1
 MAX_PROOF_BYTES = 16384
 MAX_RESPONSE_BYTES = 65536
@@ -221,6 +217,8 @@ def digest(value):
 
 
 def public_key(value):
+    from cryptography.hazmat.primitives.asymmetric import ec
+
     fields(value, {"crv", "kty", "x", "y"})
     need(value["crv"] == "P-256" and value["kty"] == "EC")
     try:
@@ -234,6 +232,8 @@ def public_key(value):
 
 
 def public_jwk(key):
+    from cryptography.hazmat.primitives.asymmetric import ec
+
     if isinstance(key, ec.EllipticCurvePrivateKey):
         key = key.public_key()
     need(isinstance(key, ec.EllipticCurvePublicKey) and isinstance(key.curve, ec.SECP256R1))
@@ -935,6 +935,9 @@ def _decode(proof, kind):
 
 
 def _sign(payload, key, kind):
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec, utils
+
     VALIDATORS[kind](payload)
     need(isinstance(key, ec.EllipticCurvePrivateKey) and isinstance(key.curve, ec.SECP256R1))
     source = (
@@ -946,6 +949,10 @@ def _sign(payload, key, kind):
 
 
 def _verify(proof, key, kind, now_ms=None):
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec, utils
+
     payload, source, raw = _decode(proof, kind)
     if type(key) is dict:
         key = public_key(key)

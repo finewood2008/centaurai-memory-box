@@ -1,15 +1,20 @@
+import { overviewHTML, knowledgeHTML } from './starlink-pages.mjs';
+import { createStarxiaotu, starxiaotuIcon } from './starxiaotu.mjs';
+import { getStarlinkTerm } from '../shared/starlink-glossary.mjs';
+import { mountTermGlossary, starxiaotuTermMarker } from './term-help.mjs';
+import { starxiaotuRecords, starxiaotuOverview, starxiaotuSearchFailure, revealStarxiaotuRecord } from './starxiaotu-records.mjs';
 import { createWorkbenchHost, readWorkbenchReply } from "./native-workbench.js";
 import { createOnboardingUI } from './onboarding.js';
 import { onboardingUnavailable } from './onboarding-dialogue-state.mjs';
 import { enterOnboardingWarehouse } from './onboarding-navigation.mjs';
-import { conversationHTML } from './conversation.js';
+import { materialReaderHTML } from './conversation.js';
 import {changeUserInstruction} from './conversation-changes-view.mjs';
 import {evidenceReferenceHTML} from './material-evidence-view.mjs';
 import {pendingAnnotationHTML} from './import-annotation.mjs';
 import {materialReplySuggestions} from './conversation-view.mjs';
 import {ConversationFlow} from './conversation-state.mjs';
 import {mountMaterialWorkspace,openMaterialUpload} from './material-workspace.mjs';
-import {readWarehouseMaterials,selectWarehouseMaterial,openWarehouseMaterial,startWarehouseMaterialDialogue} from './material-library.mjs';
+import {readWarehouseMaterials,selectWarehouseMaterial,openWarehouseMaterial} from './material-library.mjs';
 import {openMaterialDelete} from './material-deletion.mjs';
 import {continueMaterial,canContinueMaterial} from './material-continuation.mjs';
 import {nextConversationStep} from './conversation-next.mjs';
@@ -22,6 +27,7 @@ import { selectGraph, layoutGraph, edgeGeometry } from "./graph.js";
 import { createGraphMotion } from './graph-motion.mjs';
 import { createGraphExploration } from './graph-exploration-view.mjs';
 const graphMotion = createGraphMotion();
+let graphAutoRotate = false;
 import {createGraphPresentation, presentGraph} from './graph-presentation.mjs';
 const $ = (selector) => document.querySelector(selector);
 const esc = (value) =>
@@ -33,68 +39,38 @@ const esc = (value) =>
       ],
   );
 const bridge = window.semantica;
-let onboardingReturn = { view: 'warehouses', ontologySection: 'published' };
-const onboarding = createOnboardingUI({bridge,
-  show: ({returningToRules, replacing}) => {
-    if (!replacing && !(state.view === 'models' && state.modelOnboarding?.warehouseId === state.warehouseId)) {
-      onboardingReturn = { view: state.view, ontologySection: state.ontologyCategory };
-    }
-    state.onboardingSection = returningToRules ? 'ontology' : 'warehouses';
-    setView('onboarding');
-    return state.view === 'onboarding';
+$('#app').classList.toggle('has-project-banner', !!bridge?.setBannerActions);
+const onboarding = createOnboardingUI({
+  bridge, call,
+  async enter(warehouse, {isCurrent}) {
+    await enterOnboardingWarehouse({
+      warehouseId:warehouse.id, view:'conversation', isCurrent, readWarehouses:()=>call('warehouses'),
+      snapshot:()=>({...state}), select:(id,view)=>selectWarehouse(id,view,true),
+      commit:items=>{state.warehouses=items;},
+    });
   },
-  enter: async (warehouse, {isCurrent, publication, view, quick}) => {
-    if (!workbench.canLeave()) throw new Error('UNSAVED_CHANGES');
-    try {
-      await enterOnboardingWarehouse({warehouseId:warehouse.id,view,isCurrent,readWarehouses:()=>call('warehouses'),
-        snapshot:()=>({...state}),select:(id,destination)=>selectWarehouse(id,destination,true),
-        commit:items=>{state.warehouses=items;}});
-      if (view === 'conversation') {
-        await conversationReady;
-        if (!isCurrent() || state.warehouseId !== warehouse.id || state.view !== view ||
-            basicMaterialWarehouse !== warehouse.id && (!conversationFlow?.state.loaded || conversationFlow.state.warehouseMaterialError))
-          throw new Error('WAREHOUSE_UNAVAILABLE');
-        state.conversationPublication=publication || null;
-        renderConversation();
-      }
-      if (isCurrent()) toast(quick?'数据仓已创建，可以导入资料。':'整理规则已发布。');
-    } catch (error) {
-      if (isCurrent() && state.view !== 'onboarding' && !state.invalid) setView('onboarding');
-      throw error;
-    }
+  onChange() {
+    renderWarehouseDirectory();
+    syncControls();
   },
-  openModels: async (warehouse, {required, isCurrent}) => {
-    const handoff = {warehouseId:warehouse.id, required};
-    try {
-      await enterOnboardingWarehouse({warehouseId:warehouse.id,view:'models',isCurrent,readWarehouses:()=>call('warehouses'),
-        snapshot:()=>({...state}),commit:items=>{state.warehouses=items;},select:(id,view)=>{
-          state.modelOnboarding=handoff;
-          $("#model-scope").value='warehouse';
-          return selectWarehouse(id,view,true);
-        }});
-      onboarding.close();
-      $("#model-onboarding-return").focus({preventScroll:true});
-    } catch (error) {
-      if (isCurrent() && state.modelOnboarding===handoff) state.modelOnboarding=null;
-      throw error;
-    }
+  onCreated() {
+    toast('星图已就绪，可以导入资料。');
+    $('#page-primary').focus({preventScroll:true});
   },
-  leave: () => setView(onboardingReturn.view, false, onboardingReturn.ontologySection),
-  onClose: () => { if (state.view !== 'onboarding') syncControls(); },
 });
 const typeDisplay = code => state.graphPresentation.entity(code);
 const messages = {
-  SKILL_ID_CONFLICT:"当前数据仓已存在同名 Skill，不会覆盖；请修改 ZIP 名称标识或先下载后删除旧版本。",
+  SKILL_ID_CONFLICT:"当前星图已存在同名 Skill，不会覆盖；请修改 ZIP 名称标识或先下载后删除旧版本。",
   SKILL_TOO_LARGE:"Skill ZIP 不能超过 4 MiB，解压文本最多 8 MiB。",
   SKILL_INVALID_REQUEST:"文件或请求格式不正确，请检查 SKILL.md 和确认名称。",
   SKILL_PACKAGE_PATH:"ZIP 含不安全路径或重复文件，请检查后重试。",
-  SKILL_NOT_FOUND:"方法已删除或不属于当前数据仓，请刷新。",
+  SKILL_NOT_FOUND:"方法已删除或不属于当前星图，请刷新。",
   SKILL_REVISION_CONFLICT:"方法版本已变化，请重新读取后操作。",
   SKILL_REFERENCED:"还有方法依赖此 Skill，请先处理依赖或明确允许它们失效。",
   REASONING_DELIVERY_STALE:"方法、材料或检测规则已变化，请重新准备后试读。",
-  REASONING_SCOPE_REQUIRED:"请勾选当前仓的资料后重新准备。",
+  REASONING_SCOPE_REQUIRED:"请勾选当前星图的资料后重新准备。",
   REASONING_SCOPE_CHANGED:"方法或材料版本已变化，请重新准备。",
-  REASONING_PREPARATION_NOT_FOUND:"准备记录已失效或不属于当前账号、数据仓，请重新准备。",
+  REASONING_PREPARATION_NOT_FOUND:"准备记录已失效或不属于当前账号、星图，请重新准备。",
   MODEL_SHARED_REQUIRED: "知识抽取与脱敏检测共用同一个模型，请刷新后统一设置。",
   MODEL_CLOUD_CONFIRMATION_REQUIRED: "请先确认所选在线服务将接收未经脱敏的正文片段。",
   MODEL_CONFIG_CONFLICT: "模型设置已更新，请刷新后重新确认。",
@@ -103,8 +79,8 @@ const messages = {
   MODEL_AUTH_REQUIRED: "模型授权已失效，请重新连接万象。",
   MODEL_BILLING_REQUIRED: "云端模型因计费问题无法调用，请在模型设置选择可用的模型。",
   MODEL_UNAVAILABLE: "模型已停用或删除，请在万象检查模型配置。",
-  MODEL_DEFAULT_UNAVAILABLE: "WANX 默认模型暂不可用，请在万象模型设置中检查默认模型。",
-  MODEL_DEFAULT_NOT_CONFIGURED: "WANX 默认模型暂不可用，请在万象模型设置中检查默认模型。",
+  MODEL_DEFAULT_UNAVAILABLE: "万象底座的默认模型暂不可用，请在万象模型设置中检查。",
+  MODEL_DEFAULT_NOT_CONFIGURED: "万象底座尚未配置可用的默认模型。配置后，星图会自动使用。",
   MODEL_CONFIG_CHANGED: "模型服务配置已变化，请重新检查并确认。",
   MODEL_OPTIONS_INVALID: "思考模式参数无效，请重新选择。",
   MODEL_THINKING_UNSUPPORTED: "当前模型或万象版本不支持此思考模式，请刷新模型目录后选择。",
@@ -129,7 +105,7 @@ const messages = {
   SEMANTICA_NOT_CONFIGURED: "盒端尚未配置星图服务。",
   SEMANTICA_ANNOTATION_SEARCH_UNAVAILABLE: "当前无法按标签筛选，请更新盒端服务或清除标签后重试。",
   SEMANTICA_CONNECTION_FAILED: "当前连接不可用，请检查万象与盒子的连接后重试。",
-  WAREHOUSE_BUSY: "当前数据仓正在处理或清理，可切换其他仓，或稍后重试。",
+  WAREHOUSE_BUSY: "当前星图正在处理或清理，可切换其他星图，或稍后重试。",
   NETWORK_NOT_READY:
     "万象正在恢复网络连接。已提交的任务仍由盒端处理，请稍后刷新。",
   SEMANTICA_SERVICE_UNAVAILABLE: "知识服务暂时不可用，请稍后刷新。",
@@ -194,6 +170,165 @@ const state = {
   graphPresentation: createGraphPresentation(),
   graphOntology: null,
 };
+function starxiaotuScope(warehouseId=state.warehouseId) {
+  return state.ready && !state.invalid && state.identity ? JSON.stringify([
+    state.identity.accountId,state.identity.boxId,state.identity.user.id,warehouseId,
+  ]) : null;
+}
+const starxiaotu = createStarxiaotu({
+  identifyIntent:body=>call('assistant-intent',{body}),
+  hasProject:()=>!!state.warehouseId,
+  root:$('#content'), rail:$('#starlink-rail'), scope:starxiaotuScope,
+  project:() => currentWarehouse()?.name || '个人空间',
+  view:() => state.view==='graph'&&state.mode==='list'?'data':state.view,
+  materialContext:()=>{
+    if(state.view!=='conversation')return null;
+    const material=conversationFlow?.state.librarySelection?.document || state.source?.document;
+    if(!material || material.deleted_at || material.status==='deleted')return null;
+    return {key:material.id,title:material.original_name||material.name||''};
+  },
+  async search(query,source) {
+    if(!state.warehouseId)return {results:[],complete:true};
+    if(source?.documentId){
+      const payload=await call('search',{query:query.trim(),documentIds:[source.documentId]});
+      const items=(Array.isArray(payload?.items)?payload.items:Array.isArray(payload?.results)?payload.results:[]).filter(item=>item?.document_id===source.documentId);
+      return starxiaotuRecords({graph:{nodes:[],edges:[]},documents:state.documents.filter(d=>d.id===source.documentId),resolvedQuery:true},query,{items});
+    }
+    const snapshot={graph:state.graph,documents:state.documents,resolvedQuery:true};
+    const local=starxiaotuRecords(snapshot,query);
+    if(local.complete)return local;
+    try {
+      const payload=await call('search',{query:query.trim()});
+      return starxiaotuRecords(snapshot,query,payload);
+    } catch(error) {
+      if(['WAREHOUSE_CHANGED','HOST_SESSION_EXPIRED'].includes(error.code))throw error;
+      if(local.results.length){const failure=starxiaotuSearchFailure(error);return {...local,message:failure.answer+' 以下仅展示当前已加载记录。',errorCode:failure.code};}
+      throw error;
+    }
+  },
+  async overview(metric='summary') {
+    const warehouseId=state.warehouseId;
+    const snapshot={warehouse:currentWarehouse(),documents:state.documents,graph:state.graph};
+    const [warehouse,documents]=await Promise.allSettled([call('warehouse',{id:warehouseId},warehouseId),call('documents',{limit:100},warehouseId)]);
+    for(const result of [warehouse,documents])if(result.status==='rejected' && ['WAREHOUSE_CHANGED','HOST_SESSION_EXPIRED'].includes(result.reason?.code))throw result.reason;
+    const validWarehouse=warehouse.status==='fulfilled' && warehouse.value?.id===warehouseId;
+    const validDocuments=documents.status==='fulfilled' && Array.isArray(documents.value?.items);
+    const current=validWarehouse ? warehouse.value : snapshot.warehouse;
+    const rows=validDocuments ? documents.value.items : snapshot.documents;
+    return starxiaotuOverview({...snapshot,warehouse:current,documents:rows,metric,
+      notice:!validWarehouse||!validDocuments?'部分最新数据读取失败，以下包含当前已加载的项目数据，可刷新后重新查询。':''});
+  },
+  async queryOntology() {return readWorkbenchReply(await call('conversation-ontologies'));},
+  canEditOntology:() => canCreateWarehouse() && currentWarehouse()?.state==='active',
+  async ask(input, warehouseId=state.warehouseId) {
+    const snapshot = {documents:warehouseId===state.warehouseId ? state.documents : []};
+    const reply = await call('starxiaotu-answer',input,warehouseId);
+    return {...reply,results:starxiaotuRecords(snapshot,'',{items:reply.items}).results};
+  },
+  navigate:navigateStarxiaotu,
+});
+function starxiaotuMarker(context) {
+  return `<span class="sx-title-anchor"><button type="button" class="sx-context" data-starxiaotu-context="${context}" aria-label="向星小图了解${{overview:'概览',ontology:'本体',conversation:'资料库',knowledge:'数据列表',graph:'星图',data:'数据列表',models:'模型设置',warehouses:'项目'}[context] || '当前板块'}">${starxiaotuIcon}</button></span>`;
+}
+function explainStarxiaotuTerm(key) {
+  const term = getStarlinkTerm(key);
+  if (term) starxiaotu.explain(term.guide, term.label, term.definition);
+}
+mountTermGlossary($('#help-dialog'));
+function syncStarxiaotu() {
+  starxiaotu.sync();
+  const title=$('#page-title');
+  if(['overview','ontology','conversation','knowledge'].includes(state.view) && !title.querySelector('.sx-context'))
+    title.insertAdjacentHTML('beforeend',starxiaotuMarker(state.view));
+  for (const anchor of document.querySelectorAll('[data-starxiaotu-glossary]:empty')) {
+    anchor.innerHTML = starxiaotuTermMarker(anchor.dataset.starxiaotuGlossary);
+  }
+}
+async function navigateStarxiaotu(target) {
+  if(!state.ready || state.invalid)return false;
+  const revealPage=(view=target.view)=>{
+    const section=view==='data'?$('#relation-list'):view==='graph'?$('.graph-controls'):workbench.has(view)?$('#view-workbench'):$('#view-'+view);
+    return revealStarxiaotuRecord(section?.querySelector('h1,h2,h3') || section);
+  };
+  const currentView=state.view==='graph'&&state.mode==='list'?'data':state.view;
+  if(target.guide && target.view===currentView)return revealPage(currentView);
+  if(!workbench.canLeave())return false;
+  if(target.configuration==='create-project') {
+    await openWarehouseSetup();
+    return onboarding.visible;
+  }
+  if(target.configuration==='dialogue-models') {
+    if(state.view!=='models')setView('models');
+    return state.view==='models' && revealStarxiaotuRecord($('#starxiaotu-model-settings'));
+  }
+  if(!state.warehouseId)return false;
+  const generation=state.generation;
+  if(target.configuration==='material') {
+    if(state.view!=='conversation')setView('conversation');
+    if(state.view!=='conversation')return false;
+    await conversationReady;
+    if(state.generation!==generation || state.view!=='conversation')return false;
+    $('#page-primary')?.focus();
+    return true;
+  }
+  if(target.configuration==='ontology') {
+    if (!canCreateWarehouse() || currentWarehouse()?.state !== 'active') return false;
+    setView('ontology', false, 'drafts');
+    return state.view === 'ontology';
+  }
+  if(target.configuration==='import') {
+    if(state.view!=='conversation')setView('conversation');
+    if(state.view!=='conversation')return false;
+    await action('import');
+    return $('#import-dialog').open;
+  }
+  if(target.kind==='document') {
+    if(!/^[A-Za-z0-9_-]{1,128}$/.test(target.documentId || ''))return false;
+    setView('conversation');
+    if(state.view!=='conversation')return false;
+    await showSource(target.documentId,null,target.versionId || '',{segment:target.segmentId,start:target.start});
+    if(state.generation!==generation || state.invalid || state.source?.document?.id!==target.documentId)return false;
+    return revealStarxiaotuRecord($('#source-body .source-segment'));
+  }
+  if(target.kind==='entity') {
+    if(!state.graph.nodes.some(node=>node.id===target.recordId))return false;
+    setView('knowledge');
+    if(state.view!=='knowledge')return false;
+    $('#knowledge-query').value='';
+    state.knowledgeEntity=target.recordId;
+    renderKnowledge();
+    return revealStarxiaotuRecord([...document.querySelectorAll('#knowledge-list [data-entity-page]')].find(el=>el.dataset.entityPage===target.recordId));
+  }
+  if(target.kind==='relation') {
+    if(!state.graph.edges.some(edge=>edge.id===target.recordId))return false;
+    setView('graph');
+    if(state.view!=='graph')return false;
+    state.type='all';state.graphOverview=false;state.showIsolated=true;
+    state.selectedNode=state.selectedEdge=null;
+    $('#graph-query').value='';explorer.reset();renderFilters();renderGraph();
+    $('[data-mode="list"]').click();
+    state.selectedEdge=target.recordId;state.detailsDismissed=false;renderGraph();
+    return revealStarxiaotuRecord([...document.querySelectorAll('#relation-list tr[data-edge]')].find(el=>el.dataset.edge===target.recordId));
+  }
+  if(target.view==='data'||target.view==='graph') {
+    setView('graph');if(state.view!=='graph')return false;
+    const mode=target.view==='data'?'list':'graph';
+    $('[data-mode="'+mode+'"]').click();
+    return state.view==='graph'&&state.mode===mode && (target.guide ? revealPage() : true);
+  }
+  if(!['overview','ontology','conversation','knowledge','graph','models','warehouses','tasks','sensitive'].includes(target.view))return false;
+  setView(target.view,false,target.view==='ontology'?'published':undefined);
+  return state.view===target.view && (!target.guide || revealPage());
+}
+document.addEventListener('click',event=>{
+  const button=event.target.closest('[data-starxiaotu-context],[data-starxiaotu-term]');
+  if (!button) return;
+  event.preventDefault();
+  if (button.dataset.starxiaotuTerm) {
+    button.closest('#help-dialog')?.close();
+    explainStarxiaotuTerm(button.dataset.starxiaotuTerm);
+  } else starxiaotu.explain(button.dataset.starxiaotuContext);
+});
 const explorer = createGraphExploration({state,pick:$,esc,call,readReply:readWorkbenchReply,
   present:graphLayout,motion:graphMotion,redraw:() => {renderFilters();renderGraph();},
   selectEdge,notice:error => toast(errorText(error)),typeDisplay});
@@ -224,11 +359,14 @@ function banner(message) {
   $("#connection-notice").hidden = !message;
 }
 async function call(action, input, warehouseId = state.warehouseId) {
+  const systemModel = warehouseId === null && ["processing", "model-catalog", "check-models", "save-models", "sync-models", "starxiaotu-models", "save-starxiaotu-model"].includes(action);
+  const changesSensitiveSettings = action === 'workbench-request' && input?.method === 'POST' &&
+    /^\/api\/(?:sensitive\/(?:settings|preview)|jobs\/[A-Za-z0-9_-]{1,128}\/retry)(?:\?|$)/.test(input.url);
   if (
     state.preview &&
-    [
+    (changesSensitiveSettings || [
       "import-skill", "delete-skill", "download-skill",
-      "check-models", "save-models", "reprocess-models",
+      "check-models", "save-models", "sync-models", "reprocess-models", "starxiaotu-answer", "assistant-intent", "starxiaotu-models", "save-starxiaotu-model",
       "select-space-files",
       "upload",
       "download",
@@ -242,7 +380,7 @@ async function call(action, input, warehouseId = state.warehouseId) {
       "clear-warehouse",
       "prepare-delete",
       "delete-warehouse",
-    ].includes(action)
+    ].includes(action))
   )
     throw Object.assign(new Error("READ_ONLY_PREVIEW"), {
       publicMessage: "这是实际数据的只读效果预览，请从万象打开星图进行操作。",
@@ -256,6 +394,7 @@ async function call(action, input, warehouseId = state.warehouseId) {
       code: "WANX_HOST_REQUIRED",
     });
   const generation = state.generation;
+  const identity = state.identity;
   const reply = await bridge.call(action, {
     ...input,
     warehouseId,
@@ -265,11 +404,11 @@ async function call(action, input, warehouseId = state.warehouseId) {
     code: reply?.code, status: reply?.status, publicMessage: reply?.message,
   });
   const result = envelope ? reply.value : reply;
-  if (state.invalid)
+  if (state.invalid || systemModel && identity !== state.identity)
     throw Object.assign(new Error("HOST_SESSION_EXPIRED"), {
       code: "HOST_SESSION_EXPIRED",
     });
-  if (generation !== state.generation)
+  if (!systemModel && generation !== state.generation)
     throw Object.assign(new Error("WAREHOUSE_CHANGED"), {
       code: "WAREHOUSE_CHANGED",
     });
@@ -288,15 +427,16 @@ function canUploadFile(file) {
   return !file.done && !needsNewFileSelection(file);
 }
 function syncControls() {
-  const creationEnabled = canCreateWarehouse() && state.view !== "onboarding" && !onboarding.visible;
-  bridge?.setCreationEnabled?.(creationEnabled);
-  const warehouse = currentWarehouse();
-  const suggestions = $("#page-ontology-suggestions");
-  suggestions.hidden = state.view !== "conversation" || warehouse?.state !== "active" ||
-    basicMaterialWarehouse === state.warehouseId || !(warehouse.document_count > 0 || state.documents?.length);
-  suggestions.disabled = suggestions.hidden || importBlocked();
-  const batchImport = $("#page-batch-import");
-  batchImport.hidden = state.view !== "conversation" || basicMaterialWarehouse === state.warehouseId;
+  syncStarxiaotu();
+  const creationEnabled = canCreateWarehouse() && !onboarding.visible;
+  const directoryEnabled = state.ready && !state.invalid && !onboarding.busy;
+  $('#starlink-directory-entry').disabled = !directoryEnabled;
+  bridge?.setDirectoryEnabled?.(directoryEnabled);
+  $('#page-tasks').hidden = state.view !== 'conversation' || !state.warehouseId;
+  $('#page-return-library').hidden = state.view !== 'tasks';
+  const batchImport = $('#page-batch-import');
+  batchImport.hidden = state.view !== 'conversation' || basicMaterialWarehouse === state.warehouseId;
+  $('#starlink-sidebar-project').disabled = !directoryEnabled || state.uploading || state.spaceSelecting;
   batchImport.disabled = batchImport.hidden || importBlocked();
   batchImport.textContent = state.importFiles.standard.some(file => !file.done) ? "继续批量导入" : "批量导入";
   document.querySelectorAll('[data-action="new-warehouse"]').forEach(button => {
@@ -307,6 +447,7 @@ function syncControls() {
     .forEach(
       (b) => (b.disabled = importBlocked()),
     );
+  $('#starlink-sidebar-import').disabled = !directoryEnabled || importBlocked();
   $("#confirm-import").disabled =
     !state.ready || state.uploading || state.spaceSelecting ||
     (state.importContext === "conversation" ? state.files.length !== 1 || state.files[0].done : !state.files.some(canUploadFile));
@@ -334,7 +475,8 @@ function importBlocked() {
   return !!(!state.ready || !state.warehouseId || currentWarehouse()?.state !== 'active' ||
     state.importOpening || state.uploading || state.spaceSelecting ||
     state.view === 'conversation' && basicMaterialWarehouse !== state.warehouseId && (!conversationFlow?.state.loaded || conversationFlow.state.busy ||
-      conversationFlow.saved.pending || conversationFlow.saved.upload || conversationFlow.saved.intakeSubmission || conversationFlow.saved.roundOpening));
+      conversationFlow.saved.pending || conversationFlow.saved.upload || conversationFlow.saved.intakeSubmission ||
+      conversationFlow.saved.roundOpening || conversationFlow.importer?.sourceEdit));
 }
 function connection(ready) {
   state.ready = ready;
@@ -351,8 +493,8 @@ function connection(ready) {
 function invalidate() {
   if (state.invalid) return;
   state.invalid = true;
+  starxiaotu.invalidate();
   state.saving = state.sourceLoading = false;
-  state.modelOnboarding=null;
   stopConversation();
   onboarding.reset();
   state.generation++;
@@ -363,11 +505,10 @@ function invalidate() {
   $("#warehouse-picker-query").value = "";
   state.warehouseId = null;
   state.importFailure = null;
-  state.conversationPublication=null;
-  state.conversationOnboarding=null;
   renderConversation();
   state.runtime = null;
-  state.processing = null; state.modelConfig = null; state.modelCatalog = []; state.modelRequest = (state.modelRequest || 0) + 1;
+  state.processing = null; state.externalEmbedding = false; state.modelConfig = null; state.modelCatalog = []; state.modelRequest = (state.modelRequest || 0) + 1;
+  state.modelSync = null;
   state.documents = [];
   state.jobs = [];
   state.graph = { nodes: [], edges: [] };
@@ -525,7 +666,7 @@ function renderFilters() {
   const enhanced = explorer.enabled();
   const exact = $("#graph-exact-type");
   exact.hidden = !enhanced;
-  $("#graph-types-label").textContent = enhanced ? '本体标签' : '实体类型';
+  $("#graph-types-label").innerHTML = (enhanced ? '本体标签' : '实体类型') + starxiaotuTermMarker(enhanced ? 'ontology-label' : 'entity-type');
   explorer.menu();
   if (enhanced) {
     const all = [...new Set([...explorer.types().map(type => type.name),...ts])];
@@ -568,11 +709,12 @@ function renderFilters() {
   }
 }
 function transformScene() {
-  if (state.view !== 'graph' || state.mode !== 'graph') { graphMotion.reset(); return; }
+  if (!panelVisible || state.view !== 'graph' || state.mode !== 'graph') { graphMotion.reset(); return; }
   const graph = visibleGraph();
   const counts = new Map(graph.nodes.map(n => [n.id, {relations:n.degree}]));
   graphMotion.schedule(graph, JSON.stringify([state.generation, state.warehouseId]), {
     counts, metric:'relations', max:Math.max(1, ...graph.nodes.map(n => n.degree)),
+    autoRotate: graphAutoRotate && !state.selectedNode && (!state.selectedEdge || state.detailsDismissed), spatial: true,
     expansion:explorer.revision, parents:explorer.parents, afterMount:explorer.applyCamera,
   });
 }
@@ -601,6 +743,7 @@ function renderGraph() {
   const emptyAction = $("#graph-empty-action");
   emptyAction.disabled = emptyAction.dataset.action === "new-warehouse" && !canCreateWarehouse();
   renderGraphSuggestions(state.selectedNode ? "" : query, g.nodes);
+  $("#graph-auto-rotate").disabled = g.nodes.length < 2;
   $("#nodes-total").textContent = g.nodes.length;
   $("#graph-show-isolated").checked = state.showIsolated;
   $("#edges-total").textContent = g.edges.length;
@@ -652,7 +795,7 @@ function renderGraph() {
   transformScene();
   $(
     "#relation-list",
-  ).innerHTML = `<table class="relation-table"><thead><tr><th>主体</th><th>关系</th><th>客体</th><th>来源</th></tr></thead><tbody>${g.edges.filter(edge => !look?.omitted.has(edge.id))
+  ).innerHTML = `<h2 class="sx-data-heading">数据列表${starxiaotuMarker('data')}</h2><table class="relation-table"><thead><tr><th>主体</th><th>关系${starxiaotuTermMarker('relation')}</th><th>客体</th><th>来源证据${starxiaotuTermMarker('evidence')}</th></tr></thead><tbody>${g.edges.filter(edge => !look?.omitted.has(edge.id))
     .map(
       (e) =>
         `<tr data-edge="${esc(
@@ -694,11 +837,11 @@ function renderGraphEmpty(query, warehouse) {
       actionName = "show-graph-isolated"; label = "显示孤立节点";
     }
   } else if (state.ready && !state.warehouseId) {
-    title = "创建你的第一座数据仓"; message = "导入资料后，星图会呈现其中的实体和关系。";
-    actionName = "new-warehouse"; label = "新建数据仓";
+    title = "建立我的星图"; message = "填写名称即可创建，随后可以导入资料。";
+    actionName = "new-warehouse"; label = "新建星图";
   } else if (state.ready && (warehouse?.document_count !== 0 || warehouse?.active_jobs)) {
     const count = warehouse?.document_count;
-    title = warehouse?.active_jobs ? "正在处理资料" : count > 0 ? "知识图谱尚未生成" : "正在读取数据仓状态";
+    title = warehouse?.active_jobs ? "正在处理资料" : count > 0 ? "星图尚未生成" : "正在读取星图状态";
     message = (count > 0 ? `已导入 ${count} 份材料。` : "") + "可以在任务中心查看知识提取和入图进度。";
     actionName = "graph-tasks"; label = "查看任务";
   } else if (state.ready) {
@@ -740,7 +883,7 @@ function renderDetails(g) {
     <span aria-hidden="true">›</span><span>关系来源</span>` : `<span>${esc(n?.name || "相关关系")}</span>`}`;
   const details = $("#graph-details");
   const markup = `<div class="detail-top"><div class="type-line"><span>${
-    n ? esc(typeDisplay(n.type).label) : "知识图谱"
+    n ? esc(typeDisplay(n.type).label) : "星图"
   }</span><span>${n ? "实体详情" : "选择实体或关系"}</span></div><h2>${
     n ? esc(n.name) : "从一个节点开始"
   }</h2><p>${
@@ -818,7 +961,7 @@ function selectEdge(id) {
   if (changed) { fitGraph(); transformScene(); }
 }
 const skillsUi = createSkillsUI({call,state,esc,toast,errorText});
-const workbench = createWorkbenchHost({ call, warehouse: () => state.invalid ? null : state.warehouseId,
+const workbench = createWorkbenchHost({ call, onAssistantTerm: explainStarxiaotuTerm, onOutsideClick: starxiaotu.dismiss, warehouse: () => state.invalid ? null : state.warehouseId,
   container: () => $("#mw-editor-content")||$("#view-workbench"),
   onView: view => { if (!$('#mw-editor-dialog')&&workbench.has(state.view) && pages[view]) setView(view, true); },
   onImport: openMaterialFromWorkbench,
@@ -834,37 +977,56 @@ const workbench = createWorkbenchHost({ call, warehouse: () => state.invalid ? n
 });
 let panelVisible = true;
 bridge?.register?.({
-  visible(value) { panelVisible = value; if (!value) graphMotion.reset(); },
-  createWarehouse: () => action("new-warehouse").catch(error => toast(errorText(error))),
+  visible(value) { panelVisible = value; transformScene(); },
+  dismissAssistant: starxiaotu.dismiss,
+  openGraph() {
+    if (!state.ready || state.invalid || state.view === 'graph' || document.querySelector('dialog[open]') ||
+        !workbench.canLeave()) return;
+    setView('graph');
+  },
+  chooseProject: () => action('choose-warehouse').catch(error => toast(errorText(error))),
+  async importMaterial() {
+    if (importBlocked() || !workbench.canLeave()) return;
+    const generation = state.generation;
+    if (state.view !== 'conversation') {
+      setView('conversation');
+      if (state.view !== 'conversation') return;
+      await conversationReady;
+    }
+    if (generation === state.generation && state.view === 'conversation')
+      await action('import').catch(error => toast(errorText(error)));
+  },
+  openWarehouseDirectory: () => action("all-warehouses").catch(error => toast(errorText(error))),
 });
 const pages = {
-  onboarding: ["数据仓设置", "", ""],
-  ontology: ["本体与关系", "", "查看数据仓会识别哪些实体，以及它们如何关联。"],
+  overview: ["概览", "", "查看当前星图的目标、待处理资料和知识快照。"],
+  knowledge: ["数据列表", "", "按实体查看属性、关系和对应原文。"],
+  ontology: ["本体", "", "规定从资料里识别哪些对象、记录哪些属性，以及对象之间能建立什么关系。"],
   review: ["知识核对", "REVIEW WITH EVIDENCE", "对照原始材料核对实体与关系，保留修改和发布依据。"],
   releases: ["版本历史", "KNOWLEDGE THROUGH TIME", "查看知识发布记录，对比变化，追溯每个版本的来源。"],
-  skills: ["Skill 管理", "METHODS FOR YOUR KNOWLEDGE", "按数据仓保管推理方法，给其他 AI 应用可靠的分析路径。"],
-  models: ["模型设置", "KNOW HOW YOUR KNOWLEDGE IS BUILT", "为当前数据仓或星图默认范围配置处理模型。"],
-  warehouses: ["数据仓", "YOUR KNOWLEDGE SPACES", "查看各仓的资料、图谱和处理状态。"],
+  skills: ["Skill 管理", "METHODS FOR YOUR KNOWLEDGE", "按星图保管推理方法，给其他 AI 应用可靠的分析路径。"],
+  models: ["模型设置", "KNOW HOW YOUR KNOWLEDGE IS BUILT", "选择星小图模型，查看和调整资料处理模型。"],
+  warehouses: ["我的项目", "", "每个项目有独立的资料、本体和星图。"],
   data: [
     "数据管理",
     "YOUR KNOWLEDGE, YOUR CONTROL",
     "保管资料、管理知识，决定它们如何被使用。",
   ],
   graph: [
-    "知识图谱",
+    "星图",
     "A MAP OF WHAT YOU KNOW",
-    "把你的资料，连成可追溯、可调用的知识。",
+    "查看当前星图中的实体和关系，沿关系回到原文。",
   ],
   conversation: ['资料库','IMPORT MATERIALS','导入资料，查看正文和知识处理进度。'],
   tasks: [
     "处理任务",
     "FROM MATERIALS TO KNOWLEDGE",
-    "查看当前仓的处理进度和失败原因。",
+    "查看当前星图的处理进度和失败原因。",
   ],
   sensitive: [
-    "脱敏设置",
-    "SHARE KNOWLEDGE WITH CARE",
-    "为知识的使用与交付，设置清晰的边界。",
+    "脱敏规则",
+    "",
+    "设置对外提供知识时的脱敏方式。",
   ],
 };
 const ontologyHeadings = {
@@ -877,36 +1039,41 @@ function updatePageHeading() {
   $("#page-title").textContent = $("#crumb-current").textContent = heading;
   $("#page-kicker").textContent = kicker;
   $("#page-description").textContent = subtitle;
+  syncStarxiaotu();
 }
 function updateCurrentNavigation() {
-  document.querySelectorAll('[data-view], [data-ontology-action], #rules-guide-entry').forEach(el => {
-    const current = state.view === "onboarding"
-      ? state.onboardingSection === "ontology" ? el.id === "rules-guide-entry" : el.dataset.view === "warehouses"
-      : state.view === "ontology" ? el.dataset.view === "ontology" || el.dataset.ontologyAction === state.ontologyCategory : el.dataset.view === state.view;
+  document.querySelectorAll('.starlink-rail [data-view]').forEach(el => {
+    const current = state.view === "tasks" ? el.dataset.view === "conversation"
+      : state.view === "ontology" ? el.dataset.view === "ontology" || el.dataset.ontologyAction === state.ontologyCategory
+        : el.dataset.view === state.view;
     if (current) el.setAttribute("aria-current", "page");
     else el.removeAttribute("aria-current");
   });
 }
-function setView(view, fromWorkbench = false, ontologyAction, onboardingHandoff = false, materialDocumentId) {
+function setView(view, fromWorkbench = false, ontologyAction, onboardingHandoff = false, materialDocumentId, materialCitation) {
   // This built-in panel exposes the migrated knowledge workflows only.
-  if (['skills', 'api', 'data', 'sensitive', 'releases'].includes(view)) view = 'warehouses';
+  if (['skills', 'api', 'data', 'releases'].includes(view)) view = 'warehouses';
   if(view==='review'&&!fromWorkbench){if(!state.ready||state.invalid)return;view='conversation';}
   // Skill management is temporarily hidden; keep its implementation for later.
   if (view === "skills" || view === "api") view = "warehouses";
   if (!pages[view]) return;
-  if (state.view === 'onboarding' && view !== 'onboarding' && !onboardingHandoff && onboarding.busy) return;
-  const integrated = workbench.has(view);
-  if ((integrated || view==='conversation') && !fromWorkbench && !state.warehouseId && state.ready && !state.invalid) {
-    setView("warehouses");
-    toast("请先选择或创建一座数据仓，再使用知识管理。");
+  if (conversationFlow&&!conversationFlow.importer.canLeaveSource()) {
+    toast('请先保存或关闭正文编辑。');
     return;
+  }
+  if (onboarding.busy && !onboardingHandoff) return;
+  const integrated = workbench.has(view);
+  if ((integrated || ['overview','knowledge','conversation','tasks'].includes(view)) && !fromWorkbench && !state.warehouseId && state.ready && !state.invalid) {
+    setView("warehouses");
+    toast("请先选择或新建一张星图，再使用知识管理。");
+    return;
+  }
+  if (state.view === 'sensitive' && view !== 'sensitive' && !fromWorkbench && !integrated) {
+    if (!workbench.canLeave()) return;
+    workbench.reset();
   }
   if (integrated && !fromWorkbench && !workbench.show(view, ontologyAction)) return;
   const previousView = state.view;
-  if (previousView === 'models' && view !== 'models') state.modelOnboarding=null;
-  if (previousView === 'onboarding' && view !== 'onboarding' && !onboardingHandoff) onboarding.close();
-  $(".page-heading").hidden = view === 'onboarding';
-  $("#app").classList.toggle("is-setting-up", view === "onboarding");
   if (view !== "ontology" && previousView === "ontology") workbench.clearOntologyAction();
   if(view!=='conversation')stopConversation();
   state.view = view;
@@ -922,35 +1089,35 @@ function setView(view, fromWorkbench = false, ontologyAction, onboardingHandoff 
   }
   document
     .querySelectorAll(".view")
-    .forEach((el) => (el.hidden = el.id !== (integrated ? "view-workbench" : view === "onboarding" ? "onboarding-shell" : "view-" + view)));
+    .forEach((el) => (el.hidden = el.id !== (integrated ? "view-workbench" : "view-" + view)));
   if (view === 'graph') transformScene();
   else graphMotion.reset();
   updateCurrentNavigation();
   updatePageHeading();
   $("#page-secondary").hidden = view !== "graph";
   const directory = view === "warehouses";
-  $("#page-primary").hidden = directory ? typeof bridge?.setCreationEnabled === "function" : view !== "conversation";
+  $("#page-primary").hidden = directory ? !!bridge : view !== "conversation";
   $(".page-scroll").classList.toggle("workbench-page", integrated);
   $("#page-primary").dataset.action = directory ? "new-warehouse" : "import";
-  $("#page-primary").innerHTML = icon("plus") + (directory ? "新建数据仓" : "导入资料");
-  $("#crumb-current").hidden = true;
-  $("#crumb-separator").hidden = true;
+  $("#page-primary").innerHTML = icon("plus") + (directory ? "新建星图" : "导入资料");
+  $("#crumb-current").hidden = view !== "sensitive" && !bridge?.setBannerActions;
+  $("#crumb-separator").hidden = view !== "sensitive" || !!bridge?.setBannerActions;
   renderWarehouses();
   renderProcessingSummary();
   syncControls();
   $(".page-scroll").scrollTop = 0;
   setNavigationOpen(false);
-  if (view === "sensitive" && state.ready && state.warehouseId)
-    void loadPolicy();
   if (view === "data") {
     renderManagement();
     if (previousView !== "data") void refreshManagementStats();
     if (currentWarehouse()?.state === "import_failed") void loadImportFailure(true);
   }
-  if (view === "conversation") void loadConversation(materialDocumentId);
-  if (view === "models") void loadModels();
+  if (view === "conversation") void loadConversation(materialDocumentId, materialCitation);
+  if (view === 'overview') { renderOverview(); void loadOverview(); }
+  if (view === 'knowledge') renderKnowledge();
+  if (view === "models") { void loadStarxiaotuModel(); void loadModels(); }
   if (view === "skills") void skillsUi.load();
-  if (view === "warehouses" || previousView === "warehouses" && view !== "onboarding") void refresh();
+  if (view === "warehouses") void refresh();
 }
 function focusConversationCard(selector) {
   const item=$('#view-conversation '+selector),panel=item?.closest('.mw-review-content,.conversation-messages');
@@ -964,25 +1131,30 @@ function renderConversation() {
   const disclosureScope=JSON.stringify([state.generation,state.warehouseId,conversationFlow?.saved.conversationId,conversationFlow?.state.selectedIntent,conversationFlow?.state.importDocumentId]);
   const disclosureState=new Map(conversationRoot.dataset.disclosureScope===disclosureScope
     ? [...conversationRoot.querySelectorAll('[data-cv-disclosure]')].map(el=>[el.dataset.cvDisclosure,el.open]):[]);
-  const focus=document.activeElement,focusId=focus?.id?.startsWith('cv-')?focus.id:null;
+  const focus=document.activeElement,focusId=focus?.id?.startsWith('cv-')||focus?.id==='starxiaotu-input'?focus.id:null;
   const selection=focusId&&typeof focus.selectionStart==='number'?[focus.selectionStart,focus.selectionEnd]:null;
   const scroll=$('#view-conversation .conversation-messages')?.scrollTop;
   const contextScroll=$('#view-conversation .conversation-context')?.scrollTop;
   const reviewScroll=$('#view-conversation .mw-review-content')?.scrollTop;
   const listScroll=$('#view-conversation .mw-material-list')?.scrollTop;
   const knowledgeScroll=$('#view-conversation .mw-knowledge-content')?.scrollTop;
-  const sourceMatch=conversationFlow?.importer.view?.sourceMatch;
-  const sourceMatchStamp=sourceMatch?JSON.stringify([disclosureScope,sourceMatch.id,sourceMatch.request]):'';
+  const reading=conversationFlow?.importer.view;
+  const sourceMatch=reading?.sourceMatch;
+  const readerCitation=reading?.readerCitation && reading.readerCitation.start===reading.textWindow?.start;
+  const sourceMatchStamp=readerCitation?JSON.stringify([disclosureScope,reading.textWindow.version_id,reading.textWindow.start])
+    :sourceMatch?JSON.stringify([disclosureScope,sourceMatch.id,sourceMatch.request]):'';
   const sourceScroll=$('#view-conversation .cv-source-review')?.scrollTop;
   const proposalStamp=JSON.stringify(conversationFlow?.changes.state.proposals.map(p=>[p.id,p.status])||[]);
   const newProposal=conversationRoot.dataset.proposalStamp!==proposalStamp;
   const materialStamp=JSON.stringify([conversationFlow?.state.librarySelection?.document.id,conversationFlow?.state.selectedIntent,nextConversationStep(conversationFlow)]);
   const newMaterialState=conversationRoot.dataset.materialStamp!==materialStamp;
-  const markup=basicMaterialWarehouse && basicMaterialWarehouse===state.warehouseId ? basicMaterialLibrary() : conversationHTML(currentWarehouse(),state.conversationPublication,state.conversationOnboarding,
-    !state.preview && state.identity?.dataScope==='personal',conversationFlow);
+  const basic = !!basicMaterialWarehouse && basicMaterialWarehouse===state.warehouseId;
+  const markup=basic ? basicMaterialLibrary() : materialReaderHTML(currentWarehouse(),
+    !state.preview && state.identity?.dataScope==='personal', conversationFlow);
   if(conversationRoot._renderedMarkup===markup&&conversationRoot.dataset.disclosureScope===disclosureScope)return;
   conversationRoot.innerHTML=markup;conversationRoot._renderedMarkup=markup;
   mountMaterialWorkspace(conversationRoot);
+  starxiaotu.sync();
   conversationRoot.querySelectorAll('[data-intake-segment]').forEach(el=>{el.style.height='auto';el.style.height=el.scrollHeight+'px';});
   if(sourceScroll!==undefined&&$('#view-conversation .cv-source-review'))$('#view-conversation .cv-source-review').scrollTop=sourceScroll;
   conversationRoot.dataset.disclosureScope=disclosureScope;
@@ -1005,8 +1177,15 @@ function renderConversation() {
   if(sourceMatchStamp&&conversationRoot.dataset.readerSourceMatch!==sourceMatchStamp){
     const match=conversationRoot.querySelector('[data-reader-match]');
     match?.focus({preventScroll:true});
-    const quote=match?.querySelector('mark');
-    (quote||match)?.scrollIntoView({block:quote?'center':'start',inline:'nearest'});
+    const panel=match?.closest('.mw-review-content');
+    if(panel){
+      const quote=match.querySelector('mark');
+      const rect=(quote||match).getBoundingClientRect();
+      const viewport=panel.getBoundingClientRect();
+      if(rect.top<viewport.top||rect.bottom>viewport.bottom){
+        panel.scrollTop+=rect.top-viewport.top-(quote?(panel.clientHeight-rect.height)/2:12);
+      }
+    }
   }
   conversationRoot.dataset.readerSourceMatch=sourceMatchStamp;
 }
@@ -1014,42 +1193,49 @@ function basicMaterialLibrary() {
   const rows=state.documents.map(item=>`<li><button type="button" class="text-link" data-source="${esc(item.id)}">${esc(item.original_name||item.name)}</button></li>`).join('');
   return `<section class="mw-welcome"><header><strong>资料</strong></header>
     ${rows?`<ul>${rows}</ul>`:'<p class="empty">导入第一份资料，即可开始整理。</p>'}
-    <p class="wp-muted">当前盒子支持导入和查看原文。建仓与资料对话需要盒端提供相应服务。</p></section>`;
+    <p class="wp-muted">当前盒子支持导入和查看原文。</p></section>`;
 }
-async function loadConversation(materialDocumentId) {
+async function loadConversation(materialDocumentId, materialCitation) {
   stopConversation();
   const request=state.conversationRequest=(state.conversationRequest||0)+1;
   const {identity,generation,warehouseId}=state;
   const isCurrent=()=>state.ready && !state.invalid && state.identity===identity && state.generation===generation &&
     state.warehouseId===warehouseId && state.conversationRequest===request && state.view==='conversation';
-  state.conversationOnboarding=null;
   if(!isCurrent() || !warehouseId || currentWarehouse()?.state !== 'active' || state.preview || identity?.dataScope!=='personal'){renderConversation();return;}
-  const flow=conversationFlow=new ConversationFlow({warehouseId,identity,storage:window.localStorage,isCurrent,
+  const flow=conversationFlow=new ConversationFlow({warehouseId,identity,readerOnly:true,storage:window.localStorage,isCurrent,
     call:async(action,input)=>{const reply=await call(action,input);return action.startsWith('conversation-')||action==='workbench-request'?readWorkbenchReply(reply):reply;},onChange:()=>renderConversation()});
   flow.state.materialPage='import';
+  const readBasicLibrary = async () => {
+    try {
+      const documents = await call('documents',{limit:100});
+      if (isCurrent() && Array.isArray(documents?.items)) {
+        state.documents=documents.items;basicMaterialWarehouse=warehouseId;renderConversation();
+      }
+    } catch (error) { if (isCurrent()) banner(errorText(error)); }
+  };
   conversationReady=flow.load().then(async()=>{
     if(flow!==conversationFlow||!isCurrent())return;
-    if(!flow.state.loaded&&onboardingUnavailable(flow.state.errorCode)){
-      try{
-        const documents=await call('documents',{limit:100});
-        if(isCurrent()&&Array.isArray(documents?.items)){
-          state.documents=documents.items;basicMaterialWarehouse=warehouseId;renderConversation();
-        }
-      }catch(error){if(isCurrent())banner(errorText(error));}
+    if(!flow.state.loaded){
+      if(onboardingUnavailable(flow.state.errorCode))await readBasicLibrary();
       return;
     }
-    if(!flow.state.loaded)return;
     await flow.materials();
-    if(flow.saved.roundOpening&&!flow.saved.pending)await flow.rounds.finish();
-    else if(!flow.saved.pending&&!flow.saved.upload&&!flow.saved.intakeSubmission) {
-      if (materialDocumentId) await flow.importer.select(materialDocumentId);
-      else await flow.importer.first();
+    if(!isCurrent())return;
+    if(onboardingUnavailable(flow.state.warehouseMaterialErrorCode)){
+      await readBasicLibrary();
+      return;
+    }
+    if(!flow.saved.pending&&!flow.saved.upload&&!flow.saved.intakeSubmission) {
+      if (materialDocumentId) {
+        await flow.importer.select(materialDocumentId);
+        if (flow===conversationFlow && isCurrent() && materialCitation) flow.importer.openCitation(materialCitation);
+      } else await flow.importer.first();
     }
     else if(flow.saved.pending?.input.documentId)await flow.run(()=>flow.importer.read(flow.saved.pending.input.documentId));
   });
   const poll=async()=>{
     if(flow!==conversationFlow||!isCurrent())return;
-    try{if(!$('#mw-editor-dialog')){if(flow.state.materialPage==='import')await flow.importer.tick();else{await flow.tick();await flow.changes.tick();}}}
+    try{if(!$('#mw-editor-dialog'))await flow.importer.tick();}
     catch{if(flow===conversationFlow&&isCurrent()){flow.state.progressRetryable=true;flow.state.error='暂时未能读取最新进度，正在自动重连；不会重复提交任务。';flow.emit();}}
     finally{if(flow===conversationFlow&&isCurrent())conversationTimer=setTimeout(poll,2000);}
   };
@@ -1070,7 +1256,10 @@ async function openConversationReview(documentId,reviewTarget){
   const dialog=document.createElement('dialog');dialog.id='mw-editor-dialog';dialog.className='mw-editor-dialog';
   dialog.setAttribute('aria-labelledby','mw-editor-title');
   const importing=flow.state.materialPage==='import';
-  dialog.innerHTML=`<header><div><h2 id="mw-editor-title">${importing?'核对当前材料结果':'修改当前材料与本体'}</h2><p>${importing?'核对实体、关系和证据；确认发布前，原有已发布结果保持不变。':'保存后返回本材料继续对话；确认发布后才更新知识。'}修改本体规则不会自动重抽其他材料。</p></div><button class="btn btn-secondary" type="button">${importing?'返回资料管理':'返回材料对话'}</button></header><div id="mw-editor-content"></div>`;
+  const suggestions=reviewTarget==='ontology-suggestions';
+  const title=suggestions?'核对本体建议':importing?'核对当前材料结果':'修改当前材料与本体';
+  const description=suggestions?'核对根据材料原文生成的类型、关系与属性建议。采纳的规则可保存为草稿。':(importing?'核对实体、关系和证据；确认发布前，原有已发布结果保持不变。':'保存后可返回资料库，确认发布后才更新知识。')+'修改本体规则不会自动重抽其他材料。';
+  dialog.innerHTML=`<header><div><h2 id="mw-editor-title">${title}</h2><p>${description}</p></div><button class="btn btn-secondary" type="button">${importing?'返回资料管理':'返回资料库'}</button></header><div id="mw-editor-content"></div>`;
   let closing=false;
   async function close(){
     if(closing||!workbench.canLeave())return;closing=true;
@@ -1097,6 +1286,13 @@ $('#view-conversation').addEventListener('input',event=>{
   if(!conversationFlow)return;const s=conversationFlow.state;
   if(event.target.id==='cv-material-query'){filterMaterialList(event);return;}
   if(event.target.id==='cv-message')s.input=event.target.value;
+  if(event.target.dataset.inlineSource!==undefined){
+    const importer=conversationFlow.importer;
+    importer.changeSource(Number(event.target.dataset.inlineSource),event.target.value);
+    const save=$('#view-conversation [data-cv="import-source-save"]');
+    if(save&&importer.sourceEdit&&!importer.sourceEdit.write&&!importer.sourceEdit.stale)save.disabled=!importer.sourceEdit.edits.size;
+    return;
+  }
   if(event.target.dataset.intakeSegment){
     conversationFlow.intake.edit(event.target.dataset.intakeSegment,event.target.value);
     // Preserve the textarea and IME composition while typing.
@@ -1141,7 +1337,6 @@ $('#view-conversation').addEventListener('change',event=>{
 });
 $('#view-conversation').addEventListener('submit',event=>{
   if(!conversationFlow)return;event.preventDefault();
-  if(event.target.id==='cv-message-form'){conversationFlow.state.input=$('#cv-message').value;void conversationFlow.submitInput();}
   if(event.target.id==='cv-fact-filter')conversationFlow.changes.filterFacts($('#cv-fact-keyword').value,$('#cv-fact-type').value);
   if(event.target.id==='cv-goal-form'){
     const f=conversationFlow;
@@ -1151,8 +1346,6 @@ $('#view-conversation').addEventListener('submit',event=>{
 $('#view-conversation').addEventListener('click',event=>{
   const el=event.target.closest('[data-cv]'),f=conversationFlow;if(!el||!f||el.disabled)return;
   const commandName=el.dataset.cv,offset=f.state.candidates?.offset||0,mergeOffset=f.state.merge?.plan.offset||0;
-  const menu=el.closest('.mw-reader-menu');if(menu)menu.open=false;
-  if(commandName==='import-dialogue'||commandName==='material-dialogue'&&f.state.materialPage==='import')return;
   if(['candidate-inspect','candidate-zoom-in','candidate-zoom-out','candidate-zoom-reset'].includes(commandName)){
     const g=currentCandidateGraph(f);if(!g)return;
     if(commandName==='candidate-inspect'){
@@ -1161,9 +1354,9 @@ $('#view-conversation').addEventListener('click',event=>{
     }else g.zoom=commandName==='candidate-zoom-reset'?1:Math.max(1,Math.min(3,g.zoom+(commandName==='candidate-zoom-in' ? .25 : -.25)));
     f.emit();if(commandName==='candidate-inspect')focusConversationCard('.cv-network-detail');return;
   }
-  const commands={new:()=>f.create(),refresh:()=>f.refresh(),more:()=>f.more(),send:()=>f.submitInput(),upload:()=>openMaterialUpload(f),
+  const commands={refresh:()=>f.refresh(),more:()=>f.more(),upload:()=>openMaterialUpload(f),
     'reply-suggestion':()=>{const text=materialReplySuggestions(f)[Number(el.dataset.id)];if(!text)return;f.state.input=f.state.input.trim()?f.state.input+'\n'+text:text;f.saveMaterialComposer();f.emit();$('#cv-message')?.focus();},
-    'material-source':()=>f.agent.reviewSource(),'material-auto':()=>f.agent.prepareAutomatic(),'material-auto-confirm':()=>f.agent.confirmAutomatic({previewId:el.dataset.previewId,replacementAcknowledgement:el.dataset.replacementAcknowledgement}),'material-dialogue':()=>f.agent.dialogue(),
+    'material-source':()=>f.agent.reviewSource(),'material-auto':()=>f.agent.prepareAutomatic(),'material-auto-confirm':()=>f.agent.confirmAutomatic({previewId:el.dataset.previewId,replacementAcknowledgement:el.dataset.replacementAcknowledgement}),
     'material-auto-cancel':()=>f.agent.cancelPreview(),
     'auto-results-prev':()=>{f.state.automaticResultPage=Math.max(0,(f.state.automaticResultPage||0)-1);f.emit();},'auto-results-next':()=>{f.state.automaticResultPage=(f.state.automaticResultPage||0)+1;f.emit();},
     'intake-save':()=>f.intake.confirm(false),
@@ -1180,17 +1373,28 @@ $('#view-conversation').addEventListener('click',event=>{
     'instruction-example':()=>{if(!f.evidence.replaceInput(el.dataset.text))return;f.state.messageMode='auto';f.saveMaterialComposer();f.emit();$('#cv-message')?.focus();},
     'change-exclusion-apply':()=>f.changes.applyExclusion(),'change-exclusion-cancel':()=>f.changes.cancelExclusion(),
     'change-issues-suggest':()=>f.changes.adjustIssues({suggest:true,all:!f.changes.state.issueSelection?.length}),
-    'library-start':()=>startWarehouseMaterialDialogue(f),'library-select':()=>f.state.materialPage?f.importer.select(el.dataset.id):selectWarehouseMaterial(f,el.dataset.id),'library-more':()=>f.run(()=>readWarehouseMaterials(f,true)),
+    'library-select':()=>f.state.materialPage?f.importer.select(el.dataset.id):selectWarehouseMaterial(f,el.dataset.id),'library-more':()=>f.run(()=>readWarehouseMaterials(f,true)),
     'import-refresh':()=>f.importer.refresh(),
+    'import-retry-ontology-suggestions':()=>f.importer.retryOntologySuggestions(),
+    'import-ontology-suggestions':()=>f.importer.view?.ontologySuggestion?.status==='completed'
+      && openConversationReview(f.importer.view.documentId,'ontology-suggestions'),
     'import-confirm':()=>f.importer.confirm(),'import-auto':()=>f.importer.automatic(),'import-review':()=>f.importer.review((id,target)=>f===conversationFlow&&openConversationReview(id,target)),
     'import-knowledge':()=>f.importer.toggleKnowledge(),'import-knowledge-retry':()=>f.importer.readKnowledge(true),
     'import-knowledge-filter':()=>f.importer.filterKnowledge(el.dataset.id),'import-knowledge-more':()=>f.importer.moreKnowledge(),
     'import-source-jump':()=>f.importer.locateEvidence(Number(el.dataset.index)),
+    'import-process-source':()=>f.importer.startProcessing(),
+    'import-edit-source':()=>{
+      const loading=f.importer.editSource();
+      if(f.importer.sourceEdit)focusConversationCard('.mw-source-edit');
+      return loading;
+    },
+    'import-source-save':()=>f.importer.saveSource(),
+    'import-source-cancel':()=>f.importer.cancelSource(),
+    'import-source-prev':()=>f.importer.pageSource(-1),'import-source-next':()=>f.importer.pageSource(1),
     'material-review':()=>f.importer.reviewAutomatic((id,target)=>f===conversationFlow&&openConversationReview(id,target)),
     'import-index-retry':()=>f.importer.retryIndex(),
     'import-close-dialogue':()=>f.importer.exitDialogue(),'import-prev':()=>f.importer.page(-1),'import-next':()=>f.importer.page(1),
     'import-auto-switch':()=>f.importer.switchAutomatic(),
-    'round-start':()=>f.rounds.start(),'round-resume':()=>f.rounds.resume(),
     'round-finish':()=>f.saved.intakeSubmission?.newRound?f.intake.submit():f.rounds.finish(),
     'round-abandon':()=>f.rounds.abandonOpening(),
     'round-cancel':()=>{f.rounds.choice=null;f.emit();},
@@ -1234,9 +1438,9 @@ $('#view-conversation').addEventListener('click',event=>{
     'candidate-graph':async()=>{await f.showCandidateGraph();if(f===conversationFlow&&currentCandidateGraph(f))focusConversationCard('.cv-candidate-tabs');},'candidate-list':()=>{f.state.candidateView='list';f.emit();},
     'begin-edit':()=>f.beginEdit(),review:()=>f.review(),'claim-review':()=>f.claimReview(el.dataset.id),'merge-prev':()=>f.reviewPage(Math.max(0,mergeOffset-20)),'merge-next':()=>f.reviewPage(mergeOffset+20),
     merge:()=>f.merge(!!$('#cv-keep-existing')?.checked),'merge-close':()=>{if(!f.reviewPending){f.state.merge=null;f.emit();}},
-    release:()=>f.release(),ontology:()=>{f.changes.setTarget('rules');f.state.composerContext='rules';f.state.messageMode='auto';f.emit();$('#cv-message')?.focus();},'open-review':()=>canContinueMaterial(f)?continueMaterial(f,'draft'):f.changes.openDraft(),
+    release:()=>f.release(),ontology:()=>setView('ontology',false,'drafts'),'open-review':()=>canContinueMaterial(f)?continueMaterial(f,'draft'):f.changes.openDraft(),
     'change-refresh':()=>f.changes.refresh(),'change-more':()=>f.changes.more(),'change-apply':()=>f.changes.apply(el.dataset.id),
-    'change-recover':()=>f.changes.recover(),'change-suggest':()=>{f.changes.setTarget('rules');return f.changes.generate('仅调整本体规则：依据当前材料和目标，提出少量必要的类型、关系或属性；优先复用已有结构，不修改目标或材料事实。');},
+    'change-recover':()=>f.changes.recover(),
     'change-open-draft':()=>f.changes.openDraft(),'change-claim':()=>f.changes.claim(el.dataset.id),
     'advanced-review':()=>openConversationReview(f.state.detail?.document_id),
     'material-current':()=>selectWarehouseMaterial(f,f.state.detail?.document_id,true),
@@ -1253,13 +1457,19 @@ $('#view-conversation').addEventListener('click',event=>{
     'change-publish-rules':()=>f.changes.publishRules(),'change-retry-publication':()=>f.changes.retryPublication(),'change-new-draft':()=>f.changes.newDraft()};
   void Promise.resolve().then(()=>commands[commandName]?.()).then(async()=>{
     if(f!==conversationFlow)return;
+    if(sourceCommand){
+      focusConversationCard('.mw-import-source');
+      if(commandName==='import-edit-source')$('#view-conversation .mw-source-edit textarea')?.focus({preventScroll:true});
+      return;
+    }
     if(f.state.openDraft){f.state.openDraft=null;await f.changes.openDraft();}
     if(f.state.openMaterialEditor===f.state.selectedIntent&&!f.state.error&&!f.saved.pending)await f.changes.editMaterial();
     if(f.state.openDetailedEditor&&f.state.openDetailedEditor===f.state.detail?.document_id&&!f.state.error&&!f.saved.pending){f.state.openDetailedEditor=false;await openConversationReview(f.state.detail?.document_id);}
     if(f!==conversationFlow)return;
     const target={'stage-1':'.cv-goal-card','stage-2':'#cv-inline-rules','stage-3':'#cv-inline-knowledge',
       'round-history':'.mw-round-history','round-history-view':'.mw-round-transcript',
-      'import-refresh':'.mw-refresh-feedback',
+      'import-refresh':'.mw-refresh-feedback','import-process-source':'.mw-import-process',
+      'import-auto':'.mw-import-confirmation','import-auto-switch':'.mw-import-confirmation',
       'use-goal':'.cv-goal-card',plan:'.cv-plan','confirm-plan':'#cv-inline-knowledge',
       candidates:'.cv-candidates',review:'.cv-merge','begin-edit':'.cv-conversation-actions',merge:'.cv-change-facts',
       'open-review':'.cv-change-panel','change-open-draft':'.cv-change-panel',
@@ -1284,6 +1494,7 @@ const jobNames = {
 };
 const jobStates = {
   queued: "排队中",
+  awaiting_index: "等待正文索引",
   running: "处理中",
   succeeded: "已完成",
   failed: "失败",
@@ -1309,7 +1520,7 @@ function renderTasks() {
               : "activity",
           )}</div><div class="task-content"><strong>${esc(
             jobNames[j.kind] || "处理任务",
-          )}</strong><p class="task-document">${esc(j.document_name || doc(j.document_id)?.original_name || "当前数据仓")}</p>
+          )}</strong><p class="task-document">${esc(j.document_name || doc(j.document_id)?.original_name || "当前星图")}</p>
           <p class="task-progress">${esc(jobStates[j.stage] || jobNames[j.stage] || j.stage || jobStates[j.status] || "等待处理")}${
             j.total_units ? " · " + (j.completed_units ?? 0) + " / " + j.total_units + " 单元" : ""
           }</p>${j.error_message ? `<p class="task-error">${esc(j.error_message)}</p>` : ""}
@@ -1334,7 +1545,9 @@ function renderTasks() {
           }">${
             jobStates[j.status] || esc(j.status)
           }</span><span class="mono">${date(j.updated_at)}</span>${
-            j.status === "failed"
+            j.status === "failed" && j.kind === "ontology_suggest"
+              ? `<button class="text-link" ${j.document_id ? `data-overview-document="${esc(j.document_id)}"` : 'data-view="conversation"'}>前往资料库</button>`
+              : j.status === "failed"
               ? `<button class="text-link" data-retry="${esc(
                   j.id,
                 )}">重试</button>`
@@ -1525,7 +1738,7 @@ async function refresh() {
     const failed = [d, j, w].find((v) => v.status === "rejected");
     const directory = state.view === "warehouses";
     if (failed && !directory) banner(errorText(failed.reason));
-    else if (ontology.status === 'rejected' && !directory) banner('当前仓库本体名称读取失败，图谱暂按原始类型编码显示；请重新读取。');
+    else if (ontology.status === 'rejected' && !directory) banner('当前星图本体名称读取失败，图谱暂按原始类型编码显示；请重新读取。');
     else if (!state.graphError) banner("");
     if (currentWarehouse()?.state !== "active") {
       state.documents = [];
@@ -1541,23 +1754,26 @@ async function refresh() {
       state.graphError = {
         publicMessage: currentWarehouse()?.state === "import_failed"
           ? "迁入未完成，图谱暂不可读取。请到数据管理查看失败原因。"
-          : "数据仓正在处理或清理，完成后可继续查看图谱。",
+          : "星图正在处理或清理，完成后可继续查看图谱。",
       };
       $("#source-dialog").close();
       $("#source-body").replaceChildren();
       $("#source-actions").replaceChildren();
       if (!directory) banner(currentWarehouse()?.state === "clear_failed"
-        ? "当前数据仓清理未完成，请到数据管理查看；其他数据仓仍可正常使用。"
+        ? "当前星图清理未完成，请到数据管理查看；其他星图仍可正常使用。"
         : currentWarehouse()?.state === "import_failed"
-          ? "当前数据仓迁入未完成，材料和图谱暂不可读取。请到数据管理查看失败原因。"
-          : "数据仓正在处理或清理，请稍后重试。");
+          ? "当前星图迁入未完成，材料和图谱暂不可读取。请到数据管理查看失败原因。"
+          : "星图正在处理或清理，请稍后重试。");
     }
     renderTasks();
     renderFilters();
     renderGraph();
     renderManagement();
+    if (state.view === 'overview') renderOverview();
+    if (state.view === 'knowledge') renderKnowledge();
     syncControls();
     if (state.view === "data") void refreshManagementStats();
+
   } finally {
     if (generation === state.generation) {
       state.refreshing = false;
@@ -1594,6 +1810,7 @@ async function initialize() {
       state.warehouseId || rememberedWarehouse() ||
         state.warehouses.find((w) => w.state === "active")?.id ||
         state.warehouses[0]?.id || null,
+      "graph",
     );
     state.hostNavigationReady = true;
     const target = bridge ? await call("launch-target") : null;
@@ -1608,7 +1825,7 @@ let lastLaunchRequest = null;
 async function applyLaunchTarget(value) {
   if (!value || !state.hostNavigationReady || value.requestId === lastLaunchRequest) return;
   if (onboarding.busy) return;
-  if (onboarding.visible) setView(onboardingReturn.view, false, onboardingReturn.ontologySection);
+  if (onboarding.visible) onboarding.close();
   lastLaunchRequest = value.requestId;
   let ok = false;
   try {
@@ -1636,8 +1853,8 @@ async function applyLaunchTarget(value) {
     }
     ok = !state.invalid && state.ready && !state.uploading &&
       state.view === view && state.warehouseId === selected;
-    if (ok && unavailable) toast("指定数据仓当前不可用，已打开数据仓列表。清理或删除状态可在管理中查看。");
-  } catch (error) { toast("无法打开指定数据仓：" + errorText(error)); }
+    if (ok && unavailable) toast("指定星图当前不可用，已打开星图列表。清理或删除状态可在管理中查看。");
+  } catch (error) { toast("无法打开指定星图：" + errorText(error)); }
   finally {
     if (lastLaunchRequest === value.requestId)
       await call("launch-target-applied", { requestId: value.requestId, ok }).catch(() => {});
@@ -1754,7 +1971,10 @@ function renderSource() {
         ? `<button class="load-more-button" data-action="source-more" ${state.sourceLoading ? "disabled" : ""}>${state.sourceLoading ? "正在读取…" : "继续读取正文"}</button>`
         : ""
     }</article>`;
-    $("#source-actions").innerHTML = '<button class="btn btn-secondary" data-close="source-dialog">关闭</button>';
+    const canOpenReader = state.ready && !state.preview && state.identity?.dataScope === "personal";
+    const currentVersion = page.version_id === s.version?.id;
+    $("#source-actions").innerHTML = '<button class="btn btn-secondary" data-close="source-dialog">关闭</button>' +
+      (canOpenReader ? `<button class="btn btn-primary" data-action="open-source-reader">${currentVersion ? "在资料库打开" : "在资料库查看当前版本"}</button>` : "");
     return;
   }
   const d = s.document,
@@ -1769,7 +1989,7 @@ function renderSource() {
     p.index_ready ? "green" : ""
   }">${p.index_ready ? "可检索" : "索引待就绪"}</span><span class="pill">${esc(
     {
-      published: "知识图谱就绪",
+      published: "星图就绪",
       empty: "无有效关系",
       failed: "知识处理失败",
       pending: "知识处理中",
@@ -2056,7 +2276,7 @@ $("#file-list").addEventListener("click", event => {
   if (button) void removePending(button.dataset.removeFile).catch(error => toast(errorText(error)));
 });
 function pendingFileStatus(file) {
-  if (file.done) return file.reused ? "已复用仓内材料" : "已交给盒端处理";
+  if (file.done) return file.reused ? "已复用星图中的材料" : "已交给盒端处理";
   if (file.error) return errorText(file.error);
   if (file.progress != null) return `正在导入 ${Math.floor(file.progress * 100)}%`;
   return "等待导入";
@@ -2103,7 +2323,7 @@ function renderPending(changedFile) {
     ? "正在导入…"
     : !batch ? state.files.some(f => f.error) ? "重试未完成的导入" : "导入并核对"
     : retry && state.files.filter(canUploadFile).length === retry ? `重试 ${retry} 份`
-    : "导入并处理";
+    : "批量导入并解析";
   $("#import-selection-count").textContent = `已选 ${state.files.length} 份材料`;
   syncControls();
 }
@@ -2144,8 +2364,8 @@ async function uploadFiles() {
     $("#import-dialog").close();
     setView("conversation");
     toast(reused
-      ? `已复用仓内 ${reused} 份材料。${created ? `新导入 ${created} 份，可在任务中心查看进度。` : ""}`
-      : "材料已导入，正在按当前模型配置整理。可在任务中心查看进度。");
+      ? `已复用星图中的 ${reused} 份材料。${created ? `新导入的 ${created} 份材料将在解析后等待核对。` : ""}`
+      : "材料已导入，解析完成后可在资料库核对正文。");
   }
   await refresh();
 }
@@ -2187,12 +2407,13 @@ function fitGraph() {
 }
 function setNavigationOpen(open, restoreFocus = false) {
   const rail = $("#starlink-rail");
-  const toggle = $(".starlink-module .mobile-toggle");
-  const focusedInRail = toggle.getClientRects().length > 0 && rail.contains(document.activeElement);
+  const toggles = [...document.querySelectorAll(".starlink-module .mobile-toggle")];
+  const toggle = toggles.find(button => button.getClientRects().length);
+  const focusedInRail = toggle && rail.contains(document.activeElement);
   $("#app").classList.toggle("nav-open", open);
-  toggle.setAttribute("aria-expanded", String(open));
-  if (open) $(".starlink-rail [aria-current=page]")?.focus();
-  else if (restoreFocus || focusedInRail) toggle.focus();
+  for (const button of toggles) button.setAttribute("aria-expanded", String(open));
+  if (open) ($(".starlink-rail [aria-current=page]") || $('.starlink-rail [data-view="graph"]'))?.focus();
+  else if (restoreFocus || focusedInRail) toggle?.focus();
 }
 
 async function action(name, targetWarehouseId) {
@@ -2213,6 +2434,7 @@ async function action(name, targetWarehouseId) {
     }
     state.detailsDismissed = true;
     $(".graph-inspector").hidden = true;
+    transformScene();
     $("#graph-focus-back").focus({ preventScroll: true });
   } else if (name === "leave-graph-focus") {
     explorer.close();
@@ -2250,17 +2472,17 @@ async function action(name, targetWarehouseId) {
       }
       state.importContext = context;
       $("#import-intro").textContent = state.importContext === "conversation"
-        ? "选择一份材料导入当前数据仓；导入后先核对正文，再确认后续整理。"
-        : "材料将导入当前数据仓，按所选模型配置整理为可追溯的知识。";
+        ? "选择一份资料。解析后，盒子会用所配置的模型自动生成本体建议。正文与知识仍可分别核对。"
+        : "资料解析后，盒子会用所配置的模型自动生成本体建议。";
       $("#import-warning").textContent = state.importContext === "conversation"
         ? "确认后读取文件副本并准备正文。万象空间原文件保持不变；后续抽取与发布仍需单独确认。"
-        : "点击“导入并处理”后读取文件副本，由模型整理。万象空间原文件保持不变；后续修改不会自动同步。";
+        : "批量导入后先解析文件副本，解析完成后可在资料库逐份核对正文。";
       $("#import-note-field").hidden = state.importContext !== "conversation";
       $("#import-link-existing").hidden = state.importContext !== "conversation";
       if (context === "conversation" && !state.files.length) $("#import-note").value = "";
       $("#import-selection-hint").textContent = state.importContext === "conversation" ? "每次选择一份材料" : "可跨文件夹选择";
       $("#import-error").hidden = true;
-      $("#import-context").textContent = `万象空间 · ${state.identity?.boxName || state.identity?.boxId || "当前设备"} → ${currentWarehouse()?.name || "当前数据仓"}`;
+      $("#import-context").textContent = `万象空间 · ${state.identity?.boxName || state.identity?.boxId || "当前设备"} → ${currentWarehouse()?.name || "当前星图"}`;
       renderPending();
       $("#import-dialog").showModal();
       void loadSpace("");
@@ -2282,8 +2504,18 @@ async function action(name, targetWarehouseId) {
     transformScene();
   } else if (name === "zoom-in" || name === "zoom-out") {
     graphMotion.zoom(name === 'zoom-in' ? 1.2 : 1 / 1.2);
+  } else if (name === 'graph-auto-rotate') {
+    graphAutoRotate = !graphAutoRotate;
+    $('#graph-auto-rotate').setAttribute('aria-pressed', String(graphAutoRotate));
+    transformScene();
   } else if (name === 'graph-rotate-left' || name === 'graph-rotate-right') {
     graphMotion.rotate(name === 'graph-rotate-left' ? -.32 : .32);
+  } else if (name === "open-source-reader") {
+    const source = state.source;
+    if (!source?.pinned || !$("#source-dialog").open || state.saving) return;
+    const citation = {page:source.pinned, excerpt:state.sourceEvidence?.excerpt};
+    $("#source-dialog").close();
+    setView("conversation", false, undefined, false, source.document.id, citation);
   } else if (name === "edit-source") {
     state.editing = true;
     renderSource();
@@ -2301,16 +2533,21 @@ document.addEventListener("click", (event) => {
   void (async () => {
     if (el.dataset.warehouseId) {
       if (state.uploading || onboarding.busy) return;
-      const nextView = el.dataset.warehouseView || state.view;
-      if (nextView === 'onboarding') {
-        await openWarehouseSetup({warehouse:state.warehouses.find(w=>w.id===el.dataset.warehouseId&&w.state==='active'),startUpdate:el.dataset.startUpdate==='true'});
-        return;
-      }
+      const nextView = el.dataset.warehouseView || "graph";
       if (el.dataset.warehouseId !== state.warehouseId) await selectWarehouse(el.dataset.warehouseId, nextView);
       else {
         $("#warehouse-picker").close();
         setView(nextView);
       }
+    } else if (el.dataset.overviewDocument) {
+      setView('conversation', false, undefined, false, el.dataset.overviewDocument);
+    } else if (el.dataset.entityPage) {
+      state.knowledgeEntity = el.dataset.entityPage;
+      renderKnowledge();
+      [...$('#knowledge-list').children].find(item => item.dataset.entityPage === state.knowledgeEntity)?.focus({preventScroll:true});
+    } else if (el.dataset.entityInGraph) {
+      setView('graph');
+      if (state.view === 'graph') { resetGraph(); selectNode(el.dataset.entityInGraph); }
     } else if (el.dataset.ontologyAction) setView("ontology", false, el.dataset.ontologyAction);
     else if (el.dataset.view) setView(el.dataset.view);
     else if (el.dataset.action) await action(el.dataset.action, el.dataset.deleteWarehouse);
@@ -2322,7 +2559,10 @@ document.addEventListener("click", (event) => {
     } else if (el.dataset.node) {
       if (!explorer.takePathNode(el.dataset.node,event.shiftKey)) selectNode(el.dataset.node);
     }
-    else if (el.dataset.edge) selectEdge(el.dataset.edge);
+    else if (el.dataset.edge) {
+      if (state.view === 'knowledge') { setView('graph'); if (state.view !== 'graph') return; resetGraph(); }
+      selectEdge(el.dataset.edge);
+    }
     else if (el.dataset.source) {
       const e = edge(el.dataset.edgeSource);
       await showSource(
@@ -2344,6 +2584,7 @@ document.addEventListener("click", (event) => {
       transformScene();
     } else if (el.dataset.mode) {
       state.mode = el.dataset.mode;
+      syncStarxiaotu();
       document.querySelectorAll("[data-mode]").forEach((b) => {
         b.classList.toggle("active", b.dataset.mode === state.mode);
         b.setAttribute("aria-pressed", String(b.dataset.mode === state.mode));
@@ -2474,6 +2715,44 @@ setInterval(() => {
   if (Date.now() - refreshAt > (active ? 3000 : 20000)) void refresh();
 }, 1500);
 
+function renderOverview() {
+  const warehouse = currentWarehouse();
+  const snapshot = state.overview;
+  const root = $('#view-overview');
+  const markup = overviewHTML({warehouse, goal:snapshot?.goal, ontology:state.graphOntology,
+    documents:state.documents,
+    pending:snapshot?.pending, esc, date});
+  if (root.renderedMarkup !== markup) { root.innerHTML = markup; root.renderedMarkup = markup; }
+}
+
+async function loadOverview() {
+  if (!state.ready || currentWarehouse()?.state !== 'active') return;
+  const generation = state.generation;
+  const [scope, materials] = await Promise.allSettled([
+    call('onboarding-context', {warehouseId:state.warehouseId}).then(readWorkbenchReply),
+    call('conversation-material-workflows', {offset:0, limit:50}).then(readWorkbenchReply),
+  ]);
+  if (state.invalid || state.generation !== generation) return;
+  state.overview = {
+    goal:scope.value?.warehouse_scope?.purposes?.join('\n'),
+    pending:materials.value?.items?.filter(item => item.document_id && item.document?.original_name &&
+      (item.stage === 'review' || item.stage === 'awaiting_review' || item.document.ontology_suggestions?.status === 'completed' &&
+       item.document.ontology_suggestions.count > 0 && !item.document.ontology_suggestions.handled)),
+  };
+  if (state.view === 'overview') renderOverview();
+}
+
+function renderKnowledge() {
+  const {list, reader} = knowledgeHTML({graph:state.graph, selected:state.knowledgeEntity,
+    query:$('#knowledge-query').value, schema:state.graphOntology?.schema, presentation:state.graphPresentation,
+    esc, documentName:id => doc(id)?.original_name || '来源材料'});
+  for (const [selector, markup] of [['#knowledge-list', list], ['#knowledge-reader', reader]]) {
+    const root = $(selector);
+    if (root.renderedMarkup !== markup) { root.innerHTML = markup; root.renderedMarkup = markup; }
+  }
+}
+$('#knowledge-query').addEventListener('input', renderKnowledge);
+
 function currentWarehouse() {
   return state.warehouses.find((w) => w.id === state.warehouseId);
 }
@@ -2502,7 +2781,6 @@ function rememberWarehouse(id) {
   } catch { /* Browsing remains available when local preferences cannot be saved. */ }
 }
 function renderWarehouseCollection(container, query, compact) {
-  const drafts=compact?{}:onboarding.status(state.identity).drafts;
   const needle = query.trim().toLocaleLowerCase();
   const ordered = [...state.warehouses].sort((a,b) => Number(b.id === state.warehouseId) - Number(a.id === state.warehouseId) || b.created_at.localeCompare(a.created_at));
   const existing = new Map([...container.children].map(el => [el.dataset.warehouseKey, el]));
@@ -2519,15 +2797,18 @@ function renderWarehouseCollection(container, query, compact) {
       card.className = compact ? "warehouse-choice" : "warehouse-directory-card";
       card.dataset.warehouseKey = w.id;
       card.innerHTML = compact
-        ? `<span class="warehouse-choice-icon">${icon("folder")}</span><span class="warehouse-choice-content"><span class="warehouse-choice-title"><strong data-field="name"></strong><span data-field="current" class="warehouse-current-indicator"></span></span><span data-field="description" class="warehouse-choice-description"></span><span class="warehouse-choice-meta"><span data-field="counts"></span><span data-field="status" class="warehouse-state"></span></span></span><span class="warehouse-choice-arrow">${icon("arrow")}</span>`
-        : `<div class="warehouse-card-head"><span class="warehouse-card-icon">${icon("folder")}</span><div class="warehouse-card-main"><div class="warehouse-card-name"><h2 data-field="name"></h2><span data-field="current" class="warehouse-current-indicator"></span></div><p data-field="description" class="warehouse-card-description"></p></div><span data-field="status" class="warehouse-state"></span></div>
+        ? `<span class="warehouse-choice-icon">${icon("network")}</span><span class="warehouse-choice-content"><span class="warehouse-choice-title"><strong data-field="name"></strong><span data-field="current" class="warehouse-current-indicator"></span></span><span data-field="description" class="warehouse-choice-description"></span><span class="warehouse-choice-meta"><span data-field="counts"></span><span data-field="status" class="warehouse-state"></span></span></span><span class="warehouse-choice-arrow">${icon("arrow")}</span>`
+        : `<div class="warehouse-card-head"><span class="warehouse-card-icon">${icon("network")}</span><div class="warehouse-card-main"><div class="warehouse-card-name"><h2 data-field="name"></h2><span data-field="current" class="warehouse-current-indicator"></span></div><p data-field="description" class="warehouse-card-description"></p></div><span data-field="status" class="warehouse-state"></span></div>
           <dl class="warehouse-card-statistics"><div><dt>材料</dt><dd data-field="documents"></dd></div><div><dt>实体</dt><dd data-field="entities"></dd></div><div><dt>关系</dt><dd data-field="relations"></dd></div></dl>
           <footer><span data-field="created" class="warehouse-card-date"></span><div><button type="button" class="text-link warehouse-card-delete" data-action="prepare-delete" data-delete-warehouse>删除</button><button class="text-link" data-warehouse-view="conversation">资料库</button><button class="warehouse-card-open" data-warehouse-view="graph"><span data-field="open"></span>${icon("arrow")}</button></div></footer>`;
       if (compact) card.dataset.warehouseId = w.id;
       else {
         const reviewButton=document.createElement('button');
-        reviewButton.className='text-link';reviewButton.dataset.warehouseView='onboarding';
-        reviewButton.textContent='基于当前规则调整';card.querySelector('footer>div').prepend(reviewButton);
+        reviewButton.className='text-link';reviewButton.dataset.warehouseView='ontology';
+        reviewButton.textContent='本体';card.querySelector('footer>div').prepend(reviewButton);
+        const deliveryButton=document.createElement('button');
+        deliveryButton.className='text-link';deliveryButton.dataset.warehouseView='sensitive';
+        deliveryButton.textContent='脱敏规则';reviewButton.after(deliveryButton);
         card.querySelectorAll("[data-warehouse-view]").forEach(b => b.dataset.warehouseId = w.id);
       }
     }
@@ -2539,7 +2820,7 @@ function renderWarehouseCollection(container, query, compact) {
     card.classList.toggle("is-current", selected);
     card.classList.toggle("has-error", ["clear_failed", "delete_failed", "import_failed"].includes(w.state));
     update(card, "name", w.name);
-    update(card, "current", selected ? "当前使用" : "");
+    update(card, "current", selected ? "当前星图" : "");
     update(card, "description", w.description || "");
     update(card, "status", warehouseStatus(w));
     const blocked = !state.ready || state.uploading;
@@ -2547,13 +2828,13 @@ function renderWarehouseCollection(container, query, compact) {
       update(card, "counts", `${w.document_count} 份材料 · ${w.entity_count} 个实体`);
       card.disabled = blocked;
       card.setAttribute("aria-pressed", String(selected));
-      card.setAttribute("aria-label", `${selected ? "当前使用" : "切换至"}：${w.name}`);
+      card.setAttribute("aria-label", `${selected ? "当前星图" : "切换至"}：${w.name}`);
     } else {
       update(card, "documents", w.document_count);
       update(card, "entities", w.entity_count);
       update(card, "relations", w.relation_count);
       update(card, "created", "建立于 " + date(w.created_at));
-      update(card, "open", "打开图谱");
+      update(card, "open", "打开星图");
       card.querySelectorAll("[data-warehouse-id]").forEach(b => b.disabled = blocked);
       const remove = card.querySelector('[data-delete-warehouse]');
       remove.dataset.deleteWarehouse = w.id;
@@ -2561,14 +2842,13 @@ function renderWarehouseCollection(container, query, compact) {
       remove.disabled = !canDeleteWarehouse(w);
       remove.textContent = w.state === 'delete_failed' ? '继续删除' : '删除';
       remove.setAttribute('aria-label', `${remove.textContent}「${w.name}」`);
-      const reviewButton=card.querySelector('[data-warehouse-view="onboarding"]');
+      const reviewButton=card.querySelector('[data-warehouse-view="ontology"]');
       reviewButton.hidden=state.preview || state.identity?.dataScope!=='personal';
       reviewButton.disabled=blocked || w.state!=='active';
-      const draft=Object.hasOwn(drafts,w.id)?drafts[w.id]:null;
-      reviewButton.dataset.startUpdate='true';
-      reviewButton.textContent='编辑业务范围';
-      if (draft?.setupMode==='new'&&!draft.conversationId) update(card,'status','等待设置');
-      card.querySelector('[data-warehouse-view="graph"]').setAttribute("aria-label", `打开「${w.name}」的知识图谱`);
+      const delivery=card.querySelector('[data-warehouse-view="sensitive"]');
+      delivery.hidden=state.preview || state.identity?.dataScope!=='personal';
+      delivery.disabled=blocked || w.state!=='active';
+      card.querySelector('[data-warehouse-view="graph"]').setAttribute("aria-label", `打开星图「${w.name}」`);
       card.querySelector('[data-warehouse-view="conversation"]').setAttribute("aria-label", `管理「${w.name}」的资料`);
     }
     if (container.children[index] !== card) container.insertBefore(card, container.children[index] || null);
@@ -2581,29 +2861,30 @@ function renderWarehouseDirectory() {
   const recovery = onboarding.status(state.identity);
   const notice = $("#onboarding-resume");
   notice.hidden = !recovery.pending;
-  notice.querySelector('span').textContent = recovery.entryPending ? '上次规则已发布，可继续打开数据仓。'
-    : recovery.quickCreated ? '数据仓已创建，可继续打开资料库。' : '上次建仓或规则发布有待确认的操作。';
+  notice.querySelector('span').textContent = recovery.entryPending ? '上次规则已发布，可继续打开星图。'
+    : recovery.quickCreated ? '星图已创建，可继续打开资料库。' : '上次创建星图或规则发布有待确认的操作。';
   notice.querySelector('button').textContent = recovery.entryPending || recovery.quickCreated ? '继续打开' : '继续原操作';
   const totals = state.warehouses.reduce((n,w) => [n[0] + w.document_count, n[1] + w.entity_count, n[2] + w.relation_count], [0,0,0]);
-  $("#warehouse-directory-summary").innerHTML = [[state.warehouses.length,"座数据仓"],[totals[0],"份材料"],[totals[1],"个实体"],[totals[2],"条知识关系"]].map(([n,label]) => `<div><b>${esc(n)}</b><span>${label}</span></div>`).join("");
+  $("#warehouse-directory-summary").innerHTML = [[state.warehouses.length,"张星图"],[totals[0],"份材料"],[totals[1],"个实体"],[totals[2],"条知识关系"]].map(([n,label]) => `<div><b>${esc(n)}</b><span>${label}</span></div>`).join("");
   const query = $("#warehouse-query").value;
   const visible = renderWarehouseCollection($("#warehouse-directory"), query, false);
   $("#warehouse-directory-count").textContent = query.trim() ? `${visible} / ${state.warehouses.length}` : state.warehouses.length;
   const empty = $("#warehouse-directory-empty");
   empty.hidden = visible > 0;
   empty.innerHTML = state.warehouses.length
-    ? `<h2>没有找到匹配的数据仓</h2><p>换一个仓名或说明中的关键词试试。</p>`
+    ? `<h2>没有找到匹配的星图</h2><p>试试星图名称或说明中的其他关键词。</p>`
     : state.ready
-    ? `<span class="warehouse-empty-icon">${icon("folder")}</span><h2>还没有数据仓</h2><p>建仓后即可导入资料。</p><button class="btn btn-primary" data-action="new-warehouse">${icon("plus")}新建第一座数据仓</button>`
-    : `<h2>连接万象，打开你的数据仓</h2><p>数据仓随当前万象账号和盒子连接读取。</p>`;
+    ? `<span class="warehouse-empty-icon">${icon("network")}</span><h2>还没有星图</h2><p>创建星图后即可导入资料。</p><button class="btn btn-primary" data-action="new-warehouse">${icon("plus")}新建第一张星图</button>`
+    : `<h2>连接万象，打开你的星图</h2><p>星图随当前万象账号和盒子连接读取。</p>`;
 }
 
 function renderWarehouses() {
   const selected = currentWarehouse();
-  $("#crumb-warehouse").textContent = state.view === "warehouses" ? "全部数据仓" : selected?.name || "尚未建仓";
-  $("#graph-warehouse").textContent = selected?.name || "你的第一座知识仓";
-  const switchingDisabled = !state.ready || state.uploading || state.view === 'onboarding';
-  $("#rules-guide-entry").hidden = !canCreateWarehouse() || selected?.state !== 'active';
+  $("#crumb-warehouse").textContent = state.view === "warehouses" ? "全部星图" : selected?.name || "尚无星图";
+  $('#starlink-current-name').textContent = selected?.name || '我的项目';
+  $('#starlink-current-name').title = selected?.name || '';
+  $("#graph-warehouse").textContent = selected?.name || "你的第一张星图";
+  const switchingDisabled = !state.ready || state.uploading || onboarding.busy;
   $("#crumb-warehouse").disabled = switchingDisabled;
   renderWarehouseDirectory();
   // Keep the picker's buttons and search focus stable during background updates.
@@ -2619,15 +2900,16 @@ function renderWarehouses() {
     b.textContent =
       selected?.state === "clear_failed"
         ? "重新确认并继续清理"
-        : "清空当前数据仓";
+        : "清空当前星图";
   });
   document.querySelectorAll('[data-action="prepare-delete"]:not([data-delete-warehouse])').forEach((b) => {
     b.disabled = !canDeleteWarehouse(selected);
-    b.textContent = selected?.state === "delete_failed" ? "重新确认并继续删除" : "删除当前数据仓";
+    b.textContent = selected?.state === "delete_failed" ? "重新确认并继续删除" : "删除当前星图";
   });
 }
 async function selectWarehouse(id, nextView, onboardingHandoff = false) {
   if (state.uploading || state.spaceSelecting || onboarding.busy && !onboardingHandoff) return;
+  if(conversationFlow&&!conversationFlow.importer.canLeaveSource()){toast('请先保存或关闭正文编辑。');return;}
   if (id !== state.warehouseId) {
     if (!workbench.canLeave()) return;
     workbench.reset();
@@ -2640,13 +2922,14 @@ async function selectWarehouse(id, nextView, onboardingHandoff = false) {
   if (!onboardingHandoff) void selection?.catch(()=>{});
   const selectionGeneration = state.generation;
   state.warehouseId = id;
+  state.overview = null;
+  state.knowledgeEntity = null;
+  $('#knowledge-query').value = '';
   state.managementStats = null;
   state.importFailure = null;
   stopConversation();
-  state.conversationPublication=null;
-  state.conversationOnboarding=null;
   renderConversation();
-  state.processing = null; state.modelConfig = null; state.modelRequest = (state.modelRequest || 0) + 1;
+  state.processing = null; state.externalEmbedding = false;
   void loadProcessingSummary();
   rememberWarehouse(id);
   state.refreshing = false;
@@ -2688,16 +2971,15 @@ async function selectWarehouse(id, nextView, onboardingHandoff = false) {
   if (nextView) setView(nextView, false, nextView==='ontology'&&onboardingHandoff?'published':undefined, onboardingHandoff);
   if (id) {
     await refresh();
-    if (state.view === "sensitive") await loadPolicy();
   }
 }
 function renderManagement() {
   const w = currentWarehouse();
-  $("#manage-name").textContent = w?.name || "从一座数据仓开始";
+  $("#manage-name").textContent = w?.name || "从一张星图开始";
   const status = {
     clearing: "正在清理原件、知识和索引，访问凭证已撤销。",
     clear_failed: "清理未完成。请恢复本地数据库或磁盘后，重新确认并继续清理。",
-    deleting: "正在删除数据仓和全部资料。访问凭证已撤销，完成后会从列表移除。",
+    deleting: "正在删除星图和全部资料。访问凭证已撤销，完成后会从列表移除。",
     delete_failed: "删除未完成。请检查本地服务后，重新确认并继续删除。",
     importing: "正在恢复迁移资料，请等待任务完成。",
     import_failed: state.importFailure?.id === w?.id && state.importFailure?.loading
@@ -2710,7 +2992,7 @@ function renderManagement() {
   $("#manage-status").textContent = status || "";
   $("#manage-description").textContent =
     w?.description ||
-    "你的原始资料、正文版本与知识来源，保存在同一座数据仓中。";
+    "你的原始资料、正文版本与知识来源，保存在同一张星图中。";
   const currentStats = state.managementStats?.id === state.warehouseId ? state.managementStats : null;
   const stats = currentStats?.value;
   $("#warehouse-stats").innerHTML = !w ? "" : stats
@@ -2764,15 +3046,16 @@ async function refreshManagementStats() {
   }
   renderManagement();
 }
-async function openWarehouseSetup(options) {
+async function openWarehouseSetup() {
   if (!canCreateWarehouse() || onboarding.busy || document.querySelector('dialog[open]:not(#warehouse-picker)')) return;
-  if (!workbench.canLeave() || Object.hasOwn(options,'warehouse') && !options.warehouse) return;
+  if (!workbench.canLeave() || conversationFlow && !conversationFlow.importer.canLeaveSource()) return;
   $("#warehouse-picker").close();
-  onboarding.open(state.identity, options);
+  onboarding.open(state.identity);
 }
 async function warehouseAction(name, targetWarehouseId) {
   if (name === "choose-warehouse") {
     if (!state.ready || state.uploading) return true;
+    if (document.querySelector('dialog[open]')) return true;
     $("#warehouse-picker-query").value = "";
     renderWarehouseCollection($("#warehouse-picker-list"), "", true);
     $("#warehouse-picker").showModal();
@@ -2784,8 +3067,8 @@ async function warehouseAction(name, targetWarehouseId) {
     setView("warehouses");
     return true;
   }
-  if (['new-warehouse','resume-onboarding','update-warehouse-rules'].includes(name)) {
-    await openWarehouseSetup(name === 'update-warehouse-rules' ? {warehouse:currentWarehouse(),startUpdate:true} : {fresh:name === 'new-warehouse'});
+  if (name === 'new-warehouse' || name === 'resume-onboarding') {
+    await openWarehouseSetup();
     return true;
   }
   if (name === "prepare-clear" || name === "prepare-delete") {
@@ -2804,11 +3087,11 @@ async function warehouseAction(name, targetWarehouseId) {
     }
     if (intent?.warehouse?.id !== target.id || typeof intent.warehouse.name !== 'string' ||
         typeof intent.confirmation_token !== 'string' || !intent.confirmation_token)
-      throw Object.assign(new Error('SEMANTICA_INVALID_RESPONSE'), {publicMessage:'未收到有效的仓库确认，请重新发起操作。'});
+      throw Object.assign(new Error('SEMANTICA_INVALID_RESPONSE'), {publicMessage:'未收到有效的星图操作确认，请重新发起操作。'});
     state.clearIntent = {...intent, selectedId, action: deleting ? "delete" : "clear"};
-    $("#clear-title").textContent = deleting ? "永久删除数据仓？" : "清空当前数据仓？";
+    $("#clear-title").textContent = deleting ? "永久删除星图？" : "清空当前星图？";
     $('#clear-dialog .icon-btn').setAttribute('aria-label', deleting ? '取消删除' : '取消清空');
-    $('#clear-dialog .btn-secondary').textContent = deleting ? '保留数据仓' : '保留数据';
+    $('#clear-dialog .btn-secondary').textContent = deleting ? '保留星图' : '保留数据';
     $("#clear-scope").innerHTML = `<p class="modal-intro">将清空「${esc(
       intent.warehouse.name,
     )}」中的全部数据：</p><div class="clear-counts">${
@@ -2817,9 +3100,9 @@ async function warehouseAction(name, targetWarehouseId) {
       intent.warehouse.relation_count
     } 条关系</div><p class="modal-warning">原件、全部正文版本、知识关系、检索索引、Skill 及推理准备记录将被移除，${
       intent.warehouse.access_key_count
-    } 个有效凭证将同时撤销。其他数据仓不受影响。</p>`;
+    } 个有效凭证将同时撤销。其他星图不受影响。</p>`;
     if (deleting) {
-      $("#clear-scope").innerHTML = `<p class="modal-intro">将永久删除数据仓「${esc(intent.warehouse.name)}」及其全部数据：</p><div class="clear-counts">${intent.warehouse.document_count} 份材料 · ${intent.warehouse.entity_count} 个实体 · ${intent.warehouse.relation_count} 条关系</div><p class="modal-warning">数据仓本身、原件、全部正文版本、知识关系、索引、Skill 及推理准备记录将被移除，${intent.warehouse.access_key_count} 个有效凭证将撤销。此操作无法撤销，其他数据仓不受影响。</p>`;
+      $("#clear-scope").innerHTML = `<p class="modal-intro">将永久删除星图「${esc(intent.warehouse.name)}」及其全部数据：</p><div class="clear-counts">${intent.warehouse.document_count} 份材料 · ${intent.warehouse.entity_count} 个实体 · ${intent.warehouse.relation_count} 条关系</div><p class="modal-warning">星图本身、原件、全部正文版本、知识关系、索引、Skill 及推理准备记录将被移除，${intent.warehouse.access_key_count} 个有效凭证将撤销。此操作无法撤销，其他星图不受影响。</p>`;
     }
     $("#clear-second").hidden = true;
     $("#clear-name").value = "";
@@ -2860,7 +3143,7 @@ $("#clear-dialog").addEventListener("cancel", event => {
 $("#clear-next").addEventListener("click", () => {
   if ($("#clear-second").hidden) {
     $("#clear-second").hidden = false;
-    $("#clear-next").textContent = state.clearIntent?.action === "delete" ? "确认永久删除数据仓" : "确认永久清空";
+    $("#clear-next").textContent = state.clearIntent?.action === "delete" ? "确认永久删除星图" : "确认永久清空";
     $("#clear-next").disabled = true;
     $("#clear-name").focus();
     return;
@@ -2868,7 +3151,7 @@ $("#clear-next").addEventListener("click", () => {
   const intent = state.clearIntent;
   if (!intent || intent.submitting || $("#clear-name").value !== intent.warehouse.name) return;
   if (state.warehouseId !== intent.selectedId || !state.warehouses.some(w => w.id === intent.warehouse.id))
-    return toast("数据仓已变化，请重新确认。");
+    return toast("星图已变化，请重新确认。");
   intent.submitting = true;
   $("#clear-name").disabled = true;
   $("#clear-next").disabled = true;
@@ -2887,7 +3170,7 @@ $("#clear-next").addEventListener("click", () => {
       if (state.warehouseId === intent.warehouse.id) await selectWarehouse("", "warehouses");
       else renderWarehouses();
       await refresh();
-      toast("删除已提交，清理完成后会从数据仓列表移除；访问凭证已撤销。");
+      toast("删除已提交，清理完成后会从星图列表移除；访问凭证已撤销。");
     } else {
       await selectWarehouse(state.warehouseId);
       toast("清空已提交，正在移除资料与索引；访问凭证已撤销。");
@@ -2902,9 +3185,14 @@ $("#clear-next").addEventListener("click", () => {
     });
 });
 
+const embeddingTransferNotice = "建索引时可向配置的向量服务发送未经脱敏的正文片段，向量检索时可发送检索词。交付脱敏在返回结果时生效。";
+function usesExternalEmbedding(config) {
+  const item = config.effective?.embedding || config.stages?.find(stage => stage.role === 'embedding');
+  return item?.available === true && Boolean(item.location) && item.location !== 'local';
+}
 function actualModel(config, role = "extraction") {
   const item = config?.[role];
-  if (config?.mode === "automatic" && item?.available === false) return "WANX 默认模型暂不可用，请检查万象模型设置";
+  if (config?.mode === "automatic" && item?.available === false) return "万象底座默认模型暂不可用，请检查万象模型设置";
   const name = [item?.name, item?.model].find(value => typeof value === 'string' && value.trim());
   if (!name) return "历史处理记录未提供模型配置";
   const location = {local: "本地", cloud: "云端 / 外部服务"}[item.location] || "运行位置未记录";
@@ -2924,58 +3212,162 @@ async function loadProcessingSummary() {
     const config = await call("processing");
     if (generation !== state.generation) return;
     state.processing = config.effective;
+    state.externalEmbedding = usesExternalEmbedding(config);
     renderProcessingSummary();
   } catch { /* Older services keep the existing local runtime summary. */ }
 }
 function renderProcessingSummary() {
-  if (!state.processing) return;
-  const text = actualModel(state.processing);
+  const text = state.processing ? actualModel(state.processing) : '';
+  if ($("#import-model-summary")) {
+    $("#import-model-summary").textContent = text
+      ? "本次导入按入队时配置处理：" + text + (state.externalEmbedding ? `。${embeddingTransferNotice}` : '')
+      : "正在读取处理模型…";
+  }
+  if (!text) return;
   $("#graph-model").textContent = "知识抽取与脱敏：" + text;
   $("#runtime-summary").textContent = "知识抽取与脱敏共用模型：" + text;
-  if ($("#import-model-summary")) $("#import-model-summary").textContent = "本次导入按入队时配置处理：" + text;
 }
+let starxiaotuModelRequest = 0;
+let selectedStarxiaotuModel = null;
+let savingStarxiaotuModel = false;
+function updateStarxiaotuModelSave() {
+  const choice = $("#starxiaotu-model-choice");
+  $("#starxiaotu-model-save").disabled = choice.disabled || savingStarxiaotuModel ||
+    (choice.value || null) === selectedStarxiaotuModel;
+}
+function renderStarxiaotuModels(data) {
+  const choice = $("#starxiaotu-model-choice");
+  const option = (ref, label, disabled = false) => Object.assign(document.createElement("option"), {value:ref,textContent:label,disabled});
+  const defaultName = data.defaultModel?.name;
+  const fallback = option("", defaultName ? "跟随万象底座默认模型 · " + defaultName : "跟随万象底座默认模型");
+  choice.replaceChildren(fallback, ...data.models.map(model => option(model.ref, model.name + " · " + model.provider)));
+  if (data.selectedRef && !data.models.some(model => model.ref === data.selectedRef)) {
+    choice.append(option(data.selectedRef, "已选模型暂不可用", true));
+  }
+  selectedStarxiaotuModel = data.selectedRef;
+  choice.value = selectedStarxiaotuModel || "";
+  choice.disabled = false;
+  updateStarxiaotuModelSave();
+}
+function starxiaotuModelError(error) {
+  return {
+    MODEL_CHOICE_UNAVAILABLE: "所选模型已不可用，请刷新后重新选择。",
+    MODEL_PREFERENCE_UNAVAILABLE: "无法读取或保存本机模型偏好，请检查系统授权后重试。",
+    SEMANTICA_UPGRADE_REQUIRED: "当前盒端暂不提供平台模型目录。",
+    HOST_SESSION_EXPIRED: "盒子连接已变更，请重新打开模型设置。",
+  }[error.code] || "暂时无法访问平台模型，请检查盒子连接后重试。";
+}
+async function loadStarxiaotuModel() {
+  if (savingStarxiaotuModel) return;
+  const request = ++starxiaotuModelRequest;
+  const identity = state.identity;
+  const status = $("#starxiaotu-model-status");
+  $("#starxiaotu-model-choice").disabled = true;
+  $("#starxiaotu-model-choice").replaceChildren(new Option("跟随万象底座默认模型", ""));
+  updateStarxiaotuModelSave();
+  if (!state.ready || state.preview) { status.textContent = "连接盒子后可以选择模型。"; return; }
+  status.textContent = "正在读取平台模型…";
+  try {
+    const data = await call("starxiaotu-models", {}, null);
+    if (request !== starxiaotuModelRequest || state.invalid || identity !== state.identity) return;
+    renderStarxiaotuModels(data);
+    status.textContent = data.models.length ? "" : "暂无可单独选择的文本模型。";
+  } catch (error) {
+    if (request === starxiaotuModelRequest && !state.invalid && identity === state.identity) status.textContent = starxiaotuModelError(error);
+  }
+}
+$("#starxiaotu-model-choice").addEventListener("change", updateStarxiaotuModelSave);
+$("#starxiaotu-model-form").addEventListener("submit", async event => {
+  event.preventDefault();
+  if ($("#starxiaotu-model-save").disabled) return;
+  const choice = $("#starxiaotu-model-choice"), status = $("#starxiaotu-model-status");
+  const identity = state.identity;
+  savingStarxiaotuModel = true;
+  choice.disabled = true;
+  updateStarxiaotuModelSave();
+  status.textContent = "正在保存…";
+  try {
+    const data = await call("save-starxiaotu-model", {modelRef: choice.value || null}, null);
+    if (!state.invalid && identity === state.identity) {
+      renderStarxiaotuModels(data);
+      status.textContent = "已保存，下次发送时生效。";
+    }
+  } catch (error) {
+    if (!state.invalid && identity === state.identity) status.textContent = starxiaotuModelError(error);
+  } finally {
+    savingStarxiaotuModel = false;
+    if (!state.invalid && identity === state.identity) { choice.disabled = false; updateStarxiaotuModelSave(); }
+    else if (state.view === 'models') void loadStarxiaotuModel();
+  }
+});
 async function loadModels() {
   const status = $("#model-status");
   if (!state.ready || state.preview) { status.textContent = "连接盒子后即可查看和配置模型。"; return; }
+  if (state.modelSaving) return;
   const request = state.modelRequest = (state.modelRequest || 0) + 1;
-  const scope = $("#model-scope").value;
+  const identity = state.identity;
   state.modelConfig = null;
   $("#model-save-status").textContent = "";
-  $("#model-context").textContent = "";
+  $("#model-source").hidden = true;
   $("#model-stages").replaceChildren();
   updateModelControls();
-  if (scope === "warehouse" && !state.warehouseId) { $("#model-status").textContent = "请先选择数据仓，或切换到星图默认配置。"; return; }
   status.textContent = "正在读取当前设备的模型…";
-  const results = await Promise.allSettled([call("processing", {scope}),call("model-catalog", {scope})]);
-  if (request !== state.modelRequest) return;
+  const results = await Promise.allSettled([call("processing", {scope:"default"}, null), call("model-catalog", {scope:"default"}, null)]);
+  if (request !== state.modelRequest || state.invalid || identity !== state.identity) return;
   if (results[0].status === "rejected") { $("#model-status").textContent = errorText(results[0].reason); return; }
   state.modelConfig = results[0].value;
+  if (state.modelSync?.revision !== state.modelConfig.revision) state.modelSync = null;
   state.modelCatalog = results[1].status === "fulfilled" ? results[1].value.items : [];
   state.modelDefault = results[1].status === "fulfilled" ? results[1].value.default : null;
   renderModelEditor();
-  status.textContent = results[1].status === "rejected" ? errorText(results[1].reason) : state.modelCatalog.length ? "" : "万象尚未配置可用文本模型。";
+  const affected = state.modelConfig.affected_warehouses;
+  const hasOverrides = Array.isArray(affected) && state.warehouses?.length > affected.length;
+  status.textContent = [
+    results[1].status === "rejected" ? errorText(results[1].reason) : modelAvailability(state.modelConfig.effective),
+    hasOverrides && !state.modelSync ? "部分旧项目仍有独立配置。检查并保存共用模型后，它们也会使用这里的设置。" : "",
+  ].filter(Boolean).join(" ");
+}
+function modelAvailability(current) {
+  if (current.blocked_reason) {
+    const message = errorText({code:current.blocked_reason});
+    return current.mode === "manual" && ["MODEL_CONFIG_CHANGED", "MODEL_UNAVAILABLE"].includes(current.blocked_reason)
+      ? `${message}也可在编辑模型配置中切换为跟随万象底座默认模型。`
+      : message;
+  }
+  if (!state.modelCatalog.length) return "万象尚未配置可用文本模型。";
+  const item = current.extraction;
+  if (item?.route === "wanx" && (!item.available || !state.modelCatalog.some(model =>
+    model.id === item.id && model.revision === item.revision && model.available)))
+    return "当前共用模型已变化或暂不可用。请选择可用模型，检查并保存。";
+  return "";
 }
 function renderModelEditor() {
   const config = state.modelConfig;
   if (!config) return;
   const current = config.effective;
+  const source = $("#model-source");
+  source.textContent = current.mode === "automatic"
+    ? "跟随万象底座默认模型，当前盒子上的所有星图共用。"
+    : current.mode === "manual" ? "手动指定处理模型，当前盒子上的所有星图共用。" : "使用当前盒子的处理模型配置。";
+  source.hidden = false;
   const location = item => item?.location === "local" ? "本机 / 当前盒子" : item?.location ? "云端 / 外部服务" : "";
   const contextWindow = item => Number.isSafeInteger(item?.context_window)&&item.context_window>0 ? `${item.context_window} token` : "";
   const roles = [
     ["ocr","文字识别","将图片或扫描件转成正文"], ["asr","语音转写","将录音转成可追溯文字"],
     ["extraction","知识抽取","提取实体、关系和来源"], ["embedding","检索向量","为证据检索建立索引"], ["sensitive","敏感信息检测","检查知识交付中的敏感内容"]
   ];
-  $("#model-context").textContent = config.inherit ? "继承星图默认配置"
-    : $("#model-scope").value === "default" ? "星图默认配置" : "本仓独立配置";
+  const externalEmbedding = usesExternalEmbedding(config);
   $("#model-stages").innerHTML = roles.map(([role,title,purpose]) => {
     const item = current[role] || config.stages.find(s => s.role === role);
     const selected = state.modelCatalog.find(m => m.id === item?.id);
     const matchesCatalog = selected?.revision === item?.revision;
-    const ready = item?.route === "wanx" ? item.available && Boolean(selected && matchesCatalog) : item?.available;
+    const ready = item?.route === "wanx" ? item.available && Boolean(selected?.available && matchesCatalog) : item?.available;
     const status = item?.route === "legacy" ? "本地配置" : ready ? current[role] ? "使用时校验" : "已就绪" : "未就绪";
     const checked = current[role] && current.checked_at && ready ? `<small>上次检查 ${esc(date(current.checked_at))}</small>` : "";
     const details=[location(item),role==='extraction'?contextWindow(matchesCatalog?selected:item):''].filter(Boolean).join(' · ');
-    return `<article class="model-stage"><div><h3 title="${esc(purpose)}">${title}</h3></div><div><strong>${esc(item?.name || "未配置")}</strong>${details ? `<p>${details}</p>` : ""}</div><div class="model-stage-meta"><span class="model-stage-status" data-ready="${Boolean(ready)}">${status}</span>${checked}</div></article>`;
+    const term = { extraction:'extraction', embedding:'vector-index' }[role];
+    const transfer = role === 'embedding' && externalEmbedding ? `<p>${embeddingTransferNotice}</p>` : '';
+    return `<article class="model-stage"><div><h3 title="${esc(purpose)}">${title}${term ? starxiaotuTermMarker(term) : ''}</h3></div><div><strong>${esc(item?.name || "未配置")}</strong>${details ? `<p>${details}</p>` : ""}${transfer}</div><div class="model-stage-meta"><span class="model-stage-status" data-ready="${Boolean(ready)}">${status}</span>${checked}</div></article>`;
   }).join("");
   for (const role of ["extraction"]) {
     const options = [...state.modelCatalog];
@@ -2983,12 +3375,9 @@ function renderModelEditor() {
     $("#model-"+role).innerHTML = options.map(m => `<option value="${esc(m.id)}" ${m.available ? "" : "disabled"}>${esc(m.name || m.model)} · ${esc(m.provider)} · ${m.location === "local" ? "本地" : "云端 / 外部"}${contextWindow(m)?` · ${contextWindow(m)}`:''}${m.available ? "" : "（当前配置，暂不可选择）"}</option>`).join("");
     $("#model-"+role).value = current[role]?.id || "";
   }
-  $("#model-inherit").checked = config.inherit;
   $("#model-mode").value = current.mode === "automatic" ? "automatic" : "manual";
   // The backend resolves the default for new tasks; always show its actual value.
   renderThinkingOptions(current.inference_options?.thinking_mode || "auto");
-  $("#model-inherit-label").hidden = $("#model-scope").value === "default";
-  $("#model-impact").textContent = $("#model-scope").value === "default" ? "影响继承默认配置的数据仓及未来新仓：" + (config.affected_warehouses.join("、") || "目前没有继承仓") : "仅影响当前数据仓的新处理任务。";
   updateModelControls();
 }
 function renderThinkingOptions(selected = $("#model-thinking").value || null) {
@@ -3005,31 +3394,19 @@ function renderThinkingOptions(selected = $("#model-thinking").value || null) {
     : "该模型使用默认思考模式。";
 }
 function updateModelControls() {
-  const returnBar=$("#model-onboarding");
-  const handoff=state.modelOnboarding;
-  returnBar.hidden=!handoff||handoff.warehouseId!==state.warehouseId;
-  if (!returnBar.hidden) {
-    $("#model-onboarding-budget").textContent=Number.isSafeInteger(handoff.required)&&handoff.required>0
-      ? `本轮建仓预计至少需要 ${handoff.required} 个 token。` : '调整模型后，可以返回原建仓对话。';
-    $("#model-onboarding-return").disabled=!!state.modelSaving;
-  }
-  const inherited = $("#model-scope").value === "warehouse" && $("#model-inherit").checked;
   const automatic = $("#model-mode").value === "automatic";
-  for (const id of ["model-scope", "model-inherit", "model-mode", "model-extraction", "model-thinking", "model-refresh"]) $("#"+id).disabled = !!state.modelSaving;
-  for (const id of ["model-inherit", "model-mode", "model-extraction"]) $("#"+id).disabled ||= !state.modelConfig;
-  $("#model-mode-label").hidden = inherited;
-  $("#model-selectors").hidden = inherited || automatic;
-  $("#model-thinking-controls").hidden = false;
-  $("#model-thinking").disabled = inherited || !!state.modelSaving || !state.modelConfig;
+  $("#model-refresh").disabled = !!state.modelSaving;
+  for (const id of ["model-mode", "model-extraction", "model-thinking", "model-save"]) $("#"+id).disabled = !!state.modelSaving || !state.modelConfig;
+  $("#model-selectors").hidden = automatic;
   renderThinkingOptions();
-  if (inherited) $("#model-thinking-note").textContent = "继承星图默认配置。";
-  $("#model-save").disabled = !!state.modelSaving || !state.modelConfig;
-  $("#model-save").textContent = state.modelSaving ? "正在检查并保存…" : inherited ? "恢复继承" : "检查并保存";
+  const pending = state.modelSync?.pending || 0;
+  $("#model-sync").hidden = !pending;
+  $("#model-sync-retry").disabled = !!state.modelSaving || state.modelSync?.revision !== state.modelConfig?.revision;
+  $("#model-sync-status").textContent = pending ? `还有 ${pending} 个旧项目待切换到共用配置。` : "";
 }
 async function saveModels() {
   if (!state.modelConfig || state.modelSaving) return;
-  const generation = state.generation, scope = $("#model-scope").value;
-  const inherit = scope === "warehouse" && $("#model-inherit").checked;
+  const identity = state.identity;
   const mode = $("#model-mode").value;
   const revision = state.modelConfig.revision;
   const inference_options = {thinking_mode: $("#model-thinking").value || "auto"};
@@ -3037,23 +3414,44 @@ async function saveModels() {
   const status = $("#model-save-status");
   try {
     state.modelSaving = true; updateModelControls();
-    let check = {};
-    if (!inherit) {
-      const extraction = mode === "automatic" ? state.modelDefault?.id : $("#model-extraction").value;
-      const items = [state.modelCatalog.find(m => m.id === extraction)];
-      if (items.some(m => !m?.available)) throw {publicMessage:"请先选择万象中的可用模型。"};
-      if (!items[0].inference_options?.thinking_modes?.includes(inference_options.thinking_mode) && inference_options.thinking_mode !== "auto") throw {publicMessage:"当前模型不支持所选思考模式，请重新选择。"};
-      const cloud = items.filter(m => m.location !== "local");
-      if (cloud.length && !confirm(`确认使用云端 / 外部模型？\n${cloud.map(m => `${m.provider} · ${m.name}`).join("\n")}\n\n知识抽取或敏感检测可能向这些服务发送未经脱敏的正文片段，并产生模型用量。\n${$("#model-impact").textContent}\n\n是否继续检查并保存？`)) return;
-      status.textContent = "正在用示例检查模型…";
-      check = await call("check-models",{scope,config:{extraction,mode,inference_options,cloud_confirmations:cloud.map(m => m.revision)}});
-      if (generation !== state.generation || request !== state.modelRequest) return;
-    }
-    await call("save-models",{scope,config:{expected_revision:revision,inherit,mode,check_id:check.check_id || null}});
-    if (generation !== state.generation) return;
-    await loadProcessingSummary(); await loadModels();
-    status.textContent = "已保存，新任务将使用此配置。";
-  } catch (e) { if (generation === state.generation) status.textContent = errorText(e); }
+    const extraction = mode === "automatic" ? state.modelDefault?.id : $("#model-extraction").value;
+    const model = state.modelCatalog.find(item => item.id === extraction && item.available);
+    if (!model) throw {publicMessage:"请先选择万象中的可用模型。"};
+    if (inference_options.thinking_mode !== "auto" && !model.inference_options?.thinking_modes?.includes(inference_options.thinking_mode))
+      throw {publicMessage:"当前模型不支持所选思考模式，请重新选择。"};
+    const cloud = model.location !== "local";
+    if (cloud && !confirm(`确认所有星图使用云端 / 外部模型？\n${model.provider} · ${model.name}\n\n此配置适用于当前盒子上现有和新建的星图。抽取知识与检测敏感信息时，可能将未经脱敏的正文片段发送给所选服务。交付脱敏在返回结果时生效。\n\n是否继续检查并保存？`)) return;
+    status.textContent = "正在用示例检查模型…";
+    const check = await call("check-models", {scope:"default", config:{extraction,mode,inference_options,cloud_confirmations:cloud ? [model.revision] : []}}, null);
+    if (state.invalid || identity !== state.identity || request !== state.modelRequest) return;
+    if (!check?.check_id) throw {code:"MODEL_CHECK_REQUIRED"};
+    status.textContent = "正在保存并应用到所有星图…";
+    const saved = await call("save-models", {scope:"default", applyToAll:true, config:{expected_revision:revision, mode, check_id:check.check_id}}, null);
+    if (state.invalid || identity !== state.identity) return;
+    state.modelConfig = saved;
+    state.modelSync = saved.modelSync?.pending ? {...saved.modelSync, revision:saved.revision} : null;
+    renderModelEditor();
+    $("#model-status").textContent = modelAvailability(saved.effective);
+    status.textContent = state.modelSync ? "已保存共用配置。" : "已保存，所有星图的新任务将使用此配置。";
+    void loadProcessingSummary();
+  } catch (e) { if (!state.invalid && identity === state.identity) status.textContent = errorText(e); }
+  finally { state.modelSaving = false; updateModelControls(); }
+}
+async function retryModelSync() {
+  if (!state.modelSync || state.modelSaving || state.modelSync.revision !== state.modelConfig?.revision) return;
+  const identity = state.identity;
+  const {revision} = state.modelSync;
+  const status = $("#model-save-status");
+  state.modelSaving = true;
+  updateModelControls();
+  status.textContent = "正在切换旧项目…";
+  try {
+    const {modelSync} = await call("sync-models", {scope:"default", expectedRevision:revision}, null);
+    if (state.invalid || identity !== state.identity) return;
+    state.modelSync = modelSync.pending ? {...modelSync, revision} : null;
+    status.textContent = state.modelSync ? "还有旧项目待切换，可以再试一次。" : "所有星图的新任务将使用此配置。";
+    void loadProcessingSummary();
+  } catch (e) { if (!state.invalid && identity === state.identity) status.textContent = errorText(e); }
   finally { state.modelSaving = false; updateModelControls(); }
 }
 const reprocessPlans = new Map();
@@ -3104,23 +3502,16 @@ async function reprocessModels() {
     if (!plan.batches) reprocessPlans.delete(warehouseId);
   }
 }
-$("#model-scope").addEventListener("change",()=>void loadModels());
-$("#model-onboarding-return").addEventListener("click",()=>{
-  if (state.view==='models'&&!state.modelSaving&&state.modelOnboarding?.warehouseId===state.warehouseId) {
-    void openWarehouseSetup({warehouse:currentWarehouse()});
-  }
-});
-$("#model-inherit").addEventListener("change",updateModelControls);
 $("#model-mode").addEventListener("change",updateModelControls);
 $("#model-extraction").addEventListener("change",updateModelControls);
 $("#model-thinking").addEventListener("change",()=>{
   $("#model-status").textContent = "思考模式尚未保存。点击“检查并保存”后对新任务生效，已有任务和重试保留原设置。";
 });
-$("#model-refresh").addEventListener("click",()=>void loadModels());
+$("#model-refresh").addEventListener("click",()=>{void loadStarxiaotuModel();void loadModels();});
 $("#model-save").addEventListener("click",()=>void saveModels());
+$("#model-sync-retry").addEventListener("click",()=>void retryModelSync());
 $("#model-reprocess-all").addEventListener("click",()=>void reprocessModels());
-$("#model-manage").addEventListener("click",async()=>{
-  try { const result=await call("open-model-management"); if(!result.opened) toast("当前万象版本暂不支持直接跳转。请在万象管理后台的「模型」中管理，再回到这里刷新。"); }
-  catch(e){toast(errorText(e));}
+if ($("#import-model-config")) $("#import-model-config").addEventListener("click",()=>{
+  $("#import-dialog").close();
+  setView("models");
 });
-if ($("#import-model-config")) $("#import-model-config").addEventListener("click",()=>{$("#import-dialog").close();setView("models");});

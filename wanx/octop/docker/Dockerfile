@@ -60,7 +60,8 @@ RUN NODE_ENV=production NODE_OPTIONS="--max-old-space-size=${NODE_MAX_OLD_SPACE_
 
 
 # Pinned WANX Builder and dev-kit, assembled from the canonical Host SDK source.
-FROM node:22-bookworm-slim AS builder-runtime
+FROM node:22-bookworm-slim AS builder-kit
+ARG WANX_REQUIRE_RELEASE_SNAPSHOT=0
 WORKDIR /build
 COPY package.json ./
 COPY tools/build-app-kit.mjs ./tools/build-app-kit.mjs
@@ -76,7 +77,15 @@ COPY apps/builder/examples/ ./apps/builder/examples/
 COPY apps/builder/templates/ ./apps/builder/templates/
 COPY apps/builder/integration/ ./apps/builder/integration/
 COPY apps/builder/foundation-runtime/ ./apps/builder/foundation-runtime/
-RUN --mount=type=cache,target=/root/.npm npm run build:builder-runtime
+# Consume the assembled release archive when it is present in the build context.
+# Clean source builds use the same content pins as the release build.
+RUN --mount=type=bind,source=.,target=/context,readonly --mount=type=cache,target=/root/.npm \
+    kit_version="$(node -p "require('./apps/builder/vendor/dev-kit-source.json').kitVersion")" && \
+    if [ "$WANX_REQUIRE_RELEASE_SNAPSHOT" = 1 ] || [ -e "/context/.wanx-app-kit/$kit_version" ]; then \
+      export WANX_APP_KIT_DIR="/context/.wanx-app-kit/$kit_version"; \
+    fi && npm run build:builder-runtime
+
+FROM builder-kit AS builder-runtime
 WORKDIR /build/apps/builder
 RUN --mount=type=cache,target=/root/.npm npm ci --include=dev --no-audit
 

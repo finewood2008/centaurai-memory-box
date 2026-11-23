@@ -15,12 +15,27 @@ TURN = CONVERSATION + rf"/turns/(?P<turn_id>{ID})"
 CORRECTION = rf"/workbench/documents/(?P<document_id>{ID})/corrections"
 DRAFT = CORRECTION + rf"/(?P<draft_id>{ID})"
 REVISION_PAGE = PAGE | {"revision"}
+MATERIAL = rf"/workbench/conversations/materials/(?P<document_id>{ID})"
+SOURCE = rf"/workbench/documents/(?P<document_id>{ID})"
+
+PERSONAL_PROCESSING_ROUTES: tuple[tuple[str, str, frozenset[str], str], ...] = (
+    ("POST", MATERIAL + "/processing-starts", frozenset(), "start_material_processing"),
+    ("POST", MATERIAL + "/processing-previews", frozenset(), "preview_material_processing"),
+    ("POST", MATERIAL + "/processing-transitions", frozenset(), "confirm_material_processing"),
+    ("GET", MATERIAL + rf"/processing-transitions/(?P<transition_id>{ID})", frozenset(), "get_material_processing"),
+    ("POST", SOURCE + "/source-confirmations", frozenset(), "confirm_material_source"),
+    ("POST", SOURCE + "/index-retries", frozenset(), "retry_material_source_index"),
+    ("GET", rf"/workbench/jobs/(?P<job_id>{ID})", frozenset(), "get_workbench_job"),
+    ("POST", rf"/workbench/jobs/(?P<job_id>{ID})/retry", frozenset(), "retry_workbench_job"),
+)
+PERSONAL_PROCESSING_OPERATIONS = frozenset(row[3] for row in PERSONAL_PROCESSING_ROUTES)
 
 # Every method, path and operation is registered explicitly. Resource IDs are
 # only references; the service must also check their actual warehouse and
 # parent membership under the verified principal before calling the domain.
 MATERIAL_ROUTES: tuple[tuple[str, str, frozenset[str], str], ...] = (
     ("GET", rf"/workbench/knowledge/runs/(?P<run_id>{ID})", frozenset(), "get_knowledge_run"),
+    ("POST", rf"/workbench/ontology-suggestions/materials/(?P<document_id>{ID})/review", frozenset(), "review_material_ontology"),
     ("POST", "/workbench/ontology-suggestions/generate", frozenset(), "generate_ontology_suggestions"),
     ("POST", "/workbench/ontology-suggestions/draft", frozenset(), "draft_ontology_suggestions"),
     ("POST", rf"/workbench/ontology-suggestions/(?P<suggestion_preview_id>{ID})/validate", frozenset(), "validate_ontology_suggestions"),
@@ -33,6 +48,7 @@ MATERIAL_ROUTES: tuple[tuple[str, str, frozenset[str], str], ...] = (
     ("POST", CONVERSATION + "/onboarding/turns", frozenset(), "send_onboarding_turn"),
     ("GET", CONVERSATION + rf"/onboarding/turns/(?P<turn_id>{ID})", frozenset(), "get_onboarding_turn"),
     ("POST", CONVERSATION + "/onboarding/preview", frozenset(), "preview_onboarding"),
+    ("POST", CONVERSATION + "/onboarding/trial", frozenset(), "trial_onboarding"),
     ("POST", CONVERSATION + "/onboarding/publish", frozenset(), "publish_onboarding"),
     ("GET", CONVERSATION, frozenset({"intent_offset"}), "get_conversation"),
     ("GET", CONVERSATION + "/intents", PAGE, "list_conversation_intents"),
@@ -75,7 +91,7 @@ MATERIAL_ROUTES: tuple[tuple[str, str, frozenset[str], str], ...] = (
     ("GET", DRAFT + "/suggestions", REVISION_PAGE | {"kind"}, "list_correction_suggestions"),
     ("GET", DRAFT + "/extraction-results", REVISION_PAGE | {"kind"}, "list_correction_extraction_results"),
     ("GET", DRAFT + "/publication", frozenset(), "get_correction_publication"),
-)
+) + PERSONAL_PROCESSING_ROUTES
 CORRECTION_ACTIONS = (
     ("claim", "claim_correction_draft"),
     ("heartbeat", "heartbeat_correction_draft"),
@@ -94,6 +110,9 @@ CORRECTION_ACTIONS = (
 )
 ROUTES: tuple[tuple[str, str, frozenset[str], str], ...] = (
     ("GET", r"/workbench/settings/status", frozenset(), "workbench_status"),
+    ("GET", r"/workbench/sensitive/settings", frozenset(), "get_sensitive_settings"),
+    ("POST", r"/workbench/sensitive/settings", frozenset(), "save_sensitive_settings"),
+    ("POST", r"/workbench/sensitive/preview", frozenset(), "preview_sensitive"),
     ("GET", r"/workbench/jobs", PAGE, "list_jobs"),
     ("GET", r"/workbench/documents", PAGE, "list_documents"),
     (
@@ -229,6 +248,14 @@ def validate_body(method: str, path: str, body: dict[str, Any] | None) -> str | 
     if operation_name_value in MATERIAL_OPERATIONS:
         return _material_body(operation_name_value, body)
     expected = {"_native_operation_id"}
+    if operation_name_value == "save_sensitive_settings":
+        expected |= {"expected_revision", "enabled", "semantic_enabled", "rules"}
+        if isinstance(body, dict):
+            expected |= body.keys() & {"acknowledge_similar_rule_id", "acknowledge_similar_rule_ids"}
+    if operation_name_value == "preview_sensitive":
+        expected.add("text")
+        if isinstance(body, dict) and "expected_revision" in body:
+            expected.add("expected_revision")
     if path == "/workbench/ontologies":
         expected |= {"name", "schema"}
     if operation_name_value == "start_ontology_update":
@@ -253,6 +280,22 @@ def validate_body(method: str, path: str, body: dict[str, Any] | None) -> str | 
                     or selection["document_id"] in document_ids):
                 raise ValueError("workbench ontology update selection is invalid")
             document_ids.add(selection["document_id"])
+    if operation_name_value == "save_sensitive_settings":
+        acknowledgement = body.get("acknowledge_similar_rule_id")
+        acknowledgements = body.get("acknowledge_similar_rule_ids", [])
+        if (not _integer(body["expected_revision"], 0)
+            or type(body["enabled"]) is not bool or type(body["semantic_enabled"]) is not bool
+            or type(body["rules"]) is not list or not 9 <= len(body["rules"]) <= 39
+            or any(not isinstance(rule, dict) for rule in body["rules"])
+            or (acknowledgement is not None and not _string(acknowledgement, 1, 80))
+            or not isinstance(acknowledgements, list) or len(acknowledgements) > 39
+            or any(not isinstance(rule_id, str) or re.fullmatch(r"[a-z][a-z0-9_]{1,39}", rule_id) is None for rule_id in acknowledgements)):
+            raise ValueError("workbench sensitive settings are invalid")
+    if operation_name_value == "preview_sensitive" and (
+        not _string(body["text"], 1, 12000) or not body["text"].strip()
+        or ("expected_revision" in body and not _integer(body["expected_revision"], 0))
+    ):
+        raise ValueError("workbench sensitive preview is invalid")
     if path == "/workbench/ontologies" and (
         not isinstance(body["name"], str)
         or not 1 <= len(body["name"]) <= 120
@@ -269,13 +312,21 @@ MATERIAL_OPERATIONS = frozenset(row[3] for row in MATERIAL_ROUTES) | frozenset(
 # Required business fields / optional business fields. The private transport
 # operation and permitted editor credentials are added separately below.
 _BODY_FIELDS = {
+    "start_material_processing": ({"operation_id", "expected_document_version_id", "expected_workflow_revision", "confirmed"}, set()),
+    "preview_material_processing": ({"operation_id", "target_mode", "expected_document_version_id", "expected_workflow_revision"}, set()),
+    "confirm_material_processing": ({"operation_id", "preview_id", "preview_digest", "expected_workflow_revision", "confirmed"}, {"replacement_acknowledgement"}),
+    "confirm_material_source": ({"operation_id", "expected_document_version_id", "confirmed"}, set()),
+    "retry_material_source_index": ({"operation_id", "expected_document_version_id", "confirmation_id"}, set()),
+    "retry_workbench_job": ({"operation_id"}, set()),
     "generate_ontology_suggestions": ({"document_ids", "base_ontology_id", "schema"}, set()),
     "draft_ontology_suggestions": ({"operation_id", "preview_ids", "name", "schema"}, {"reviewed_preview_ids"}),
     "validate_ontology_suggestions": (set(), set()),
+    "review_material_ontology": (set(), set()),
     "create_conversation": ({"operation_id"}, {"scenario"}),
     "start_onboarding": ({"operation_id", "expected_revision", "draft_digest"}, set()),
     "send_onboarding_turn": ({"operation_id", "expected_revision", "draft_digest"}, {"content", "question_actions"}),
     "preview_onboarding": ({"operation_id", "expected_revision", "draft_digest"}, {"name"}),
+    "trial_onboarding": ({"operation_id", "expected_revision", "draft_digest", "document_id", "document_version_id"}, set()),
     "publish_onboarding": ({"operation_id", "preview_id", "preview_digest", "confirmed"}, set()),
     "send_conversation_message": ({"operation_id", "expected_revision", "content"}, set()),
     "create_material_intent": ({"operation_id", "expected_revision"}, {"document_id"}),
@@ -357,6 +408,22 @@ def _material_body(operation: str, body: dict[str, Any] | None) -> str:
         raise ValueError("workbench operation id is required")
     if "operation_id" in body and body["operation_id"] != native:
         raise ValueError("workbench business operation does not match transport")
+    if operation in {"start_material_processing", "preview_material_processing", "confirm_material_processing",
+                     "confirm_material_source", "retry_material_source_index"}:
+        for key in ("expected_document_version_id", "confirmation_id", "preview_id"):
+            if key in body and (not isinstance(body[key], str) or not re.fullmatch(ID, body[key])):
+                raise ValueError("workbench source or processing reference is invalid")
+        if "expected_workflow_revision" in body and not _integer(body["expected_workflow_revision"]):
+            raise ValueError("workbench workflow revision is invalid")
+        if "confirmed" in body and body["confirmed"] is not True:
+            raise ValueError("workbench source requires explicit confirmation")
+        if body.get("target_mode", "automatic") != "automatic":
+            raise ValueError("only automatic material processing is available through this route")
+        if "replacement_acknowledgement" in body and (
+            not isinstance(body["replacement_acknowledgement"], str)
+            or not re.fullmatch(r"[0-9a-f]{64}", body["replacement_acknowledgement"])
+        ):
+            raise ValueError("workbench replacement acknowledgement is invalid")
     if "_native_editor" in body and not (
             body["_native_editor"] is None and operation in _OPTIONAL_EDITOR) and not _editor(body["_native_editor"]):
         raise ValueError("workbench editor credentials are invalid")
@@ -369,7 +436,7 @@ def _material_body(operation: str, body: dict[str, Any] | None) -> str:
                 or reference["processing_generation"] is not None and not _integer(reference["processing_generation"], 0)):
             raise ValueError("workbench extraction review reference is invalid")
     for name in ("expected_revision", "expected_conversation_revision", "proposal_offset"):
-        if name in body and not _integer(body[name], 0 if name == "proposal_offset" or operation in {"start_onboarding", "send_onboarding_turn", "preview_onboarding"} else 1):
+        if name in body and not _integer(body[name], 0 if name == "proposal_offset" or operation in {"start_onboarding", "send_onboarding_turn", "preview_onboarding", "trial_onboarding"} else 1):
             raise ValueError("workbench revision or offset is invalid")
     for name in ("confirmed", "legacy_confirmed"):
         if name in body and type(body[name]) is not bool:
@@ -411,6 +478,10 @@ def _material_body(operation: str, body: dict[str, Any] | None) -> str:
     if operation == "preview_onboarding" and (not _string(body.get("name", "建仓对话本体"), 1, 120)
             or not body.get("name", "建仓对话本体").strip()):
         raise ValueError("workbench onboarding name is invalid")
+    if operation == "trial_onboarding" and any(
+            not isinstance(body[key], str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,120}", body[key])
+            for key in ("document_id", "document_version_id")):
+        raise ValueError("workbench trial source is invalid")
     if operation == "publish_onboarding" and (not _string(body["preview_id"], 1, 120) or body["confirmed"] is not True):
         raise ValueError("workbench onboarding publication requires a confirmed preview")
     if "deferred_policy" in body and body["deferred_policy"] not in (None, "keep_existing"):
@@ -464,3 +535,22 @@ def resource_ids(method: str, path: str, body: dict[str, Any] | None = None) -> 
                     result[key] = body[key]
             return result
     raise ValueError("workbench resource route is not registered")
+
+
+def validate_source_correction(body: dict[str, Any]) -> None:
+    if not isinstance(body, dict) or set(body) != {"operation_id", "payload"}:
+        raise ValueError("source correction envelope is invalid")
+    operation = body["operation_id"]
+    payload = body["payload"]
+    if (not isinstance(operation, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,120}", operation)
+            or not isinstance(payload, dict) or set(payload) != {"base_version_id", "segments"}
+            or not _string(payload["base_version_id"], 1, 80) or not re.fullmatch(ID, payload["base_version_id"])
+            or not isinstance(payload["segments"], list) or not 1 <= len(payload["segments"]) <= 100_000):
+        raise ValueError("source correction payload is invalid")
+    seen = set()
+    for segment in payload["segments"]:
+        if (not isinstance(segment, dict) or set(segment) != {"id", "text"}
+                or not _string(segment["id"], 1, 80) or not re.fullmatch(ID, segment["id"])
+                or not _string(segment["text"], 0, 1_000_000) or segment["id"] in seen):
+            raise ValueError("source correction segments are invalid")
+        seen.add(segment["id"])

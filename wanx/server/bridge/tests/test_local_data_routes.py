@@ -124,6 +124,21 @@ def test_upload_limits_are_exact_route_caps_not_generic_unknown_allowance():
         route_policy(context(), observed("/api/anything/archive", "POST"))
 
 
+def test_text_edit_requires_host_space_write():
+    path = "/api/personal-space/files/" + "a" * 32 + "/edit-uploads"
+    route = route_policy(context("space", ["write"]), observed(path, "POST"))
+    assert route["resourceId"] == "space:personal"
+    assert route["action"] == "write"
+    for principal, path, method in (
+        (context("space", ["read"]), path, "POST"),
+        (context("space", ["write"], app="ai.wanx.studio"), path, "POST"),
+        (context("space", ["write"]), path + "?space_id=personal", "POST"),
+        (context("space", ["write"]), path, "GET"),
+    ):
+        with pytest.raises(wire.DataProtocolError):
+            route_policy(principal, observed(path, method))
+
+
 def test_additional_note_routes_use_the_same_owner_read_and_write_grants():
     path = "/api/clipboard/v1/notes"
     item = path + "/" + "c" * 32

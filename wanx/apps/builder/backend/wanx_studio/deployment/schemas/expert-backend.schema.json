@@ -8,6 +8,7 @@
   "properties": {
     "schemaVersion": {"const": 1},
     "format": {"const": "wanx-expert-backend-v1"},
+    "prompt": {"type": "string", "minLength": 1, "maxLength": 65536},
     "mode": {"const": "ask"},
     "template": {
       "type": "object",

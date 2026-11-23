@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { ontologyIssues, renameEntity, sameOntologyType, type OntologyDefinition, type OntologyProperty, type RelationDefinition } from '../ontology';
 import '../ontology.css';
+import StarxiaotuTerm from './StarxiaotuTerm';
 import type { OntologyTypeChange } from '../ontologySuggestions';
 
 type Selection = { kind: 'entity' | 'relation'; index: number | null };
@@ -8,9 +9,9 @@ export type OntologyEditRequest = {kind: Selection['kind']; name?: string; seque
 
 function Properties({ value, onChange }: { value: OntologyProperty[]; onChange: (value: OntologyProperty[]) => void }) {
   return <section className="ontology-properties" aria-label="属性配置">
-    <div className="ontology-list-heading"><h3>属性配置 <small>{value.length}/50</small></h3>
+    <div className="ontology-list-heading"><h3>属性配置<StarxiaotuTerm name="property" /> <small>{value.length}/50</small></h3>
       <button type="button" disabled={value.length >= 50} onClick={() => onChange([...value, { name: '', label: '', required: false }])}>添加属性</button></div>
-    <p className="ontology-hint">属性默认选填。勾选必填后，缺少该属性的抽取结果将无法通过校验。</p>
+    <p className="ontology-hint">属性默认选填。勾选必填后，缺少该属性的抽取结果将无法通过校验。<StarxiaotuTerm name="required-property" /></p>
     {!value.length && <p className="ontology-empty">尚未配置属性，可按业务需要添加。</p>}
     {value.map((property, index) => <div className="ontology-property" key={index}>
       <label>属性标识<input maxLength={64} placeholder="例如 job_title" value={property.name}
@@ -108,13 +109,19 @@ export function ConfigurationDrawer({ value, selection, onApply, onClose, onDirt
       <fieldset disabled={disabled} className={inline ? 'ontology-type-fields' : undefined} style={{border:0,padding:0,margin:0,minWidth:0}}>
       <div className="ontology-type-form">
       <div className="ontology-fields">
-        <label>{entity ? '实体标识' : '关系标识'}<input autoFocus={!inline} maxLength={64} value={draft.name}
-          placeholder={entity ? '例如 PERSON' : '例如 WORKS_AT'} onChange={event => setDraft({ ...draft, name: event.target.value.toUpperCase().trim() })} /></label>
-        <label>显示名称<input maxLength={80} value={draft.label} placeholder={entity ? '例如 人物' : '例如 任职于'}
-          onChange={event => setDraft({ ...draft, label: event.target.value })} /></label>
+        <div className="ontology-field">
+          <div><label htmlFor={title+'-type-id'}>{entity ? '实体标识' : '关系标识'}</label><StarxiaotuTerm name="type-id" /></div>
+          <input id={title+'-type-id'} autoFocus={!inline} maxLength={64} value={draft.name}
+            placeholder={entity ? '例如 PERSON' : '例如 WORKS_AT'} onChange={event => setDraft({ ...draft, name: event.target.value.toUpperCase().trim() })} />
+        </div>
+        <div className="ontology-field">
+          <div><label htmlFor={title+'-type-label'}>显示名称</label><StarxiaotuTerm name="display-name" /></div>
+          <input id={title+'-type-label'} maxLength={80} value={draft.label} placeholder={entity ? '例如 人物' : '例如 任职于'}
+            onChange={event => setDraft({ ...draft, label: event.target.value })} />
+        </div>
       </div>
       <p className="ontology-hint">标识以英文字母开头，可包含数字和下划线。{entity && '修改实体标识后，当前配置的关系引用会同步更新。'}</p>
-      {!entity && <section className="ontology-endpoint-section"><h3>关系方向</h3><p className="ontology-hint">起点 → 关系 → 终点；每端至少选择一个实体类型。</p>
+      {!entity && <section className="ontology-endpoint-section"><h3>关系方向<StarxiaotuTerm name="relation-direction" /></h3><p className="ontology-hint">起点 → 关系 → 终点；每端至少选择一个实体类型。</p>
         {(['source_types', 'target_types'] as const).map(endpoint => <fieldset className="ontology-endpoints" key={endpoint}>
           <legend>{endpoint === 'source_types' ? '起点类型' : '终点类型'}</legend>
           {value.entity_types.map(item => <label className="ontology-check" key={item.name}>

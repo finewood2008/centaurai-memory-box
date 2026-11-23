@@ -53,7 +53,7 @@ async def test_real_standard_direct_edit_builds_next_immutable_package(standard,
   await svc.edits.tool(owner,pid,eid,'update_prd',{'expectedHash':r['expectedHash'],'summary':{'workflow':'输入文本后查看回答','outputs':'显示专家回答'},'upsert':[{'section':'tests','value':{'title':'界面标题','given':'打开应用','when':'查看页面','then':'显示新标题'}}]})
   current=await svc.edits.tool(owner,pid,eid,'read_project',{})
   if reduce_capabilities:
-   await svc.edits.tool(owner,pid,eid,'update_prd',{'expectedHash':current['expectedHash'],'capabilities':['foundation']})
+   await svc.edits.tool(owner,pid,eid,'update_prd',{'expectedHash':current['expectedHash'],'capabilities':[]})
    current=await svc.edits.tool(owner,pid,eid,'read_project',{})
   await svc.edits.tool(owner,pid,eid,'finish_edit',{'outcome':'ready','summary':'修改界面标题','runtimeIntent':{'solutionHash':current['expectedHash'],'capabilities':current['solution']['capabilities'],'execution':'managed-expert'}})
  async def execute(owner,q,tid,instruction):
@@ -81,7 +81,7 @@ async def test_real_standard_direct_edit_builds_next_immutable_package(standard,
  assert a['manifest']['compatibility']==baseline['manifest']['compatibility']
  assert a['expertContractDigest']==baseline['expertContractDigest']
  assert a['snapshot']['solution']['outputs']=='显示专家回答'
- assert a['snapshot']['solution']['capabilities']==(['foundation'] if reduce_capabilities else ['data','foundation'])
+ assert a['snapshot']['solution']['capabilities']==([] if reduce_capabilities else ['wanx.expert-app.v1'])
  assert a['checkpoint']['contract']['format']=='wanx-app-dev-kit'
  assert 'collections' not in a['manifest']
 
@@ -101,7 +101,7 @@ async def test_standard_direct_edit_cannot_replace_frozen_expert_contract(standa
  svc,p=standard;svc.runner=Runner(svc)
  q=svc.store.get('alice',p['id']);q['deploymentExpert']['revision']+=1
  q['deploymentExpert']['template']['digest']='sha256:'+'b'*64
- q['preparation']['handoff']['contracts']['foundation']['expertDeployment']=deepcopy(q['deploymentExpert'])
+ q['preparation']['handoff']['contracts']['wanx.expert-app.v1']['expertDeployment']=deepcopy(q['deploymentExpert'])
  svc.store.save(q)
  async def no_model(owner,pid,eid):
   await svc.edits.tool(owner,pid,eid,'finish_edit',{'outcome':'no_change','summary':'Synthetic no model'})

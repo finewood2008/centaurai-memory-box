@@ -61,7 +61,7 @@
       backup?.lastBackup ? `最近备份：${formatDate(backup.lastBackup)}` : "";
     return `<section class="settings-panel space-local-memory" aria-label="记忆库备份">
       <div><h3>记忆库备份</h3>
-        <p class="muted">把本机记忆自动备份到所选盒子空间。换电脑后，连接同一盒子即可恢复。</p>
+        <p class="muted">把本机记忆备份到所选盒子。每个备份来源保留最近三份自动生成的快照。换电脑后，连接同一盒子即可恢复。</p>
         <p class="muted">${!backup?.connected ? "请先连接盒子。" : backup.enabled ? `自动备份已开启 · ${esc(backup.name)}` : "自动备份未开启"}</p>
         ${status ? `<p class="muted" role="status">${esc(status)}</p>` : ""}
         ${backupError ? `<p class="danger-text" role="alert">${esc(backupError)}</p>` : ""}

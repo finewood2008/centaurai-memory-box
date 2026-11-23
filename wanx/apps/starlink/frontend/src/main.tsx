@@ -1,7 +1,8 @@
+import StarxiaotuTerm from "./components/StarxiaotuTerm";
 import { embeddedHost, bridgeHosted, type OntologyAction, type OntologyCategory, type OntologySection } from "./nativeHost.ts";
 import {graphUrl, readGraphSources, type GraphSources} from './graphTransport';
 import "./starlink-theme.css";
-import { Component, StrictMode, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Component, StrictMode, Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import SigmaGraph, { type GraphEdgeData, type GraphNodeData } from "./components/SigmaGraph";
 import GraphDetails from "./components/GraphDetails";
@@ -28,7 +29,7 @@ import KnowledgeReleases from "./components/KnowledgeReleases";
 import OntologyUpdates from './components/OntologyUpdates';
 import type { SuggestionPreview } from './ontologySuggestions';
 import { newOntologyOperationId, type OntologyTypeChange } from './ontologySuggestions';
-import { ontologyIssues, type OntologyDefinition } from "./ontology";
+import { ontologyDraftName, ontologyIssues, type OntologyDefinition } from "./ontology";
 import type {SelectedKnowledgeSource} from './corrections';
 const SkillWorkbench = lazy(() => import("./components/SkillPackages"));
 const DocumentKnowledgeCorrections = lazy(() => import("./components/DocumentKnowledgeCorrections"));
@@ -564,7 +565,7 @@ function OntologyView({ report: onReport, onLeaveStateChange, initialPreview, on
       return;
     }
     if(base!==definition&&currentOntology){
-      const nextName=`${currentOntology.name}（修订）`.slice(0,120);
+      const nextName=ontologyDraftName(currentOntology.name);
       setDefinition(structuredClone(base));setName(nextName);
       setSavedConfiguration(JSON.stringify({name:nextName,definition:base}));
       setCreatedConfiguration(null);clearSuggestions();
@@ -598,7 +599,7 @@ function OntologyView({ report: onReport, onLeaveStateChange, initialPreview, on
       setPageApplied({kind:pageSelection.kind,name:list[pageSelection.index??list.length-1].name});
     }
     if(pageEditorBase!==definition&&currentOntology){
-      const nextName=`${currentOntology.name}（修订）`.slice(0,120);
+      const nextName=ontologyDraftName(currentOntology.name);
       setName(nextName);
       setSavedConfiguration(JSON.stringify({name:nextName,definition:pageEditorBase}));
       setCreatedConfiguration(null);
@@ -633,7 +634,7 @@ function OntologyView({ report: onReport, onLeaveStateChange, initialPreview, on
     editDefinition(structuredClone(item.schema));
     setCreatedConfiguration(null);
     clearSuggestions();
-    setName(`${item.name}（修订）`.slice(0, 120));
+    setName(ontologyDraftName(item.name));
     report(`已复制 v${item.version_number} 到配置表单，保存时将创建新草稿。`);
   }
 
@@ -663,9 +664,9 @@ function OntologyView({ report: onReport, onLeaveStateChange, initialPreview, on
     if (!initialized.current || current && current.id!==editorBaselineId.current && !editorState.current.dirty && !selectedDraft) {
       if (current) {
         setDefinition(structuredClone(current.schema));
-        setName(`${current.name}（修订）`.slice(0, 120));
+        setName(ontologyDraftName(current.name));
       }
-      setSavedConfiguration(JSON.stringify({ name: current ? `${current.name}（修订）`.slice(0, 120) : '业务本体', definition: current?.schema ?? starterOntology }));
+      setSavedConfiguration(JSON.stringify({ name: current ? ontologyDraftName(current.name) : '业务本体', definition: current?.schema ?? starterOntology }));
       if(initialized.current){
         setCreatedConfiguration(null);setCreatedVersionId(undefined);
         setPageSelection(null);setPageApplied(null);setEditRequest(undefined);clearSuggestions();
@@ -723,7 +724,7 @@ function OntologyView({ report: onReport, onLeaveStateChange, initialPreview, on
     try {
       const published = await requestJson<Ontology>(`/api/ontologies/${id}/publish`, { method: "POST" });
       setItems(previous => previous.map(item => item.id === id ? published : item.status === 'published' ? { ...item, status: 'superseded' } : item));
-      const nextName=`${published.name}（修订）`.slice(0,120);
+      const nextName=ontologyDraftName(published.name);
       setDefinition(structuredClone(published.schema));
       setName(nextName);
       setSavedConfiguration(JSON.stringify({name:nextName,definition:published.schema}));
@@ -758,15 +759,15 @@ function OntologyView({ report: onReport, onLeaveStateChange, initialPreview, on
         <div className="rules-workspace-top">
           <nav className="rules-workspace-tabs" aria-label="本体与关系">
             <button type="button" aria-current={category==='published'?'page':undefined} disabled={busy} onClick={()=>navigateRules('published')}>规则总览</button>
+            <button type="button" aria-current={category==='drafts'?'page':undefined} disabled={busy} onClick={()=>navigateRules('drafts')}>本体修改</button>
           </nav>
           <div className="rules-workspace-version">
             {currentOntology&&<><strong>{currentOntology.name}</strong><span className="badge published">v{currentOntology.version_number} · 生效</span>
               <button type="button" disabled={busy} onClick={()=>setVersionsOpen(true)}>版本与影响</button></>}
-            {draftCount===0 && <button type="button" aria-current={category==='drafts'?'page':undefined} disabled={busy} onClick={()=>navigateRules('drafts')}>待发布草稿</button>}
           </div>
         </div>
         {draftCount>0 && <div className="rules-draft-banner" aria-label="未发布规则">
-          <div><strong>{draftCount} 份待发布草稿</strong>{currentOntology && <span>当前生效 v{currentOntology.version_number}</span>}</div>
+          <div><strong>{draftCount} 份待发布草稿<StarxiaotuTerm name="draft" /></strong>{currentOntology && <span>当前生效 v{currentOntology.version_number}</span>}</div>
           <button type="button" aria-current={category==='drafts'?'page':undefined} disabled={busy} onClick={()=>navigateRules('drafts')}>查看草稿</button>
         </div>}
       </div>}
@@ -776,7 +777,7 @@ function OntologyView({ report: onReport, onLeaveStateChange, initialPreview, on
       </section>}
       {!host && <p className="ontology-notice"><DesignIcon name="info" /> 规则更新仅影响后续材料抽取。历史材料不会自动重做，需要在规则发布后另行选择更新。</p>}
       {host && loaded && showPublished && !currentOntology && <section className="knowledge-card ontology-page-state">
-        <h2>当前数据仓还没有生效规则</h2><p>核对实体和关系后，可以发布首个版本。</p>
+        <h2>当前星图还没有生效规则</h2><p>核对实体和关系后，可以发布首个版本。</p>
         <button type="button" onClick={() => setConfigOpen(true)}>查看待发布草稿</button>
       </section>}
       {(host ? showDrafts && loaded && savedDrafts.length > 0 : savedDrafts.length > 0) && <section className="workflow-next ontology-saved-drafts" aria-label="手动编辑草稿">
@@ -800,21 +801,21 @@ function OntologyView({ report: onReport, onLeaveStateChange, initialPreview, on
         </div>
         <div className="form-body">
           <label>
-            版本名称
+            <span>版本名称<StarxiaotuTerm name="ontology-version" /></span>
             <input value={name} disabled={busy || !loaded} maxLength={120} onChange={(event) => setName(event.target.value)} />
           </label>
           <OntologyChangeSummary before={currentOntology?.schema} after={definition} />
-          <OntologySuggestions key={suggestionEpoch} schema={definition} baseOntologyId={items.find(item => item.status === 'published')?.id}
+          {initialPreview && suggestionEpoch===0 && <OntologySuggestions schema={definition}
             focusRequest={suggestionFocus}
-            initialPreview={suggestionEpoch===0?initialPreview:undefined}
+            initialPreview={initialPreview}
             onReviewState={recordSuggestionReview}
             disabled={busy || !loaded || issues.length > 0} previewIds={suggestionPreviewIds} typeChanges={suggestionTypeChanges} onBusy={setBusy}
-            onAdopt={(schema, previewId) => { editDefinition(schema); setSuggestionPreviewIds(previous => [...new Set([...previous, previewId])]); setSuggestedMaterials(true); }} />
+            onAdopt={(schema, previewId) => { editDefinition(schema); setSuggestionPreviewIds(previous => [...new Set([...previous, previewId])]); setSuggestedMaterials(true); }} />}
           <OntologyEditor value={definition} onChange={editDefinition} onDraftChange={setDrawerDirty} disabled={busy || !loaded} editRequest={editRequest} creationPlacement="page" onAddType={host ? openTypeEditor : undefined}
             activeKind={host ? draftKind : undefined} onKindChange={setDraftKind}
             published={currentOntology?.schema} saved={created} onPublish={(kind,typeName)=>{setVersionFeedback(null);setRowPublication(`${kind==='entity'?'实体类型':'关系类型'}：${typeName}`);}} />
           {issues.length > 0 && <ul className="ontology-issues" aria-live="polite">{issues.map((issue, index) => <li key={index}>{issue}</li>)}</ul>}
-          {suggestedMaterials && <p className="ontology-notice">发布后，仅新抽取使用新规则。提供建议的材料及同类业务材料可能需要补充抽取；请返回“对话整理材料”逐份确认目标与处理计划，不会自动全库重跑。</p>}
+          {suggestedMaterials && <p className="ontology-notice">发布后，仅新抽取使用新规则。提供建议的材料及同类业务材料可能需要补充抽取；可返回资料库，按需核对与重新抽取材料。</p>}
           <div className="ontology-draft-actions">
             {suggestionPreviewIds.length > 0 && <button type="button" disabled={busy} onClick={resetUnsavedConfiguration}>撤销未保存配置并清除建议</button>}
             {created && items.some(item => item.id === createdVersionId && item.status === 'draft')
@@ -1464,7 +1465,7 @@ function SearchView({
         {!result && <div className="empty">输入问题或原文中的关键词，查看对应证据。正文索引就绪后即可检索；已发布的实体关系可辅助检索，未发布草稿不参与。{documentId&&' 当前已限定材料，可在上方切换为全部材料。'}</div>}
         {result?.message && <div className="review-warning" role="status">{result.message}</div>}
         {result && !result.items.length && !result.sensitive?.confirmation_count && !result.sensitive?.withheld && <div className="empty">没有找到符合当前版本与筛选条件的证据。</div>}
-        {!!result?.sensitive?.withheld && <div className="review-warning">{result.sensitive.withheld} 条结果的正文尚未完成脱敏检测，暂不显示。请在“脱敏设置”查看扫描状态并重试失败的扫描。</div>}
+        {!!result?.sensitive?.withheld && <div className="review-warning">{result.sensitive.withheld} 条结果的正文尚未完成脱敏检测，暂不显示。请在“脱敏规则”查看扫描状态并重试失败的扫描。</div>}
         {!!result?.sensitive?.confirmation_count && <div className="review-warning">
           {result.sensitive.confirmation_count} 条结果包含需要确认的敏感信息。
           <button type="button" disabled={confirming} onClick={() => void confirmSensitive(true)}>确认并脱敏查看</button>
@@ -1641,36 +1642,87 @@ function LLMConfigPanel({ report: onReport, onSaved, onLeaveState }: { report: (
   </div>;
 }
 
-function SensitiveView({ report: onReport, onSavingChange }: { report: (message: string, error?: boolean) => void; onSavingChange: (saving: boolean) => void }) {
+function SensitiveView({ report: onReport, onSavingChange, onDirtyChange }: {
+  report: (message: string, error?: boolean) => void;
+  onSavingChange: (saving: boolean) => void;
+  onDirtyChange: (dirty: boolean) => void;
+}) {
+  const hosted = bridgeHosted();
+  const [ruleGroup, setRuleGroup] = useState<"builtin" | "custom">("builtin");
   const [ruleFeedback, setRuleFeedback] = useState<{text: string; failed: boolean} | null>(null);
   const report = useCallback((text: string, failed = false) => { setRuleFeedback({text, failed}); onReport(text, failed); }, [onReport]);
   const [settings, setSettings] = useState<SensitiveSettings | null>(null);
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
   const [preview, setPreview] = useState("");
-  const [previewResult, setPreviewResult] = useState("");
+  const [previewResult, setPreviewResult] = useState<{label: string; text: string} | null>(null);
+  const [previewing, setPreviewing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [savingFlag, setSavingFlag] = useState(false);
+  const [reloading, setReloading] = useState(false);
   const savedSettings = useRef<SensitiveSettings | null>(null);
   const saving = useRef(false);
-  const retryPending = useRef(false);
+  const manualRead = useRef(false);
+  const settingsRead = useRef<AbortController | null>(null);
+  const previewRequest = useRef<AbortController | null>(null);
+  const retryRequest = useRef<AbortController | null>(null);
+  const retryOperation = useRef<{ jobId: string; id: string } | null>(null);
+  const saveOperation = useRef<{ payload: string; id: string; acknowledged: string[] } | null>(null);
   const [retryBusy, setRetryBusy] = useState(false);
-  const load = useCallback(async () => {
-    if (saving.current) return;
-    const next = await requestJson<SensitiveSettings>(`/api/sensitive/settings?workspace_id=${workspaceId}`);
-    if (saving.current || (savedSettings.current && next.revision < savedSettings.current.revision)) return;
-    savedSettings.current = next;
-    setSettings((current) => current && current.revision === next.revision ? {
-      ...current, scan: next.scan, llm_provider: next.llm_provider,
-      llm_model: next.llm_model, llm_configured: next.llm_configured,
-    } : next);
+  const rulesChanged = !!settings && JSON.stringify(settings.rules) !== JSON.stringify(savedSettings.current?.rules);
+  useLayoutEffect(() => { onDirtyChange(rulesChanged); return () => onDirtyChange(false); }, [rulesChanged, onDirtyChange]);
+  const load = useCallback(async (discardDraft = false) => {
+    if (saving.current || (settingsRead.current && !discardDraft)) return false;
+    settingsRead.current?.abort();
+    const controller = new AbortController();
+    settingsRead.current = controller;
+    try {
+      const next = await requestJson<SensitiveSettings>(`/api/sensitive/settings?workspace_id=${workspaceId}`, { signal: controller.signal });
+      const previous = savedSettings.current;
+      if (controller.signal.aborted || saving.current || (previous && next.revision < previous.revision)) return false;
+      if (previous && next.revision !== previous.revision) {
+        previewRequest.current?.abort();
+        setPreviewResult(null);
+      }
+      savedSettings.current = next;
+      setSettings((current) => !discardDraft && current && JSON.stringify(current.rules) !== JSON.stringify(previous?.rules) ? {
+        ...next, enabled: current.enabled, semantic_enabled: current.semantic_enabled, rules: current.rules, revision: current.revision,
+      } : next);
+      return true;
+    } catch (reason) {
+      if (controller.signal.aborted) return false;
+      throw reason;
+    } finally {
+      if (settingsRead.current === controller) settingsRead.current = null;
+    }
   }, []);
   useEffect(() => {
     void load().catch((reason: Error) => report(reason.message, true));
     const timer = window.setInterval(() => void load().catch(() => undefined), 3000);
-    return () => window.clearInterval(timer);
+    return () => {
+      settingsRead.current?.abort();
+      settingsRead.current = null;
+      previewRequest.current?.abort();
+      retryRequest.current?.abort();
+      window.clearInterval(timer);
+    };
   }, [load, report]);
+  async function reload() {
+    if (saving.current || manualRead.current) return;
+    if (rulesChanged && !window.confirm('放弃未保存的规则修改并读取最新设置？')) return;
+    manualRead.current = true;
+    setReloading(true);
+    try {
+      if (await load(true)) { setEditingRuleId(null); setRuleFeedback(null); setPreviewResult(null); }
+    }
+    catch (reason) { report(reason instanceof Error ? reason.message : '读取设置失败，请重试。', true); }
+    finally { manualRead.current = false; setReloading(false); }
+  }
+  function updateRules(change: (rules: SensitiveRule[]) => SensitiveRule[]) {
+    if (saving.current || manualRead.current) return;
+    setSettings((current) => current ? { ...current, rules: change(current.rules) } : current);
+  }
   function updateRule(id: string, patch: Partial<SensitiveRule>) {
-    setSettings((current) => current ? { ...current, rules: current.rules.map((rule) => rule.id === id ? { ...rule, ...patch } : rule) } : current);
+    updateRules((rules) => rules.map((rule) => rule.id === id ? { ...rule, ...patch } : rule));
   }
   function updateMasking(rule: SensitiveRule, patch: Partial<SensitiveRule["masking"]>) {
     const masking = { ...rule.masking, ...patch };
@@ -1678,34 +1730,48 @@ function SensitiveView({ report: onReport, onSavingChange }: { report: (message:
     updateRule(rule.id, { masking, mask: masking.replacement });
   }
   function setSaving(value: boolean) {
+    if (value) settingsRead.current?.abort();
     saving.current = value;
     setBusy(value);
     onSavingChange(value);
   }
+  async function submitSettings(payload: object, confirmSimilar: (id: string) => boolean) {
+    const serialized = JSON.stringify(payload);
+    if (saveOperation.current?.payload !== serialized) saveOperation.current = { payload: serialized, id: crypto.randomUUID(), acknowledged: [] };
+    const operation = saveOperation.current;
+    for (;;) {
+      try {
+        const acknowledgements = operation.acknowledged.length ? { acknowledge_similar_rule_ids: operation.acknowledged,
+          ...(!hosted ? { acknowledge_similar_rule_id: operation.acknowledged.at(-1) } : {}) } : {};
+        const next = await requestJson<SensitiveSettings>("/api/sensitive/settings", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...payload, ...acknowledgements, ...(hosted ? { operation_id: operation.id } : {}) }),
+        });
+        saveOperation.current = null;
+        setPreviewResult(null);
+        return next;
+      } catch (reason) {
+        const similar = /规则与 ([a-z][a-z0-9_]+) 相似/.exec(reason instanceof Error ? reason.message : "");
+        if (!similar || operation.acknowledged.includes(similar[1]) || !confirmSimilar(similar[1])) throw reason;
+        operation.acknowledged.push(similar[1]);
+        operation.id = crypto.randomUUID();
+      }
+    }
+  }
   async function updateGlobalToggle(field: "enabled" | "semantic_enabled", value: boolean) {
     const baseline = savedSettings.current;
-    if (!baseline || saving.current) return;
+    if (!baseline || saving.current || manualRead.current || previewRequest.current) return;
     setSaving(true);
     setSavingFlag(true);
     setSettings((current) => current ? { ...current, [field]: value } : current);
     const payload = { workspace_id: workspaceId, expected_revision: baseline.revision,
       enabled: baseline.enabled, semantic_enabled: baseline.semantic_enabled, rules: baseline.rules, [field]: value };
-    const submit = (acknowledgeSimilarRuleId?: string) => requestJson<SensitiveSettings>("/api/sensitive/settings", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...payload, acknowledge_similar_rule_id: acknowledgeSimilarRuleId }),
-    });
     try {
-      let next: SensitiveSettings;
-      try {
-        next = await submit();
-      } catch (reason) {
-        const similar = /规则与 ([a-z][a-z0-9_]+) 相似/.exec(reason instanceof Error ? reason.message : "");
-        if (!similar) throw reason;
-        // These are the persisted rules; this operation does not change their definitions.
-        next = await submit(similar[1]);
-      }
+      // The toggle submits only the persisted rules.
+      const next = await submitSettings(payload, () => true);
       savedSettings.current = next;
-      setSettings((current) => ({ ...next, rules: current?.rules ?? next.rules }));
+      setSettings((current) => current && JSON.stringify(current.rules) !== JSON.stringify(baseline.rules)
+        ? { ...next, rules: current.rules, revision: current.revision === baseline.revision ? next.revision : current.revision } : next);
       const label = field === "enabled" ? "交付脱敏" : "LLM 语义敏感识别";
       report(`${label}已${value ? "启用" : "关闭"}，开关已自动保存。`);
     } catch (reason) {
@@ -1717,58 +1783,65 @@ function SensitiveView({ report: onReport, onSavingChange }: { report: (message:
       setSaving(false);
     }
   }
-  async function save(acknowledgeSimilarRuleId?: string) {
-    if (!settings || saving.current) return;
+  async function save() {
+    if (!settings || saving.current || manualRead.current || previewRequest.current) return;
     setSaving(true);
     try {
-      const next = await requestJson<SensitiveSettings>("/api/sensitive/settings", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ workspace_id: workspaceId, expected_revision: settings.revision,
-          enabled: settings.enabled, semantic_enabled: settings.semantic_enabled, rules: settings.rules,
-          acknowledge_similar_rule_id: acknowledgeSimilarRuleId }),
-      });
+      const next = await submitSettings({ workspace_id: workspaceId, expected_revision: settings.revision,
+        enabled: settings.enabled, semantic_enabled: settings.semantic_enabled, rules: settings.rules },
+        (id) => window.confirm(`有规则与「${settings.rules.find((rule) => rule.id === id)?.name || id}」相似。确认用途不同并继续保存吗？`));
       savedSettings.current = next;
       setSettings(next);
       setEditingRuleId(null);
       report("脱敏规则已保存；需要重新识别的内容会自动安排扫描。");
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "保存失败";
-      const similar = /规则与 ([a-z][a-z0-9_]+) 相似/.exec(message);
-      if (similar && !acknowledgeSimilarRuleId && window.confirm(`这条规则与 ${similar[1]} 相似。确认用途不同并继续保存吗？`)) {
-        setSaving(false);
-        await save(similar[1]);
-        return;
-      }
-      report(message, true);
+      report(reason instanceof Error ? reason.message : "保存失败", true);
     } finally { setSaving(false); }
   }
   async function testPreview() {
-    if (!preview.trim()) return;
+    const revision = savedSettings.current?.revision;
+    if (!preview.trim() || revision === undefined || previewRequest.current || saving.current || manualRead.current) return;
+    const controller = new AbortController();
+    previewRequest.current = controller;
+    setPreviewing(true);
+    setPreviewResult(null);
     try {
       const next = await requestJson<{ text: string; status: string }>("/api/sensitive/preview", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ workspace_id: workspaceId, text: preview }),
+        method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal,
+        body: JSON.stringify({ workspace_id: workspaceId, text: preview, ...(hosted ? { expected_revision: revision } : {}) }),
       });
-      setPreviewResult(`${next.status}：${next.text || "[不交付]"}`);
-    } catch (reason) { report(reason instanceof Error ? reason.message : "测试失败", true); }
+      if (controller.signal.aborted || revision !== savedSettings.current?.revision) return;
+      const status = { clean: '未命中', masked: '已脱敏', block: '拒绝交付', confirm: '需要确认', pending: '等待检测' }[next.status] ?? next.status;
+      setPreviewResult({label: status, text: next.text});
+    } catch (reason) { if (!controller.signal.aborted) report(reason instanceof Error ? reason.message : "测试失败", true); }
+    finally { previewRequest.current = null; setPreviewing(false); }
   }
   async function retry() {
-    if (!settings?.scan.id || retryPending.current) return;
-    retryPending.current = true;
+    const jobId = settings?.scan.id;
+    if (!jobId || retryRequest.current) return;
+    if (retryOperation.current?.jobId !== jobId) retryOperation.current = { jobId, id: crypto.randomUUID() };
+    const controller = new AbortController();
+    retryRequest.current = controller;
     setRetryBusy(true);
     try {
-      const scan = await requestJson<Job>(`/api/jobs/${settings.scan.id}/retry`, { method: "POST" });
+      const scan = await requestJson<Job>(`/api/jobs/${jobId}/retry`, { method: "POST", signal: controller.signal,
+        ...(hosted ? { body: JSON.stringify({ operation_id: retryOperation.current.id }) } : {}) });
+      retryOperation.current = null;
       setSettings((current) => current ? { ...current, scan } : current);
       await load();
       report(scan.status === "succeeded" ? "当前内容已完成检测。" : "已复用当前扫描任务。");
-    } catch (reason) { report(reason instanceof Error ? reason.message : "重试失败", true); }
-    finally { retryPending.current = false; setRetryBusy(false); }
+    } catch (reason) { if (!controller.signal.aborted) report(reason instanceof Error ? reason.message : "重试失败", true); }
+    finally { retryRequest.current = null; setRetryBusy(false); }
   }
-  if (!settings) return <div className="empty">正在读取脱敏设置…</div>;
+  if (!settings) return <div className="empty">{ruleFeedback?.failed ? <>
+    <p role="alert">{ruleFeedback.text}</p><button type="button" disabled={reloading} onClick={() => void reload()}>重新读取</button>
+  </> : "正在读取脱敏规则…"}</div>;
   const builtins = settings.rules.filter((rule) => rule.source === "built_in");
   const customRules = settings.rules.filter((rule) => rule.source === "custom");
   const editingRule = settings.rules.find((rule) => rule.id === editingRuleId) ?? null;
-  const rulesChanged = JSON.stringify(settings.rules) !== JSON.stringify(savedSettings.current?.rules);
+  const cannotEdit = busy || reloading;
+  const cannotSave = cannotEdit || previewing;
+  const visibleToggles = savingFlag ? settings : savedSettings.current ?? settings;
   const draftPromptUsed = settings.rules.filter((rule) => rule.enabled && rule.kind === "semantic")
     .reduce((sum, rule) => sum + rule.name.length + rule.description.length
       + [...rule.examples, ...rule.counter_examples].reduce((exampleSum, value) => exampleSum + value.trim().length, 0) + 20, 0);
@@ -1790,58 +1863,97 @@ function SensitiveView({ report: onReport, onSavingChange }: { report: (message:
     queued: "等待扫描", running: "扫描中", succeeded: "扫描完成",
     failed: "扫描失败", cancelled: "扫描已取消",
   };
+  const scanStatus = settings.scan.status;
+  const canRetry = Boolean(settings.scan.id && ["failed", "cancelled"].includes(scanStatus));
+  const readiness = !visibleToggles.enabled ? "仅强制保护生效"
+    : scanStatus === "succeeded" ? "检测完成 · 按规则交付" : "未完成检测的内容暂缓交付";
+  const scanDetail = settings.scan.error_message ?? settings.scan.error_code
+    ?? (settings.scan.metrics?.fields != null ? scanCounts(settings.scan.metrics)
+      : settings.scan.total_units != null
+        ? `已检测 ${settings.scan.completed_units ?? 0} / ${settings.scan.total_units} 个交付字段` : "");
+  const ruleLabel = (rule: SensitiveRule) => rule.mode === "mask" ? "自动脱敏" : rule.mode === "block" ? "拒绝交付" : "需要确认";
+  const rules = ruleGroup === "builtin" ? builtins : customRules;
+  const overCapacity = draftPromptUsed > settings.rule_capacity.prompt_limit;
+
+  function addCustomRule() {
+    const id = `custom_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
+    updateRules((items) => [...items, { id, name: "", kind: "semantic", source: "custom", enabled: true,
+      mode: "mask", mask: "[已脱敏]", masking: { strategy: "fixed", prefix_characters: 0, suffix_characters: 0, replacement: "[已脱敏]" },
+      allow_original_after_confirm: false, description: "", examples: [], counter_examples: [] }]);
+    setRuleGroup("custom");
+    setEditingRuleId(id);
+  }
+
   return <section className="knowledge-card sensitive-settings">
-    <div className="section-title"><h2>脱敏设置</h2><span>工作空间 {workspaceId}</span></div>
-    <p className="settings-location">模型连接在左下角“设置”中调整，知识识别与脱敏继续共用同一配置。</p>
-    <div className="sensitive-panel">
-      <div className="sensitive-panel-title"><h3>保护设置</h3><span role="status">{savingFlag ? "正在保存开关…" : "开关修改后自动保存"}</span></div>
-      <label className="sensitive-toggle"><input type="checkbox" disabled={busy} checked={settings.enabled} onChange={(event) => void updateGlobalToggle("enabled", event.target.checked)} /><span><strong>启用交付脱敏</strong><small>规则对对外交付的检索与图谱结果生效</small></span></label>
-      <label className="sensitive-toggle"><input type="checkbox" disabled={busy} checked={settings.semantic_enabled} onChange={(event) => void updateGlobalToggle("semantic_enabled", event.target.checked)} /><span><strong>使用 LLM 识别语义敏感信息</strong><small>复用左下角“设置”中的模型连接</small></span></label>
-      <p>开启后自动扫描当前知识内容。切换模型仍会创建扫描任务，但识别规则、模板和原文均未变化的结果会直接复用，包括未命中结果，不再调用模型。检测未完成的结果会暂缓交付。</p>
-    </div>
-    <div className="sensitive-panel sensitive-scan">
-      <div className="sensitive-panel-title"><h3>检测运行状态</h3><span>{scanLabels[settings.scan.status] ?? settings.scan.status}</span></div>
-      <p>{settings.scan.metrics?.fields != null ? scanCounts(settings.scan.metrics) : settings.scan.total_units != null ? `已覆盖 ${settings.scan.completed_units ?? 0} / ${settings.scan.total_units} 个交付字段` : "等待可用索引或新的扫描任务"}{settings.scan.error_code ? ` · ${settings.scan.error_message ?? settings.scan.error_code}` : ""}</p>
-      {settings.scan.metrics && <small>本轮执行 {processingSeconds(settings.scan.metrics, settings.scan.status)} 秒{settings.scan.metrics.total_processing_seconds != null ? ` · 已结束轮次累计 ${settings.scan.metrics.total_processing_seconds.toFixed(1)} 秒` : ""}</small>}
-      {(settings.scan.status === "failed" || settings.scan.status === "cancelled") && <button type="button" disabled={retryBusy} onClick={() => void retry()}>{retryBusy ? "正在安排…" : "重试扫描"}</button>}
-    </div>
-    <div className="sensitive-panel">
-      <div className="sensitive-panel-title"><h3>系统内置规则</h3><span>{builtins.length} 条 · ID 与识别器固定</span></div>
-      <div className="sensitive-rule-save"><span className={rulesChanged ? "sensitive-unsaved" : ""}>{rulesChanged ? "规则修改尚未保存" : "规则已保存"}</span><button type="button" disabled={busy || draftPromptUsed > settings.rule_capacity.prompt_limit} onClick={() => void save()}>{busy && !savingFlag ? "保存中…" : "保存脱敏设置"}</button></div>
-      <div className="sensitive-rule-grid">{builtins.map((rule) => <article className="sensitive-rule-card" key={rule.id}>
-        <div className="sensitive-card-head"><strong>{rule.name}</strong><span>{rule.protected ? "强制保护" : rule.enabled ? "已启用" : "已停用"}</span></div>
-        <p>{rule.description}</p>
-        <small>{rule.kind === "regex" ? "确定性识别" : "语义识别"} · {rule.mode === "mask" ? "自动脱敏" : rule.mode === "block" ? "拒绝交付" : "需要确认"}</small>
-        <div className="sensitive-card-actions"><button type="button" onClick={() => setEditingRuleId(rule.id)}>编辑</button>
-          {!rule.protected && <button type="button" onClick={() => updateRule(rule.id, { enabled: !rule.enabled })}>{rule.enabled ? "停用" : "启用"}</button>}
-          {isBuiltinCustomized(rule) && <button type="button" onClick={() => {
-            const original = settings.builtin_defaults.find((item) => item.id === rule.id);
-            if (original) updateRule(rule.id, original);
-          }}>恢复默认</button>}
+    <section className="sensitive-panel sensitive-overview" aria-labelledby="delivery-status-title">
+      <div className="sensitive-panel-title">
+        <div><h3 id="delivery-status-title">当前交付状态</h3><p className="sensitive-readiness">{readiness}</p></div>
+        <button type="button" disabled={cannotSave || retryBusy} onClick={() => void reload()}>{reloading ? "正在读取…" : "刷新状态"}</button>
+      </div>
+      <p>对外提供知识时按规则处理敏感内容。本人在资料库和星图中可查看原文。</p>
+      <div className="sensitive-scan" data-scan-status={scanStatus}>
+        <div><strong>{scanLabels[scanStatus] ?? "状态待确认"}</strong>{scanDetail && <p>{scanDetail}</p>}</div>
+        {canRetry && <button type="button" disabled={retryBusy || cannotSave} onClick={() => void retry()}>{retryBusy ? "正在安排…" : "重试检测"}</button>}
+      </div>
+      <details className="sensitive-scope">
+        <summary>保护设置</summary>
+        <label className="sensitive-toggle"><input type="checkbox" disabled={cannotSave} checked={visibleToggles.enabled} onChange={(event) => void updateGlobalToggle("enabled", event.target.checked)} /><span><strong>启用交付脱敏</strong><small>密钥保护始终生效。</small></span></label>
+        <label className="sensitive-toggle"><input type="checkbox" disabled={cannotSave} checked={visibleToggles.semantic_enabled} onChange={(event) => void updateGlobalToggle("semantic_enabled", event.target.checked)} /><span><strong>使用模型识别语义敏感信息</strong><small>与知识抽取共用模型。开关修改即时生效。</small></span></label>
+        <p className="settings-location">{hosted ? "可在星图「模型设置」中调整模型。" : "可在「设置」中调整共用模型。"}</p>
+      </details>
+    </section>
+    <div className="sensitive-workspace">
+      <section className="sensitive-panel sensitive-rules" aria-labelledby="delivery-rules-title">
+        <div className="sensitive-panel-title"><h3 id="delivery-rules-title">保护规则</h3>
+          <button type="button" disabled={cannotEdit || customRules.length >= settings.rule_capacity.max_custom} onClick={addCustomRule}>新增自定义规则</button>
         </div>
-      </article>)}</div>
+        <div className="sensitive-filters" role="group" aria-label="规则来源">
+          <button type="button" aria-pressed={ruleGroup === "builtin"} onClick={() => setRuleGroup("builtin")}>系统内置 · {builtins.length}</button>
+          <button type="button" aria-pressed={ruleGroup === "custom"} onClick={() => setRuleGroup("custom")}>自定义 · {customRules.length}</button>
+        </div>
+        {(rulesChanged || ruleGroup === "custom") && <div className="sensitive-rule-save">
+          <span className={rulesChanged ? "sensitive-unsaved" : ""}>{rulesChanged ? "规则修改尚未保存" : `自定义规则 ${customRules.length} / ${settings.rule_capacity.max_custom} 条`}</span>
+          {rulesChanged && !editingRule && <button type="button" disabled={cannotSave || overCapacity} onClick={() => void save()}>{busy && !savingFlag ? "保存中…" : "保存脱敏设置"}</button>}
+        </div>}
+        {ruleGroup === "custom" && <details className={`sensitive-rule-capacity${overCapacity ? " over-limit" : ""}`} open={overCapacity || undefined}>
+          <summary>识别规则容量</summary>
+          <p>约 {draftPromptUsed} / {settings.rule_capacity.prompt_limit} 字符。停用规则不占用模型提示容量。</p>
+        </details>}
+        {overCapacity && <p className="sensitive-unsaved" role="alert">语义规则超出容量，请缩短说明或停用部分规则后保存。</p>}
+        <div className={ruleGroup === "custom" ? "sensitive-custom-list" : "sensitive-rule-grid"}>
+          {rules.map((rule) => <article className="sensitive-rule-card" key={rule.id}>
+            <div className="sensitive-card-head"><strong>{rule.name || "新规则"}</strong><span>{rule.protected ? "强制保护" : rule.enabled ? ruleLabel(rule) : "已停用"}</span></div>
+            <p>{rule.description}</p>
+            <div className="sensitive-card-actions">
+              <button type="button" aria-label={`编辑${rule.name || "新规则"}`} disabled={cannotEdit} onClick={() => setEditingRuleId(rule.id)}>编辑</button>
+              {!rule.protected && <button type="button" disabled={cannotEdit} aria-label={`${rule.enabled ? "停用" : "启用"}${rule.name || "新规则"}`} onClick={() => updateRule(rule.id, { enabled: !rule.enabled })}>{rule.enabled ? "停用" : "启用"}</button>}
+              {rule.source === "built_in" && isBuiltinCustomized(rule) && <button type="button" disabled={cannotEdit} onClick={() => {
+                const original = settings.builtin_defaults.find((item) => item.id === rule.id);
+                if (original) updateRule(rule.id, original);
+              }}>恢复默认</button>}
+              {rule.source === "custom" && <button type="button" disabled={cannotEdit} onClick={() => {
+                if (window.confirm(`删除“${rule.name}”？保存设置后生效。`)) {
+                  updateRules((items) => items.filter((item) => item.id !== rule.id));
+                  setEditingRuleId(null);
+                }
+              }}>删除</button>}
+            </div>
+          </article>)}
+          {!rules.length && <p>尚无自定义规则。</p>}
+        </div>
+      </section>
+      <section className="sensitive-panel sensitive-preview" aria-labelledby="delivery-preview-title">
+        <h3 id="delivery-preview-title">样文测试</h3>
+        <p>使用已保存的规则。若当前星图配置外部模型，语义识别可能发送这段样文。</p>
+        <label htmlFor="delivery-preview-text">样本文字</label>
+        <textarea id="delivery-preview-text" aria-label="脱敏测试文本" value={preview} disabled={previewing} onChange={(event) => { setPreview(event.target.value); setPreviewResult(null); }} maxLength={12000} placeholder="输入一段不含真实敏感信息的样文" />
+        <button type="button" disabled={cannotSave || !preview.trim()} onClick={() => void testPreview()}>{previewing ? "正在检测…" : "测试脱敏效果"}</button>
+        {previewResult && <div className="sensitive-preview-result" role="status"><strong>{previewResult.label}</strong><p>{previewResult.text || "本次无可交付文本"}</p></div>}
+      </section>
     </div>
-    <div className="sensitive-panel">
-      <div className="sensitive-panel-title"><h3>自定义语义规则</h3><span>{customRules.length} / {settings.rule_capacity.max_custom} 条</span></div>
-      <p>用明确的识别说明、正例和反例限定业务敏感内容。停用规则不占用模型提示容量。</p>
-      <div className={`sensitive-capacity${draftPromptUsed > settings.rule_capacity.prompt_limit ? " over-limit" : ""}`}><span>当前表单提示容量约 {draftPromptUsed} / {settings.rule_capacity.prompt_limit} 字符</span><progress value={Math.min(draftPromptUsed, settings.rule_capacity.prompt_limit)} max={settings.rule_capacity.prompt_limit} /></div>
-      <div className="sensitive-custom-list">{customRules.map((rule) => <article className="sensitive-custom-row" key={rule.id}>
-        <div><strong>{rule.name}</strong><p>{rule.description}</p><small>{rule.enabled ? "已启用" : "已停用"} · {rule.mode === "mask" ? "自动脱敏" : rule.mode === "block" ? "拒绝交付" : "需要确认"}</small></div>
-        <div className="sensitive-card-actions"><button type="button" onClick={() => setEditingRuleId(rule.id)}>编辑</button><button type="button" onClick={() => updateRule(rule.id, { enabled: !rule.enabled })}>{rule.enabled ? "停用" : "启用"}</button><button type="button" onClick={() => {
-          if (window.confirm(`删除“${rule.name}”？保存设置后生效。`)) { setSettings({ ...settings, rules: settings.rules.filter((item) => item.id !== rule.id) }); setEditingRuleId(null); }
-        }}>删除</button></div>
-      </article>)}</div>
-      {!customRules.length && <p>尚无自定义规则。</p>}
-      <button type="button" disabled={customRules.length >= settings.rule_capacity.max_custom} onClick={() => {
-        const id = `custom_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
-        setSettings({ ...settings, rules: [...settings.rules, { id, name: "", kind: "semantic", source: "custom", enabled: true, mode: "mask", mask: "[已脱敏]", masking: { strategy: "fixed", prefix_characters: 0, suffix_characters: 0, replacement: "[已脱敏]" }, allow_original_after_confirm: false, description: "", examples: [], counter_examples: [] }] });
-        setEditingRuleId(id);
-      }}>新增自定义规则</button>
-    </div>
-    {editingRule && <WorkbenchDrawer title={`编辑规则：${editingRule.name || "新规则"}`} close={() => setEditingRuleId(null)} canClose={!busy}><div className="sensitive-panel sensitive-editor">
+    {editingRule && <WorkbenchDrawer title={`编辑规则：${editingRule.name || "新规则"}`} close={() => setEditingRuleId(null)} canClose={!cannotEdit}><div className="sensitive-panel sensitive-editor">
       {ruleFeedback && <p role={ruleFeedback.failed ? 'alert' : 'status'} className={ruleFeedback.failed ? 'notice error' : 'notice'}>{ruleFeedback.text}</p>}
-      <div className="sensitive-panel-title"><h3>编辑：{editingRule.name || "新规则"}</h3><button type="button" onClick={() => setEditingRuleId(null)}>收起</button></div>
-      <div className="sensitive-editor-grid">
+      <fieldset className="sensitive-editor-grid" disabled={cannotEdit}>
         <label>规则名称<input value={editingRule.name} maxLength={80} placeholder="例如：客户项目代号" onChange={(event) => updateRule(editingRule.id, { name: event.target.value })} /></label>
         <label>命中后的处理<select value={editingRule.mode} disabled={editingRule.protected} onChange={(event) => updateRule(editingRule.id, { mode: event.target.value as SensitiveRule["mode"], allow_original_after_confirm: false })}><option value="confirm">需要确认</option><option value="mask">自动脱敏</option><option value="block">直接阻止</option></select></label>
         {editingRule.kind === "semantic" && <><label className="wide">识别说明<textarea value={editingRule.description} maxLength={400} rows={3} placeholder="写清哪些内容算命中，以及容易混淆但不应命中的情况；自定义规则至少 10 字。" onChange={(event) => updateRule(editingRule.id, { description: event.target.value })} /></label>
@@ -1851,17 +1963,16 @@ function SensitiveView({ report: onReport, onSavingChange }: { report: (message:
         <label>遮盖方式<select value={editingRule.masking.strategy} disabled={editingRule.protected} onChange={(event) => updateMasking(editingRule, { strategy: event.target.value as SensitiveRule["masking"]["strategy"] })}><option value="full">完全遮盖</option><option value="fixed">固定替换文本</option>{(!editingRule.protected && !["secret"].includes(editingRule.id)) && <option value="keep_edges">保留前后字符</option>}</select></label>
         <label>替换字符或文本<input value={editingRule.masking.replacement} maxLength={32} disabled={editingRule.protected} onChange={(event) => updateMasking(editingRule, { replacement: event.target.value })} /></label>
         {editingRule.masking.strategy === "keep_edges" && <><label>保留前缀字符数<input type="number" min={0} max={editingRule.id === "email" || editingRule.id === "person" ? 1 : editingRule.id === "phone" ? 3 : editingRule.id === "id_card" ? 6 : 32} value={editingRule.masking.prefix_characters} onChange={(event) => updateMasking(editingRule, { prefix_characters: Number(event.target.value) })} /></label><label>保留后缀字符数<input type="number" min={0} max={editingRule.id === "phone" || editingRule.id === "id_card" ? 4 : editingRule.id === "email" || editingRule.id === "person" ? 0 : 32} value={editingRule.masking.suffix_characters} onChange={(event) => updateMasking(editingRule, { suffix_characters: Number(event.target.value) })} /></label></>}
-      </div>
+      </fieldset>
       <p>内置规则的识别器保持不变；密钥规则始终启用并拒绝交付。保存后再运行下方测试。</p>
-      <button className="primary" disabled={busy || draftPromptUsed > settings.rule_capacity.prompt_limit} onClick={() => void save()}>保存脱敏设置</button>
+      <button className="primary" disabled={cannotSave || draftPromptUsed > settings.rule_capacity.prompt_limit} onClick={() => void save()}>保存脱敏设置</button>
     </div></WorkbenchDrawer>}
-    <button className="sensitive-save" type="button" disabled={busy || draftPromptUsed > settings.rule_capacity.prompt_limit} onClick={() => void save()}>{busy ? "保存中…" : "保存脱敏设置"}</button>
-    <div className="sensitive-panel sensitive-preview"><h3>效果测试</h3><small>测试使用已保存的规则；修改规则后请先保存。示例文本不会另行保存。</small><textarea value={preview} onChange={(event) => setPreview(event.target.value)} maxLength={12000} placeholder="粘贴一段测试文本" /><button type="button" onClick={() => void testPreview()}><DesignIcon name="play" />测试脱敏效果</button>{previewResult && <p>{previewResult}</p>}</div>
+
   </section>;
 }
 
 function App() {
-  const [view, setView] = useState<"materials" | "ontology" | "review" | "graph" | "search" | "sensitive" | "skills" | "releases">((new URLSearchParams(location.search).get("view") as "ontology" | "materials" | "releases") || "materials");
+  const [view, setView] = useState<"materials" | "ontology" | "review" | "graph" | "search" | "sensitive" | "skills" | "releases">((new URLSearchParams(location.search).get("view") as "ontology" | "materials" | "releases" | "sensitive") || "materials");
   const [ontologyNavigation, setOntologyNavigation] = useState<{ action: OntologyAction }>();
   const clearOntologyNavigation = useCallback(() => setOntologyNavigation(undefined), []);
   const [searchDocumentId,setSearchDocumentId]=useState('');
@@ -1882,6 +1993,7 @@ function App() {
   }
   function canLeaveView() {
     if(sensitiveSaving)return false;
+    if(view === 'sensitive' && sensitiveDirty.current && !window.confirm('脱敏规则有未保存修改，是否放弃并离开？')) return false;
     if(view==='materials'&&!leaveMaterialReview())return false;
     if(view==='ontology'){
       if(ontologyLeaveState.current.busy){report('本体操作正在处理中，请等待结果后再切换页面。',true);return false;}
@@ -1941,6 +2053,8 @@ function App() {
   const [segmentWindowStart, setSegmentWindowStart] = useState(0);
   const [busy, setBusy] = useState(false);
   const [sensitiveSaving, setSensitiveSaving] = useState(false);
+  const sensitiveDirty = useRef(false);
+  const updateSensitiveDirty = useCallback((dirty: boolean) => { sensitiveDirty.current = dirty; }, []);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const materialSelection = useRef({id: selectedId, editing, saving});
@@ -2393,7 +2507,7 @@ function App() {
     }
   }
 
-  const pageNames = { materials: '知识核对', ontology: '类型与关系', releases: '版本历史', graph: '知识网络', search: '知识检索', sensitive: '脱敏设置', skills: '推理方法', review: '知识核对' };
+  const pageNames = { materials: '知识核对', ontology: '类型与关系', releases: '版本历史', graph: '知识网络', search: '知识检索', sensitive: '脱敏规则', skills: '推理方法', review: '知识核对' };
   const pageDescriptions = { materials: '阅读原文，核对依据，将可信的知识发布到网络。', ontology: '管理的是类型规则，不是材料中的具体实体。', releases: '追溯已发布知识的变化，查看当时使用的正文与来源依据。', graph: '查看已发布知识之间的联系，回到材料核对来源。', search: '检索正文与已发布知识，回到原文核对每一条依据。', sensitive: '设置敏感内容的保护方式，使用已保存规则验证处理效果。', skills: '管理分析方法，查看和维护可供外部助手使用的方法包。', review: '对照原文核对知识。' };
   const navIcons: Record<string, IconName> = { materials: 'materials', ontology: 'ontology', releases: 'releases', graph: 'graph', search: 'search', sensitive: 'sensitive', skills: 'skills' };
   const activeIcons: Record<string, IconName> = { materials: 'materialsActive', ontology: 'ontologyActive', releases: 'releasesActive', search: 'searchActive', sensitive: 'sensitiveActive' };
@@ -2414,8 +2528,24 @@ function App() {
       refreshGraph:()=>window.dispatchEvent(new Event('starlink:graph-changed')),
       openMaterial: (documentId,reviewTarget) => {
         if(!/^[A-Za-z0-9_-]{1,128}$/.test(documentId)||!canLeaveView()||!leaveMaterialReview())return false;
+        if(reviewTarget==='ontology-suggestions'){
+          if(!navigate('ontology'))return false;
+          const sequence=++materialInteraction.current;
+          setMaterialPreview(undefined);
+          setOntologyNavigation(undefined);
+          setError(null);
+          requestJson<SuggestionPreview>(`/api/ontology-suggestions/materials/${encodeURIComponent(documentId)}/review`,{
+            method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({workspace_id:workspaceId}),
+          },15000).then(preview=>{
+            if(sequence===materialInteraction.current)setMaterialPreview(preview);
+          }).catch(reason=>{
+            if(sequence===materialInteraction.current)setError(reason instanceof Error?reason.message:'本体建议读取失败。');
+          });
+          return true;
+        }
         initialMaterialSelected.current=true;materialInteraction.current++;detailRequest.current++;
         setMaterialReviewTarget({documentId,target:reviewTarget});
+        setError(null);
         setSelectedId(documentId);setDetail(null);setEditing(false);setDrafts({});setSegmentWindowStart(0);
         setSelectedSegmentId(null);setLocatedSourceId(undefined);setFocusedSource(null);setView('materials');
         // The requested material may be outside the currently loaded library page.
@@ -2436,9 +2566,9 @@ function App() {
           ["releases", "版本历史"],
           ["graph", "知识网络"],
           ["search", "知识检索"],
-          ["sensitive", "脱敏设置"],
+          ["sensitive", "脱敏规则"],
           ["skills", "推理方法"],
-        ] as const).filter(([key]) => !new URLSearchParams(location.search).has("native") || ["materials","ontology","releases"].includes(key)).map(([key, label]) => (
+        ] as const).filter(([key]) => !new URLSearchParams(location.search).has("native") || ["materials","ontology","releases","sensitive"].includes(key)).map(([key, label]) => (
           <button
             type="button"
             className={view === key ? "active" : ""}
@@ -2833,7 +2963,7 @@ function App() {
       {view === "review" && <ReviewView documents={documents} report={report} />}
       {view === "graph" && <GraphView />}
       {view === "search" && <SearchView key={searchDocumentId} initialDocumentId={searchDocumentId} documents={documents} report={report} onOpenSource={openIndexSource} />}
-      {view === "sensitive" && <SensitiveView report={report} onSavingChange={setSensitiveSaving} />}
+      {view === "sensitive" && <SensitiveView report={report} onSavingChange={setSensitiveSaving} onDirtyChange={updateSensitiveDirty} />}
 
       {status && (
         <footer>

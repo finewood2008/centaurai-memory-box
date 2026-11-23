@@ -18,6 +18,7 @@ async function fixture(t) {
     runtime: { async waitForStartup() {} },
     agentAccess: { supports: id => ["codex", "claude_code"].includes(id), async disconnect(id) { calls.push(["disconnect", id]); return { connected: false }; } },
     memoryTransfer: { async action(method, data, check) { check(); calls.push(["transfer", method, data]); onTransfer?.(); check(); return { previewId: "opaque-preview" }; } },
+    claudeChatImport: { async action(method, data, check) { check(); calls.push(["claude", method, data]); onTransfer?.(); check(); return { previewId: "claude-preview" }; } },
     myAiTask: async (action, data) => { calls.push([action, data]); return {}; },
     request: async (url, init) => {
       assert.equal(url.pathname, "/api/agent-sources/codex/sync-access");
@@ -44,8 +45,28 @@ test("generic source and native-file transfer routes require an active desktop t
   }))).status, 403);
   assert.equal((await h.request("agent-context/selection", { agent: "gemini", selection: { memoryEnabled: false } })).status, 200);
   assert.deepEqual(h.calls.at(-1), ["agent-context/selection", { agent: "gemini", selection: { memoryEnabled: false } }]);
+  const repairAction = "agent-access/copy-removal-command";
+  const claude = { agent: "claude_code" };
+  assert.equal((await h.request(repairAction, claude, "wrong-token")).status, 403);
+  assert.equal((await h.request(repairAction, claude)).status, 200);
+  assert.deepEqual(h.calls.at(-1), [repairAction, claude]);
+  assert.equal((await h.request("agent-access/test", { agent: "gemini" }, "wrong-token")).status, 403);
+  assert.equal((await h.request("agent-access/test", { agent: "gemini" }, h.token, "GET")).status, 403);
+  assert.equal((await h.request("agent-access/test", { agent: "gemini" })).status, 200);
+  assert.deepEqual(h.calls.at(-1), ["agent-access/test", { agent: "gemini" }]);
   h.switchDuringTransfer();
   assert.equal((await h.request("memory-transfer/import", { previewId: "opaque-preview" })).status, 403);
+});
+
+test("Claude file selection and commit are restricted to the current desktop session", async t => {
+  const h = await fixture(t);
+  assert.equal((await h.request("claude-chat-import/preview", {}, "wrong-token")).status, 403);
+  assert.equal((await h.request("claude-chat-import/preview", {}, h.token, "GET")).status, 403);
+  const preview = await h.request("claude-chat-import/preview");
+  assert.deepEqual(await preview.json(), { previewId: "claude-preview" });
+  assert.deepEqual(h.calls, [["claude", "preview", {}]]);
+  h.switchDuringTransfer();
+  assert.equal((await h.request("claude-chat-import/commit", { previewId: "claude-preview" })).status, 403);
 });
 
 test("CLI and desktop mode revocation resolves their shared integration and scan source", async t => {

@@ -68,6 +68,27 @@ function sourceInfo() {
   return {revision, dirty};
 }
 
+export async function resolveAppKit(version, directory = process.env.WANX_APP_KIT_DIR) {
+  assertVersion(version);
+  const output = path.resolve(directory || path.join(root, '.wanx-app-kit', version));
+  let manifest;
+  try {
+    manifest = JSON.parse(await readFile(path.join(output,'wanx-app-kit.json'), 'utf8'));
+  } catch (error) {
+    if (directory || error.code !== 'ENOENT') throw error;
+    return buildAppKit({version});
+  }
+  if (manifest.kitId !== 'wanx-app-kit' || manifest.kitVersion !== version) throw Error('APP_KIT_VERSION_MISMATCH');
+  for (const [kind, relative] of [['sdk','sdk/@centaurai/wanx-host-sdk'],['contract','contracts']]) {
+    const entries = manifest.artifacts.filter(entry => entry.kind === kind);
+    const [entry] = entries;
+    if (entries.length !== 1 || entry.version !== version || entry.path !== relative) throw Error('APP_KIT_MANIFEST_INVALID');
+    const actual = await digestTree(path.join(output, relative));
+    if (actual.sha256 !== entry.sha256 || JSON.stringify(actual.files) !== JSON.stringify(entry.files)) throw Error('APP_KIT_DIGEST_MISMATCH');
+  }
+  return {output, manifest};
+}
+
 export async function buildAppKit({version, distribution = 'workspace', out = path.join(root, '.wanx-app-kit')} = {}) {
   assertVersion(version);
   assertDistribution(distribution);
@@ -87,8 +108,12 @@ export async function buildAppKit({version, distribution = 'workspace', out = pa
     recursive: true,
     filter: source => source !== path.join(CONTRACTS_SOURCE, 'api.openapi.json'),
   });
-  const npmCli = process.env.npm_execpath || path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
-  const packageFile = execFileSync(process.execPath, [npmCli, 'pack', sdkOutput, '--pack-destination', output, '--ignore-scripts'], {cwd: root, encoding: 'utf8'})
+  const packArgs = ['pack', sdkOutput, '--pack-destination', output, '--ignore-scripts'];
+  const npmCli = process.env.npm_execpath || (process.platform === 'win32'
+    ? path.join(path.dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js') : undefined);
+  const npmCommand = npmCli ? process.execPath : 'npm';
+  const packageFile = execFileSync(npmCommand, npmCli ? [npmCli, ...packArgs] : packArgs,
+    {cwd: root, encoding: 'utf8'})
     .trim().split(/\r?\n/).pop();
   const digest = await digestTree(sdkOutput);
   const contractsDigest = await digestTree(path.join(output, 'contracts'));

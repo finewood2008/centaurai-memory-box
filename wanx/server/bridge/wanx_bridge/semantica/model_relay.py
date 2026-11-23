@@ -25,7 +25,14 @@ from starlette.requests import ClientDisconnect
 from ..admin_client import BridgeUpstreamError
 from ..model_reasoning import reasoning_metadata
 from ..oidc import loopback_origin
-from .desktop import APPS, DesktopConfig, DesktopError, request_json, strict_json
+from .desktop import (
+    APPS,
+    DesktopConfig,
+    DesktopError,
+    parse_model_output,
+    request_json,
+    strict_json,
+)
 from .desktop_routes import bounded_body, live_request
 from .model_budget import InvalidModelOutputLimit, output_budget, truncated
 from .model_options import inference_options, thinking_modes, thinking_overrides
@@ -323,7 +330,7 @@ class ModelRelay:
             )
         return items, providers
 
-    async def catalog_result(self, items, *, fallback_active=False):
+    async def catalog_result(self, items):
         response = await self.admin._admin("GET", "/api/providers/application-defaults")
         if response.status_code == 404:
             policy = {"managed": False, "defaults": {}}
@@ -333,7 +340,7 @@ class ModelRelay:
             raise DesktopError("MODEL_SERVICE_UNAVAILABLE")
         configured = policy.get("defaults", {}).get("starlink")
         reference = configured.get("model_ref") if configured and configured.get("available") else None
-        if configured is None and fallback_active:
+        if configured is None:
             active = await self.admin._admin("GET", "/api/providers/active-model")
             if active.status_code != 200:
                 raise DesktopError("MODEL_SERVICE_UNAVAILABLE")
@@ -557,7 +564,7 @@ class ModelRelay:
             if content.startswith("```"):
                 content = content.partition("\n")[2].rsplit("```", 1)[0].strip()
             failure_kind = "invalid_json"
-            value = strict_json(content)
+            value = parse_model_output(content)
             failure_kind = "schema_validation"
             # Preserve the callback's object-only contract even for a loose schema.
             if not isinstance(value, dict):

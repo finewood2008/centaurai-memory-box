@@ -3,14 +3,14 @@ from copy import deepcopy
 from uuid import uuid4
 from .contracts import Solution, StudioError, digest
 
-ARRAYS={'scenarios','features','pages','dataFields','rules','exceptions','tests','outOfScope','openQuestions'}
+ARRAYS={'scenarios','features','pages','dataFields','rules','expertRules','exceptions','tests','outOfScope','openQuestions'}
 TEXT={'problem','currentApproach','successOutcome'}
 
 def rows(project):
     ids=project['preparation'].setdefault('entryIds',{})
     result={}
     for section in ARRAYS:
-        values=project['solution']['prd'][section]
+        values=project['solution']['prd'].get(section) or []
         names=ids.setdefault(section,[])
         while len(names)<len(values):names.append(uuid4().hex)
         if len(names)!=len(values):raise StudioError('PRD_IDS_CHANGED',409)
@@ -39,6 +39,8 @@ def apply_patch(project,args):
             entry['value']=change['value']
         else:entries.append({'id':uuid4().hex,'value':change['value']})
     for section,entries in indexed.items():
+        if section == 'expertRules' and not entries and section not in project['solution']['prd']:
+            continue
         candidate['solution']['prd'][section]=[e['value'] for e in entries]
         candidate['preparation']['entryIds'][section]=[e['id'] for e in entries]
     for key,value in args.get('summary',{}).items():
@@ -48,7 +50,11 @@ def apply_patch(project,args):
             candidate['autoName']=value
             if candidate.get('nameMode')=='auto':candidate['name']=value
         else:candidate['solution'][key]=value
-    if 'capabilities' in args:candidate['solution']['capabilities']=args['capabilities']
+    if 'capabilities' in args:
+        if project.get('devKit'):
+            from .public_capabilities import validate_declaration
+            validate_declaration(args['capabilities'])
+        candidate['solution']['capabilities']=args['capabilities']
     prd=candidate['solution']['prd']
     candidate['solution']['fields']=[f['name'] for f in prd['dataFields']]
     candidate['solution']['acceptance']=[t['title']+'：'+t['then'] for t in prd['tests']]

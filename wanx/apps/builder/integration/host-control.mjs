@@ -2,7 +2,6 @@ import{mkdtemp,rm,readFile,writeFile}from'node:fs/promises';
 import os from'node:os';
 import path from'node:path';
 import{createHash,randomUUID}from'node:crypto';
-import{writeMiniappPackage}from'../core/package.mjs';
 import{STANDARD_MAX_COMPRESSED_BYTES}from'../../team-client/applications/standard-deployment-limits.mjs';
 export const STUDIO_ID='ai.wanx.studio';
 export {createStudioEntry} from './host-entry.mjs';
@@ -31,7 +30,8 @@ export function createStudioControl({applications,assets,onChanged=async()=>{},n
       if(payload.artifactHash!==body.artifactHash)throw fail('INSTALLED_ARTIFACT_MISMATCH');
       const standardBytes=payload.packageBase64?Buffer.from(payload.packageBase64,'base64'):null;
       const standardHash=standardBytes?createHash('sha256').update(standardBytes).digest('hex'):null;
-      if(standardBytes&&payload.packageSha256&&payload.packageSha256!==standardHash)throw fail('STANDARD_PACKAGE_HASH_MISMATCH');
+      if(!standardBytes||payload.manifest?.protocolVersion!==3)throw fail('STANDARD_PACKAGE_REQUIRED');
+      if(payload.packageSha256!==standardHash)throw fail('STANDARD_PACKAGE_HASH_MISMATCH');
       const restore=payload.restore!==undefined;
       if(restore&&(!standardBytes||!payload.packageSha256||standardBytes.toString('base64')!==payload.packageBase64||
         !payload.restore||Object.keys(payload.restore).sort().join()!=='artifactHash,schemaVersion,source'||payload.restore.schemaVersion!==1||payload.restore.source!=='restore'||
@@ -41,9 +41,6 @@ export function createStudioControl({applications,assets,onChanged=async()=>{},n
         if(standardBytes){
           const descriptor=current.descriptor;
           if(!descriptor||descriptor.sha256!==standardHash||descriptor.applicationId!==payload.applicationId||descriptor.version!==payload.version)throw fail('INSTALLED_ARTIFACT_MISMATCH');
-        }else{
-          const record=JSON.parse(await readFile(path.join(current.installPath,'miniapp.runtime.json'),'utf8'));
-          if(record.artifactHash!==payload.artifactHash)throw fail('INSTALLED_ARTIFACT_MISMATCH');
         }
       }else{
         const directory=await mkdtemp(path.join(os.tmpdir(),'wanx-selfmade-install-'));
@@ -53,7 +50,7 @@ export function createStudioControl({applications,assets,onChanged=async()=>{},n
             current=restore
               ?await applications.restoreStandardPackage({archivePath:archive,artifactHash:standardHash,manifest:payload.manifest,assertSession:assertLive})
               :await applications.install({archivePath:archive,standardArtifactHash:standardHash,manifest:payload.manifest});
-          }else{await writeMiniappPackage(payload,directory,{assets});assertLive();current=await applications.install({sourceDir:directory})}
+          }
           assertLive();
         }finally{await rm(directory,{recursive:true,force:true})}
       }

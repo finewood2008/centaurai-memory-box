@@ -7,7 +7,7 @@ from wanx_studio.service import StudioService
 from wanx_studio.contracts import StudioError,digest
 from wanx_studio.preparation import CATALOG
 from wanx_studio.prd_patch import apply_patch,rows
-from test_discovery import solution
+from test_discovery import standard_solution
 ROOT=Path(__file__).resolve().parents[2]
 def op():return uuid4().hex
 class Context:
@@ -24,7 +24,7 @@ async def env(tmp_path):
  async def model(owner,body):
   calls.append(body)
   if body['messages'][0]['content'].startswith('你是万象客户端'):
-   content=json.dumps({'message':'最近一次整理会议时，最费力的是哪一步？','brief':{'goal':'会议助手','scenario':'每周例会','pain':'行动遗漏'},'capabilities':['data','model'],'options':['找不到负责人','忘记期限']},ensure_ascii=False)
+   content=json.dumps({'message':'最近一次整理会议时，最费力的是哪一步？','brief':{'goal':'会议助手','scenario':'每周例会','pain':'行动遗漏'},'capabilities':['host.session'],'options':['找不到负责人','忘记期限']},ensure_ascii=False)
   else:content='WANX_OK'
   return {'choices':[{'finish_reason':'stop','message':{'content':content}}]}
  svc.model=model
@@ -33,7 +33,7 @@ async def env(tmp_path):
  class Runner:
   async def preflight(self,**kwargs):return {'available':True,'modelCalls':0,'policy':{'scope':'task-MCP-tools-only'}}
  svc.runner=Runner()
- p=svc.store.create('alice','测试','会议行动项跟进',op());svc.preparation.enable('alice',p['id'])
+ p=svc.create_project('alice','测试','会议行动项跟进',op());svc.preparation.enable('alice',p['id'])
  yield svc,p['id'],calls
  await svc.close()
 async def test_intake_never_receives_context_or_source_names_and_is_idempotent(env):
@@ -59,14 +59,13 @@ async def test_real_fixed_probes_cleanup_and_block_before_handoff(env):
  count=len(calls);await prep.check('alice',pid,request);assert len(calls)==count
  p=await prep.handoff('alice',pid,{'expectedRevision':p['preparation']['revision']})
  assert p['preparation']['phase']=='acp' and not p['tasks'] and p['confirmation'] is None
- assert p['preparation']['handoff']['contracts']['model']['methods']==['model.generate']
-async def test_configured_model_can_fail_without_false_pass(env):
- svc,pid,calls=env;prep=svc.preparation
- await prep.intake('alice',pid,{'operationId':op(),'text':'保存并提取会议行动'})
- async def failed(*args):raise StudioError('MODEL_UPSTREAM_FAILED',502)
- svc.model=failed
+ assert p['preparation']['handoff']['contracts']['host.session']['methods']==['window.wanx.context']
+async def test_unavailable_build_executor_blocks_handoff(env, monkeypatch):
+ svc,pid,_=env;prep=svc.preparation
+ async def unavailable(**kwargs):return {'available':False,'code':'ISOLATION_UNAVAILABLE'}
+ monkeypatch.setattr(svc.runner,'preflight',unavailable)
  p=await prep.check('alice',pid,{'operationId':op()})
- assert p['preparation']['report']['results']['model']['status']=='failed'
+ assert not p['preparation']['report']['codex']['available']
  with pytest.raises(StudioError,match='CAPABILITY_CHECK_REQUIRED'):await prep.handoff('alice',pid,{'expectedRevision':p['preparation']['revision']})
 
 async def test_rechecking_unchanged_inputs_preserves_synced_plan_and_confirmation(env):
@@ -74,10 +73,8 @@ async def test_rechecking_unchanged_inputs_preserves_synced_plan_and_confirmatio
  await prep.intake('alice',pid,{'operationId':op(),'text':'保存并提取会议行动'})
  p=await prep.check('alice',pid,{'operationId':op()})
  await prep.handoff('alice',pid,{'expectedRevision':p['preparation']['revision']})
- p=svc.store.get('alice',pid);p['solution']=solution();p['solution']['capabilities']=['data','model']
+ p=svc.store.get('alice',pid);p['solution']=standard_solution();p['solution']['capabilities']=['host.session']
  p['preparation']['interview'].update({'state':'completed','sync':'saved','turns':[{'id':'completed-software-test-turn'}]});rows(p);svc.store.save(p)
- from wanx_studio.iterative import propose_contract
- propose_contract(svc,'alice',pid,{'expectedHash':digest(p['solution']),'collections':{'meetings':{'title':'string','notes':'string'}}})
  q=svc.store.get('alice',pid);q['preparation']['interview'].update(state='running',turnId='completed-software-test-turn');svc.store.save(q)
  await prep.pm.tool('alice',pid,'completed-software-test-turn','complete_prd',{'expectedHash':digest(q['solution']),'summary':'已共同核对流程、保存方式和异常验收。'})
  q=svc.store.get('alice',pid);q['preparation']['interview']['state']='completed';svc.store.save(q)
@@ -124,7 +121,7 @@ async def test_handoff_background_reads_are_scoped_paged_and_revoke_session(env)
  assert prep.state('alice',pid)['interview']['sessionId'] is None
 async def test_incremental_patch_has_stable_ids_no_count_limit_and_atomic_failure(env):
  svc,pid,calls=env;prep=svc.preparation
- p=svc.store.get('alice',pid);p['solution']=solution();p['solution']['prd']['rules']=['规则'+str(i) for i in range(501)];rows(p);svc.store.save(p)
+ p=svc.store.get('alice',pid);p['solution']=standard_solution();p['solution']['prd']['rules']=['规则'+str(i) for i in range(501)];rows(p);svc.store.save(p)
  p=svc.store.get('alice',pid);before=deepcopy(p);entry=rows(p)['rules'][250]
  candidate=apply_patch(p,{'expectedHash':digest(p['solution']),'upsert':[{'section':'rules','id':entry['id'],'value':'修正中间规则'}],'text':{'problem':'新的痛点'}})
  assert len(candidate['solution']['prd']['rules'])==501
@@ -205,7 +202,7 @@ async def test_background_credentials_never_reach_agent_read_or_search(env):
   with pytest.raises(StudioError,match='CONTEXT_CREDENTIAL_DETECTED'):await call
 async def test_client_background_and_suggestion_cannot_create_fake_gap(env):
  svc,pid,calls=env
- async def model(owner,body):return {'choices':[{'message':{'content':json.dumps({'message':'已理解','brief':{'goal':'AI提取摘要'},'capabilities':['model'],'gaps':[{'requirement':'到期提醒','reason':'建议','evidence':'不存在的用户原话'},{'requirement':'AI提取摘要','reason':'模型误判','evidence':'AI提取摘要'}]})}}]}
+ async def model(owner,body):return {'choices':[{'message':{'content':json.dumps({'message':'已理解','brief':{'goal':'AI提取摘要'},'capabilities':['wanx.expert-app.v1'],'gaps':[{'requirement':'到期提醒','reason':'建议','evidence':'不存在的用户原话'},{'requirement':'AI提取摘要','reason':'模型误判','evidence':'AI提取摘要'}]})}}]}
  svc.model=model;p=await svc.preparation.intake('alice',pid,{'operationId':op(),'text':'AI提取摘要'})
  assert not p['preparation']['gaps']
 async def test_pending_interview_cannot_be_deleted_and_restored_stuck(env):
@@ -291,12 +288,12 @@ async def test_acp_recheck_covers_intake_planning_after_solution_capabilities_sh
  p=await prep.check('alice',pid,{'operationId':op()})
  await prep.handoff('alice',pid,{'expectedRevision':p['preparation']['revision']})
  p=svc.store.get('alice',pid)
- assert p['preparation']['required']==['data','model']
+ assert p['preparation']['required']==['host.session']
  p['solution']['capabilities']=[]
  svc.store.save(p)
  p=await prep.check('alice',pid,{'operationId':op()})
  assert p['preparation']['phase']=='acp'
- assert p['preparation']['report']['required']==['data','model']
+ assert p['preparation']['report']['required']==['host.session']
  assert all(r['status']=='passed' for r in p['preparation']['report']['results'].values())
  assert prep.valid_report('alice',svc.store.get('alice',pid),development=True)
  # Planning still guards the handed-off intake capabilities while the draft
@@ -309,27 +306,26 @@ async def test_acp_recheck_covers_intake_planning_after_solution_capabilities_sh
  assert not svc.runtime_sessions
  assert not svc.store.db.execute("select * from records where app like '__probe__%'").fetchall()
 
-async def test_acp_report_old_capability_failure_does_not_block_reduced_development(env):
+async def test_acp_report_old_capability_failure_does_not_block_reduced_development(env,monkeypatch):
  svc,pid,calls=env;prep=svc.preparation
  await prep.intake('alice',pid,{'operationId':op(),'text':'保存并提取会议行动'})
  p=await prep.check('alice',pid,{'operationId':op()})
  await prep.handoff('alice',pid,{'expectedRevision':p['preparation']['revision']})
  p=svc.store.get('alice',pid)
- p['solution']['capabilities']=['data']
+ p['solution']['capabilities']=[]
  p['preparation']['interview'].update(state='completed',sync='saved')
  svc.store.save(p)
- async def unavailable(*args):raise StudioError('MODEL_UPSTREAM_FAILED',502)
- svc.model=unavailable
+ async def unavailable(*args):raise StudioError('SYNTHETIC_PROBE_UNAVAILABLE',503)
+ monkeypatch.setattr(prep,'probe_runtime',unavailable)
  p=await prep.check('alice',pid,{'operationId':op()})
  report=p['preparation']['report']
- assert report['required']==['data','model']
- assert report['results']['data']['status']=='passed'
- assert report['results']['model']['code']=='MODEL_UPSTREAM_FAILED'
+ assert report['required']==['host.session']
+ assert report['results']['host.session']['code']=='SYNTHETIC_PROBE_UNAVAILABLE'
  assert not prep.valid_report('alice',svc.store.get('alice',pid))
  with pytest.raises(StudioError,match='CAPABILITY_CHECK_REQUIRED'):
   await prep.guard_async('alice',svc.store.get('alice',pid),planning=True)
  await prep.guard_async('alice',svc.store.get('alice',pid),development=True)
- assert p['solution']['capabilities']==['data']
+ assert p['solution']['capabilities']==[]
  assert not p['tasks'] and p['confirmation'] is None
 
 async def test_acp_report_probes_new_prd_capability_and_blocks_failed_development(env):
@@ -338,20 +334,19 @@ async def test_acp_report_probes_new_prd_capability_and_blocks_failed_developmen
  p=await prep.check('alice',pid,{'operationId':op()})
  await prep.handoff('alice',pid,{'expectedRevision':p['preparation']['revision']})
  p=svc.store.get('alice',pid)
- p['solution']['capabilities']=['data','model','files']
+ p['solution']['capabilities']=['host.session','space.drive']
  p['preparation']['interview'].update(state='completed',sync='saved')
  svc.store.save(p)
- svc.files=None
  p=await prep.check('alice',pid,{'operationId':op()})
  report=p['preparation']['report']
- assert report['required']==['data','files','model']
- assert report['results']['files']['code']=='FILES_UNAVAILABLE'
+ assert report['required']==['host.session','space.drive']
+ assert report['results']['space.drive']['code']=='PUBLIC_CONTRACT_ADAPTER_UNAVAILABLE'
  assert prep.valid_report('alice',svc.store.get('alice',pid))
  assert not prep.valid_report('alice',svc.store.get('alice',pid),development=True)
  with pytest.raises(StudioError,match='CAPABILITY_CHECK_REQUIRED'):
   await prep.guard_async('alice',svc.store.get('alice',pid),development=True)
- assert p['preparation']['required']==['data','model']
- assert p['solution']['capabilities']==['data','model','files']
+ assert p['preparation']['required']==['host.session']
+ assert p['solution']['capabilities']==['host.session','space.drive']
  assert not p['tasks'] and p['confirmation'] is None
 
 async def test_acp_capability_api_roundtrip_preserves_declared_ids_and_rejects_arbitrary_ids(env):
@@ -376,13 +371,13 @@ async def test_acp_capability_api_roundtrip_preserves_declared_ids_and_rejects_a
   assert state.json()['required']==[]
   checked=await client.post(prefix+'/check',json={'operationId':op(),'capabilityIds':state.json()['required']})
   assert checked.status_code==200, checked.text
-  assert checked.json()['preparation']['report']['required']==['data','model']
+  assert checked.json()['preparation']['report']['required']==['host.session']
   invalid=await client.post(prefix+'/check',json={'operationId':op(),'capabilityIds':['http://arbitrary']})
   assert invalid.status_code==409
   assert invalid.json()['code']=='CAPABILITY_SET_CHANGED'
  assert svc.store.get('alice',pid)['solution']['capabilities']==[]
 
-async def test_acp_expert_recheck_covers_data_intake_with_empty_prd_capabilities(env,monkeypatch,tmp_path):
+async def test_acp_expert_recheck_covers_host_intake_with_empty_prd_capabilities(env,monkeypatch,tmp_path):
  from test_studio_expert_delivery import wire,configure
  svc,pid,calls=env;prep=svc.preparation
  manager,_=wire(svc,tmp_path)
@@ -391,49 +386,40 @@ async def test_acp_expert_recheck_covers_data_intake_with_empty_prd_capabilities
  original_probe=prep.probe_runtime;probed=[]
  async def dependency_probe(owner,project_id,cap):
   probed.append(cap)
-  if cap=='foundation':return {'status':'passed','coverage':'synthetic expert dependency fixture'}
   return await original_probe(owner,project_id,cap)
  monkeypatch.setattr(prep,'probe_runtime',dependency_probe)
  p=await prep.check('alice',pid,{'operationId':op()})
  await prep.handoff('alice',pid,{'expectedRevision':p['preparation']['revision']})
  p=svc.store.get('alice',pid)
- assert prep.required(p)==['data','foundation']
+ assert prep.required(p)==['host.session','wanx.expert-app.v1']
  p['solution']['capabilities']=[];svc.store.save(p)
- assert prep.required(p,development=True)==['foundation']
+ assert prep.required(p,development=True)==['wanx.expert-app.v1']
  probed.clear()
- p=await prep.check('alice',pid,{'operationId':op(),'capabilityIds':['foundation']})
- assert probed==['data','foundation']
- assert p['preparation']['report']['required']==['data','foundation']
+ p=await prep.check('alice',pid,{'operationId':op(),'capabilityIds':['wanx.expert-app.v1']})
+ assert probed==['host.session','wanx.expert-app.v1']
+ assert p['preparation']['report']['required']==['host.session','wanx.expert-app.v1']
  await prep.guard_async('alice',svc.store.get('alice',pid),planning=True)
  await prep.handoff('alice',pid,{'expectedRevision':p['preparation']['revision']})
  assert svc.store.get('alice',pid)['solution']['capabilities']==[]
  assert not svc.runtime_sessions
 
-async def test_expert_capability_mismatch_can_be_discussed_but_not_built(env,monkeypatch,tmp_path):
+async def test_expert_capability_mismatch_can_be_discussed_but_not_built(env,tmp_path):
  from test_studio_expert_delivery import wire,configure
  svc,pid,_=env;prep=svc.preparation
  manager,_=wire(svc,tmp_path);configure(manager,svc.store.get('alice',pid))
- original=prep.probe_runtime
- async def probe(owner,project_id,cap):
-  if cap=='foundation':
-   if 'files' in svc.store.get(owner,project_id)['solution']['capabilities']:
-    raise StudioError('EXPERT_CLIENT_CAPABILITY_UNSUPPORTED',409)
-   return {'status':'passed'}
-  return await original(owner,project_id,cap)
- monkeypatch.setattr(prep,'probe_runtime',probe)
  p=await prep.check('alice',pid,{'operationId':op()})
  await prep.handoff('alice',pid,{'expectedRevision':p['preparation']['revision']})
- p=svc.store.get('alice',pid);p['solution']['capabilities']=['data','files','foundation']
+ p=svc.store.get('alice',pid);p['solution']['capabilities']=['space.drive','wanx.expert-app.v1']
  p['preparation']['interview'].update(state='completed',sync='saved');svc.store.save(p)
  p=await prep.check('alice',pid,{'operationId':op()})
- assert p['preparation']['report']['results']['foundation']['code']=='EXPERT_CLIENT_CAPABILITY_UNSUPPORTED'
+ assert p['preparation']['report']['results']['space.drive']['code']=='PUBLIC_CONTRACT_ADAPTER_UNAVAILABLE'
  await prep.guard_async('alice',p,planning=True)
  await prep.handoff('alice',pid,{'expectedRevision':p['preparation']['revision']})
  p=svc.store.get('alice',pid);p['preparation']['interview'].update(state='completed',sync='saved');svc.store.save(p)
  with pytest.raises(StudioError,match='CAPABILITY_CHECK_REQUIRED'):
   await prep.guard_async('alice',p,development=True)
  # A correction never turns the failed dependency result into a passed probe.
- assert p['preparation']['report']['results']['foundation']['status']=='failed'
- p['solution']['capabilities']=['data','foundation'];svc.store.save(p)
+ assert p['preparation']['report']['results']['space.drive']['status']=='failed'
+ p['solution']['capabilities']=['wanx.expert-app.v1'];svc.store.save(p)
  p=await prep.check('alice',pid,{'operationId':op()})
  await prep.guard_async('alice',p,development=True)

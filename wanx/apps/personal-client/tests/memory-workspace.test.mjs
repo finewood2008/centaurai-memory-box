@@ -307,7 +307,7 @@ test("My AI puts the chosen retrieval instructions into the optimized prompt and
   assert.match(spaceOnly, /空间案例.*space_search.*space_read/u);
   assert.doesNotMatch(spaceOnly, /starlink_|task_id/u);
   const { text: both } = await (await optimize(selection)).json();
-  assert.match(both, /支持仓库.*starlink_search.*starlink_evidence/u);
+  assert.match(both, /支持仓库.*xingtu_search.*xingtu_evidence/u);
   assert.deepEqual(models.at(-1).taskSources, { spaceFolder: "空间案例", starlinkWarehouse: "支持仓库" });
   assert.equal(grants.length, 0);
 
@@ -316,7 +316,7 @@ test("My AI puts the chosen retrieval instructions into the optimized prompt and
   assert.match(delivered[0], /MemoBox MCP task_id: a{36}/);
   const edit = { agent: "codex", text: "保留我编辑的任务。", codexContext: { warehouseId: selection.warehouseId } };
   assert.deepEqual(await (await post("copy", edit)).json(), { copied: true });
-  assert.match(copied[0], /^保留我编辑的任务。.*starlink_evidence.*task_id/su);
+  assert.match(copied[0], /^保留我编辑的任务。.*xingtu_evidence.*task_id/su);
   assert.doesNotMatch(copied[0], /space_search/u);
   assert.deepEqual(await (await post("handoff", { ...edit, text: "长".repeat(900) })).json(), { opened: true, copied: true, delivery: "copy-open", reason: "too-long" });
   assert.equal(grants.at(-1).revoked, false);

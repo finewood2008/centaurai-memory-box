@@ -40,8 +40,8 @@ try{
   const click=async (selector,modifiers=[],button='left')=>{const point=await js(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e)throw Error('Missing '+${JSON.stringify(selector)});e.scrollIntoView({block:'center'});const r=e.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};})()`);win.webContents.sendInputEvent({type:'mouseDown',button,modifiers,clickCount:1,...point});win.webContents.sendInputEvent({type:'mouseUp',button,modifiers,clickCount:1,...point});await pause(60);};
   const key=async code=>{win.webContents.sendInputEvent({type:'keyDown',keyCode:code});win.webContents.sendInputEvent({type:'char',keyCode:code});win.webContents.sendInputEvent({type:'keyUp',keyCode:code});await pause(25);};
   await click('[data-action="show-space"]');
-  await js(`until(()=>!!document.querySelector('[data-workspace-action="requests"]'))`);
-  assert.equal(await js(`document.querySelector('.space-tree > section').getAttribute('aria-label')`),'常用位置');
+  await js(`until(()=>!!document.querySelector('[data-agent-hub-open]'))`);
+  assert.equal(await js(`document.querySelector('.space-tree > section').getAttribute('aria-label')`),'我的空间');
   assert.equal(await js(`Array.from(document.querySelectorAll('.space-tree-toggle')).every(e=>e.getAttribute('aria-expanded')==='false')`),true);
   console.log('SPACES: create'); await click('[data-action="space-mkdir"]');
   await js(`window.originalInput=document.querySelector('#space-name');void 0;`);
@@ -91,7 +91,7 @@ try{
   directoryChoice={canceled:true};await click('[data-workspace-action="storage-choose"]');
   assert.equal(await js(`document.querySelector('[data-storage-path]').textContent`),'/tmp/space-test');
   await click('[data-workspace-form] button[type="submit"]');
-  assert.match(await js(`document.querySelector('[data-workspace-error]').textContent`),/主机服务需要更新/);
+  assert.match(await js(`document.querySelector('[data-workspace-error]').textContent`),/设备服务需要更新/);
   assert.equal(await js(`document.querySelector('[data-storage-path]').textContent`),'/tmp/space-test');
   await click('[data-workspace-form] button[type="submit"]');
   assert.deepEqual(calls.find(c=>c[0]==='storage')[1],{id:spaceA,path:'/tmp/space-test'});
@@ -102,8 +102,10 @@ try{
   assert.equal(await js(`document.querySelectorAll('.space-file-row.is-selected').length`),2);
   await click(`[data-workspace-action="menu"][data-id="${child}"]`);
   assert.equal(await js(`document.querySelector('.space-workspace').inert`),false);
-  await click(`[data-entry-id="${'f'.repeat(32)}"]`);assert.equal(await js(`Boolean(document.querySelector('.space-sidebar-menu'))`),false);
-  await click(`[data-entry-id="${'1'.repeat(32)}"]`,[process.platform==='darwin'?'meta':'control']);
+  assert.equal(await js(`Boolean(document.querySelector('.space-sidebar-menu'))`),true);
+  await click('.space-status-count');
+  assert.equal(await js(`Boolean(document.querySelector('.space-sidebar-menu'))`),false);
+  assert.equal(await js(`document.querySelectorAll('.space-file-row.is-selected').length`),2);
   await click(`[data-workspace-action="menu"][data-id="${child}"]`);
   await click('[data-workspace-action="menu-command"][data-command="rename"]');
   assert.equal(await js(`document.querySelector('#space-name').value`),'资料');await click('[data-action="space-dialog-close"]');

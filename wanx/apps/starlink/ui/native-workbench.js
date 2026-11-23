@@ -3,7 +3,7 @@ export function materialAccessLost(error) {
   return error?.status === 401 || error?.status === 403 ||
     error?.status === 404 && !['SEMANTICA_OPERATION_NOT_ALLOWED','SEMANTICA_UPGRADE_REQUIRED'].includes(error?.code);
 }
-const targetViews = { ontology: "ontology", review: "materials", releases: "releases" };
+const targetViews = { ontology: "ontology", review: "materials", releases: "releases", sensitive: "sensitive" };
 export function readWorkbenchReply(reply) {
   if (reply?.ok === true) return reply.value;
   const refused = reply?.ok === false && typeof reply.code === 'string' && /^[A-Z][A-Z_]{1,95}$/.test(reply.code);
@@ -13,7 +13,7 @@ export function readWorkbenchReply(reply) {
   const message = refused && typeof reply?.message === 'string' && reply.message.length <= 200 ? reply.message : code;
   throw Object.assign(new Error(message), { code, status });
 }
-export function createWorkbenchHost({ call, warehouse, container, onView, onImport, onOntologySection, onSource }) {
+export function createWorkbenchHost({ call, warehouse, container, onView, onImport, onOntologySection, onSource, onSensitivePolicyChanged, onAssistantTerm, onOutsideClick }) {
   let current = null, epoch = 0, wanted = null, wantedDocument = null, wantedReview, wantedOntologyAction;
   const trusted = source => current && source === current.frame.contentWindow && current.warehouse === warehouse();
   const host = Object.freeze({
@@ -22,7 +22,9 @@ export function createWorkbenchHost({ call, warehouse, container, onView, onImpo
       const generation = epoch, selected = current.warehouse;
       const result = await call("workbench-request", { ...input, warehouseId: selected });
       if (epoch !== generation || !trusted(source)) throw Object.assign(new Error("WAREHOUSE_CHANGED"), { code: "WAREHOUSE_CHANGED" });
-      return readWorkbenchReply(result);
+      const value = readWorkbenchReply(result);
+      if (input.method === 'POST' && input.url?.split('?')[0] === '/api/sensitive/settings') onSensitivePolicyChanged?.();
+      return value;
     },
     register(source, controls) {
       if (!trusted(source)) return;
@@ -60,7 +62,7 @@ export function createWorkbenchHost({ call, warehouse, container, onView, onImpo
     has: view => Object.hasOwn(targetViews, view),
     openMaterial(documentId,reviewTarget){
       if(!/^[A-Za-z0-9_-]{1,128}$/.test(documentId)||!warehouse())return false;
-      if(reviewTarget!==undefined&&reviewTarget!=='current-extraction')return false;
+      if(reviewTarget!==undefined&&!['current-extraction','ontology-suggestions'].includes(reviewTarget))return false;
       if(current?.controls?.openMaterial)return current.controls.openMaterial(documentId,reviewTarget)!==false;
       wantedDocument=documentId;wantedReview=reviewTarget;return this.show('review');
     },
@@ -77,6 +79,15 @@ export function createWorkbenchHost({ call, warehouse, container, onView, onImpo
         const url = new URL("workbench/index.html", document.baseURI);
         url.search = new URLSearchParams({ native: "1", embedded: "1", view: wanted });
         current = { frame, warehouse: warehouse(), controls: null };
+        if (onAssistantTerm || onOutsideClick) frame.addEventListener('load', () => {
+          if (!trusted(frame.contentWindow)) return;
+          frame.contentDocument?.addEventListener('click', event => {
+            if (!trusted(frame.contentWindow)) return;
+            const marker = event.target.closest?.('[data-starxiaotu-term]');
+            if (marker) onAssistantTerm?.(marker.dataset.starxiaotuTerm);
+            else onOutsideClick?.();
+          });
+        });
         frame.src = url.href;
         container().replaceChildren(frame);
       } else if (current.controls) {

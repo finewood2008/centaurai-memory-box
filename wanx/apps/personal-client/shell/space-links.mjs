@@ -27,6 +27,11 @@ export async function createSpaceLinkBridge({client,store,serviceURL,onChanged=(
  const mcp=createSpaceMcp({state,persist,scope,storageScope,assertScope,remote,client,copyText,resolveEndpoint:mcpEndpoint,resetEndpoint:()=>relay.reset(),team:agentHubOptions.team===true});
  relay.contextChanged();
  return {
+  async output(grant,name,args){
+   const result=await mcp.output(grant,name,args);
+   if(name==='space_write_text'||args.action==='commit-write')onChanged();
+   return result;
+  },
   async manage(action,input={}){
    const bound=scope();assertScope(bound);
    if(action.startsWith('share-'))return shares(action,input);

@@ -58,7 +58,6 @@ class SpaceLinks(PersonalSpace):
                     action TEXT NOT NULL, target TEXT NOT NULL, agent TEXT NOT NULL,
                     result TEXT NOT NULL
                 );
-                CREATE TABLE IF NOT EXISTS retired_blobs (id TEXT PRIMARY KEY);
             """)
 
     @contextlib.contextmanager
@@ -147,20 +146,6 @@ class SpaceLinks(PersonalSpace):
                 raise SpaceError("SPACE_INVALID_DESTINATION")
             return parent
         return target
-
-    def _collect(self, db: sqlite3.Connection) -> None:
-        for row in db.execute("SELECT id FROM retired_blobs").fetchall():
-            blob = row["id"]
-            if not db.execute(
-                "SELECT 1 FROM entries WHERE COALESCE(blob,id)=? OR previous_blob=?", (blob, blob)
-            ).fetchone():
-                try:
-                    self._object(blob).unlink(missing_ok=True)
-                except (OSError, SpaceError):
-                    # Offline optional storage must not block unrelated Agent operations.
-                    continue
-                db.execute("DELETE FROM object_locations WHERE id=?", (blob,))
-                db.execute("DELETE FROM retired_blobs WHERE id=?", (blob,))
 
     def execute(
         self,
@@ -335,24 +320,8 @@ class SpaceLinks(PersonalSpace):
             result_id = staged["id"]
             if upload["expected"] is not None:
                 result_id = row["id"]
-                if row["previous_blob"]:
-                    db.execute(
-                        "INSERT OR IGNORE INTO retired_blobs VALUES(?)", (row["previous_blob"],)
-                    )
                 db.execute("DELETE FROM entries WHERE id=?", (upload_id,))
-                db.execute(
-                    "UPDATE entries SET blob=?,size=?,digest=?,previous_blob=?,previous_size=?,previous_digest=?,version=version+1,modified=? WHERE id=?",
-                    (
-                        upload_id,
-                        staged["size"],
-                        staged["digest"],
-                        row["blob"] or result_id,
-                        row["size"],
-                        row["digest"],
-                        time.time(),
-                        result_id,
-                    ),
-                )
+                self._replace_blob(db, row, upload_id, staged["size"], staged["digest"])
             db.execute("UPDATE agent_uploads SET result=? WHERE id=?", (result_id, upload_id))
             return public(self._entry(db, result_id), root)
         raise SpaceError("SPACE_ACTION_INVALID")

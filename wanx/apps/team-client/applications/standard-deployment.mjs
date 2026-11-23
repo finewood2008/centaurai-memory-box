@@ -59,12 +59,12 @@ export function standardDeploymentManifest(record){
 }
 // Inventory is made from verified extracted ZIP bytes and checked again after copy.
 // Standard shared Electron clients never need supplier symlinks or Host records.
-export async function standardDeploymentFiles(directory,{installed=false,assertSession=()=>{}}={}){
+export async function standardDeploymentFiles(directory,{installed=false,includePackageFile=false,assertSession=()=>{}}={}){
  const root=await realpath(directory),files=[];let total=0;
  async function visit(current,prefix=''){
   for(const entry of (await readdir(current,{withFileTypes:true})).sort((a,b)=>a.name.localeCompare(b.name))){
    assertSession();const relative=prefix+entry.name,file=path.join(current,entry.name),info=await lstat(file);
-   if(!prefix&&['.wanx-install.json',STANDARD_PACKAGE_FILE].includes(entry.name)){
+   if(!prefix&&(entry.name==='.wanx-install.json'||entry.name===STANDARD_PACKAGE_FILE&&!includePackageFile)){
     if(installed)continue;
     throw fail('APPLICATION_DEPLOYMENT_MISMATCH');
    }

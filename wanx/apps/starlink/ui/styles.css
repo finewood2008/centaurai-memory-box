@@ -1770,21 +1770,6 @@ dialog::backdrop {
   font-size: 10px;
   color: var(--muted);
 }
-.help-grid {
-  display: grid;
-  gap: 15px;
-  margin-top: 22px;
-}
-.help-item {
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 14px;
-  font-size: 12px;
-}
-.help-item p {
-  font-size: 11px;
-  color: var(--muted);
-  margin-top: 4px;
-}
 .graph-no-results {
   position: absolute;
   top: 45%;

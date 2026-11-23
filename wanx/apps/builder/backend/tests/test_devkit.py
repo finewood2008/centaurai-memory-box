@@ -76,11 +76,11 @@ def test_project_inventory_rejects_identity_conflicts_and_hash_changes():
     assert devkit.digest(devkit.project_spec(base)) != devkit.digest(devkit.project_spec(changed))
 
 
-@pytest.mark.parametrize("target",["tree","archive"])
+@pytest.mark.parametrize("target",["tree","archive","contract","generator"])
 def test_sdk_tree_or_package_tampering_blocks_kit(tmp_path,monkeypatch,target):
     import shutil
     kit=devkit._kit_root(ROOT)
-    for relative in ['package.json','vendor/wanx-app-kit/0.3.0','contracts/app-builder/project.schema.json']:
+    for relative in ['package.json','package-lock.json','vendor/wanx-app-kit/0.3.0','contracts/app-builder','templates','tools']:
         src=kit/relative;dst=tmp_path/relative;dst.parent.mkdir(parents=True,exist_ok=True)
         if src.is_dir():shutil.copytree(src,dst)
         else:shutil.copy2(src,dst)
@@ -89,6 +89,18 @@ def test_sdk_tree_or_package_tampering_blocks_kit(tmp_path,monkeypatch,target):
     if target=='tree':
         tree=tmp_path/'vendor/wanx-app-kit/0.3.0/sdk/@centaurai/wanx-host-sdk/index.cjs'
         tree.write_bytes(tree.read_bytes()+b'\n// changed\n')
+    elif target=='contract':
+        path=tmp_path/'vendor/wanx-app-kit/0.3.0/contracts/contract-status.v1.json'
+        path.write_bytes(path.read_bytes()+b' ')
+        from wanx_studio.public_capabilities import catalog
+        with pytest.raises(devkit.StudioError,match='DEVKIT_CONTRACT_INTEGRITY_FAILED'):
+            catalog(ROOT)
+    elif target=='generator':
+        before=devkit.kit_info(ROOT)
+        path=tmp_path/'tools/app-builder/generate.mjs'
+        path.write_bytes(path.read_bytes()+b'\n')
+        assert devkit.kit_info(ROOT)['kitSha256']!=before['kitSha256']
+        return
     else:
         archive=tmp_path/'vendor/wanx-app-kit/0.3.0/centaurai-wanx-host-sdk-0.3.0.tgz'
         archive.write_bytes(b'changed')

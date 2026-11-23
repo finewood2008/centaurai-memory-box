@@ -16,7 +16,7 @@ JOB = "10000000-0000-4000-8000-000000000001"
 MODEL = {"modelId": "1:synthetic/model", "modelRevision": "a" * 64, "purpose": "extraction"}
 
 
-async def native_source(operation="/conversations/c/intents/i/confirm", *, clock=None):
+async def native_source(operation="/conversations/c/intents/i/confirm", *, clock=None, method="POST"):
     h = Harness()
     if clock is not None:
         h.clock = clock
@@ -47,7 +47,7 @@ async def native_source(operation="/conversations/c/intents/i/confirm", *, clock
         if operation is None
         else "/api/semantica/warehouses/" + warehouse + "/workbench" + operation
     )
-    payload = h.payload(method="POST", rawTarget=path)
+    payload = h.payload(method=method, rawTarget=path)
     op = await s.admit_request(h.signed(payload), h.observed(payload))
     await s.activate_request(op["operationId"], payload["bodySha256"], payload["bodyBytes"])
     proof = await s.gateway_request(
@@ -68,6 +68,24 @@ async def queued_task(h, op, *, kind="extraction", task_id=JOB, snapshot=MODEL, 
     signed = await h.service.semantica_models.task_start(body, audience="semantica")
     claims = wire.verify_gateway_semantica_task(signed, wire.public_jwk(h.gateway), h.clock.wall)
     return h.service._operations[claims["operationId"]], claims, signed
+
+
+@pytest.mark.asyncio
+async def test_reading_sensitive_settings_can_resolve_the_selected_model_without_starting_a_task():
+    h, operation = await native_source("/sensitive/settings", method="GET")
+    try:
+        raw = b'{"action":"catalog"}'
+        proof = await h.service.semantica_models.model_request({
+            **h.native(operation, n=11), "modelAction": "catalog",
+            "bodySha256": wire.encode(hashlib.sha256(raw).digest()), "bodyBytes": len(raw),
+        }, audience="semantica")
+        claims = wire.verify_gateway_model_request(proof, wire.public_jwk(h.gateway), h.clock.wall)
+        assert claims["modelAction"] == "catalog"
+        assert claims["taskId"] is None
+        with pytest.raises(wire.DataProtocolError, match="LOCAL_DATA_SCOPE_DENIED"):
+            await queued_task(h, operation, kind="sensitive", snapshot={**MODEL, "purpose": "sensitive"})
+    finally:
+        await h.service.close()
 
 
 def model_bytes(task):
@@ -290,6 +308,30 @@ async def test_parse_index_sensitive_derivation_keeps_original_request_and_survi
             audience="semantica",
         )
     await h.service.close()
+
+
+@pytest.mark.asyncio
+async def test_auto_material_publication_is_derived_only_from_scoped_processing_requests():
+    h, source = await native_source("/conversations/materials/document/processing-starts")
+    index, _, _ = await queued_task(h, source, kind="index", snapshot=None, task_id="source-index")
+    extraction, _, _ = await queued_task(h, source, task_id=JOB, n=13)
+    with pytest.raises(wire.DataProtocolError):
+        await queued_task(h, source, kind="publication", snapshot=None, task_id="unbound", n=14)
+    publication, claims, _ = await queued_task(h, extraction, kind="publication", snapshot=None,
+                                               task_id="source-publication", n=15)
+    assert claims["parentRequestId"] == source["operationId"]
+    assert claims["serviceContext"] == source["route"]["serviceContext"]
+    await h.service.semantica_models.task_close({**h.native(index, n=16), "outcome": "completed"}, audience="semantica")
+    await h.service.semantica_models.task_close({**h.native(extraction, n=17), "outcome": "completed"}, audience="semantica")
+    rebuilt, _, _ = await queued_task(h, publication, kind="index", snapshot=None, task_id="graph-index", n=18)
+    _, claims, _ = await queued_task(h, rebuilt, kind="sensitive", snapshot=None, task_id="graph-scan", n=19)
+    assert claims["parentRequestId"] == source["operationId"]
+    await h.service.close()
+    other, old = await native_source()
+    unrelated, _, _ = await queued_task(other, old)
+    with pytest.raises(wire.DataProtocolError):
+        await queued_task(other, unrelated, kind="publication", snapshot=None, task_id="other-publication", n=21)
+    await other.service.close()
 
 
 @pytest.mark.asyncio

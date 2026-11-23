@@ -293,19 +293,24 @@ test("synthetic Space → Starlink import binding → tag-only Agent recall retu
   assert.equal(imported.annotationIndex.status, "saved");
   await f.restart();
   decorator = createStarlinkSpaceAnnotations({ space, service, check: () => {} });
+  const current=await f.service.operation('annotation',{id:file});
+  await f.service.operation('set-annotation',{id:file,expectedRevision:current.revision,tags:['空间后续标签'],description:'空间后续说明',reviewed:true});
   const sources = createCodexContextSources({ space: f.service, starlink: (action, input) => decorator.run(action, input, async () => ({ items: [] })) });
-  const matches = await sources.call({ warehouseId: warehouse }, "starlink_search", { query: "星图合成召回词" }, () => {});
-  assert.equal(matches.matches[0].documentId, documentId);
-  assert.equal(matches.matches[0].versionId, versionId);
-  assert.equal(matches.matches[0].snippet, undefined);
-  assert.equal(matches.matches[0].annotation, undefined);
-  assert.equal(JSON.stringify(matches).includes(text.trim()), false);
-  assert.equal(matches.matches[0].evidenceId, undefined);
+  const search = () => sources.call({ warehouseId: warehouse }, "starlink_search", { query: "星图合成召回词" }, () => {});
+  const result = await search();
+  assert.deepEqual(result.matches, []);
+  const [related] = result.relatedDocuments;
+  assert.equal(related.documentId, documentId);
+  assert.equal(related.versionId, versionId);
+  assert.equal(related.snippet, undefined);
+  assert.equal(related.annotation, undefined);
+  assert.equal(JSON.stringify(result).includes(text.trim()), false);
+  assert.equal(related.evidenceId, undefined);
   f.put({ ...f.entries.get(file) }, "已变化的合成正文");
-  assert.deepEqual((await sources.call({ warehouseId: warehouse }, "starlink_search", { query: "星图合成召回词" }, () => {})).matches, []);
+  assert.deepEqual((await search()).relatedDocuments, []);
 });
 
-test("a label added after import can find a document beyond the first 200 warehouse bindings", async t => {
+test("an imported snapshot can find a document beyond 200 unrelated warehouse bindings", async t => {
   const f = await fixture(t);
   const space = { operation: (...args) => f.service.operation(...args) };
   const docId = "synthetic_late_document", versionId = "synthetic_version";
@@ -313,7 +318,10 @@ test("a label added after import can find a document beyond the first 200 wareho
   const bind = async (id, documentId) => {
     const annotation = await space.operation("annotation", { id });
     await space.operation("annotation-bind", { id, warehouseId: warehouse, documentId, versionId,
-      digest: f.entries.get(id).digest, annotationRevision: annotation.revision });
+      digest: f.entries.get(id).digest, annotationRevision: annotation.revision, snapshot: {
+        tags: annotation.tags, description: annotation.description, revision: annotation.revision,
+        needsReview: annotation.needsReview, provenance: annotation.provenance,
+      } });
   };
   for (let i = 1; i <= 200; i++) {
     const id = i.toString(16).padStart(32, "0");
@@ -321,10 +329,12 @@ test("a label added after import can find a document beyond the first 200 wareho
     await bind(id, `synthetic_doc_${i}`);
   }
   f.put({ ...f.entries.get(file), parent: child }, text);
-  await bind(file, docId);
   const query = "蓝岸合成索引";
   const parent = await space.operation("annotation", { id: child });
-  await space.operation("set-annotation", { id: child, expectedRevision: parent.revision, tags: [query], reviewed: true });
+  const imported = await space.operation("set-annotation", { id: child, expectedRevision: parent.revision, tags: [query], reviewed: true });
+  await bind(file, docId);
+  const laterTag = "空间后续标签";
+  await space.operation("set-annotation", { id: child, expectedRevision: imported.revision, tags: [laterTag], reviewed: true });
   await f.restart();
   const reads = [];
   const service = { async call(action, input) {
@@ -332,11 +342,12 @@ test("a label added after import can find a document beyond the first 200 wareho
     return { document: { id: docId, active_version_id: versionId, status: "ready", warehouse_id: warehouse }, segments: [{ text }] };
   } };
   const decorator = createStarlinkSpaceAnnotations({ space, service, check: () => {} });
-  const search = () => decorator.run("search", { warehouseId: warehouse, query }, async () => ({ items: [] }));
+  const search = (keyword = query) => decorator.run("search", { warehouseId: warehouse, query: keyword }, async () => ({ items: [] }));
   const result = await search();
   assert.deepEqual(reads, [["document", docId]]);
   assert.equal(Object.hasOwn(result.annotationDocuments[0], 'text'), false);
   assert.ok(result.annotationDocuments[0].annotation.provenance.some(row => row.tag === query && row.source === "inherited"));
+  assert.deepEqual((await search(laterTag)).annotationDocuments, []);
   f.put({ ...f.entries.get(file) }, "更新后的合成正文");
   assert.deepEqual((await search()).annotationDocuments, []);
 });

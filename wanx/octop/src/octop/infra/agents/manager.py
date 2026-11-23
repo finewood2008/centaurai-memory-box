@@ -1392,6 +1392,14 @@ class AgentManager:
         finally:
             self._end_invocation(agent_id)
 
+    @asynccontextmanager
+    async def thread_invocation(self, agent_id: str, thread_id: str) -> AsyncIterator[None]:
+        async with (
+            self._thread_execution_lock(agent_id, thread_id),
+            self._track_invocation(agent_id),
+        ):
+            yield
+
     @metered_stream
     async def stream(self, agent_id: str, request: dict[str, Any]) -> AsyncIterator[Any]:
         """Stream harness chunks (Langfuse tracing handled inside octop-harness)."""
@@ -1399,10 +1407,7 @@ class AgentManager:
             raise self._unavailable_error(agent_id)
 
         thread_id = str(request.get("thread_id") or "")
-        async with (
-            self._thread_execution_lock(agent_id, thread_id),
-            self._track_invocation(agent_id),
-        ):
+        async with self.thread_invocation(agent_id, thread_id):
             self._apply_pending_bootstrap_graph_refresh(agent_id)
             from octop.infra.agents.teams.brainstorm import is_brainstorm_host, service_for
 
@@ -1458,10 +1463,7 @@ class AgentManager:
             thread = await asyncio.to_thread(self._repos.thread_repo.get, thread_id)
             if thread is None or thread.user_id != user_id or thread.agent_id != agent_id:
                 raise OctopError.localized(ErrorCode.FORBIDDEN)
-        async with (
-            self._thread_execution_lock(agent_id, thread_id),
-            self._track_invocation(agent_id),
-        ):
+        async with self.thread_invocation(agent_id, thread_id):
             self._apply_pending_bootstrap_graph_refresh(agent_id)
             from octop.infra.agents.middleware.private_storage import resuming_actor
 

@@ -18,10 +18,11 @@ export function nextScopeQuestion(draft={}){
   });
   return nextDialogueQuestion({...draft,questions});
 }
-export function questionCardsHTML(questions,{editable=false,allowSkip=false,rangeActions=false,hasInput=false}={}){
+export function questionCardsHTML(questions,{editable=false,allowSkip=false,rangeActions=false,hasInput=false,selectedAnswer}={}){
+  const choiceState=text=>selectedAnswer===undefined?'':`aria-pressed="${selectedAnswer===text}"`;
   return (questions||[]).map(q=>`<section class="od-question"><p>${esc(q.text)}</p>${q.examples?.length||q.question_id?`<div class="wp-choices">
     ${rangeActions&&q.question_id?actionButton(q,'answer','回答',!editable||hasInput):''}
-    ${(q.examples||[]).map(text=>`<button class="ob-button" type="button" data-od-choice="${esc(text)}" ${q.question_id?`data-choice-question="${esc(q.question_id)}"`:''} ${!editable||hasInput?'disabled':''}>${esc(text)}</button>`).join('')}
+    ${(q.examples||[]).map(text=>`<button class="ob-button" type="button" data-od-choice="${esc(text)}" ${q.question_id?`data-choice-question="${esc(q.question_id)}"`:''} ${!editable||hasInput?'disabled':''} ${choiceState(text)}>${esc(text)}</button>`).join('')}
     ${q.question_id?actionButton(q,'uncertain',rangeActions?'不确定':'暂不确定，先继续',!editable||hasInput):''}
     ${allowSkip&&q.question_id?actionButton(q,'skip','跳过这项',!editable||hasInput):''}
     ${rangeActions&&q.question_id?`<button type="button" class="ob-button" data-od="defer-question" ${!editable||hasInput?'disabled':''}>稍后</button>`:''}

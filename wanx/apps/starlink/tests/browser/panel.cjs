@@ -34,7 +34,7 @@ app.whenReady().then(async () => {
     <div class="app-layout starlink-layout"><header class="topbar">星图</header><header class="wanx-section-banner starlink-banner" data-section="starlink">
       <div class="personal-module-title"><span class="personal-module-mark" aria-hidden="true"></span>
       <div><h2>知识星图 <span class="wanx-section-english">Starlink</span></h2><p>在图谱中探索资料里的实体与关系，沿着关联追溯原文。</p></div></div>
-    <div class="wanx-section-actions"><button type="button" id="starlink-banner-create" class="button primary" disabled>＋ 新建数据仓</button></div>
+
     </header><div class="page-content data-page-content">${region}</div></div>`;
   await writeFile(join(renderer, 'starlink-smoke.html'), `<!doctype html><html lang="zh" data-sample="${sample}"><meta charset="utf-8"><title>星图 · 界面结构预览</title><body data-wanx-surface="main">${layout}<script src="data-view.js"></script><script src="starlink-smoke-host.js"></script></html>`);
   win = new BrowserWindow({ show: false, width: 1280, height: 900, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling:false } });
@@ -52,6 +52,18 @@ app.whenReady().then(async () => {
   await until(() => win.webContents.executeJavaScript('window.fixtureCalls.some(call=>call.action==="launch-target-applied")'), Boolean, 'initial warehouse navigation did not settle');
   assert.equal(await win.webContents.executeJavaScript('window.fixtureCalls.find(call=>call.action==="launch-target-applied").input.ok'), true);
   assert.equal(await js('document.querySelector("#view-graph").hidden'),false);
+  if (!preview) {
+    await js('document.querySelector("#starlink-directory-entry").click()');
+    await until(() => js('!document.querySelector("#view-warehouses").hidden'), Boolean, 'project directory did not open');
+    await js('document.querySelector("#warehouse-directory [data-warehouse-id=fixture][data-warehouse-view=graph]").click()');
+    await until(() => js('!document.querySelector("#view-graph").hidden'), Boolean, 'opening a project should show the graph');
+    await js('document.querySelector(".starlink-rail [data-view=overview]").click()');
+    await until(() => js('!document.querySelector("#view-overview").hidden'), Boolean, 'project overview did not open');
+    await js('document.querySelector("#crumb-warehouse").click();document.querySelector("#warehouse-picker [data-warehouse-id=second]").click()');
+    await until(() => js('!document.querySelector("#view-graph").hidden && document.querySelector("#crumb-warehouse").textContent === "第二验收仓"'), Boolean, 'switching projects should show the new graph');
+    await js('document.querySelector("#crumb-warehouse").click();document.querySelector("#warehouse-picker [data-warehouse-id=fixture]").click()');
+    await until(() => js('!document.querySelector("#view-graph").hidden && document.querySelector("#crumb-warehouse").textContent === "迁移验收仓"'), Boolean, 'initial graph after project switch');
+  }
   if (preview) {
     clearTimeout(deadline);
     app.on('window-all-closed', () => app.quit());
@@ -80,8 +92,61 @@ app.whenReady().then(async () => {
   }
   assert.equal(await js('Boolean(window.semantica)'), true);
   assert.equal(await js('Boolean(window.wanxClient)'), false);
-  assert.equal(await js('document.querySelectorAll(".nav-item[data-view=skills],.nav-item[data-view=data],.nav-item[data-view=sensitive],.nav-item[data-view=releases]").length'), 0);
-  assert.equal(await win.webContents.executeJavaScript('document.querySelector("#starlink-banner-create").disabled'), false);
+  assert.equal(await js('document.querySelectorAll(".nav-item[data-view=skills],.nav-item[data-view=data],.nav-item[data-view=releases]").length'), 0);
+  await js('document.querySelector("#starlink-directory-entry").click()');
+  await until(() => js('Boolean(document.querySelector("[data-warehouse-id=fixture][data-warehouse-view=sensitive]:enabled"))'), Boolean, 'warehouse delivery entry missing');
+  assert.equal(await js('document.querySelector("[data-warehouse-id=fixture][data-warehouse-view=sensitive]").textContent'), '脱敏规则');
+  await js('document.querySelector("[data-warehouse-id=fixture][data-warehouse-view=sensitive]").click()');
+  assert.equal(await js('document.querySelector("#page-title").textContent'), '脱敏规则');
+  await js('document.querySelector(".nav-item[data-view=graph]").click()');
+  const beforeRulesEntry = await win.webContents.executeJavaScript('window.fixtureCalls.length');
+  await js('document.querySelector("#starlink-browse [data-view=sensitive]").click()');
+  assert.equal(await js('document.querySelector("#starlink-browse [aria-current=page]").dataset.view'), 'sensitive');
+  assert.equal(await js('document.querySelector("#crumb-current").textContent'), '脱敏规则');
+  const rulesPage = code => js(`(() => {
+    const frame = document.querySelector('iframe.integrated-workbench');
+    const doc = frame?.contentDocument;
+    if (!doc) return null;
+    const button = (label, parent = doc) => [...parent.querySelectorAll('button')].find(el => el.textContent.trim() === label);
+    const input = (el, value) => {
+      Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value').set.call(el, value);
+      el.dispatchEvent(new frame.contentWindow.Event('input', { bubbles: true }));
+    };
+    return (${code});
+  })()`);
+  await until(() => rulesPage('Boolean(button("新增自定义规则"))'), Boolean, 'sensitive settings did not load');
+  const rulesRequests = await win.webContents.executeJavaScript(`window.fixtureCalls.slice(${beforeRulesEntry}).filter(({action, input}) =>
+    action === 'workbench-request' && input.method === 'GET' && input.url.startsWith('/api/sensitive/settings'))`);
+  assert.ok(rulesRequests.length && rulesRequests.every(({input}) => input.warehouseId === 'fixture'));
+  assert.equal(await rulesPage('doc.querySelector("#delivery-status-title").textContent'), '当前交付状态');
+  assert.equal(await rulesPage('doc.querySelector("#delivery-preview-title").textContent'), '样文测试');
+  await rulesPage('button("新增自定义规则").click()');
+  await until(() => rulesPage('Boolean(doc.querySelector(".sensitive-editor input"))'), Boolean, 'rule editor did not open');
+  await rulesPage('input(doc.querySelector(".sensitive-editor input"), "验收项目")');
+  await rulesPage('input(doc.querySelector(".sensitive-editor textarea"), "识别合成材料中的完整项目名称")');
+  await rulesPage('input(doc.querySelectorAll(".sensitive-editor textarea")[1], "验收项目")');
+  await win.webContents.executeJavaScript('window.fixturePauseSensitiveSave = true');
+  await rulesPage('button("保存脱敏设置", doc.querySelector(".sensitive-editor")).click()');
+  await until(() => win.webContents.executeJavaScript('typeof window.fixtureReleaseSensitiveSave === "function"'), Boolean, 'rule save did not start');
+  assert.equal(await rulesPage('doc.querySelector(".sensitive-editor input").matches(":disabled") && button("新增自定义规则").disabled'), true);
+  await win.webContents.executeJavaScript('window.fixturePauseSensitiveSave = false; window.fixtureReleaseSensitiveSave()');
+  await until(() => rulesPage('!doc.querySelector(".sensitive-editor") && doc.querySelector(".sensitive-custom-list").textContent.includes("验收项目")'), Boolean, 'custom rule was not saved');
+  await rulesPage('input(doc.querySelector("textarea[aria-label=脱敏测试文本]"), "样例：验收项目")');
+  await rulesPage('button("测试脱敏效果").click()');
+  await until(() => rulesPage('doc.querySelector(".sensitive-preview [role=status]")?.textContent'), value => /已脱敏.*样例：\[已脱敏\]/s.test(value), 'preview did not use the saved rule');
+  const protectionWindow = win.getContentSize();
+  win.setContentSize(1440, 1080);
+  await delay(180);
+  await writeFile(join(output, 'delivery-protection.png'), (await win.webContents.capturePage()).toPNG());
+  win.setContentSize(...protectionWindow);
+  await win.webContents.executeJavaScript(`(() => {
+    const current = window.fixtureSensitivePolicies.get('fixture');
+    window.fixtureSensitivePolicies.set('fixture', { ...current, revision: current.revision + 1 });
+  })()`);
+  await until(() => rulesPage('!doc.querySelector(".sensitive-preview [role=status]")'), Boolean, 'preview remained visible after the saved revision changed');
+  await js('document.querySelector(".nav-item[data-view=graph]").click()');
+  assert.equal(await js('document.querySelector(".nav-item[aria-current=page]").dataset.view'), 'graph');
+  assert.equal(await js('document.querySelector("#starlink-directory-entry").disabled'), false);
   for (const width of [1440, 1100, 850, 760]) {
     const wide = width >= 1100;
     win.setContentSize(width, wide ? 900 : 760);
@@ -91,7 +156,6 @@ app.whenReady().then(async () => {
       const reference = starlink.cloneNode(true);
       reference.classList.remove("starlink-banner");
       reference.dataset.section = "memory";
-      reference.querySelector(".wanx-section-actions").remove();
       reference.style.position = "absolute";
       reference.style.visibility = "hidden";
       reference.style.width = starlink.offsetWidth + "px";
@@ -120,6 +184,7 @@ app.whenReady().then(async () => {
         railVisible: getComputedStyle(rail).visibility === "visible",
         railWidth: rail.offsetWidth,
         navGroups: Array.from(rail.querySelectorAll(".nav-group-label"), label => label.textContent),
+        managementAlwaysOpen: rail.querySelector('nav[aria-label="系统选项"]').closest("details") === null,
         current: current?.dataset.view,
         inspector: document.querySelector(".graph-inspector").hidden,
         filters: document.querySelector(".graph-filter-menu").open };
@@ -127,7 +192,8 @@ app.whenReady().then(async () => {
     assert.ok(layout.ratio >= (width === 1440 ? .69 : .63), JSON.stringify(layout));
     assert.equal(layout.railVisible, width > 900);
     if (layout.railVisible) assert.ok(layout.railWidth >= 182 && layout.railWidth <= 210, JSON.stringify(layout));
-    assert.deepEqual(layout.navGroups, ['探索', '资料处理', '本体与关系', '管理']);
+    assert.deepEqual(layout.navGroups, ['当前本体', '系统选项']);
+    assert.equal(layout.managementAlwaysOpen, true);
     assert.equal(layout.current, 'graph');
     assert.equal(layout.inspector, true);
     assert.equal(layout.filters, false);
@@ -158,14 +224,14 @@ app.whenReady().then(async () => {
     }
   }
   assert.equal(await js(`(() => {
-    const toggle = document.querySelector(".mobile-toggle");
+    const toggle = [...document.querySelectorAll(".mobile-toggle")].find(button => button.getClientRects().length);
     const rect = toggle.getBoundingClientRect();
     return rect.width > 0 && toggle.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
   })()`), true);
-  await js('document.querySelector(".mobile-toggle").click()');
-  assert.equal(await js('document.querySelector(".mobile-toggle").getAttribute("aria-expanded")'), 'true');
+  await js('[...document.querySelectorAll(".mobile-toggle")].find(button => button.getClientRects().length).click()');
+  assert.equal(await js('[...document.querySelectorAll(".mobile-toggle")].find(button => button.getClientRects().length).getAttribute("aria-expanded")'), 'true');
   await js('document.querySelector(".starlink-rail [data-view=graph]").click()');
-  assert.equal(await js('document.querySelector(".mobile-toggle").getAttribute("aria-expanded")'), 'false');
+  assert.equal(await js('[...document.querySelectorAll(".mobile-toggle")].find(button => button.getClientRects().length).getAttribute("aria-expanded")'), 'false');
   assert.equal(await js('document.querySelectorAll("#graph-scene .node-star-glow").length'), 0);
   assert.equal(await js('document.querySelector("#graph-filters").closest("details") === null'), true);
   const enhancedFilters = await js('!document.querySelector("#graph-exact-type").hidden');
@@ -202,6 +268,14 @@ app.whenReady().then(async () => {
   await js('document.querySelector("#source-body [data-action=source-previous]").click()');
   await until(() => js('document.querySelector("#source-body").textContent.includes("引用版上一段")'), Boolean, 'graph context did not use the cited version');
   await js('document.querySelector("#source-dialog").close()');
+  await win.webContents.executeJavaScript(`window.fixtureOverrides["document-text"]=({id,start})=>({ok:true,value:{
+    document_id:id,version_id:"new-version",start,end:25,total_chars:25,text:"更新后的正文"
+  }});void 0`);
+  await js('document.querySelector("#graph-details [data-source=doc]").click()');
+  await until(() => js('document.querySelector("#source-body").textContent'), text => text.includes('无法核对引用的正文版本'), 'stale evidence opened a newer source');
+  assert.doesNotMatch(await js('document.querySelector("#source-body").textContent'), /更新后的正文/);
+  await js('document.querySelector("#source-dialog").close()');
+  await win.webContents.executeJavaScript('delete window.fixtureOverrides["document-text"];void 0');
   assert.match(await js('document.querySelector("#graph-inspector-trail").textContent'), /关系来源/);
   await js('document.querySelector("#graph-inspector-trail [data-action=graph-entity-details]").click()');
   await js('document.querySelector("[data-action=close-graph-details]").click()');
@@ -222,8 +296,59 @@ app.whenReady().then(async () => {
   })()`), true);
   await js('document.querySelector("#graph-empty-action").click()');
   assert.equal(await js('document.querySelector("#graph-empty").hidden'), true);
+  await win.webContents.executeJavaScript(`(() => {
+    const material = {id:'doc',status:'ready',original_name:'引用测试.txt',segment_count:1};
+    const version = () => window.fixtureSourceVersion || 'current-version';
+    const workflow = () => ({document_id:material.id,document:material,document_version_id:version(),
+      label:'待核对正文',stage:'source_ready',tasks:[],conversations:[],actions:{start_dialogue:{allowed:false}},preparation:{ready:false,source_review:{status:'pending'},indexing:{status:'not_started',document_version_id:version()}}});
+    Object.assign(window.fixtureOverrides,{
+      document:()=>({ok:true,value:{document:material,version:{id:version(),version_number:2},
+        segments:[{id:'current-segment',text:'资料库当前正文'}]}}),
+      'conversation-material-workflows':()=>({ok:true,value:{items:[workflow()],total:1}}),
+      'conversation-material-workflow':()=>({ok:true,value:workflow()})
+    });
+  })()`);
+  await js('document.querySelector("#graph-query").value="";document.querySelector("#graph-query").dispatchEvent(new Event("input",{bubbles:true}))');
+  const openGraphSource = async () => {
+    await js('document.querySelector("#graph-svg [data-edge=relation], #graph-space [data-edge=relation]")?.dispatchEvent(new MouseEvent("click",{bubbles:true}))');
+    if (!await js('Boolean(document.querySelector("#graph-details [data-source=doc]"))')) {
+      await js('document.querySelector("#graph-space [data-node=project]")?.dispatchEvent(new MouseEvent("click",{bubbles:true}))');
+      await js('document.querySelector("#graph-details [data-edge=relation]")?.click()');
+    }
+    await js('document.querySelector("#graph-details [data-source=doc]").click()');
+    await until(() => js('Boolean(document.querySelector("[data-action=open-source-reader]"))'), Boolean, 'source handoff action missing');
+  };
+  await openGraphSource();
+  assert.match(await js('document.querySelector("[data-action=open-source-reader]").textContent'), /当前版本/);
+  await js('document.querySelector("[data-action=open-source-reader]").click()');
+  await until(() => js('document.querySelector(".mw-reader-source")?.textContent'),
+    text => text?.includes('引用使用历史版本') && text.includes('资料库当前正文'), 'historical source was mapped onto a current document');
+  assert.equal(await js('Boolean(document.querySelector(".mw-reader-source [data-reader-match]"))'), false);
+  assert.equal(await js('Boolean(document.querySelector("#view-conversation #cv-message, #view-conversation .conversation-composer, #view-conversation [data-cv=library-start]"))'), false);
+  await js('document.querySelector(".nav-item[data-view=graph]").click()');
+  await win.webContents.executeJavaScript('window.fixtureSourceVersion="cited-version";void 0');
+  await openGraphSource();
+  await js('document.querySelector("[data-action=open-source-reader]").click()');
+  await until(() => js('document.querySelector(".mw-reader-source mark")?.textContent'), text => text === '引用版正文', 'current citation lost its range in the reader');
+  assert.equal(await js('document.querySelector(".page-scroll").scrollTop'), 0);
+  await delay(180);
+  await writeFile(join(output, 'reader-graph-citation.png'), (await win.webContents.capturePage()).toPNG());
+  assert.equal(await js('document.querySelector("#page-ontology-suggestions")'), null);
+  await win.webContents.executeJavaScript('window.fixtureOntologyTask="running";void 0');
+  await until(() => js('document.querySelector(".mw-reader-tools")?.textContent'), value => value?.includes('正在构建本体建议'), 'background ontology status not visible');
+  await win.webContents.executeJavaScript('window.fixtureOntologyTask="completed";void 0');
+  await until(() => js('document.querySelector(".mw-reader-tools")?.textContent'), value => value?.includes('核对本体建议（1）'), 'finished ontology suggestions not visible');
+  await js('document.querySelector("[data-cv=import-ontology-suggestions]").click()');
+  await until(() => js('document.querySelector("#mw-editor-dialog iframe")?.contentDocument?.querySelector(".ontology-suggestion blockquote")?.textContent'),
+    value => value?.includes('引用版正文'), 'ontology suggestions did not preserve cited source');
+  assert.equal(await win.webContents.executeJavaScript('window.fixtureCalls.some(x=>x.input.url?.includes("/ontology-suggestions/generate"))'),false);
+  await js('document.querySelector("#mw-editor-dialog>header button").click()');
+  await until(() => js('document.querySelector("#mw-editor-dialog") === null'), Boolean, 'could not return to the material');
+
+  await win.webContents.executeJavaScript(`for (const key of ['document','conversation-material-workflow','conversation-material-workflows']) delete window.fixtureOverrides[key];void 0`);
+  await js('document.querySelector(".nav-item[data-view=graph]").click()');
   win.setContentSize(1280, 900);
-  await js('document.querySelector(".starlink-rail [data-view=warehouses]").click()');
+  await js('document.querySelector("#starlink-directory-entry").click()');
   assert.equal(await js('document.querySelectorAll("#warehouse-directory .warehouse-directory-card:not([hidden])").length'), 2);
   assert.equal(await js('document.querySelector("#page-primary").hidden'), true);
   await js(`(() => {
@@ -235,34 +360,179 @@ app.whenReady().then(async () => {
   await delay(130);
   await writeFile(join(output, 'subpage-warehouses.png'), (await win.webContents.capturePage()).toPNG());
 
-  await js('document.querySelector(".starlink-rail [data-view=tasks]").click()');
+  await js('document.querySelector(".starlink-rail [data-view=conversation]").click(); document.querySelector("#page-tasks").click()');
   await until(() => js('document.querySelector(".task-error")?.textContent'), text => text === '合成失败原因', 'failed tasks missing');
   assert.match(await js('document.querySelector(".task-progress").textContent'), /失败.*2.*5/);
   assert.equal(await js('document.querySelector(".task-model-details").open'), false);
   assert.ok(await js('Boolean(document.querySelector(".task-end [data-retry]"))'));
   await writeFile(join(output, 'subpage-tasks.png'), (await win.webContents.capturePage()).toPNG());
 
+  const modelSettingsStart = await win.webContents.executeJavaScript('window.fixtureCalls.length');
   await js('document.querySelector(".starlink-rail [data-view=models]").click()');
   await until(() => js('document.querySelectorAll("#model-stages .model-stage").length'), count => count === 5, 'configured roles missing');
-  assert.ok(await js('document.querySelector("#model-scope").getBoundingClientRect().top < document.querySelector("#model-stages").getBoundingClientRect().top'));
+  assert.match(await js('[...document.querySelectorAll("#model-stages .model-stage")].find(stage=>stage.querySelector("h3").textContent==="检索向量").textContent'), /未经脱敏的正文片段.*检索词/);
+  assert.match(await js('document.querySelector("#import-model-summary").textContent'), /未经脱敏的正文片段.*检索词/);
+  assert.equal(await js('document.querySelector("#model-scope, #model-inherit, #view-models #model-reprocess-all")'), null);
+  assert.equal(await js('document.querySelector("#model-roles-title").textContent'), '共用处理模型');
+  assert.match(await js('document.querySelector("#model-source").textContent'), /跟随万象底座默认模型/);
+  assert.equal(await js('Boolean(document.querySelector("#view-tasks #model-reprocess-all"))'), true);
+  const modelSettingsReads = await win.webContents.executeJavaScript(`window.fixtureCalls.slice(${modelSettingsStart})
+    .filter(({action}) => ['processing', 'model-catalog'].includes(action))`);
+  assert.deepEqual(modelSettingsReads.map(({action}) => action), ['processing', 'model-catalog']);
+  assert.ok(modelSettingsReads.every(({input}) => input.scope === 'default' && input.warehouseId === null));
   await delay(130);
   await writeFile(join(output, 'subpage-models.png'), (await win.webContents.capturePage()).toPNG());
 
-  await win.webContents.executeJavaScript('window.fixtureOverrides["conversation-list"]=()=>({ok:false,code:"SEMANTICA_CONNECTION_FAILED"});void 0');
+  await win.webContents.executeJavaScript('window.fixtureOverrides["conversation-material-workflows"]=()=>({ok:false,code:"SEMANTICA_CONNECTION_FAILED",status:503});void 0');
   await js('document.querySelector(".starlink-rail [data-view=conversation]").click()');
-  await until(() => js('Boolean(document.querySelector(".material-load-failure [data-action=reload-materials]"))'), Boolean, 'material load failure was presented as empty');
+  await until(() => js('Boolean(document.querySelector(".mw-library [data-cv=material-refresh]"))'), Boolean, 'material load failure was presented as empty');
   assert.match(await js('document.querySelector(".mw-list-empty").textContent'), /暂不可读/);
   await writeFile(join(output, 'subpage-material-failure.png'), (await win.webContents.capturePage()).toPNG());
-  await win.webContents.executeJavaScript('delete window.fixtureOverrides["conversation-list"]');
-  await js('document.querySelector("[data-action=reload-materials]").click()');
-  await until(() => js('Boolean(document.querySelector("#page-primary[data-action=import]:enabled:not([hidden])"))'), Boolean, 'material retry did not restore the import action');
+  await win.webContents.executeJavaScript('delete window.fixtureOverrides["conversation-material-workflows"]');
+  await js('document.querySelector(".mw-library [data-cv=material-refresh]").click()');
+  await until(() => js('!document.querySelector(".mw-library [data-cv=material-refresh]") && Boolean(document.querySelector("#page-primary[data-action=import]:enabled:not([hidden])"))'), Boolean, 'material retry did not restore the import action');
   assert.equal(await js('document.querySelector(".material-load-failure")'), null);
   assert.equal(await js('document.querySelector("#page-title").textContent'), '资料库');
   assert.equal(await js('document.querySelectorAll(".mw-library [data-cv=material-add]").length'), 0);
   await writeFile(join(output, 'subpage-material.png'), (await win.webContents.capturePage()).toPNG());
 
-  assert.deepEqual(await js('[...document.querySelectorAll("[aria-labelledby=starlink-browse] button")].map(button => button.textContent.trim())'), ['知识星图']);
+  assert.deepEqual(await js('[...document.querySelectorAll("#starlink-browse [data-view]")].map(button => button.textContent.trim())'), ['概览','星图','资料库','本体','数据列表','脱敏规则']);
   assert.equal(await js('Boolean(document.querySelector("#view-search"))'), false);
+  await win.webContents.executeJavaScript(`(() => {
+    const material = { id: 'body-fixture', original_name: '源文验收.html', status: 'ready', document_format: 'html', segment_count: 24 };
+    const version = { id: 'body-v1', version_number: 1, metadata: {} };
+    const segment = { id: 'body-segment', kind: 'text', text: '待校对的合成正文', source_locator: {} };
+    const detail = { document: material, version, segments: [segment, ...Array.from({length: 23}, (_, index) =>
+      ({...segment, id: 'body-segment-' + index, text: '正文片段 ' + (index + 2)}))] };
+    const result = value => ({ ok: true, value });
+    let processing, indexFailed=false;
+    const workflow = () => ({ document_id: material.id, document: material, document_version_id: version.id,
+      label: '待处理', workflow_revision: processing ? 2 : 1, latest_transition_id: processing?.receipt.transition_id,
+      tasks: [], conversations: [], actions: { start_dialogue: { allowed: true }, process_source: { allowed: !processing } },
+      preparation: { ready: processing?.current.stage === 'published',
+        source_review: processing ? {status:'confirmed', confirmed_version_id:version.id, confirmation_id:'body-confirmed'} : {status:'unconfirmed'},
+        indexing: {status: processing?.current.stage === 'published' ? 'ready' : indexFailed ? 'failed' : processing ? 'queued' : 'not_started',
+          document_version_id: version.id, retryable:indexFailed} } });
+    window.fixtureFailBodyIndex = () => { indexFailed=true; };
+    window.fixturePublishBody = () => {
+      processing.current = {stage:'published',is_current:true,publication_performed:true,published_run_id:'body-run'};
+      detail.processing = {sensitive_status:'running'};
+    };
+    window.fixtureCompleteDetection = () => { detail.processing = {sensitive_status:'completed'}; };
+    Object.assign(window.fixtureOverrides, {
+      'conversation-material-workflows': () => result({ items: [workflow()], total: 1 }),
+      'conversation-material-workflow': () => result(workflow()),
+      'conversation-index-retry': input => {
+        if (!indexFailed || input.confirmationId!=='body-confirmed' || input.documentVersionId!==version.id)
+          return {ok:false,status:409,code:'SOURCE_VERSION_CONFLICT'};
+        indexFailed=false;
+        return result({receipt:{document_id:material.id,document_version_id:version.id,operation_id:input.operationId,
+          confirmation_id:'body-confirmed',extraction_started:false,publication_performed:false}});
+      },
+      'conversation-processing-start': input => {
+        if (input.documentVersionId !== version.id || input.workflowRevision !== 1 || input.confirmed !== true)
+          return {ok:false, status:409, code:'SOURCE_VERSION_CONFLICT'};
+        processing = {receipt:{operation_id:input.operationId,document_id:material.id,document_version_id:version.id,
+          transition_id:'body-process',target_mode:'automatic',job_id:'body-extraction',waits_for_source_index:true},
+          current:{stage:'queued',is_current:true}};
+        return result(processing);
+      },
+      'conversation-processing-status': () => result(processing),
+      'conversation-published-run': () => result({
+        run:{id:'body-run',document_id:material.id,document_version_id:version.id,status:'published'},
+        candidates:Array.from({length:20},(_,i)=>({id:'fact-'+i,kind:'entity',status:'published',payload:{name:'发布条目 '+i,type:'CONCEPT'}})),
+      }),
+      document: () => result(structuredClone(detail)),
+      'workbench-request': input => {
+        if (input.url === '/api/documents/body-fixture/content' && input.method === 'PATCH') {
+          const body = JSON.parse(input.body);
+          if (body.base_version_id !== version.id) return { ok: false, status: 409, code: 'SOURCE_VERSION_CONFLICT' };
+          version.id = 'body-v3'; version.version_number = 3;
+          segment.text = body.segments[0].text;
+          return result(detail);
+        }
+        if (input.url.startsWith('/api/documents/body-fixture?')) return result(window.fixtureBodyStale
+          ? { ...detail, version: { ...version, id: 'body-v2', version_number: 2 } } : detail);
+        return result({ items: [], total: 0, document_coverage: [] });
+      },
+    });
+  })()`);
+  await js('document.querySelector("[data-view=tasks]").click(); document.querySelector("[data-view=conversation]").click()');
+  const bodyEditButton = '.mw-source-heading h3 + [data-cv=import-edit-source]:enabled';
+  await until(() => js(`Boolean(document.querySelector(${JSON.stringify(bodyEditButton)}))`), Boolean, 'body edit entry missing beside the heading');
+  const editBody = () => js(`document.querySelector(${JSON.stringify(bodyEditButton)}).click()`);
+  const cancelBody = () => js('document.querySelector("[data-cv=import-source-cancel]").click()');
+  await win.webContents.executeJavaScript('window.fixtureBodyStale=true');
+  await editBody();
+  await until(() => js('document.querySelector(".mw-source-edit-toolbar [role=alert]")?.textContent.includes("材料正文已更新")'), Boolean, 'body editor did not reject a changed version');
+  assert.equal(await js('Boolean(document.querySelector(".mw-source-edit textarea"))'), false);
+  await cancelBody();
+  await until(() => js(`Boolean(document.querySelector(${JSON.stringify(bodyEditButton)}))`), Boolean, 'material did not return after a version conflict');
+  await win.webContents.executeJavaScript('window.fixtureBodyStale=false');
+  await editBody();
+  const bodyField = '.mw-source-edit textarea[data-inline-source="0"]';
+  const awaitBody = () => until(() => js(`document.querySelector(${JSON.stringify(bodyField)})?.value`), value => value === '待校对的合成正文', 'edit entry did not start inline correction');
+  await awaitBody();
+  assert.equal(await js('document.querySelector("#mw-editor-dialog")'), null);
+  const bodyWindowSize = win.getContentSize();
+  win.setContentSize(1084, 841);
+  assert.equal(await js(`(() => {
+    const panel = document.querySelector('.mw-review-content');
+    panel.scrollTop = 360;
+    const toolbar = document.querySelector('.mw-source-edit-toolbar');
+    const bounds = toolbar.getBoundingClientRect();
+    const hit = document.elementFromPoint(bounds.left + 8, bounds.top + bounds.height / 2);
+    return getComputedStyle(toolbar).backgroundColor.startsWith('rgb(') &&
+      panel.scrollTop > 0 && bounds.bottom <= panel.getBoundingClientRect().top && toolbar.contains(hit);
+  })()`), true, 'the editing toolbar must mask scrolled text and stay below the material header');
+  const typeBody = text => js(`(() => {
+    const area = document.querySelector(${JSON.stringify(bodyField)});
+    area.value = ${JSON.stringify(text)};
+    area.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await typeBody('取消的校对');
+  await cancelBody();
+  await until(() => js('document.querySelector(".mw-import-source")?.textContent.includes("待校对的合成正文")'), Boolean, 'cancel did not return to the original preview');
+  await editBody();
+  await awaitBody();
+  await typeBody('已经校对的合成正文');
+  await js('document.querySelector("[data-cv=import-source-save]:enabled").click()');
+  await until(() => js('document.querySelector(".mw-import-source")?.textContent.includes("已保存新的星图正文版本")'), Boolean, 'body edits were not saved');
+  assert.match(await js('document.querySelector(".mw-source-segments").textContent'), /已经校对的合成正文/);
+  const bodyRequests = await win.webContents.executeJavaScript('window.fixtureCalls.filter(call=>call.action==="workbench-request" && call.input.url.includes("body-fixture"))');
+  assert.equal(bodyRequests.filter(call=>call.input.method==='PATCH').length, 1);
+  assert.ok(bodyRequests.every(call=>!call.input.url.includes('/corrections')));
+  assert.deepEqual(await js('[...document.querySelectorAll(".mw-import-steps strong")].map(step=>step.textContent)'), ['核对正文', '自动处理']);
+  assert.equal(await js('document.querySelector("[data-cv=import-process-source]").textContent'), '确认正文并处理');
+  await js('document.querySelector("[data-cv=import-process-source]:enabled").click()');
+  await until(() => js('document.querySelector(".mw-import-process")?.textContent.includes("等待索引")'), Boolean, 'one click did not show the queued processing chain');
+  const startRequests = await win.webContents.executeJavaScript('window.fixtureCalls.filter(call=>call.action==="conversation-processing-start")');
+  assert.equal(startRequests.length, 1);
+  assert.equal(startRequests[0].input.documentVersionId, 'body-v3');
+  assert.equal(await js('document.querySelector(".mw-reader-progress").open'), false);
+  await win.webContents.executeJavaScript('window.fixtureFailBodyIndex()');
+  await until(() => js('Boolean(document.querySelector(".mw-reader-next [data-cv=import-index-retry]:enabled"))'), Boolean, 'inline retry missing after index failure');
+  await js('document.querySelector(".mw-reader-next [data-cv=import-index-retry]").click()');
+  await until(() => win.webContents.executeJavaScript('window.fixtureCalls.filter(c=>c.action==="conversation-index-retry").length'), n=>n===1, 'inline retry not sent');
+  await until(() => js('!document.querySelector(".mw-reader-next [data-cv=import-index-retry]")'), Boolean, 'inline retry did not restore the queued state');
+  await win.webContents.executeJavaScript('window.fixturePublishBody()');
+  await until(() => js('document.querySelector(".mw-published-results")?.textContent.includes("已发布知识 · 20 项")'), Boolean, 'published results missing');
+  assert.match(await js('document.querySelector(".mw-import-steps").textContent'), /正在脱敏检测/);
+  await win.webContents.executeJavaScript('window.fixtureCompleteDetection()');
+  await until(() => js('document.querySelector(".mw-import-steps")?.textContent.includes("处理完成")'), Boolean, 'processing did not finish after detection');
+  assert.equal(await js(`(() => {
+    const results = document.querySelector('.mw-published-results');
+    const bodyButton = document.querySelector(${JSON.stringify(bodyEditButton)});
+    return !results.open && results.getBoundingClientRect().height < 65 && !!bodyButton;
+  })()`), true, 'a long publication must leave the editor entry visible');
+  await js('document.querySelector(".mw-published-results > summary").click()');
+  assert.equal(await js('document.querySelector(".mw-published-results").open'), true);
+  win.setContentSize(...bodyWindowSize);
+  await win.webContents.executeJavaScript(`for (const action of ['conversation-material-workflows', 'conversation-material-workflow',
+    'conversation-processing-start', 'conversation-processing-status', 'conversation-published-run', 'document', 'workbench-request']) delete window.fixtureOverrides[action];
+    delete window.fixturePublishBody; delete window.fixtureCompleteDetection; delete window.fixtureFailBodyIndex; delete window.fixtureOverrides['conversation-index-retry']`);
+
+  await js('document.querySelector("[data-view=conversation]").click()');
   await js('document.querySelector("#page-primary").click()');
   await until(() => js('document.querySelector("#import-dialog").open'), Boolean, 'header import did not open the shared dialog');
   assert.equal(await js('Boolean(document.querySelector("#import-dialog #space-browser")) && !document.querySelector("#source-computer,#computer-browser,#choose-files")'), true);
@@ -291,19 +561,20 @@ app.whenReady().then(async () => {
   await until(() => js('Boolean(document.querySelector("[data-action=save-correction]:not(:disabled)"))'), Boolean, 'correction retry did not settle');
   await js('document.querySelector("#source-actions [data-close]").click()');
   await until(() => js('document.querySelector("#source-dialog").open'), open => !open, 'source dialog did not close');
-  assert.deepEqual(await js('[...document.querySelectorAll("[aria-labelledby=starlink-ontology] button")].map(button => button.textContent)'), ['规则总览','规则调整向导']);
+  assert.deepEqual(await js('[...document.querySelectorAll("#starlink-browse [data-view=ontology], #page-rules-guide")].map(button => button.textContent.trim())'), ['本体']);
   assert.equal(await js('Boolean(document.querySelector("#ontology-actions"))'), false);
   const chooseOntology = action => action === 'published'
     ? js('document.querySelector(".starlink-rail [data-ontology-action=published]").click()')
-    : ontologyJs(`[...document.querySelectorAll(".rules-workspace-header button")].find(button => ["待发布草稿", "查看草稿"].includes(button.textContent.trim())).click()`);
+    : ontologyJs(`[...document.querySelectorAll(".rules-workspace-header button")].find(button => ["本体修改", "查看草稿"].includes(button.textContent.trim())).click()`);
   await chooseOntology('published');
   assert.equal(await js('document.querySelector(".starlink-rail [aria-current=page]")?.dataset.view'), 'ontology');
-  await until(() => js('document.querySelector("#page-title").textContent'), text => text === '本体与关系', 'ontology navigation did not complete');
+  await until(() => js('document.querySelector("#page-title").textContent'), text => text === '本体', 'ontology navigation did not complete');
   await until(() => win.webContents.mainFrame.framesInSubtree.map(f => f.url), urls => urls.some(url => url.includes('/workbench/index.html')), 'ontology workbench missing');
-  assert.equal(await js('document.querySelector("#rules-guide-entry").hidden'), false);
   await until(() => js('document.querySelector("#view-workbench iframe")?.contentDocument?.body.textContent || ""'), text => text.includes('本体'), 'ontology content did not render');
   assert.equal(await js('document.querySelector("#view-workbench iframe").contentDocument.body.textContent.includes("页面加载失败")'), false);
-  const ontologyFrame = win.webContents.mainFrame.framesInSubtree.find(f => f.url.includes('/workbench/index.html'));
+  const workbenchFrame = () => win.webContents.mainFrame.framesInSubtree.find(f => f.url.includes('/workbench/index.html'));
+  await until(() => workbenchFrame()?.executeJavaScript('Boolean(document.querySelector(".rules-catalog-grid"))'), Boolean, 'personal ontology catalog did not render');
+  const ontologyFrame = workbenchFrame();
   const ontologyJs = code => ontologyFrame.executeJavaScript(code);
   const catalogTab = label => ontologyJs(`[...document.querySelectorAll(".rules-catalog-toolbar [role=tab]")].find(button => button.textContent.startsWith("${label}")).click()`);
   const addFromCatalog = async kind => {
@@ -340,7 +611,7 @@ app.whenReady().then(async () => {
   await chooseOntology('drafts');
   await until(() => ontologyJs('Boolean(document.querySelector(".ontology-editor:not([hidden])"))'), Boolean, 'draft management did not open');
   assert.equal(await js('document.querySelector(".starlink-rail [aria-current=page]")?.dataset.view'), 'ontology');
-  assert.match(await ontologyJs('document.querySelector(".rules-workspace-version [aria-current=page], .rules-draft-banner [aria-current=page]")?.textContent || ""'), /^(待发布草稿|查看草稿)/);
+  assert.match(await ontologyJs('document.querySelector(".rules-workspace-tabs [aria-current=page]")?.textContent || ""'), /^本体修改$/);
   assert.equal(await ontologyJs('Boolean(document.querySelector(".ontology-editor table[aria-label=实体类型列表]"))'), true);
   await ontologyJs('document.querySelector(".rules-draft-tabs button:last-child").click()');
   assert.equal(await ontologyJs('Boolean(document.querySelector(".ontology-editor table[aria-label=关系类型列表]"))'), true);
@@ -350,7 +621,7 @@ app.whenReady().then(async () => {
   assert.equal(await js('document.querySelector(".starlink-rail [aria-current=page]")?.dataset.view'), 'ontology');
   await ontologyJs('document.querySelector(".ontology-type-page footer button").click()');
   await until(() => ontologyJs('Boolean(document.querySelector(".ontology-editor:not([hidden])"))'), Boolean, 'cancel did not return to the draft list');
-  assert.match(await ontologyJs('document.querySelector(".rules-workspace-version [aria-current=page], .rules-draft-banner [aria-current=page]")?.textContent || ""'), /^(待发布草稿|查看草稿)/);
+  assert.match(await ontologyJs('document.querySelector(".rules-workspace-tabs [aria-current=page]")?.textContent || ""'), /^本体修改$/);
   await chooseOntology('published');
   await until(() => ontologyJs('Boolean(document.querySelector(".rules-catalog-grid"))'), Boolean, 'published ontology did not return');
   assert.equal(await js('document.querySelector(".starlink-rail [aria-current=page]")?.dataset.ontologyAction'), 'published');
@@ -394,7 +665,7 @@ app.whenReady().then(async () => {
   await ontologyJs('document.querySelector(".ontology-type-page footer .primary").click()');
   await until(() => ontologyJs('Boolean(document.querySelector(".ontology-editor:not([hidden]) [data-type-name=NEW_TYPE]"))'), Boolean, 'applying a type did not show it in pending rules');
   assert.equal(await js('document.querySelector(".starlink-rail [aria-current=page]")?.dataset.view'), 'ontology');
-  assert.match(await ontologyJs('document.querySelector(".rules-workspace-version [aria-current=page], .rules-draft-banner [aria-current=page]")?.textContent || ""'), /^(待发布草稿|查看草稿)/);
+  assert.match(await ontologyJs('document.querySelector(".rules-workspace-tabs [aria-current=page]")?.textContent || ""'), /^本体修改$/);
   await ontologyJs('document.querySelector(".ontology-draft-actions .primary").click()');
   await until(() => ontologyJs('Boolean(document.querySelector(".ontology-saved-drafts .workflow-draft-row"))'), Boolean, 'saving the type did not add it to the draft list');
   assert.equal(await ontologyJs('Boolean(document.querySelector(".ontology-history-page"))'), false);
@@ -404,6 +675,15 @@ app.whenReady().then(async () => {
   await until(() => ontologyJs('Boolean(document.querySelector(".rules-catalog-grid"))'), Boolean, 'published rules did not reopen after editing');
   await ontologyFrame.executeJavaScript('document.querySelector(".rules-catalog-detail button[aria-label=编辑人物]").click()');
   await until(() => ontologyFrame.executeJavaScript('Boolean(document.querySelector(".ontology-drawer input"))'), Boolean, 'type drawer missing');
+  const drawerTheme = await ontologyJs('(()=>{const dialog=document.querySelector(".ontology-drawer"),r=dialog.getBoundingClientRect(),apply=dialog.querySelector(".ontology-apply"),base=document.querySelector(".ontology-draft-actions .primary");return {primary:getComputedStyle(apply).backgroundColor,base:getComputedStyle(base).backgroundColor,backdrop:getComputedStyle(dialog,"::backdrop").backgroundColor,radius:getComputedStyle(dialog).borderTopRightRadius,inside:r.top>0&&r.right<innerWidth,label:dialog.querySelector("[data-starxiaotu-term=type-id]").title,required:dialog.querySelector("[data-starxiaotu-term=required-property]").title};})()');
+  assert.equal(drawerTheme.primary,drawerTheme.base);
+  assert.equal(drawerTheme.primary,'rgb(166, 83, 63)');
+  assert.equal(drawerTheme.radius,'12px');
+  assert.ok(drawerTheme.inside);
+  assert.match(drawerTheme.backdrop,/^rgba\(68, 53, 40,/);
+  assert.match(drawerTheme.label,/类型标识.*PERSON/);
+  assert.match(drawerTheme.required,/必填.*无法通过校验/);
+  await writeFile(join(output, 'subpage-ontology-warm-drawer.png'), (await win.webContents.capturePage()).toPNG());
   await ontologyFrame.executeJavaScript('window.fixtureConfirmCount=0;window.confirm=()=>{window.fixtureConfirmCount++;return false;};const field=document.querySelector(".ontology-drawer input");Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").set.call(field,"DRAFT_TYPE");field.dispatchEvent(new Event("input",{bubbles:true}));void 0');
   await until(() => ontologyFrame.executeJavaScript('document.querySelector(".ontology-live-review").textContent'), text => text.includes('DRAFT_TYPE'), 'drawer edits not registered');
   await js('document.querySelector("#crumb-warehouse").click();document.querySelector("#warehouse-picker [data-warehouse-id=second]").click()');
@@ -419,21 +699,24 @@ app.whenReady().then(async () => {
   assert.equal(frame.detached, false);
   await js('window.parent.fixtureOldBridge=window.semantica');
   await win.webContents.executeJavaScript('window.fixtureLaunchTarget=null;window.fixtureWarehouses=[];document.querySelector("iframe").contentWindow.location.reload()');
-  await until(() => js('document.querySelector("#graph-empty-title")?.textContent'), value => value === '创建你的第一座数据仓', 'empty warehouse should land on the 3D home');
-  assert.equal(await js('document.querySelector("#onboarding-shell").hidden'), true);
-  await until(() => win.webContents.executeJavaScript('!document.querySelector("#starlink-banner-create").disabled'), Boolean, 'banner action did not reconnect');
-  await win.webContents.executeJavaScript('document.querySelector("#starlink-banner-create").click()');
-  await until(() => js('Boolean(document.querySelector("#onboarding-shell:not([hidden]) #od-name-form button[type=submit]:not(:disabled)"))'), Boolean, 'new warehouse onboarding remained blocked');
-  assert.equal(await js('document.querySelectorAll("#onboarding-shell .wp-error").length'),0);
-  assert.equal(await js('document.querySelector("#onboarding-shell").closest("#app").hidden'),false);
-  assert.equal(await js('document.querySelector(".starlink-rail [aria-current=page]").dataset.view'),'warehouses');
+  await until(() => js('document.querySelector("#graph-empty-title")?.textContent'), value => value === '建立我的星图', 'empty box should show the first setup entry');
+  assert.equal(await js('Boolean(document.querySelector("#warehouse-creation[open],#onboarding-shell:not([hidden])"))'), false);
+  await until(() => js('!document.querySelector("#starlink-directory-entry").disabled'), Boolean, 'banner action did not reconnect');
+  await js('document.querySelector("#starlink-directory-entry").click()');
+  await js('document.querySelector("#view-warehouses:not([hidden]) .warehouse-directory-tools [data-action=new-warehouse]").click()');
+  await until(() => js('Boolean(document.querySelector("#warehouse-creation[open] #warehouse-creation-name:not(:read-only)"))'), Boolean, 'new warehouse form remained blocked');
+  assert.equal(await js('document.querySelector("#warehouse-profile-options").hidden'), true);
+  assert.equal(await js('document.querySelector("#warehouse-creation-profile").textContent'), '通用知识');
+  assert.equal(await js('document.querySelector("#warehouse-creation-error").hidden'), true);
+  assert.equal(await js('document.querySelector("#app").hidden'), false);
+  assert.equal(await js('document.querySelector("#starlink-directory-entry").nextElementSibling.id'), 'starlink-sidebar-project');
   // A retired document's Promise callbacks can be suspended by Chromium. Check
   // that it cannot dispatch a request, without awaiting work in that old realm.
   await win.webContents.executeJavaScript('window.fixtureOldBridge.call("upload",{handle:"retired-document"}).catch(()=>{});void 0');
   await delay(100);
   assert.equal(await win.webContents.executeJavaScript('window.fixtureCalls.some(call=>call.action==="upload")'),false);
   assert.deepEqual(errors, []);
-  const result = { passed: true, checks: ['packaged UI', 'current warehouse', 'scoped bridge', 'feature menu', 'desktop and narrow 3D layout', 'host sizes and zoom levels', 'graph search, focus and inspector', 'shared import entry', 'retired search route opens the graph', 'correction failure preserves text and retry identity', 'ontology workbench', 'unapplied type edits block warehouse switch', 'retained document', 'unblocked onboarding', 'reload revokes old document'], layouts, errors };
+  const result = { passed: true, checks: ['packaged UI', 'current warehouse', 'scoped bridge', 'feature menu', 'desktop and narrow 3D layout', 'host sizes and zoom levels', 'graph search, focus and inspector', 'shared import entry', 'retired search route opens the graph', 'correction failure preserves text and retry identity', 'ontology workbench', 'unapplied type edits block warehouse switch', 'retained document', 'unblocked new warehouse form', 'reload revokes old document'], layouts, errors };
   await writeFile(join(output, 'result.json'), JSON.stringify(result, null, 2));
   await writeFile(join(output, 'panel.png'), (await win.webContents.capturePage()).toPNG());
   console.log('STARLINK_PANEL_SMOKE_PASS');

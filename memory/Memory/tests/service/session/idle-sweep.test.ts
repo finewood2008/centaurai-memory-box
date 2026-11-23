@@ -1,5 +1,6 @@
 import { assignedEpisodeId } from "../../fixtures/memory-service-fixture.js";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { MemoryDb } from "../../../src/index.js";
 import {
   createMemoryServiceFixture,
   setRawTurnActivityAt
@@ -7,12 +8,90 @@ import {
 
 const {
   cleanup,
+  createTestMemoryService,
   createTestService
 } = createMemoryServiceFixture();
 
 afterEach(cleanup);
+afterEach(() => vi.useRealTimers());
 
 describe("MemoryService / session / idle sweep", () => {
+  it.each([false, true])("closes a quiet episode after restart without another write (legacy: %s)", async (legacy) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const initial = Date.now();
+    const deadline = initial + 2 * 60 * 60 * 1000;
+    const { service, db } = createTestService({ mode: "local" });
+    const session = service.openSession({ namespace: { source: "codex", profileId: "fixture", sessionKey: "quiet" } });
+    const turn = await service.completeTurn("quiet-turn", {
+      sessionId: session.sessionId,
+      query: "Prepare a deployment checklist",
+      answer: "The checklist is ready."
+    });
+    await service.runWorkerOnce(20);
+    const episodeId = assignedEpisodeId(service, turn);
+    if (legacy) db.db.prepare("DELETE FROM evolution_jobs WHERE status = 'queued' AND job_type = 'episode_idle_close'").run();
+    const path = db.path;
+    await service.stop();
+    db.close();
+
+    const reopened = new MemoryDb({ path });
+    const restarted = createTestMemoryService({ db: reopened, mode: "local" });
+    const status = () => reopened.db.prepare("SELECT status FROM episodes WHERE id = ?").get(episodeId);
+    vi.setSystemTime(legacy ? deadline + 1 : deadline - 1);
+    restarted.reconcileWorkerStartup();
+    restarted.reconcileWorkerStartup();
+    if (!legacy) {
+      await restarted.runWorkerOnce(20);
+      expect(status()).toEqual({ status: "open" });
+      vi.setSystemTime(deadline);
+    }
+    await restarted.runWorkerOnce(20);
+    expect(status()).toEqual({ status: "closed" });
+    await restarted.runWorkerOnce(20);
+    const change = reopened.db.prepare(
+      "SELECT COUNT(*) AS count FROM memory_change_log WHERE entity_id = ? AND change_type = 'episode_closed'"
+    ).get(episodeId);
+    expect(change).toEqual({ count: 1 });
+  });
+
+  it("rechecks a due timer after a follow-up starts and completes", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const initial = Date.now();
+    const timeout = 2 * 60 * 60 * 1000;
+    const { service, db } = createTestService({ mode: "local" });
+    const session = service.openSession({ namespace: { source: "codex", profileId: "fixture", sessionKey: "follow-up" } });
+    const query = "Check the deployment";
+    const first = await service.completeTurn("initial-turn", {
+      sessionId: session.sessionId, query, answer: "The deployment checklist is ready."
+    });
+    await service.runWorkerOnce(20);
+    const episodeId = assignedEpisodeId(service, first);
+    const status = () => db.db.prepare("SELECT status FROM episodes WHERE id = ?").get(episodeId);
+
+    vi.setSystemTime(initial + 1000);
+    await service.startTurn({ sessionId: session.sessionId, turnId: "active-turn", query });
+    vi.setSystemTime(initial + timeout);
+    await service.runWorkerOnce(20);
+    expect(status()).toEqual({ status: "open" });
+
+    await service.observeTool({ sessionId: session.sessionId, turnId: "active-turn", toolName: "deployment_check", result: "Running" });
+    vi.setSystemTime(initial + timeout + 1000);
+    await service.runWorkerOnce(20);
+    expect(status()).toEqual({ status: "open" });
+
+    const completedAt = Date.now();
+    await service.completeTurn("active-turn", {
+      sessionId: session.sessionId, episodeId, query, answer: "The deployment checks passed."
+    });
+    await service.runWorkerOnce(20);
+    vi.setSystemTime(completedAt + timeout - 1);
+    await service.runWorkerOnce(20);
+    expect(status()).toEqual({ status: "open" });
+    vi.setSystemTime(completedAt + timeout);
+    await service.runWorkerOnce(20);
+    expect(status()).toEqual({ status: "closed" });
+  });
+
   it("closes idle episodes across local user aliases after a started turn completes", async () => {
     const { db, service } = createTestService();
     const idleSession = service.openSession({
@@ -344,12 +423,13 @@ describe("MemoryService / session / idle sweep", () => {
     }));
     expect(retry.jobs.map((job) => job.jobType)).not.toContain("episode_idle_close");
     const idleCloseJobs = db.db.prepare(
-      `SELECT COUNT(*) AS count
+      `SELECT COUNT(*) AS count,
+              SUM(CASE WHEN json_extract(payload_json, '$.idleTimer') = 1 THEN 1 ELSE 0 END) AS timers
        FROM evolution_jobs
        WHERE job_type = 'episode_idle_close'
          AND episode_id = ?`
-    ).get(assignedEpisodeId(service, first)) as { count: number };
-    expect(idleCloseJobs.count).toBe(1);
+    ).get(assignedEpisodeId(service, first));
+    expect(idleCloseJobs).toEqual({ count: 2, timers: 1 });
     db.close();
   });
 

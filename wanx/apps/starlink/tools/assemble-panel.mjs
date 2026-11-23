@@ -4,9 +4,11 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { npmCommand } from '../../../tools/npm-command.mjs';
+import {syncStarxiaotuCatalog} from './sync-starxiaotu-catalog.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 export async function assembleStarlinkPanel(client, { buildFrontend = true } = {}) {
+  await syncStarxiaotuCatalog({check:true});
   if (buildFrontend) execFileSync(...npmCommand(['run', 'build']), {
     cwd: path.join(root, 'frontend'), stdio: 'inherit',
   });

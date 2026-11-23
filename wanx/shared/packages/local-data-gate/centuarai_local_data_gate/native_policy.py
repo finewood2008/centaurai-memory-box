@@ -250,7 +250,7 @@ OCTOP_RULES = (
     ("POST", r"/api/personal-space/(?:agent-access|connection-access)", "space", "read", MIB),
     (
         "POST",
-        rf"/api/personal-space/(?:uploads/{FILE}/complete|files/{FILE}/previous|trash/{FILE}/restore)",
+        rf"/api/personal-space/(?:uploads/{FILE}/complete|files/{FILE}/(?:previous|edit-uploads)|trash/{FILE}/restore)",
         "space",
         "write",
         MIB,
@@ -574,6 +574,9 @@ def classify_octop(method, target, transport, application_id, data_context=None)
                 # Unlike legacy routes, deployment has no implicit HEAD or WS alias.
                 need(method == allowed and transport == "http", "LOCAL_DATA_ROUTE_DENIED")
                 allowed_query = _deployment_query(target, method, query)
+            if re.fullmatch(rf"/api/personal-space/files/{FILE}/edit-uploads", path):
+                need(application_id == "wanx-host", "LOCAL_DATA_ROUTE_DENIED")
+                need(method == "POST" and transport == "http" and target == path, "LOCAL_DATA_ROUTE_DENIED")
             preview = re.fullmatch(rf"/api/_client/space-previews/{FILE}(?:/content)?", path)
             if preview:
                 need(application_id == "wanx-host", "LOCAL_DATA_ROUTE_DENIED")

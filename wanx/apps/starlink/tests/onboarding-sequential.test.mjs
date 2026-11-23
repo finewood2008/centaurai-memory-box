@@ -42,7 +42,7 @@ test('ledger overrides stale current questions and scope values do not count as 
 
 test('initial sidebar shows pending scope and collapsed default definitions without a graph',async()=>{
   const {m}=await setup(),html=dialogueSideHTML({snapshot:m.state.snapshot,editable:true});
-  assert.match(html,/等待明确业务范围/);assert.match(html,/<dd>尚未明确<\/dd>/);assert.match(html,/<details id="od-current-rules">/);assert.match(html,/<details id="od-ledger">/);
+  assert.match(html,/等待明确业务范围/);assert.match(html,/尚未填写/);assert.match(html,/<details id="od-current-rules">/);assert.match(html,/<details id="od-ledger">/);
   assert.doesNotMatch(html,/ob-ontology-node/);assert.doesNotMatch(html,/data-od-question=/);
   assert.match(html,/不是根据本次回答生成的建议/);
 });

@@ -1,5 +1,5 @@
 """Private client launch bridge. Existing public Studio contracts stay unchanged."""
-from .foundation import FOUNDATION_PROMPT
+from .public_capabilities import catalog, planning_instruction
 import json
 from uuid import uuid4
 from fastapi import Depends
@@ -26,7 +26,7 @@ class Launch(Operation):
 
 PROMPT = '''你是需求整理助手。将用户的一段需求改写为简洁、可编辑的构建简报，一次完成，不提问，不写完整PRD。正文控制在300到600个汉字以内，待在Builder确认最多3条，只列会影响首版的关键取舍。已明确的内容不要变成待确认。登录、应用授权、存储接口、试用与正式数据隔离由WANX提供，不重复询问实现方式；不要擅自增加备份、自动保存、分页或复杂权限等范围。保留用户意图，按“目标、主要使用方式、核心功能、建议边界、待在Builder确认”组织。可以补充合理建议，但明确标注“建议”，不得捏造业务事实、权限、日期、接口或承诺。未知内容标为待确认。不要读取或索取资料、不要启动开发。只返回JSON：{"requirement":"整理后的中文需求，最多9000字"}。'''
 
-PROMPT += "\n" + FOUNDATION_PROMPT
+PROMPT += "\n" + planning_instruction()
 
 
 class ClientLaunch:
@@ -42,8 +42,11 @@ class ClientLaunch:
         text = body['text'].strip()
         if not text: raise StudioError('INTAKE_TEXT_REQUIRED')
         if has_credentials(text): raise StudioError('INPUT_CREDENTIAL_DETECTED')
+        available = {key: {"status": item["status"], "adapterAvailable": item["adapterAvailable"]}
+                     for key, item in catalog(self.svc.project_root).items()}
+        prompt = PROMPT + "\navailableContracts=" + json.dumps(available, ensure_ascii=False)
         result = await self.svc.generate(owner, 'client-launch-suggestion', {
-            'messages': [{'role':'system', 'content':PROMPT}, {'role':'user', 'content':text}], 'max_tokens':4096
+            'messages': [{'role':'system', 'content':prompt}, {'role':'user', 'content':text}], 'max_tokens':4096
         }, published_runtime=True)
         try:
             choice = result['choices'][0]
@@ -61,6 +64,8 @@ class ClientLaunch:
         if not body['confirmed']: raise StudioError('REQUIREMENT_CONFIRMATION_REQUIRED', 409)
         text = body['requirement'].strip()
         if not text or has_credentials(text) or has_credentials(body['original']): raise StudioError('INPUT_CREDENTIAL_DETECTED')
+        if body.get('projectId'):
+            self.svc.preparation.get(owner, body['projectId'])
         provider = self.provider()
         storage = await provider.launch_storage(owner, body['storage'])
         refs = await self.svc.preparation.validate_references(owner, body['references'])
@@ -85,7 +90,7 @@ class ClientLaunch:
             if p['preparation']['revision'] != body['expectedRevision']: raise StudioError('INTAKE_CHANGED', 409)
             if p['preparation']['phase'] != 'intake' or p['tasks']: raise StudioError('INTAKE_ALREADY_HANDED_OFF', 409)
         else:
-            p = self.svc.store.create(owner, text.splitlines()[0].removeprefix('目标：')[:30] or '新应用', body['original'].strip(), body['operationId'], dev_kit=True)
+            p = self.svc.create_project(owner, text.splitlines()[0].removeprefix('目标：')[:30] or '新应用', body['original'].strip(), body['operationId'])
             pid = p['id']
             self.svc.preparation.enable(owner, pid)
         async with self.svc.preparation.lock(owner, pid):

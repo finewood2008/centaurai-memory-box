@@ -42,6 +42,7 @@ export async function readWarehouseMaterials(flow,more=false){
 }
 
 export async function selectWarehouseMaterial(flow,id,inspectCurrent=false){
+  if(flow.readerOnly)return flow.importer.select(id);
   if(flow.state.busy)return;
   if(flow.saved.pending||flow.saved.materialDeletion||flow.saved.upload||flow.saved.intakeSubmission||flow.saved.roundOpening||flow.intake.staged||
     flow.reviewPending||flow.claimPending||flow.releasePending||flow.changes.record.pending||flow.changes.claimRequest){
@@ -88,6 +89,7 @@ export async function refreshWarehouseMaterial(flow){
 // This explicit action only associates the material for review. Extraction and
 // publication still require the existing plan and publication confirmations.
 export async function startWarehouseMaterialDialogue(flow){
+  if(flow.readerOnly)return;
   const id=flow.state.librarySelection?.document.id;if(!id||flow.state.busy)return;
   let staged=false;
   await flow.run(async()=>{
@@ -117,6 +119,10 @@ export async function openWarehouseMaterial(flow,target){
     rows.set(target.documentId,value.document);flow.state.warehouseMaterials=[...rows.values()];selected=true;
   });
   if(!selected||flow.state.error)return false;
+  if(flow.readerOnly){
+    await flow.importer.select(target.documentId);
+    return !flow.state.error&&flow.importer.view?.documentId===target.documentId;
+  }
   if(target.conversationId)await flow.selectMaterial(target.conversationId,target.intentId);
   else await selectWarehouseMaterial(flow,target.documentId);
   return !flow.state.error&&(flow.state.librarySelection?.document.id===target.documentId||flow.state.detail?.document_id===target.documentId);

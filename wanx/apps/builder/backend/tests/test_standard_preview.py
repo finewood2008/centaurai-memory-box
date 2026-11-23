@@ -75,12 +75,14 @@ async def test_standard_production_runtime_retains_zip_contract(standard):
  svc.close_runtime('alice',value['session'])
 
 
-async def test_legacy_workshop_delete_keeps_dynamic_actor_check(workshop,monkeypatch):
+async def test_layout_session_delete_keeps_dynamic_actor_check(workshop,monkeypatch):
  from fastapi import FastAPI
  from httpx import ASGITransport,AsyncClient
  from wanx_studio.api import create_router
- from test_studio import seeded
- p=await seeded(workshop);token=workshop.open_runtime('alice',p['id'],p['artifacts'][-1]['hash'],'preview')['session']
+ import time
+ token='layout-preview'
+ session={'owner':'alice','layoutOnly':True,'expires':time.time()+60}
+ workshop.runtime_sessions[token]=session
  original=workshop.authorize_management;calls=[]
  def checked(owner):calls.append(owner);return original(owner)
  monkeypatch.setattr(workshop,'authorize_management',checked)
@@ -88,7 +90,7 @@ async def test_legacy_workshop_delete_keeps_dynamic_actor_check(workshop,monkeyp
  async with AsyncClient(transport=ASGITransport(app=app),base_url='http://test') as client:
   response=await client.delete('/api/app-studio/runtime/'+token)
  assert response.status_code==200 and token not in workshop.runtime_sessions and calls==['alice']
- token=workshop.open_runtime('alice',p['id'],p['artifacts'][-1]['hash'],'preview')['session']
+ workshop.runtime_sessions[token]=session
  workshop.actor_check=lambda *_:None
  with pytest.raises(StudioError,match='WORKSHOP_IDENTITY_REQUIRED'):workshop.close_runtime('alice',token)
  assert token in workshop.runtime_sessions

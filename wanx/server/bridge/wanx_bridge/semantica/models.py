@@ -20,7 +20,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from .client import SemanticaClient, SemanticaError
-from .desktop import strict_json
+from .desktop import parse_model_output
 from .model_budget import InvalidModelOutputLimit, output_budget, truncated
 from .model_options import inference_options, thinking_overrides
 from .output_diagnostics import (
@@ -287,7 +287,7 @@ async def _generate(
         if cleaned.startswith("```"):
             cleaned = cleaned.partition("\n")[2].rsplit("```", 1)[0].strip()
         try:
-            value = strict_json(cleaned)
+            value = parse_model_output(cleaned)
         except ValueError as exc:
             if isinstance(exc, json.JSONDecodeError):
                 metadata["json_error_position"] = exc.pos

@@ -2,7 +2,7 @@ import { lstat, readFile } from 'node:fs/promises';
 import { request } from 'node:http';
 import path from 'node:path';
 
-const MAX_REQUEST_BYTES = 64 * 1024;
+const MAX_REQUEST_BYTES = 128 * 1024;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const EMPTY = Buffer.alloc(0);
 
@@ -69,7 +69,7 @@ async function forward(filename, message, notification) {
     const outgoing = request({
       host: '127.0.0.1', port, method: 'POST', path: '/mcp', agent: false,
       headers: {'content-type': 'application/json', accept: 'application/json', authorization: `Bearer ${token}`, 'content-length': Buffer.byteLength(payload)},
-      signal: AbortSignal.timeout(60000),
+      signal: AbortSignal.timeout(message.method === 'tools/call' && message.params?.name?.startsWith('xingtu_') ? 330000 : 60000),
     }, response => { readReply(response, notification).then(resolve, reject); });
     outgoing.once('error', reject);
     outgoing.end(payload);
@@ -96,7 +96,7 @@ async function handle(filename, line) {
     }
     process.stdout.write(`${JSON.stringify(result)}\n`);
   } catch {
-    if (!notification) writeError(value.id, -32000, '无法连接记忆盒子。请打开客户端并检查「我的 AI」中的资料连接。');
+    if (!notification) writeError(value.id, -32000, '无法连接本机的记忆盒子客户端。请打开客户端并检查「我的 AI」中的资料连接。');
   }
 }
 

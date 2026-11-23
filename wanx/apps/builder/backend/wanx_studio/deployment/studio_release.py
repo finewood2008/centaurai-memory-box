@@ -52,9 +52,7 @@ class StudioRelease:
                 package_bytes=validate_standard_package(payload['packageBase64'],payload['packageSha256'],payload['manifest'],application_id=project['appId'],version=artifact['version'])
                 payload=metadata(payload)
             else:
-                payload={'applicationId':project['appId'],'name':artifact['manifest']['name'],'version':artifact['version'],
-                    'manifest':deepcopy(artifact['manifest']),'bundle':artifact['bundle'],'css':artifact['css'],'runtimeNamespace':'studio'}
-                payload['artifactHash']=sha(payload)[7:]
+                raise StudioError('STANDARD_ARTIFACT_REQUIRED',409)
             release_id='kaiwu-'+sha([owner,pid,source['artifactHash'],source['contentHash'],contract])[7:55]
             trace={**source,'projectId':pid}
             if old:
@@ -64,6 +62,8 @@ class StudioRelease:
                 result={'schemaVersion':1,'profile':PROFILE,'release':None,'source':trace,'releaseId':release_id}
                 self.svc.store.db.execute('INSERT INTO studio_release_exports VALUES(?,?,?,?)',(owner,body['operationId'],request_hash,json.dumps(result,ensure_ascii=False)))
         backend={'schemaVersion':1,'format':'wanx-expert-backend-v1','template':contract['template'],'mode':'ask'}
+        if 'expertPrompt' in artifact.get('snapshot', {}):
+            backend['prompt'] = artifact['snapshot']['expertPrompt']
         values={'backend/expert.json':backend,'client/payload.json':payload,
             'support/configuration.schema.json':{'type':'object','properties':{},'additionalProperties':False},
             'support/dependencies.lock.json':{'schemaVersion':1,'dependencies':[{'kind':'expert-template',**contract['template']}]},

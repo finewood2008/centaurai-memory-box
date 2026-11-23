@@ -89,6 +89,12 @@ async def test_success_keeps_usage_budget_and_cleanup(model):
     model.close.assert_awaited_once()
 
 
+async def test_brackets_inside_json_strings_do_not_count_toward_nesting_limit(model):
+    value = {"entities": [{"confidence": 0.5, "text": '"' + "[{" * 200 + "\\"}]}
+    model.reply.content = json.dumps(value)
+    assert json.loads((await generate())["text"]) == value
+
+
 async def test_upstream_failure_is_not_relabelled(model):
     model.mock.ainvoke.side_effect = httpx.ReadTimeout("PRIVATE")
     with pytest.raises(httpx.ReadTimeout):

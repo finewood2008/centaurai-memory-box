@@ -8,10 +8,12 @@ import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from octop.infra.agents.assistant_knowledge import KnowledgeReader, SemanticaError
-from octop.infra.agents.assistant_profile import AssistantProfiles
+from wanx_bridge.semantica.client import SemanticaError
+
+from octop.infra.agents.assistant_knowledge import KnowledgeReader
+from octop.infra.agents.assistant_profile import AssistantProfiles, is_assistant_profile
 from octop.infra.agents.assistant_space import SpaceGrantStore
 from octop.infra.agents.threads.fork import load_checkpoint_messages, write_checkpoint_messages
 from octop.infra.agents.workspace.dir import resolve_workspace_host_path
@@ -29,6 +31,15 @@ class ConversationError(Exception):
     def __init__(self, code: str, status: int = 409):
         self.code, self.status = code, status
         super().__init__(code)
+
+
+ZhijunMode = Literal["ask", "craft"]
+
+
+def _normalize_mode(value: str | None) -> ZhijunMode | None:
+    if value is None:
+        return None
+    return "craft" if value == "craft" else "ask"
 
 
 def empty_context() -> dict[str, Any]:
@@ -101,13 +112,21 @@ class AssistantConversations:
     def state(self, user: Any, identity: str) -> dict[str, Any]:
         row = self.owned(user, identity)
         cid = self.repo.root(identity)
-        self.owned(user, cid)
-        return self.repo.get(cid) or {
+        root = self.owned(user, cid)
+        legacy_mode = "ask" if getattr(root, "conversation_mode", None) == "plan" else None
+        saved = self.repo.get(cid)
+        if saved is not None:
+            if saved["user_id"] != user.id or saved["agent_id"] != row.agent_id:
+                raise ConversationError("ASSISTANT_CONVERSATION_NOT_FOUND", 404)
+            saved["conversation_mode"] = _normalize_mode(saved["conversation_mode"]) or legacy_mode
+            return saved
+        return {
             "id": cid,
             "agent_id": row.agent_id,
             "user_id": user.id,
             "active_thread_id": cid,
             "context": empty_context(),
+            "conversation_mode": legacy_mode,
             "revision": 0,
             "versions": [
                 {
@@ -118,6 +137,34 @@ class AssistantConversations:
                 }
             ],
         }
+
+    def require_zhijun(self, user: Any, identity: str) -> dict[str, Any]:
+        """Authorize access to the bound, personal Zhijun conversation."""
+        if getattr(user, "local_team", None) is not None:
+            raise ConversationError("ASSISTANT_CONVERSATION_NOT_FOUND", 404)
+        state = self.state(user, identity)
+        profile = self.server.services.agent_repo.get(state["agent_id"])
+        if (
+            profile is None
+            or not profile.enabled
+            or not is_assistant_profile(profile, self.server.services.user_repo)
+        ):
+            raise ConversationError("ASSISTANT_CONVERSATION_NOT_FOUND", 404)
+        return state
+
+    def resolve_turn_mode(
+        self, user: Any, identity: str, requested: str | None = None
+    ) -> ZhijunMode:
+        state = self.require_zhijun(user, identity)
+        saved = state["conversation_mode"]
+        if saved is None and requested in ("ask", "craft"):
+            try:
+                saved = self.repo.initialize_mode(
+                    state["id"], user.id, state["agent_id"], requested
+                )
+            except ConversationConflict as exc:
+                raise ConversationError("ASSISTANT_CONVERSATION_CONFLICT") from exc
+        return _normalize_mode(saved) or "ask"
 
     def busy(self, user: Any, state: dict[str, Any]) -> bool:
         gateway = self.server.app_runtime.gateway
@@ -195,7 +242,10 @@ class AssistantConversations:
     def public(state: dict[str, Any], errors: list[dict[str, str]] | None = None) -> dict[str, Any]:
         return {
             key: state[key] for key in ("id", "active_thread_id", "context", "revision", "versions")
-        } | {"validation_errors": errors or []}
+        } | {
+            "conversation_mode": _normalize_mode(state.get("conversation_mode")),
+            "validation_errors": errors or [],
+        }
 
     async def get(self, user: Any, identity: str) -> dict[str, Any]:
         state = await asyncio.to_thread(self.state, user, identity)
@@ -463,22 +513,25 @@ class AssistantConversations:
         revision: int,
         context: dict[str, Any] | None,
         active: str | None,
+        *,
+        conversation_mode: ZhijunMode | None = None,
     ) -> dict[str, Any]:
         cid = self.repo.root(identity)
         async with self.locks.setdefault(cid, asyncio.Lock()):
-            state = await asyncio.to_thread(self.state, user, identity)
+            read_state = self.require_zhijun if conversation_mode is not None else self.state
+            state = await asyncio.to_thread(read_state, user, identity)
             if revision != state["revision"]:
                 raise ConversationError("ASSISTANT_CONVERSATION_CONFLICT")
             if active and active not in {v["thread_id"] for v in state["versions"]}:
                 raise ConversationError("ASSISTANT_CONVERSATION_NOT_FOUND", 404)
-            if self.busy(user, state) and (
+            if (
                 active
                 or context is not None
                 and any(
                     context.get(k, {}).get("enabled") and context.get(k) != state["context"].get(k)
                     for k in ("space", "knowledge")
                 )
-            ):
+            ) and self.busy(user, state):
                 raise ConversationError("ASSISTANT_TURN_ACTIVE")
             if context is not None:
                 normalized = dict(context)
@@ -498,6 +551,7 @@ class AssistantConversations:
                     revision,
                     context=context,
                     active=active,
+                    conversation_mode=conversation_mode,
                 )
             except ConversationConflict as exc:
                 raise ConversationError("ASSISTANT_CONVERSATION_CONFLICT") from exc
@@ -507,6 +561,7 @@ class AssistantConversations:
                         "context"
                     ].get(kind):
                         await self.revoke(user, state, kind)
+            saved["conversation_mode"] = saved["conversation_mode"] or state["conversation_mode"]
             return self.public(saved)
 
     async def messages(self, aid: str, tid: str) -> list[Any]:
@@ -662,9 +717,12 @@ class AssistantConversations:
                         "kind": body["kind"],
                     },
                 )
-            except Exception:
+            except Exception as exc:
                 if isinstance(archive, HistoryArchive):
                     await asyncio.to_thread(archive.remove_thread, tid)
                 registry.delete_thread(tid)
+                if isinstance(exc, ConversationConflict):
+                    raise ConversationError("ASSISTANT_CONVERSATION_CONFLICT") from exc
                 raise
+            saved["conversation_mode"] = saved["conversation_mode"] or state["conversation_mode"]
             return {**self.public(saved), "prepared_content": content}

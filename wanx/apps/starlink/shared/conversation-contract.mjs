@@ -9,6 +9,7 @@ const definitions={
   'material-workflows':['GET',C+'/materials','page'],
   'material-workflow':['GET',C+'/materials/:d','read'],
   'processing-preview':['POST',C+'/materials/:d/processing-previews','processingPreview'],
+  'processing-start':['POST',C+'/materials/:d/processing-starts','processingStart'],
   'processing-confirm':['POST',C+'/materials/:d/processing-transitions','processingConfirm'],
   'processing-status':['GET',C+'/materials/:d/processing-transitions/:x','read'],
   'source-save':['POST','/documents/:d/correction','sourceSave'],
@@ -38,6 +39,7 @@ const definitions={
 export const conversationActions=new Set([...Object.keys(definitions).map(k=>'conversation-'+k),...changeActions,...dialogueActions,...instructionActions]);
 const fields={read:[],page:['offset','limit'],get:['intentOffset'],messages:['afterSequence','limit'],
   processingPreview:['operationId','documentVersionId','workflowRevision'],
+  processingStart:['operationId','documentVersionId','workflowRevision','confirmed'],
   processingConfirm:['operationId','previewId','previewDigest','workflowRevision','confirmed','replacementAcknowledgement'],
   sourceSave:['operationId','documentVersionId','segments'],
   sourceConfirm:['operationId','documentVersionId','confirmed'],
@@ -87,10 +89,11 @@ export function conversationRequest(action,input={}){
       if(kind==='reviewPlan'){if(input[key]!==null)query.set(wire,input[key]);}else body[wire]=input[key];
     }
     if(fields[kind].includes('confirmed')){if(input.confirmed!==true)invalid();body.confirmed=true;}
-    if(kind==='processingPreview'||kind==='processingConfirm'){
+    if(kind==='processingPreview'||kind==='processingConfirm'||kind==='processingStart'){
       if(!number(input.workflowRevision,1))invalid();body.expected_workflow_revision=input.workflowRevision;
-      if(kind==='processingPreview'){
-        delete body.document_version_id;body.expected_document_version_id=input.documentVersionId;body.target_mode='automatic';
+      if(kind!=='processingConfirm'){
+        delete body.document_version_id;body.expected_document_version_id=input.documentVersionId;
+        if(kind==='processingPreview')body.target_mode='automatic';
       }else{
         if(!id(input.previewId)||!/^[a-f0-9]{64}$/.test(input.previewDigest||''))invalid();
         body.preview_id=input.previewId;body.preview_digest=input.previewDigest;

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -23,6 +24,8 @@ from typing import Any, BinaryIO, cast
 from octop.infra.host_resources import host_resources
 
 CHUNK_SIZE = 4 * 1024 * 1024
+TEXT_EDIT_LIMIT = 16 * 1024 * 1024
+TEXT_EXTENSIONS = frozenset({".txt", ".md", ".json", ".log", ".csv"})
 _ID = re.compile(r"^[0-9a-f]{32}$")
 
 
@@ -44,6 +47,24 @@ def validate_name(value: str) -> str:
     ):
         raise SpaceError("SPACE_INVALID_NAME")
     return value
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(value)
+
+
+def _validate_edit_text(filename: str, data: bytes) -> None:
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise SpaceError("SPACE_TEXT_INVALID") from exc
+    if "\0" in text:
+        raise SpaceError("SPACE_TEXT_INVALID")
+    if Path(filename).suffix.lower() == ".json":
+        try:
+            json.loads(text, parse_constant=_reject_json_constant)
+        except (ValueError, RecursionError) as exc:
+            raise SpaceError("SPACE_TEXT_JSON_INVALID") from exc
 
 
 def _safe_file(path: Path, *, missing: bool = False) -> None:
@@ -104,6 +125,11 @@ class PersonalSpace:
                     size INTEGER NOT NULL, offset INTEGER NOT NULL DEFAULT 0,
                     state TEXT NOT NULL DEFAULT 'pending', modified REAL NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS space_text_edits (
+                    id TEXT PRIMARY KEY, target TEXT NOT NULL,
+                    expected INTEGER NOT NULL, digest TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS retired_blobs (id TEXT PRIMARY KEY);
             """)
 
         with self._db() as db:
@@ -399,6 +425,90 @@ class PersonalSpace:
             )
             return dict(db.execute("SELECT * FROM uploads WHERE id=?", (upload_id,)).fetchone())
 
+    def begin_text_edit(
+        self, item_id: str, expected: int, upload_id: str, size: int, digest: str
+    ) -> dict[str, Any]:
+        if size < 0 or size > TEXT_EDIT_LIMIT:
+            raise SpaceError("SPACE_TEXT_TOO_LARGE", 413)
+        if not re.fullmatch(r"[a-f0-9]{64}", digest):
+            raise SpaceError("SPACE_CHUNK_INVALID")
+        with self._db() as db:
+            entry = self._entry(db, item_id)
+            existing = db.execute(
+                "SELECT * FROM space_text_edits WHERE id=?", (upload_id,)
+            ).fetchone()
+            if existing is not None:
+                status = self.upload_status(upload_id)
+                if (
+                    existing["target"],
+                    existing["expected"],
+                    existing["digest"],
+                    status["size"],
+                ) != (item_id, expected, digest, size):
+                    raise SpaceError("SPACE_UPLOAD_CONFLICT", 409)
+                if status["state"] == "complete":
+                    return status
+                self._text_edit_entry(entry, expected)
+                return status
+            self._text_edit_entry(entry, expected)
+            if db.execute(
+                "SELECT 1 FROM uploads WHERE id=? UNION SELECT 1 FROM entries WHERE id=? UNION SELECT 1 FROM object_locations WHERE id=?",
+                (upload_id, upload_id, upload_id),
+            ).fetchone():
+                raise SpaceError("SPACE_UPLOAD_CONFLICT", 409)
+            self._collect(db)
+            status = self.upload_create(
+                entry["parent"], entry["name"], size, upload_id, entry["space_id"]
+            )
+            db.execute(
+                "INSERT INTO space_text_edits VALUES (?, ?, ?, ?)",
+                (upload_id, item_id, expected, digest),
+            )
+            return status
+
+    @staticmethod
+    def _text_edit_entry(entry: sqlite3.Row, expected: int) -> None:
+        if entry["version"] != expected:
+            raise SpaceError("SPACE_VERSION_CONFLICT", 409)
+        if entry["kind"] != "file" or Path(entry["name"]).suffix.lower() not in TEXT_EXTENSIONS:
+            raise SpaceError("SPACE_TEXT_UNSUPPORTED", 415)
+        if entry["size"] > TEXT_EDIT_LIMIT:
+            raise SpaceError("SPACE_TEXT_TOO_LARGE", 413)
+
+    def _collect(self, db: sqlite3.Connection) -> None:
+        for row in db.execute("SELECT id FROM retired_blobs").fetchall():
+            blob = row["id"]
+            if not db.execute(
+                "SELECT 1 FROM entries WHERE COALESCE(blob,id)=? OR previous_blob=?", (blob, blob)
+            ).fetchone():
+                try:
+                    self._object(blob).unlink(missing_ok=True)
+                except (OSError, SpaceError):
+                    # Offline optional storage must not block unrelated file operations.
+                    continue
+                db.execute("DELETE FROM object_locations WHERE id=?", (blob,))
+                db.execute("DELETE FROM retired_blobs WHERE id=?", (blob,))
+
+    @staticmethod
+    def _replace_blob(
+        db: sqlite3.Connection, entry: sqlite3.Row, blob: str, size: int, digest: str
+    ) -> None:
+        if entry["previous_blob"]:
+            db.execute("INSERT OR IGNORE INTO retired_blobs VALUES(?)", (entry["previous_blob"],))
+        db.execute(
+            "UPDATE entries SET blob=?,size=?,digest=?,previous_blob=?,previous_size=?,previous_digest=?,version=version+1,modified=? WHERE id=?",
+            (
+                blob,
+                size,
+                digest,
+                entry["blob"] or entry["id"],
+                entry["size"],
+                entry["digest"],
+                time.time(),
+                entry["id"],
+            ),
+        )
+
     def upload_status(self, upload_id: str) -> dict[str, Any]:
         with self._db() as db:
             row = db.execute("SELECT * FROM uploads WHERE id=?", (upload_id,)).fetchone()
@@ -441,7 +551,27 @@ class PersonalSpace:
             row = db.execute("SELECT * FROM uploads WHERE id=?", (upload_id,)).fetchone()
             if row is None:
                 raise SpaceError("SPACE_NOT_FOUND", 404)
-            if row["state"] == "complete":
+            edit = db.execute("SELECT * FROM space_text_edits WHERE id=?", (upload_id,)).fetchone()
+            target = None
+            if edit is not None:
+                target = self._entry(db, edit["target"])
+                if expected_digest != edit["digest"]:
+                    raise SpaceError("SPACE_UPLOAD_CONFLICT", 409)
+                if row["state"] == "complete":
+                    if (
+                        target["version"] != edit["expected"] + 1
+                        or target["digest"] != expected_digest
+                    ):
+                        raise SpaceError("SPACE_VERSION_CONFLICT", 409)
+                    return dict(target)
+                self._text_edit_entry(target, edit["expected"])
+                if (target["parent"], target["name"], target["space_id"]) != (
+                    row["parent"],
+                    row["name"],
+                    row["space_id"],
+                ):
+                    raise SpaceError("SPACE_VERSION_CONFLICT", 409)
+            elif row["state"] == "complete":
                 return dict(self._entry(db, upload_id, trash=True))
             if row["offset"] != row["size"]:
                 raise SpaceError("SPACE_UPLOAD_INCOMPLETE", 409)
@@ -474,6 +604,13 @@ class PersonalSpace:
                 digest = checksum.hexdigest()
                 if digest != expected_digest:
                     raise SpaceError("SPACE_CHUNK_INVALID", 409)
+                if target is not None:
+                    handle.seek(0)
+                    _validate_edit_text(target["name"], handle.read())
+            if target is not None:
+                self._replace_blob(db, target, upload_id, row["size"], digest)
+                db.execute("UPDATE uploads SET state='complete' WHERE id=?", (upload_id,))
+                return dict(self._entry(db, target["id"]))
             db.execute(
                 "INSERT INTO entries(id,parent,name,kind,size,modified,digest,space_id) VALUES(?,?,?,'file',?,?,?,?)",
                 (
@@ -497,6 +634,7 @@ class PersonalSpace:
                 self._object(upload_id).unlink(missing_ok=True)
                 db.execute("DELETE FROM object_locations WHERE id=?", (upload_id,))
                 db.execute("DELETE FROM uploads WHERE id=?", (upload_id,))
+                db.execute("DELETE FROM space_text_edits WHERE id=?", (upload_id,))
 
     def metadata(self, item_id: str) -> dict[str, Any]:
         with self._db() as db:
@@ -558,6 +696,7 @@ class PersonalSpace:
         metrics = host_resources(container=container)
         return {
             "protocolVersion": 1,
+            "textEditing": True,
             "chunkSize": CHUNK_SIZE,
             "collectedAt": time.time(),
             "filesBytes": used,

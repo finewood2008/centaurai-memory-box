@@ -7,15 +7,13 @@ import pytest
 from test_preparation import env
 from test_prd_completeness import prepared,assess
 from wanx_studio.contracts import digest
-from wanx_studio.iterative import propose_contract,proposal
+from wanx_studio.iterative import proposal
 
 @pytest.mark.parametrize('agent_mode',['follow-action','explicit-noop','ignore-action','stale-hash','unresolved-question'])
 async def test_retry_complete_draft_requires_explicit_hash_checked_save_before_finish(env,monkeypatch,agent_mode):
  svc,pid=await prepared(env);p=svc.store.get('alice',pid)
  # Prior successful PM turn uses the real save path, including derived fields.
  await svc.preparation.pm.tool('alice',pid,'review-turn','update_prd',{'expectedHash':digest(p['solution'])})
- p=svc.store.get('alice',pid)
- propose_contract(svc,'alice',pid,{'expectedHash':digest(p['solution']),'collections':{'items':{'title':'string'}}})
  assert (await assess(svc,pid))['complete']
  p=svc.store.get('alice',pid);s=p['preparation']['interview']
  s.update(state='completed',sync='saved');s['turns'][0]['state']='completed'

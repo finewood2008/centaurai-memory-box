@@ -110,7 +110,7 @@ async def test_queued_input_pauses_after_revocation_or_disconnect_and_survives_r
 async def test_new_iteration_row_ids_remain_stable_between_read_and_patch(env,monkeypatch):
  from test_discovery import solution
  svc,pid,_=env;await ready(svc,pid);pm=svc.preparation.pm
- p=svc.store.get('alice',pid);p['solution']=solution();p['preparation'].pop('entryIds',None);svc.store.save(p)
+ p=svc.store.get('alice',pid);p['solution']=solution();p['solution']['capabilities']=[];p['preparation'].pop('entryIds',None);svc.store.save(p)
  monkeypatch.setattr('wanx_studio.product_manager.runtime_config',lambda *a:{'WANX_CODEX_CONFIG':'{}'})
  gate=asyncio.Event()
  async def wait(*args):await gate.wait()

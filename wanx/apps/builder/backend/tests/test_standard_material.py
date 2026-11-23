@@ -21,7 +21,7 @@ async def test_real_standard_workspace_supplies_project_spec_and_fixed_renderer_
     expert = bool(current.get("deploymentExpert"))
     # Use the actual contract projector rather than the pipeline fixture's
     # intentionally minimal adoption-only handoff.
-    current["preparation"]["handoff"]["contracts"] = svc.preparation.contracts(current, ["data", "foundation"] if expert else [])
+    current["preparation"]["handoff"]["contracts"] = svc.preparation.contracts(current, ["wanx.expert-app.v1"] if expert else [])
     task = op()
     current["tasks"].append({"id": task, "state": "running", "solutionHash": digest(current["solution"]), "events": []})
     svc.store.save(current)
@@ -79,9 +79,9 @@ async def test_real_standard_workspace_supplies_project_spec_and_fixed_renderer_
         assert "expertInvoke" not in config["files"]["app/host.mjs"]
         assert b"expertContext" in observed["fixedSources"]["shell/preload.cjs"]
         assert b"expertInvoke" in observed["fixedSources"]["shell/preload.cjs"]
-        assert bridge["expertOperations"] == material["verifiedContracts"]["foundation"]["operations"]
+        assert bridge["expertOperations"] == material["verifiedContracts"]["wanx.expert-app.v1"]["operations"]
         assert set(bridge["expertOperations"]) == {"expert.run", "expert.tasks", "expert.cancel"}
-        assert bridge["dataOperations"] == material["verifiedContracts"]["data"]["operations"]
+        assert bridge["dataOperations"] == material["verifiedContracts"]["wanx.expert-app.v1"]["data"]["operations"]
         assert set(bridge["dataOperations"]) == {"data.list", "data.get", "data.put", "data.delete"}
         assert bridge["stateCollection"] == "state"
         assert bridge["recordShape"] == "flat"
@@ -113,7 +113,7 @@ async def test_real_standard_workspace_supplies_project_spec_and_fixed_renderer_
 async def test_standard_edit_material_preserves_only_current_original_request_and_answers(standard, monkeypatch):
     svc, project = standard
     current = svc.store.get("alice", project["id"])
-    current["preparation"]["handoff"]["contracts"] = svc.preparation.contracts(current, ["data", "foundation"])
+    current["preparation"]["handoff"]["contracts"] = svc.preparation.contracts(current, ["wanx.expert-app.v1"])
     edit_id, task = op(), op()
     original = "ORIGINAL_REQUEST_SENTINEL：读取 flat record.json，禁止 record.value.json；unknown 无 runId 时保留 operationId，只查询不重放。\nCAS RECORD_CHANGED 后重新读取，不覆盖其他会话；跨 scope 历史只读，禁止 cancel/replay。"
     answers = [{"operationId": op(), "text": "ANSWER_SENTINEL：确认初始化解析失败后保持提交禁用，不写入空记录。"}]

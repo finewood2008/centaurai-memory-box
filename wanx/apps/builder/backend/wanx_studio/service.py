@@ -1,4 +1,5 @@
 from __future__ import annotations
+from .public_capabilities import expert_contract
 
 import asyncio
 from copy import deepcopy
@@ -122,6 +123,21 @@ class StudioService:
         p["acceptance"] = None
         p["stage"] = "discovery"
 
+    def create_project(self, owner, name, goal, operation_id, *, target="client"):
+        from .deployment.project_expert import ProjectExpert
+        factory = None
+        if target == "expert":
+            if getattr(self, "workshop", False) or not getattr(self, "directory_profile", None):
+                raise StudioError("EXPERT_TEMPLATE_UNAVAILABLE", 409)
+            factory = ProjectExpert(self).general_contract
+        elif target != "client":
+            raise StudioError("PROJECT_TARGET_INVALID", 422)
+        from .devkit import kit_info
+        kit = kit_info(self.project_root)
+        if not kit["available"]:
+            raise StudioError(kit["code"], 503)
+        return self.store.create(owner, name, goal, operation_id, dev_kit=True, expert_factory=factory, kit_sha256=kit["kitSha256"])
+
     def authorize_management(self, owner):
         team=getattr(self,'team',None)
         if team and not team.is_admin(owner):
@@ -138,6 +154,9 @@ class StudioService:
             if 'files' in caps and not self.files:raise StudioError('FILES_UNAVAILABLE',409)
 
     def revise(self, p, solution, source):
+        if p.get('devKit'):
+            from .public_capabilities import validate_declaration
+            validate_declaration(solution.get('capabilities',[]),self.project_root)
         if p['solution'].get('prd') is not None and solution.get('prd') is None and source!='fixed-example':
             raise StudioError('PRD_REQUIRED',409)
         self.invalidate(p)
@@ -154,7 +173,7 @@ class StudioService:
                 for section in ARRAYS:
                     old_values=p['solution']['prd'].get(section,[]);old_ids=ids.get(section,[])
                     used=set();new_ids=[]
-                    for index,value in enumerate(solution['prd'][section]):
+                    for index,value in enumerate(solution['prd'].get(section) or []):
                         match=next((i for i,v in enumerate(old_values) if v==value and i not in used and i<len(old_ids)),None)
                         if match is None and index<len(old_ids) and index not in used:match=index
                         if match is not None:used.add(match)
@@ -302,7 +321,8 @@ class StudioService:
         if not self.model:
             response = {"message":"先想一想最近一次遇到这个问题：你当时怎样完成，哪一步最费力？连接 WANX 默认模型后，我会结合你的回答继续挖掘，并逐步整理右侧 PRD。", "solution":p["solution"]}
         else:
-            messages=[{"role":"system","content":interview_prompt()},{"role":"user","content":json.dumps({"originalGoal":p["originalGoal"],"solution":p["solution"],"conversation":p["messages"],"interviewContext":interview_context(p)},ensure_ascii=False)}]
+            from .public_capabilities import catalog
+            messages=[{"role":"system","content":interview_prompt()},{"role":"user","content":json.dumps({"availableContracts":catalog(self.project_root),"originalGoal":p["originalGoal"],"solution":p["solution"],"conversation":p["messages"],"interviewContext":interview_context(p)},ensure_ascii=False)}]
             try:
                 # One bounded format repair, accounted as another real request.
                 # Never splice partial JSON, apply partial sections, or retry an
@@ -366,6 +386,8 @@ class StudioService:
             if p['solution'].get('prd') is not None and (len(body.get('reviewedSections',[]))!=len(PRD_REVIEW_SECTIONS) or set(body.get('reviewedSections',[]))!=set(PRD_REVIEW_SECTIONS)):
                 raise StudioError('PRD_REVIEW_REQUIRED',409)
             p["confirmation"] = {"hash":digest(p["solution"]),"decisionsHash":digest(p["decisions"]),"operationId":body["operationId"],"createdAt":time.time()}
+            from .devkit import build_input
+            p["confirmation"]["buildInput"] = build_input(p, self.project_root)
             if p['solution'].get('prd') is not None:p['confirmation']['reviewedSections']=list(PRD_REVIEW_SECTIONS)
             p["acceptance"] = None
             p["stage"] = "confirmed"
@@ -376,6 +398,8 @@ class StudioService:
         a = next((a for a in p["artifacts"] if a["hash"] == artifact_hash),None)
         if not a:
             raise StudioError("ARTIFACT_NOT_FOUND",404)
+        if not a.get("devKitPackage"):
+            raise StudioError("STANDARD_ARTIFACT_REQUIRED",409)
         return p,a
 
     async def add_artifact(self, owner, project_id, task_id, files):
@@ -397,11 +421,15 @@ class StudioService:
                 working=self.edits.execution_project(owner,project,live_task) if live_task and live_task.get('editId') else project
                 if not live_task or live_task["state"] != "running" or live_task["solutionHash"] != digest(working["solution"]) or not working.get("confirmation") or working["confirmation"]["hash"]!=live_task["solutionHash"]:
                     raise StudioError("BUILD_VERSION_STALE", 409)
+                if live_task.get("buildInput") is not None:
+                    from .devkit import build_input
+                    if build_input(working,self.project_root) != live_task["buildInput"] or working["confirmation"].get("buildInput") != live_task["buildInput"]:
+                        raise StudioError("BUILD_INPUT_CHANGED",409)
                 from copy import deepcopy
                 from .deployment.project_expert import selected
                 from .versions import next_version, standard_artifact_hash, verify
                 expert=selected(working)
-                frozen_expert=(working.get('preparation',{}).get('handoff') or {}).get('contracts',{}).get('foundation',{}).get('expertDeployment')
+                frozen_expert=expert_contract((working.get('preparation',{}).get('handoff') or {}).get('contracts',{})).get('expertDeployment')
                 if expert!=frozen_expert:raise StudioError('EXPERT_CONTRACT_CHANGED',409)
                 if live_task.get('editId'):
                     if digest(project['solution'])!=digest(working['solution']):
@@ -417,6 +445,13 @@ class StudioService:
                 artifact = {"standardArtifactVersion":1,"hash":"", "version":version, "manifest":pipeline["manifest"], "solutionHash":live_task["solutionHash"], "confirmation":deepcopy(working["confirmation"]), "taskId":task_id, "createdAt":time.time(), "files":deepcopy(files), "bundle":"", "css":"", "devKitPackage":pipeline, "sourceFormat":"wanx-app-dev-kit", "projectSpecHash":live_task.get("devKitSpecHash"), "packageSha256":pipeline["packageSha256"]}
                 if expert is not None:artifact['expertContractDigest']=digest(expert)
                 self.versions.add(project,artifact,live_task)
+                if expert and expert['template']['resourceId'] == 'general-assistant':
+                    from .deployment.project_expert import build_expert_prompt
+                    from .deployment.expert_runtime import validate_backend
+                    prompt = build_expert_prompt(working)
+                    validate_backend({'schemaVersion': 1, 'format': 'wanx-expert-backend-v1', 'mode': 'ask',
+                                      'template': expert['template'], 'prompt': prompt})
+                    artifact['snapshot']['expertPrompt'] = prompt
                 artifact['hash']=standard_artifact_hash(artifact)
                 if project['versioning'].get('iteration'):project['versioning']['iteration']['latestHash']=artifact['hash']
                 if live_task.get('change'):
@@ -433,81 +468,7 @@ class StudioService:
                 _, artifact=self.artifact(owner,project_id,result['artifacts'][-1]['hash'])
                 await self.client_launch.archive(owner,project_id,artifact)
             return result
-        # New Builder projects are dev-kit projects.  A missing workspace means
-        # the standard generator failed before the artifact phase; silently
-        # falling back to compile-artifact would produce a legacy miniapp that
-        # cannot be installed by the standard Host.
-        if current.get("devKit") and task and task.get("buildFormat") == "wanx-app-dev-kit":
-            raise StudioError("DEVKIT_WORKSPACE_REQUIRED", 409)
-        # Trust-owned compiler; never executes generated code in the service.
-        proc = await asyncio.create_subprocess_exec("node",str(self.project_root/"tools/compile-artifact.mjs"),stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,cwd=self.project_root,start_new_session=True)
-        try:
-            out,_ = await asyncio.wait_for(proc.communicate(json.dumps({"files":files}).encode()),30)
-        finally:
-            await self.native_codex.stop(proc)
-        if proc.returncode:
-            raise StudioError("ARTIFACT_VALIDATION_FAILED",422)
-        compiled = json.loads(out)
-        manifest = check_manifest(compiled["manifest"])
-        def change(p):
-            self.authorize_management(owner)
-            task = next((t for t in p["tasks"] if t["id"] == task_id),None)
-            working=self.edits.execution_project(owner,p,task) if task and task.get('editId') else p
-            if not task or task["state"] != "running" or task["solutionHash"] != digest(working["solution"]) or not working["confirmation"]:
-                raise StudioError("BUILD_VERSION_STALE",409)
-            if not set(manifest["capabilities"]) <= set(working["solution"]["capabilities"]):
-                raise StudioError("CAPABILITY_NOT_CONFIRMED",409)
-            if task.get('change'):
-                self.engines.guard(owner,p,required=True)
-                from .iterative import enforce
-                enforce(task['change'],manifest)
-            previous = next((a["manifest"] for a in p["artifacts"] if p.get("installed",{} ) and a["hash"]==p["installed"]["artifactHash"]),None)
-            if not compatible(previous,manifest):
-                raise StudioError("BREAKING_SCHEMA_CHANGE",409)
-            if task.get('editId'):
-                base=next(a for a in p['artifacts'] if a['hash']==task['baseHash'])
-                if not compatible(base['manifest'],manifest):raise StudioError('BREAKING_SCHEMA_CHANGE',409)
-                # Commit the private change draft only after compilation and compatibility checks.
-                from copy import deepcopy
-                if digest(p['solution'])!=digest(working['solution']):
-                    p['revisions'].append({'number':len(p['revisions'])+1,'hash':digest(working['solution']),'solution':deepcopy(working['solution']),'source':'direct-edit','createdAt':time.time()})
-                p['solution']=deepcopy(working['solution']);p['decisions']=deepcopy(working['decisions']);p['confirmation']=deepcopy(working['confirmation'])
-                if p.get('nameMode')=='auto':p['name']=working['name']
-                if 'preparation' in p:
-                    for k in ['entryIds','provenance']:
-                        if k in working['preparation']:p['preparation'][k]=deepcopy(working['preparation'][k])
-                    p['preparation']['interview'].update({'state':'completed','sync':'saved','error':None})
-            from .deployment.project_expert import selected as expert_selected
-            from .versions import artifact_hash
-            expert=expert_selected(working)
-            expert_digest=None
-            if expert:
-                frozen_expert=(working.get('preparation',{}).get('handoff') or {}).get('contracts',{}).get('foundation',{}).get('expertDeployment')
-                if frozen_expert!=expert:raise StudioError('EXPERT_CONTRACT_CHANGED',409)
-                expert_digest=digest(frozen_expert)
-            h = artifact_hash(files,manifest,task['solutionHash'],task_id,expert_digest)
-            from .versions import next_version
-            version = next_version(p)
-            artifact={"hash":h,"version":version,"manifest":manifest,"solutionHash":task["solutionHash"],"confirmation":working["confirmation"],"taskId":task_id,"createdAt":time.time(),"files":files,"bundle":compiled["bundle"],"css":compiled["css"],"sourceFormat":"legacy-miniapp"}
-            if expert_digest is not None:artifact['expertContractDigest']=expert_digest
-            self.versions.add(p,artifact,task)
-            if task.get('change'):
-                change=task['change']
-                artifact['checkpoint']={'schemaVersion':1,'artifactHash':h,'parent':task.get('baseHash'),
-                    'changeId':change['id'],'specHash':digest(change['spec']),'contract':change['contract']}
-                artifact['checkpointHash']=digest(artifact['checkpoint'])
-            p["artifacts"].append(artifact)
-            task["state"] = "completed"
-            p["acceptance"] = None
-            p["stage"] = "preview"
-        result = self.store.mutate(owner,project_id,"artifact_"+task_id,{"task":task_id,"filesHash":digest(files)},change)
-        if getattr(self,'client_launch',None):
-            # Public snapshots deliberately omit source files. The trusted archive
-            # adapter needs the exact private artifact, never the redacted summary.
-            _, artifact = self.artifact(owner,project_id,result['artifacts'][-1]['hash'])
-            await self.client_launch.archive(owner,project_id,artifact)
-            result = self.snapshot(owner,project_id)
-        return result
+        raise StudioError("DEVKIT_WORKSPACE_REQUIRED", 409)
 
     def accept(self, owner, project_id, body):
         def change(p):
@@ -525,28 +486,6 @@ class StudioService:
             p["stage"] = "accepted"
         return self.store.mutate(owner,project_id,body["operationId"],{"action":"accept",**body},change)
 
-    def migrate_legacy(self, owner, project_id, body):
-        self.authorize_management(owner)
-        source = self.store.get(owner, project_id)
-        if not source.get("artifacts") or source.get("devKit"):
-            raise StudioError("LEGACY_MIGRATION_NOT_REQUIRED", 409)
-        source_artifact = source["artifacts"][-1]
-        operation_id = body["operationId"]
-        name = source["name"] + "（标准工程迁移）"
-        created = self.store.create(owner, name, source["originalGoal"], operation_id + ":create")
-        target_id = created["id"]
-        def change(target):
-            target["devKit"] = True
-            target["solution"] = json.loads(json.dumps(source["solution"]))
-            target["revisions"] = json.loads(json.dumps(source.get("revisions", [])))
-            target["migration"] = {"kind": "legacy-miniapp", "sourceProjectId": source["id"], "sourceArtifactHash": source_artifact["hash"], "state": "review-required", "sourceFiles": sorted(source_artifact.get("files", {}).keys()), "createdAt": time.time()}
-            target["confirmation"] = None
-            target["artifacts"] = []
-            target["stage"] = "discovery"
-        result = self.store.mutate(owner, target_id, operation_id + ":configure", {"sourceProjectId": project_id, "sourceArtifactHash": source_artifact["hash"]}, change)
-        result["migration"] = {"sourceProjectId": source["id"], "sourceArtifactHash": source_artifact["hash"], "state": "review-required"}
-        return result
-
     def list_projects(self, owner, include_deleted=False):
         team=getattr(self,'team',None)
         if team and not team.is_admin(owner):return team.catalog(owner)
@@ -557,14 +496,9 @@ class StudioService:
         if team and not team.is_admin(owner):return team.payload(owner,project_id,artifact_hash)
 
         p,a = self.artifact(owner,project_id,artifact_hash)
-        build_task = next((item for item in p.get("tasks", []) if item.get("id") == a.get("taskId")), {})
-        if p.get("devKit") and build_task.get("buildFormat") == "wanx-app-dev-kit" and not a.get("devKitPackage"):
-            raise StudioError("STANDARD_ARTIFACT_REQUIRED", 409)
-        devkit_payload = {"taskId":a["taskId"],"applicationId":a["manifest"].get("applicationId", p["appId"]),"name":a["manifest"].get("name", p["name"]),"projectId":p["id"],"version":a["version"],"artifactHash":a["hash"],"manifest":a["manifest"],"packageBase64":a["devKitPackage"]["packageBase64"],"packageSha256":a["devKitPackage"]["packageSha256"]} if a.get("devKitPackage") else None
+        devkit_payload = {"taskId":a["taskId"],"applicationId":a["manifest"].get("applicationId", p["appId"]),"name":a["manifest"].get("name", p["name"]),"projectId":p["id"],"version":a["version"],"artifactHash":a["hash"],"manifest":a["manifest"],"packageBase64":a["devKitPackage"]["packageBase64"],"packageSha256":a["devKitPackage"]["packageSha256"]}
         if "versioning" in p:
             if not p["versioning"]["adoptedHash"] or p["versioning"]["adoptedHash"] != artifact_hash:raise StudioError("USER_ACCEPTANCE_REQUIRED",409)
-            if not devkit_payload:
-                return self.versions.payload(owner,project_id,artifact_hash)
             self.versions.guard(owner,p,a)
             devkit_payload["delivery"]=delivery_state(p,a)
             adoptions=p["versioning"].get("adoptions",[])
@@ -574,13 +508,8 @@ class StudioService:
             return devkit_payload
         if not p["acceptance"] or p["acceptance"]["artifactHash"] != artifact_hash or a["solutionHash"] != digest(p["solution"]) or not p["confirmation"] or p["confirmation"]["hash"] != digest(p["solution"]) or p["artifacts"][-1]["hash"] != artifact_hash or p["tasks"][-1]["id"] != a["taskId"] or any(t["state"] in {"queued","running","waiting"} for t in p["tasks"]):
             raise StudioError("USER_ACCEPTANCE_REQUIRED",409)
-        if devkit_payload:
-            devkit_payload["delivery"] = delivery_state(p, a)
-            return devkit_payload
-        previous = next((x["manifest"] for x in p["artifacts"] if p["installed"] and x["hash"] == p["installed"]["artifactHash"]),None)
-        if not compatible(previous,a["manifest"]):
-            raise StudioError("BREAKING_SCHEMA_CHANGE",409)
-        return {"taskId":a["taskId"],"applicationId":p["appId"],"name":a["manifest"]["name"],"projectId":p["id"],"version":a["version"],"artifactHash":a["hash"],"manifest":a["manifest"],"bundle":a["bundle"],"css":a["css"],"delivery":delivery_state(p, a)}
+        devkit_payload["delivery"] = delivery_state(p,a)
+        return devkit_payload
 
     def export_standard_version(self, owner, project_id, artifact_hash):
         from copy import deepcopy
@@ -617,7 +546,7 @@ class StudioService:
             if any(entry.get(k)!=v for k,v in expected.items()):raise ValueError('descriptor mismatch')
             if any(project_data.get(k)!=a['snapshot'][k] for k in ['solution','decisions','confirmation']):raise ValueError('snapshot mismatch')
             if has_credentials(json.dumps(bundle,ensure_ascii=False)):raise ValueError('credentials')
-            expert=a['snapshot'].get('contracts',{}).get('foundation',{}).get('expertDeployment')
+            expert=expert_contract(a['snapshot'].get('contracts',{})).get('expertDeployment')
             if expert is not None and (not isinstance(expert,dict) or expert.get('profile')!='wanx-expert-app-v1' or type(expert.get('revision')) is not int or not 1<=expert['revision']<=9007199254740991):
                 raise ValueError('invalid frozen expert configuration')
         except (StudioError,KeyError,TypeError,ValueError) as exc:
@@ -682,13 +611,13 @@ class StudioService:
             except StudioError:
                 if not team.is_admin(owner):raise
             else:
-                a=publication['payload'];token=secrets.token_urlsafe(32)
+                a=publication['payload']
+                if not a.get('packageBase64'):raise StudioError("STANDARD_ARTIFACT_REQUIRED",409)
+                token=secrets.token_urlsafe(32)
                 self.runtime_sessions[token]={'owner':owner,'project':publication['project'],'app':app_id,
                     'artifact':artifact_hash,'environment':'production','manifest':a['manifest'],'files':{},
                     'expires':time.time()+3600,'dataOwner':'team:'+app_id,'publicationDigest':digest(a)}
-                if a.get('packageBase64'):
-                    return {'session':token,'manifest':a['manifest'],'packageBase64':a['packageBase64'],'packageSha256':a['packageSha256']}
-                return {'session':token,'manifest':a['manifest'],'bundle':a.get('bundle',''),'css':a.get('css','')}
+                return {'session':token,'manifest':a['manifest'],'packageBase64':a['packageBase64'],'packageSha256':a['packageSha256']}
         project=next((p for p in self.store.list(owner) if p['appId']==app_id),None)
         if not project:raise StudioError('APP_NOT_FOUND',404)
         return self.open_runtime(owner,project['id'],artifact_hash,'production')
@@ -713,7 +642,7 @@ class StudioService:
                 self.runtime_sessions[token]['layoutOnly']=True
                 result['standardLayout']=layout
             return result
-        return {"session":token,"manifest":a["manifest"],"bundle":a.get("bundle",""),"css":a.get("css","")}
+        raise StudioError("STANDARD_ARTIFACT_REQUIRED",409)
 
     def runtime(self, owner, token, *, allow_layout=False):
         s = self.runtime_sessions.get(token)

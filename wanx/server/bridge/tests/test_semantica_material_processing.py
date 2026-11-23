@@ -10,14 +10,13 @@ from wanx_bridge.semantica import material_processing_contract as material
 from wanx_bridge.semantica.desktop import DesktopError, resolve
 
 
-@pytest.mark.parametrize("suffix", ["processing-previews", "processing-transitions"])
-async def test_strict_transition_payloads_and_scope(desktop, suffix):
+@pytest.mark.parametrize("suffix,model", [
+    ("processing-previews", material.ProcessingPreview),
+    ("processing-starts", material.ProcessingStart),
+    ("processing-transitions", material.ProcessingConfirm),
+])
+async def test_strict_transition_payloads_and_scope(desktop, suffix, model):
     client, _, _, seen, _, _ = desktop
-    model = (
-        material.ProcessingPreview
-        if suffix.endswith("previews")
-        else material.ProcessingConfirm
-    )
     body = material.EXAMPLES[model]
     path = BASE + W + "/workbench/conversations/materials/document/" + suffix
     changes = [
@@ -28,8 +27,10 @@ async def test_strict_transition_payloads_and_scope(desktop, suffix):
     ]
     if model is material.ProcessingPreview:
         changes += [{"dialogue_context": None}, {"target_mode": "dialogue"}]
-    else:
+    elif model is material.ProcessingConfirm:
         changes += [{"confirmed": False}, {"preview_digest": "bad"}]
+    else:
+        changes += [{"confirmed": False}, {"confirmed": 1}, {"replacement_acknowledgement": "b" * 64}]
     for change in changes:
         response = await client.post(path, headers=AUTH, json={**body, **change})
         assert response.status_code in (403, 422), response.text
@@ -97,12 +98,35 @@ def test_new_routes_are_finite_and_have_documented_contracts():
         assert resolve(method, W + concrete)
         schema = contract.schema_extra(method, path, model, {})
         assert (
-            str(202 if model is material.ProcessingConfirm else 200)
+            str(202 if model in (material.ProcessingConfirm, material.ProcessingStart) else 200)
             in schema["responses"]
         )
         assert "$ref" not in json.dumps(schema)
     with pytest.raises(DesktopError):
         resolve("POST", W + "/workbench/conversations/materials/doc/release-hold")
+
+
+async def test_processing_start_is_signed_and_forwards_the_bound_source_version(desktop):
+    client, _, _, seen, reply, _ = desktop
+    body = material.EXAMPLES[material.ProcessingStart]
+    path = BASE + W + "/workbench/conversations/materials/document/processing-starts"
+    reply.update(status=202, value={"receipt": {"waits_for_source_index": True}, "reused": False})
+    result = await client.post(path, headers=AUTH, json=body)
+    assert result.status_code == 202
+    assert result.json() == reply["value"]
+    assert claims(seen[-1])["operation_id"] == "process"
+    assert json.loads(seen[-1].content)["expected_document_version_id"] == "version"
+
+
+async def test_staged_batch_import_forwards_source_review_requirement(desktop):
+    client, _, _, seen, reply, _ = desktop
+    body = {"operation_id": "batch-file", "filename": "example.txt", "external_document_id": "example",
+            "size_bytes": 7, "sha256": "a" * 64, "source_review_required": True}
+    reply.update(status=200, value={"upload_handle": "b" * 32, "offset": 0})
+    result = await client.post(BASE + W + "/imports", headers=AUTH, json=body)
+    assert result.status_code == 200, result.text
+    assert claims(seen[-1])["operation_id"] == "batch-file"
+    assert json.loads(seen[-1].content) == body
 
 
 async def test_automatic_replacement_ack_is_forwarded_exactly(desktop):

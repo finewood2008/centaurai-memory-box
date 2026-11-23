@@ -44,6 +44,7 @@ test('personal Starlink onboarding and ontology modeling use the service-only ma
     ['GET', '/api/semantica/modeling/onboarding'], ['GET', '/api/semantica/modeling/warehouses'],
     ['POST', '/api/semantica/modeling/onboarding'], ['POST', '/api/semantica/modeling/onboarding/profile/warehouse'],
     ['GET', root+'/modeling/suggestion-context'], ['POST', root+'/modeling/answer-confirmations'],
+    ['POST', root+'/modeling/assistant-intent'],
     ['POST', root+'/modeling/answer-suggestions'], ['GET', root+'/modeling/answer-suggestions/proposal'],
     ['GET', root+'/modeling/answer-suggestions/proposal/rules'], ['POST', root+'/modeling/rule-previews'],
     ['POST', root+'/modeling/rule-previews/preview/publish'], ['POST', root+'/modeling/warehouse-scope/publish'],
