@@ -1,0 +1,36 @@
+name: Windows installer graphical validation
+
+on:
+  push:
+    branches: [codex/memobox-windows-installer-gui-qa]
+
+permissions:
+  contents: read
+
+jobs:
+  graphical-validation:
+    runs-on: windows-2025
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github
+          persist-credentials: false
+      - name: Download the published installer
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:RUNNER_TEMP 'MemoBox-1.5.4-preview.2.exe'
+          curl.exe --retry 2 -fLsS -o "$exe" "https://github.com/finewood2008/centaurai-memory-box/releases/download/v1.5.4-windows-preview.2/CentaurAI-MemoBox-1.5.4-windows-preview.2-windows-x64.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'Download failed' }
+          if ((Get-FileHash -Algorithm SHA256 $exe).Hash -ne 'B8A5CCF63672B54AC8389B425216BD42CFC93822D5C12107FE55FF1A04FDD51D') {
+            throw 'The installer differs from the published preview'
+          }
+      - name: Exercise the installation wizard and capture its window
+        shell: powershell
+        run: .github/scripts/windows-installer-gui-qa.ps1 -Installer "$env:RUNNER_TEMP/MemoBox-1.5.4-preview.2.exe" -OutputPath "$env:RUNNER_TEMP/memobox-gui-qa"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: memobox-windows-installer-screenshots
+          path: ${{ runner.temp }}/memobox-gui-qa/
+          if-no-files-found: error
