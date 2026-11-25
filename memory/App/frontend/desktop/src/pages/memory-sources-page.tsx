@@ -959,7 +959,7 @@ export function MemorySourcesContent(props: MemorySourcesContentProps = {}) {
       </div>}
       <div className="space-y-2.5">
         {!isMyAi && !focusedSourceId && <div className="rounded-card border-content-panel bg-background-paper p-4">
-          <strong>配件</strong><p className="mt-1 text-xs text-text-ink/60">在配件工作台选择「保存到记忆」后，可在智能体记忆中按「配件」查看已确认的录音总结。</p>
+          <strong>配件</strong><p className="mt-1 text-xs text-text-ink/60">在对应录音智能体中点击「添加到自动记忆采集」，之后确认的总结会按来源归档。旧版录音和硬盘问答可按「配件记录（旧版录音、硬盘问答）」筛选。</p>
         </div>}
         {isMyAi && canChangeIntegrations && !visibleSources.length && !waitingSources.length && !state.agentSources.error && (
           <p className="rounded-card border-content-panel bg-background-paper p-4 text-sm text-text-ink/60" role="status">

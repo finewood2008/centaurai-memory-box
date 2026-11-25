@@ -38,7 +38,8 @@ async function sourceFingerprint(source, clientRoot, managed) {
     if (!await exists(path.join(source, name))) continue;
     hash.update(name); hash.update('\0'); hash.update(await readFile(path.join(source, name))); hash.update('\0');
   }
-  for (const file of [fileURLToPath(import.meta.url), fileURLToPath(new URL('./prepare-memory-runtime.mjs', import.meta.url)),
+  for (const file of [fileURLToPath(import.meta.url), fileURLToPath(new URL('../../starlink/shared/application-guide.mjs',import.meta.url)), fileURLToPath(new URL('../../starlink/shared/starlink-glossary.mjs',import.meta.url)), fileURLToPath(new URL('./prepare-memory-runtime.mjs', import.meta.url)),
+    fileURLToPath(new URL('../resources/accessory-preview/public/box-connection.css', import.meta.url)),
     fileURLToPath(new URL('../../../tools/stage-local-memory.mjs', import.meta.url)),
     fileURLToPath(new URL('../../../tools/repair-locked-sqlite.mjs', import.meta.url))]) hash.update(await readFile(file));
   return hash.digest('hex');
@@ -78,6 +79,7 @@ export async function buildMemoryWorkspace({clientRoot = client, env = process.e
       const npm = (args) => env.npm_execpath
         ? run(process.execPath, [env.npm_execpath, ...args], options)
         : run(process.platform === 'win32' ? 'npm.cmd' : 'npm', args, {...options, shell:process.platform === 'win32'});
+      const compileStarted = performance.now();
       if (managed) {
         npm(['run', 'memory:build']);
         npm(['run', 'build', '-w', '@memmy/backend']);
@@ -87,6 +89,7 @@ export async function buildMemoryWorkspace({clientRoot = client, env = process.e
         {...options, cwd:renderer});
       const frontend = (await treeFiles(nextUI)).sort();
       if (!await validFrontend(nextUI, frontend)) throw new Error('MEMORY_FRONTEND_BUILD_MISSING');
+      console.log('记忆盒前端与运行时 JS 构建：' + ((performance.now() - compileStarted) / 1000).toFixed(1) + ' 秒');
       if (managed) await prepareRuntime({source, clientRoot, env, run});
       await rm(cachedUI, {recursive:true, force:true});
       await rename(nextUI, cachedUI);

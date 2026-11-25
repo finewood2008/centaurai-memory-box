@@ -37,10 +37,18 @@ type response struct {
 func serve(ctx context.Context, input io.Reader, output io.Writer, s *service) {
 	var writes sync.Mutex
 	scan := bufio.NewScanner(input)
-	scan.Buffer(make([]byte, 4096), 64*1024)
+	const maxControlLine = 64 * 1024
+	// A HomeAI request may include a base64-encoded upload chunk.
+	scan.Buffer(make([]byte, 4096), (maxHomeAIRequestBody+2)/3*4+maxControlLine)
 	for scan.Scan() {
 		var req request
 		if json.Unmarshal(scan.Bytes(), &req) != nil || len(req.ID) == 0 {
+			continue
+		}
+		if len(scan.Bytes()) > maxControlLine && req.Method != "homeai_request" {
+			writes.Lock()
+			_ = json.NewEncoder(output).Encode(response{ID: req.ID, Error: &rpcError{Code: "invalid_params"}})
+			writes.Unlock()
 			continue
 		}
 		// A pending device login or start must never prevent stop being handled.

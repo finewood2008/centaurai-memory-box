@@ -314,8 +314,8 @@ test("Mac application and tray menus route quit through the Host confirmation an
 test("packaging ships readable platform icons and Retina tray artwork", async () => {
   const root = new URL("../", import.meta.url);
   const config = JSON.parse(await readFile(new URL("package.json", root), "utf8")).build;
-  assert.equal(config.productName, "半人马AI记忆盒子");
-  assert.equal(DESKTOP_NAME, "半人马AI记忆盒子 · CentaurAI MemoBox");
+  assert.equal(config.productName, "半人马AI-记忆盒子");
+  assert.equal(DESKTOP_NAME, "半人马AI-记忆盒子");
   assert.ok(config.files.includes("resources/**"));
   const icns = await readFile(new URL(config.mac.icon, root));
   assert.equal(icns.toString("ascii", 0, 4), "icns");

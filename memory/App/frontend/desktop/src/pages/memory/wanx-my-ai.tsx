@@ -586,9 +586,7 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
                 {
                   icon: Orbit,
                   label: "星图与空间",
-                  detail: boxContextLabel,
-                  action: boxDisconnected && <button type="button" className="my-ai-button my-ai-flow-step-action"
-                    onClick={() => openFlowDestination("boxes")}><Link2 size={13} aria-hidden="true" />连接盒子</button>,
+                  detail: boxDisconnected ? undefined : boxContextLabel,
                 },
                 { icon: Files, label: "本次选择的资料", detail: selectedContext || "可选星图和空间文件" },
                 {
@@ -609,7 +607,15 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
             </section>
           </div>
           <div className="my-ai-flow-controls my-ai-flow--context">
-            {supportsConnection && <div className="my-ai-connection-status" data-tone={progress.tone} aria-label="智能体连接状态">
+            {boxDisconnected && <section className="box-connect-notice compact" aria-label="资料授权连接提示">
+              <span className="box-connect-icon"><span className="box-connect-glyph" aria-hidden="true" /></span>
+              <div className="box-connect-copy" role="status">
+                <strong>盒子未连接</strong>
+                <p>连接盒子后可选择并授权任务资料。</p>
+              </div>
+              <button type="button" className="box-connect-button" onClick={() => openFlowDestination("boxes")}>连接盒子</button>
+            </section>}
+            {supportsConnection && (!boxDisconnected || hasConnection) && <div className="my-ai-connection-status" data-tone={progress.tone} aria-label="智能体连接状态">
               <div role="status" className="my-ai-connection-result">
                 {progress.tone === "success" ? <Check size={16} aria-hidden="true" />
                   : progress.tone === "working" ? <LoaderCircle className="animate-spin" size={16} aria-hidden="true" /> : null}

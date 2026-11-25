@@ -46,7 +46,18 @@ async function fixture(t,options={}) {
  service=await createPersonalSpace(settings);t.after(()=>service.close());
  return {root,entries,uploads,calls,events,saved:()=>saved,get service(){return service;},state:patch=>{state={...state,...patch};for(const f of listeners)f();},restart:async()=>{await service.close();service=await createPersonalSpace(settings);},done:timeout=>wait(()=>service.snapshot().imports.length&&service.snapshot().imports.every(b=>['complete','failed'].includes(b.phase)),timeout)};
 }
-async function samples(f,count=137){const folder=path.join(f.root,'中文 资料 #😀');await mkdir(path.join(folder,'一级','二级'),{recursive:true});await mkdir(path.join(folder,'空文件夹'));for(let i=0;i<count;i++)await writeFile(path.join(folder,i%2?'一级/二级':'',`材料 ${i} #%.txt`),`中文 ${i}\n  内容\n`);return folder;}
+async function samples(f,count=137){
+ const folder=path.join(f.root,'中文 资料 #😀');
+ await mkdir(path.join(folder,'一级','二级'),{recursive:true});
+ await mkdir(path.join(folder,'空文件夹'));
+ for(let start=0;start<count;start+=16){
+  await Promise.all(Array.from({length:Math.min(16,count-start)},(_,offset)=>{
+   const i=start+offset;
+   return writeFile(path.join(folder,i%2?'一级/二级':'',`材料 ${i} #%.txt`),`中文 ${i}\n  内容\n`);
+  }));
+ }
+ return folder;
+}
 const remotePath=(entries,entry)=>entry.parent?remotePath(entries,entries.get(entry.parent))+'/'+entry.name:entry.name;
 
 test('folder streams >20 files, retaining hierarchy, empty folders, exact names and full bytes',async t=>{

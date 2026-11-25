@@ -134,7 +134,7 @@ test("automatic recovery records the failing stage instead of hiding a cancelled
     return { getToken: () => "synthetic-token", close() {} };
   } });
   stages.length = 0; down = true;
-  await advance(t, 30_000);
+  await advanceToNetworkRecovery(t);
   assert.equal(f.client.snapshot().phase, "recovering");
   assert.ok(stages.some(([step, result]) => step === "box.recovery.session" && result === "NETWORK_CANCELLED"));
   assert.ok(stages.some(([step, result]) => step === "box.recovery.network" && result === "completed"));
@@ -145,6 +145,11 @@ const settle = () => new Promise(setImmediate);
 async function advance(t, ms = 30_000) {
   t.mock.timers.tick(ms);
   await settle();
+}
+
+async function advanceToNetworkRecovery(t) {
+  await advance(t);
+  for (const delay of [1000, 1000, 2000, 5000]) await advance(t, delay);
 }
 
 test("checks the selected box every 30 seconds through its original agent without replacing the gateway", async t => {
@@ -178,17 +183,19 @@ test("automatic recovery backs off beyond three failures and restores the same s
   await f.client.connect(overlay);
   down = true;
   await advance(t);
-  for (const delay of [1000, 2000, 5000, 10000, 30000, 60000, 60000]) {
-    const previous = recoveries;
+  assert.equal(f.client.snapshot().phase, "ready");
+  for (const [index, delay] of [1000, 1000, 2000, 5000, 10000, 30000, 60000, 60000].entries()) {
+    const previous = f.client.snapshot().recovery?.attempt ?? 0;
     await advance(t, delay - 1);
-    assert.equal(recoveries, previous);
+    assert.equal(f.client.snapshot().recovery?.attempt ?? 0, previous);
     await advance(t, 1);
-    assert.equal(recoveries, previous + 1);
+    const attempt = index + 1;
+    assert.equal(f.client.snapshot().recovery?.attempt, attempt);
+    assert.equal(recoveries, [0, 0, 0, 1, 1, 1, 2, 3][index]);
     assert.equal(f.client.snapshot().phase, "recovering");
     assert.equal(f.client.snapshot().connection.deviceId, overlay.deviceId);
     assert.equal(f.created[0].closed, false);
   }
-  assert.ok(recoveries > 3);
   down = false;
   await advance(t, 60000);
   assert.equal(f.client.snapshot().phase, "ready");
@@ -208,13 +215,13 @@ test("successful recovery preserves the application lease and resets the next ou
   await f.client.setNetworkEnabled(true);
   await f.client.connect(overlay, { createSession: async () => { sessions++; return { close() {} }; } });
   const lease = f.client.applicationConnection("test.app");
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 2; i++) {
     down = true;
-    await advance(t);
+    await advanceToNetworkRecovery(t);
     assert.equal(f.client.snapshot().phase, "ready");
+    assert.equal(recoveries, i + 1);
     assert.equal(await lease.request({ path: "/api/health" }), "alive");
   }
-  assert.equal(recoveries, 4);
   assert.equal(sessions, 1);
 });
 
@@ -307,7 +314,7 @@ for (const denied of [false, true]) {
     } });
     const previousLease = f.client.applicationConnection("test.app");
     down = true;
-    await advance(t);
+    await advanceToNetworkRecovery(t);
     assert.equal(sessions, 2);
     assert.equal(gateways[0].closed, true);
     assert.throws(() => previousLease.request({}), /SESSION_CLOSED/);
@@ -337,7 +344,7 @@ test("close waits for a late recovery gateway to be disposed", async t => {
   await f.client.setNetworkEnabled(true);
   await f.client.connect(overlay);
   down = true;
-  await advance(t);
+  await advanceToNetworkRecovery(t);
   assert.equal(count, 2);
   const closing = f.client.close().then(() => { closed = true; });
   await settle();
@@ -457,6 +464,31 @@ test("repeated control events do not overlap an in-flight health probe", async t
   assert.equal(f.client.snapshot().phase, "ready");
 });
 
+test("a failed periodic probe enters recovery immediately if the network changed during the probe", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const pending = deferred();
+  let probes = 0;
+  const f = fixture({
+    probe: async () => {
+      probes++;
+      if (probes === 1) return;
+      if (probes === 2) await pending.promise;
+      throw new Error("health_unavailable");
+    },
+  });
+  t.after(() => f.client.close());
+  await f.client.setNetworkEnabled(true);
+  await f.client.connect(overlay);
+  await advance(t);
+  assert.equal(probes, 2);
+  f.emit({ phase: "recovering" });
+  assert.equal(f.client.snapshot().phase, "ready");
+  pending.resolve();
+  await settle();
+  assert.equal(f.client.snapshot().phase, "recovering");
+  assert.equal(f.client.snapshot().recovery?.attempt, 1);
+});
+
 test("control-plane disruption enters recovery only after failed health and a ready status cannot clear it", async t => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   let down = false;
@@ -474,15 +506,86 @@ test("control-plane disruption enters recovery only after failed health and a re
   assert.equal(f.created[0].closed, false);
 });
 
-test("recovery rechecks the endpoint before requesting an engine restart", async t => {
+test("one failed periodic probe is confirmed on the same endpoint before reporting an outage", async t => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  let probes = 0, restarts = 0;
-  const f = fixture({ probe: async () => { if (++probes === 2) throw new Error("health_timeout"); }, recover: async () => { restarts++; } });
+  const agent = {}, probes = [], phases = [];
+  let restarts = 0;
+  const f = fixture({
+    resolveEndpoint: input => ({ url: input.url, agent }),
+    probe: async (url, options) => {
+      probes.push({ url, agent: options.agent });
+      if (probes.length === 2) throw new Error("health_unavailable");
+    },
+    recover: async () => { restarts++; },
+  });
   t.after(() => f.client.close());
   await f.client.setNetworkEnabled(true);
   await f.client.connect(overlay);
+  f.client.subscribe(state => phases.push(state.phase));
   await advance(t);
+  assert.equal(probes.length, 2);
+  await advance(t, 999);
+  assert.equal(probes.length, 2);
   assert.equal(f.client.snapshot().phase, "ready");
+  await advance(t, 1);
+  assert.equal(probes.length, 3);
+  for (const probe of probes.slice(1)) {
+    assert.equal(probe.url, overlay.url);
+    assert.equal(probe.agent, agent);
+  }
+  assert.equal(f.resolves, 1);
+  assert.equal(f.client.snapshot().phase, "ready");
+  assert.ok(!phases.includes("recovering"));
+  assert.equal(f.created[0].closed, false);
+  assert.equal(restarts, 0);
+});
+
+test("a short service outage recovers after multiple refused connections on the same tunnel", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let down = false, restarts = 0;
+  const f = fixture({
+    probe: async () => { if (down) throw new Error("health_unavailable"); },
+    recover: async () => { restarts++; },
+  });
+  t.after(() => f.client.close());
+  await f.client.setNetworkEnabled(true);
+  await f.client.connect(overlay);
+  down = true;
+  await advance(t);
+  await advance(t, 1000);
+  await advance(t, 1000);
+  assert.equal(f.client.snapshot().phase, "recovering");
+  assert.equal(f.client.snapshot().recovery?.attempt, 2);
+  assert.equal(restarts, 0);
+  down = false;
+  await advance(t, 2000);
+  assert.equal(f.client.snapshot().phase, "ready");
+  assert.equal(f.created.length, 1);
+  assert.equal(f.created[0].closed, false);
+  assert.equal(restarts, 0);
+});
+
+test("an unhealthy HTTP response keeps the tunnel intact throughout a sustained service outage", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let down = false, restarts = 0;
+  const f = fixture({
+    probe: async () => { if (down) throw new Error("health_invalid"); },
+    recover: async () => { restarts++; },
+  });
+  t.after(() => f.client.close());
+  await f.client.setNetworkEnabled(true);
+  await f.client.connect(overlay);
+  down = true;
+  await advance(t);
+  await advance(t, 1000);
+  for (const delay of [1000, 2000, 5000, 10000, 30000, 60000, 60000]) await advance(t, delay);
+  assert.equal(f.client.snapshot().phase, "recovering");
+  assert.equal(f.client.snapshot().recovery?.attempt, 8);
+  assert.equal(restarts, 0);
+  down = false;
+  await advance(t, 60000);
+  assert.equal(f.client.snapshot().phase, "ready");
+  assert.equal(f.created.length, 1);
   assert.equal(restarts, 0);
 });
 
@@ -597,7 +700,7 @@ for (const code of ["netbird_peer_unknown", "netbird_peer_disconnected"]) {
       recover: async () => { restarts++; } });
     t.after(() => f.client.close());
     await f.client.setNetworkEnabled(true); await f.client.connect(overlay);
-    ready = false; await advance(t); await advance(t);
+    ready = false; await advanceToNetworkRecovery(t);
     assert.equal(restarts, 0); assert.equal(f.client.snapshot().phase, "recovering");
     ready = true; await advance(t);
     assert.equal(f.client.snapshot().phase, "ready"); assert.equal(restarts, 0);

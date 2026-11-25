@@ -1,3 +1,4 @@
+import { guideScreenTargets, isGuideBackgroundClick } from "../../../../../wanx/apps/starlink/shared/application-guide.mjs";
 import { AppBootstrapResponseSchema } from "@memmy/local-api-contracts";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -13,6 +14,7 @@ import "./styles.css";
 import "./theme/centaur.css";
 import "./wanx-memory.css";
 import "./wanx-memory-workspace.css";
+import "../../../../../wanx/apps/personal-client/resources/accessory-preview/public/box-connection.css";
 
 const MemoryPage = lazy(() => import("./pages/memory-page.js").then(({ MemoryPage }) => ({ default: MemoryPage })));
 const MemorySettings = lazy(() => import("./pages/memory/wanx-memory-settings.js"));
@@ -23,13 +25,87 @@ const section = params.get("section");
 const requestedPage = params.get("memoryPage");
 const requestedAgent = params.get("memoryAgent") ?? "";
 const memoryAgent = requestedPage === "memories" && /^[a-z0-9_]{1,40}$/.test(requestedAgent) ? requestedAgent : undefined;
-const initialMemoryPage = requestedPage === "backup" ? "backup" : memoryAgent ? "memories" : undefined;
+const initialMemoryPage = requestedPage === "backup" ? "backup" : requestedPage === "memories" ? "memories" : undefined;
+document.addEventListener('click', event => {
+  if (window.parent !== window && isGuideBackgroundClick(event)) window.parent.postMessage({type:'wanx-guide-background'}, '*');
+});
+// Only return fields from controls on the mounted page, including current selections.
+window.addEventListener('message', event => {
+  if (event.source !== window.parent || event.data?.type !== 'wanx-guide-page' || !event.ports[0]) return;
+  if (typeof event.data.query==='string' && event.data.query.length<=120) {
+    if(event.data.area==='selection'){
+      const drawer=document.querySelector<HTMLElement>('.memory-drawer--entry');
+      const row=document.querySelector<HTMLElement>('.memory-list [data-guide-record][aria-selected="true"]');
+      const summary=Array.from(drawer?.querySelectorAll<HTMLElement>('.memory-detail-card .memory-detail-text') || []).find(el=>el.getClientRects().length);
+      const key=row?.dataset.guideRecord;
+      const available=!!(key && drawer?.getClientRects().length && summary);
+      const result=event.data.key ? available && event.data.key===key : available ? [{key,title:row?.dataset.guideTitle,source:'当前记忆详情',excerpt:summary?.innerText.slice(0,600)}] : [];
+      event.ports[0].postMessage(result);return;
+    }
+    const hits=guideScreenTargets(document,event.data.query);
+    const result=typeof event.data.key==='string' ? !!hits.find(h=>h.key===event.data.key)?.open()
+      : hits.map(({key,title,source})=>({key,title,source}));
+    event.ports[0].postMessage(result);
+    return;
+  }
+  const facts: Record<string, string | number | boolean | undefined> = {};
+  const shown = (s:string) => Array.from(document.querySelectorAll<HTMLElement>(s)).filter(el=>el.getClientRects().length);
+  const selected = shown('.my-ai-agent[aria-pressed=true]')[0];
+  if (selected) facts.当前智能体 = selected.getAttribute('aria-label') ?? undefined;
+  for (const el of shown('.my-ai-source-trigger')) {
+    const label=el.getAttribute('aria-label');
+    if (label) facts[label] = el.dataset.selected==='true' ? el.getAttribute('aria-description') || '已选择' : '未选择';
+  }
+  facts.子页面=shown('.memory-page-nav-group [aria-current=page]')[0]?.innerText.trim();
+  const counts=shown('.memory-overview [data-overview-target]');
+  if (counts.length) facts.概览数量=counts.map(card=>
+    card.querySelector('.memory-overview__stat-label')?.textContent?.trim()+' '+card.querySelector('.memory-overview__stat-value')?.textContent?.trim()).join('，');
+  const sources=shown('.memory-overview [data-source-distribution-row]');
+  if (sources.length) facts.来源分布示例=sources.slice(0,5).map(row=>row.innerText.trim().replace(/\s+/g,' ')).join('，');
+  const list=shown('.memory-panel--memories')[0]?.dataset;
+  if (list) Object.assign(facts,{列表状态:list.guideState, 当前来源:list.guideSource,
+    筛选结果数:list.guideTotal, 本页记录数:list.guideVisible});
+  const backup=shown('#my-ai-backup')[0]?.dataset;
+  if (backup) Object.assign(facts,{自动备份:backup.guideEnabled, 已选来源快照数:backup.guideSnapshots});
+  event.ports[0].postMessage(facts);
+});
+window.addEventListener('keydown',e=>{
+  if(!e.repeat && (e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase()==='k'){
+    e.preventDefault();window.parent.postMessage({type:'wanx-guide-ask'},'*');
+  }
+});
+// Notify the host when a memory or authorization editor is holding the user's place.
+let previousLocation = '';
+let modalOpen = false;
+new MutationObserver(() => {
+  const visible = (selector: string) => Array.from(document.querySelectorAll<HTMLElement>(selector)).find(el => el.getClientRects().length);
+  const dialog = visible('dialog[open], [aria-modal="true"]');
+  const open = Boolean(dialog);
+  const nav = visible('.memory-page-nav-group [aria-current="page"]');
+  const path = [
+    nav?.closest('.memory-page-nav-group')?.querySelector('.memory-page-section-label')?.textContent,
+    nav?.innerText,
+    visible('.wanx-memory-settings-tabs [aria-current="page"]')?.innerText,
+    visible('.my-ai-agent[aria-pressed="true"]')?.getAttribute('aria-label'),
+    visible('#my-ai-connection-details')?.getAttribute('aria-label'),
+    dialog?.matches('.memory-drawer--entry') ? '记忆详情' : dialog?.getAttribute('aria-label') ||
+      document.getElementById(dialog?.getAttribute('aria-labelledby') || '')?.textContent,
+  ].map(label => label?.trim()).filter(Boolean);
+  const location = JSON.stringify(path);
+  if (location !== previousLocation) {
+    previousLocation = location;
+    window.parent.postMessage({type:'wanx-guide-location', path}, '*');
+  }
+  if (open === modalOpen) return;
+  modalOpen = open;
+  window.parent.postMessage({type:'wanx-guide-modal',open}, '*');
+}).observe(document.body, {subtree:true,childList:true,attributes:true,attributeFilter:['open','hidden','aria-modal','aria-current','aria-pressed']});
 const isMyAi = section === "my-ai";
 const healthIntervalMs = 5_000;
 document.body.dataset.memorySurface = isMyAi ? "my-ai" : "memory";
 
 function wanxMemoryWording(message: string) {
-  return message.replace(/半人马AI\s*私人记忆盒子(?:\s+Platform)?|\bMemmy\b/gi, "半人马AI记忆盒子");
+  return message.replace(/半人马AI\s*私人记忆盒子(?:\s+Platform)?|\bMemmy\b/gi, "半人马AI-记忆盒子");
 }
 
 function WanxMemorySurface() {

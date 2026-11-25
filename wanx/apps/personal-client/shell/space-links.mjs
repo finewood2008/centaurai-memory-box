@@ -36,7 +36,7 @@ export async function createSpaceLinkBridge({client,store,serviceURL,onChanged=(
    const bound=scope();assertScope(bound);
    if(action.startsWith('share-'))return shares(action,input);
    if(action.startsWith('mcp-')){const v=await mcp.manage(action,input);assertScope(bound);if(['mcp-issue','mcp-revoke','mcp-manage','mcp-rotate'].includes(action))onChanged();return v;}
-   if(action==='spaces'){const own=(await remote(bound,'/spaces')).value.filter(s=>s.id==='personal');assertScope(bound);const drives=client.snapshot().connection.authorization==='local-trust-v1'?[]:await mcp.manage('mcp-drives');assertScope(bound);return [...own,...drives].map(s=>({...s,connections:[]}));}
+   if(action==='spaces'){const own=(await remote(bound,'/spaces')).value.filter(s=>s.id==='personal');assertScope(bound);const drives=input.personalOnly===true || client.snapshot().connection.authorization==='local-trust-v1'?[]:await mcp.manage('mcp-drives');assertScope(bound);return [...own,...drives].map(s=>({...s,connections:[]}));}
    if(action==='space-manage')return (await remote(bound,`/spaces/${id(input.id)}/manage`,{method:'POST',body:{action:input.action,name:input.name||''}})).value;
    if(action==='file-transfer'){if(input.space_id!=='personal')id(input.space_id);const v=await remote(bound,`/files/${id(input.id)}/transfer`,{method:'POST',body:{parent:input.parent||'',space_id:input.space_id,copy:input.copy===true}});onChanged();return v.value;}
    if(action==='storage-set'){if(input.id!=='personal')id(input.id);const v=await remote(bound,`/spaces/${input.id}/storage`,{method:'POST',body:{path:String(input.path||'')}});onChanged();return v.value;}

@@ -1,7 +1,7 @@
 (() => {
   const origin = "wanx-memory://local";
   let host, generation = 0;
-
+  let modalOpen=false, guidePath=[];
   async function open() {
     const target = host;
     const section = target.dataset.memorySection;
@@ -28,8 +28,8 @@
     const url = new URL(`${origin}/wanx-memory.html`);
     if (section === "my-ai") url.searchParams.set("section", section);
     const source = target.dataset.memoryAgent;
-    if (!section && target.dataset.memoryPage === "backup") {
-      url.searchParams.set("memoryPage", "backup");
+    if (!section && ["backup","memories"].includes(target.dataset.memoryPage)) {
+      url.searchParams.set("memoryPage", target.dataset.memoryPage);
     } else if (!section && source) {
       url.searchParams.set("memoryPage", "memories");
       url.searchParams.set("memoryAgent", source);
@@ -44,6 +44,16 @@
 
   window.addEventListener?.("message", event => {
     if (event.origin !== origin || !host?.isConnected || event.source !== host.querySelector("iframe")?.contentWindow) return;
+    if(event.data?.type==='wanx-guide-location' && Array.isArray(event.data.path)){
+      guidePath=event.data.path.filter(label=>typeof label==='string').slice(0,6);
+      window.memoGuide?.refreshLocation();
+    }
+    if(event.data?.type==='wanx-guide-background')window.memoGuideShell?.dismissOnBackground();
+    if(event.data?.type==='wanx-guide-modal')modalOpen=event.data.open===true;
+    if (event.data?.type==='wanx-guide-ask' && [undefined,'task-access','memory-source','backup'].includes(event.data.key)) window.memoGuide?.open(event.data.key);
+    if (event.data?.type === "wanx-accessory-project" && !host.dataset.memorySection &&
+        ["disk","clip"].includes(event.data.kind) && /^m-\d{8}-\d{6}-[a-f0-9]{6}$/.test(event.data.id))
+      window.dispatchEvent(new CustomEvent("wanx:accessory-project", {detail:{kind:event.data.kind, id:event.data.id}}));
     if (event.data?.type === "wanx-view-agent-memory" && host.dataset.memorySection === "my-ai" &&
         typeof event.data.source === "string" && /^[a-z0-9_]{1,40}$/.test(event.data.source))
       window.dispatchEvent(new CustomEvent("wanx:view-agent-memory", { detail: event.data.source }));
@@ -55,13 +65,34 @@
   });
 
   window.wanxMemory = {
+    guidePath:()=>guidePath,
+    async guideFacts(args={}) {
+      const target = host?.querySelector('iframe')?.contentWindow;
+      if (!target) return {};
+      const {port1,port2} = new MessageChannel();
+      try {
+        return await new Promise(resolve=>{
+          const timer=setTimeout(()=>resolve({}),500);
+          port1.onmessage=event=>{
+            clearTimeout(timer);
+            resolve(target===host?.querySelector('iframe')?.contentWindow ? event.data : {});
+          };
+          target.postMessage({type:'wanx-guide-page',...args},origin,[port2]);
+        });
+      } finally { port1.close(); }
+    },
+    canLeaveForGuide:()=>!modalOpen,
     reset() {
+      modalOpen=false;
+      guidePath=[];
       host?.replaceChildren();
       host = undefined;
       generation++;
     },
     mount(target) {
       if (target === host) return;
+      modalOpen=false;
+      guidePath=[];
       host = target;
       if (host) void open();
       else generation++;

@@ -8,6 +8,7 @@ import { parseArgs } from 'node:util';
 import { stageLocalMemory } from './stage-local-memory.mjs';
 import { repairLockedSqlite } from './repair-locked-sqlite.mjs';
 import { smokePackagedMemory } from './smoke-packaged-memory.mjs';
+import { smokePackagedAccessories } from './smoke-packaged-accessories.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 const checksum = async file => createHash('sha256').update(await readFile(file)).digest('hex');
@@ -155,8 +156,12 @@ export async function packageWindowsPreview({ version, out, repo = repositoryRoo
   const nativeCode = `const fs=require('node:fs'),path=require('node:path');const root=process.argv[1];const report=JSON.parse(fs.readFileSync(path.join(root,'runtime-manifest.json')));for(const item of report.nativeModules){const Db=require(path.join(root,item));const db=new Db(':memory:');if(db.prepare('SELECT 1 AS ok').get().ok!==1)throw Error('SQLITE_NATIVE_SMOKE_FAILED');db.close();}console.log(JSON.stringify({nativeAbi:process.versions.modules,nativeModules:report.nativeModules.length}));`;
   const nativeSmoke = JSON.parse(execFileSync(executable, ['-e', nativeCode, path.join(resources, 'local-memory')], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, encoding: 'utf8', timeout: 30_000 }).trim());
   const smoke = await smokePackagedMemory({ executable, resources, temporary: out });
+  if (!extractFile(path.join(resources, 'app.asar'), path.join('host-sdk', 'index.cjs')).length) {
+    throw new Error('RECORDING_HOST_SDK_MISSING');
+  }
+  const accessoriesSmoke = await smokePackagedAccessories({ executable, resources, temporary: out });
   const report = { schemaVersion: 1, version, sourceCommit, platform: 'windows', arch: 'x64', signed: false,
-    distributionClass: 'unsigned-internal-only', installer: installers[0], electronVersion, nativeSmoke, sqliteRepair, sqliteLock, smoke,
+    distributionClass: 'unsigned-internal-only', installer: installers[0], electronVersion, nativeSmoke, sqliteRepair, sqliteLock, smoke, accessoriesSmoke,
     runtimePackages: runtime.packages, immutableIdentity: { packageName: pkg.name, appId: pkg.build.appId, profileName: pkg.productName || pkg.name },
     sourceLocks: Object.fromEntries(await Promise.all(['memory/package-lock.json','wanx/apps/personal-client/package-lock.json'].map(async file => [file, await checksum(path.join(repo,file))]))) };
   const verification = path.join(output, 'verification-windows-preview.json');
@@ -164,12 +169,14 @@ export async function packageWindowsPreview({ version, out, repo = repositoryRoo
   const sums = await Promise.all([installers[0], path.basename(verification)].map(async file => `${await checksum(path.join(output,file))}  ${file}`));
   await writeFile(path.join(output, 'SHA256SUMS.txt'), sums.join('\n') + '\n');
   await writeFile(path.join(output, 'release-notes.md'), [
-    '半人马AI记忆盒子 Windows x64 预览版',
+    '半人马AI-记忆盒子 Windows x64 预览版',
     '',
     `- 来源提交 \`${sourceCommit}\`。`,
-    '- 「我的 AI」新增 Google，并区分 WorkBuddy 国内版和海外版。国内版首次配置提供 MCP 信任指引。',
-    '- 空间支持编辑可预览的纯文本文件，文件脱敏可通过右键菜单进入。',
-    '- 打包时验证应用内的备份 Drive SDK，防止缺少模块导致客户端启动失败。',
+    '- 安装向导直接进入安装位置，显示实际安装进度，完成后可选择打开应用。',
+    '- 配件目录和其他板块共用 CentaurAI 侧栏，打开侧栏时保留卡片布局。',
+    '- 星图入口使用「知识星图」，各板块横幅已整合。',
+    '- 「配件」支持本机录音。实时字幕、转写和云端总结需匹配的盒端服务与授权。',
+    '- 「配件 → 外接存储」可管理连接到盒子的外接硬盘。NAS 入口暂不可用。',
     '- 安装包未签名，预览版不启用正式自动更新。',
     '- 安装包内的原生依赖和本机记忆服务已在 Windows CI 验证。',
     '- 真实盒子登录、备份恢复和跨设备行为待实机联测。',

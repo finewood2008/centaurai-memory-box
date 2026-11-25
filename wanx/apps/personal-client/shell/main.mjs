@@ -41,7 +41,7 @@ import { registerControlActions, openConnectedDashboard } from "./control.mjs";
 import { createDashboardWindows } from "./dashboard.mjs";
 import { APP_ICON, DESKTOP_NAME, createDesktopIntegration } from "./desktop.mjs";
 import { claimSingleInstance } from "./instance.mjs";
-import { registerShutdown } from "./shutdown.mjs";
+import { createQuitRequest, registerShutdown } from "./shutdown.mjs";
 import { createFaqCache } from "../account/faq-cache.mjs";
 import { createAccount, DEFAULT_CONSUMER_URL } from "../account/index.mjs";
 import { createSetupRuntime } from "./setup.mjs";
@@ -99,6 +99,8 @@ import { createCodexContext } from "./codex-context.mjs";
 import { createCodexContextConfig, findCodexCli } from "./codex-context-config.mjs";
 import { detectWindowsCodex, openWindowsCodex } from "./windows-codex.mjs";
 import { createCodexContextSources } from "./codex-context-sources.mjs";
+import { spaceVolumeRequest } from "./accessory-nas.mjs";
+import { ACCESSORY_SCHEME, createAccessoriesPreview } from "./accessories-preview.mjs";
 import { createSemanticaMcpClient } from "./semantica-mcp-client.mjs";
 import { createMyAiAccess, createMyAiMemoryAccess } from "./my-ai-access.mjs";
 import { configurableAgents, createMyAiMcpConfig } from "./my-ai-mcp-config.mjs";
@@ -110,9 +112,9 @@ import { createTestUpdateRuntime } from "../updates/test-runtime.mjs";
 const testBuild = app.isPackaged ? testPackageIdentity(JSON.parse(readFileSync(path.join(app.getAppPath(), "package.json"), "utf8"))) : null;
 const windowName = testBuild ? TEST_PRODUCT_NAME : DESKTOP_NAME;
 const controlURL = new URL("../local-ui/renderer/index.html", import.meta.url).href;
-protocol.registerSchemesAsPrivileged([{ scheme: MEMORY_SCHEME, privileges: {
+protocol.registerSchemesAsPrivileged([MEMORY_SCHEME, ACCESSORY_SCHEME].map(scheme => ({ scheme, privileges: {
   standard: true, secure: true, supportFetchAPI: true, corsEnabled: true,
-} }]);
+} })));
 if (!testBuild && process.env.WANX_SMOKE_USER_DATA) {
   const isolated = path.resolve(process.env.WANX_SMOKE_USER_DATA);
   mkdirSync(isolated, { recursive: true });
@@ -482,6 +484,15 @@ if (process.argv.includes("--wanx-managed-app")) {
       control.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
       control.webContents.on("will-navigate", event => event.preventDefault());
       control.webContents.on("will-attach-webview", event => event.preventDefault());
+      const accessoriesPreview = createAccessoriesPreview({
+        app, window: control, BrowserWindow, client, account, dialog, safeStorage: osSafeStorage,
+        navigate: page => sendToLiveFrame(control, "wanx-client:navigate", page),
+        memoryFile: () => memoryRuntimeFile, ensureMemory: () => memoryRuntime.ensure(),
+        resourceDirectory: app.isPackaged ? path.join(process.resourcesPath, "accessory-preview")
+          : path.join(app.getAppPath(), "resources", "accessory-preview"),
+        dataDirectory: path.join(userData, "accessories-unconnected"),
+        onError: reportError,
+      });
       const deviceTrustWindow = createDeviceTrustWindow({
         BrowserWindow, ipcMain, service: deviceTrust, parentWindow: control,
         wifiTransport: offlineWifiTransport,
@@ -493,19 +504,7 @@ if (process.argv.includes("--wanx-managed-app")) {
       broadcast = createUIBroadcast({
         client, applications, uiState, startup, updates, defaultApplications, notifications, windows: () => [control], onError: reportError,
       });
-      let quitPrompt;
-      const requestQuit = () => {
-        if (quitPrompt) return quitPrompt;
-        // Only an explicit user action opens this confirmation. Background state
-        // changes never bring either window to the front.
-        quitPrompt = dialog.showMessageBox({
-          type: "question", title: "退出记忆盒子", message: "退出记忆盒子？",
-          detail: "这会关闭记忆盒子所承载的应用，并断开盒子连接。收起窗口可以继续在后台运行。",
-          buttons: ["继续运行", "退出记忆盒子"], defaultId: 0, cancelId: 0,
-        }).then(result => { if (result.response === 1) app.quit(); })
-          .finally(() => { quitPrompt = null; });
-        return quitPrompt;
-      };
+      const requestQuit = createQuitRequest({ app, control, dialog, onError: reportError });
 
       dashboards = createDashboardWindows({
         BrowserWindow,
@@ -771,8 +770,11 @@ if (process.argv.includes("--wanx-managed-app")) {
       });
       if (memorySource) void memoryRuntime.ensure().catch(reportError);
       memoryWorkspace.sync();
+      control.webContents.session.protocol.handle(ACCESSORY_SCHEME, accessoriesPreview.handleCatalog);
       control.webContents.session.protocol.handle(MEMORY_SCHEME, memoryWorkspace.handle);
       registerControlActions({
+        accessoriesPreview: accessoriesPreview.show,
+        spaceVolumes: input => spaceVolumeRequest({app,client}, input),
         personalDataService, personalWorkshop, starlinkPanel,
         openMemoryWorkspace: memoryWorkspace.open,
         localMemoryStorage: memoryWorkspace.storage,
@@ -840,6 +842,7 @@ if (process.argv.includes("--wanx-managed-app")) {
         },
       });
       unsubscribe = client.subscribe(() => {
+        accessoriesPreview.syncConnection();
         memoryWorkspace.sync();
         agentAccess.sync();
         if (!testRuntime) void agentAccess.restore(reportError).catch(reportError);
@@ -866,6 +869,7 @@ if (process.argv.includes("--wanx-managed-app")) {
           await agentLauncher.close();
           personalDataService?.close();
           starlinkPanel?.close();
+          accessoriesPreview.close();
           aiDialogue?.close();
           await memoryWorkspace.close().catch(reportError);
           await deliveryScheduler.close();

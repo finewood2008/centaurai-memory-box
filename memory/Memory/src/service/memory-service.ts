@@ -3365,12 +3365,14 @@ export class MemoryService {
     q?: string;
     tags?: string[];
     sourceAgent?: string;
+    sourceMatch?: "exact";
     excludedSourceAgents?: string[];
     page?: number;
     limit?: number;
     cursor?: string | number;
   }): {
     items: PanelMemoryListItem[];
+    sourceAgents?: string[];
     page: number;
     pageSize: number;
     total: number;

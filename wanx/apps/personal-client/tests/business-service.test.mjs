@@ -56,12 +56,16 @@ test('platform business replies arriving after a box switch are rejected without
 for (const platform of [false, true]) {
  test(`clipboard resumes through fresh ${platform ? 'platform ingress' : 'local business gateway'} after network recovery`, async t => {
   t.mock.timers.enable({apis:['setTimeout']});
-  let agent={}, failNext=false, sessions=0;
+  let agent={}, unhealthyProbes=0, sessions=0;
   const gateways=[];
   const network={snapshot:()=>({}),subscribe:()=>()=>{},close(){},networkChanged:async()=>{},
    resolveEndpoint:async value=>({url:value.url,agent})};
   const client=createClient({network,probe:async()=>{
-   if(failNext){failNext=false;agent={};throw new Error('network_unavailable');}
+   if(unhealthyProbes>0){
+    unhealthyProbes--;
+    if(!unhealthyProbes)agent={};
+    throw new Error('network_unavailable');
+   }
   },createGateway:async options=>{
    const gateway={url:'http://127.0.0.1:18888',closed:false,
     async request(){return {token:options.session?.getToken()};},
@@ -75,7 +79,11 @@ for (const platform of [false, true]) {
   const old=client.applicationConnection();
   await old.businessRequest('clipboard',{path:'/api/clipboard/v1/note'});
   const previous=gateways.map(item=>item.gateway);
-  failNext=true;t.mock.timers.tick(30_000);
+  unhealthyProbes=2;t.mock.timers.tick(30_000);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(client.snapshot().phase,'ready');
+  assert.ok(previous.every(gateway=>!gateway.closed));
+  t.mock.timers.tick(1_000);
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(client.snapshot().phase,'ready');
   assert.ok(previous.every(gateway=>gateway.closed));

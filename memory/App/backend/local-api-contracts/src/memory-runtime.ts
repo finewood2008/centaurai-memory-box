@@ -757,6 +757,7 @@ export type RetryMemoryProcessingOutput = z.infer<typeof RetryMemoryProcessingOu
 
 /** Schema for panel items input. */
 export const PanelItemsInputSchema = z.object({
+  sourceMatch: z.literal("exact").optional(),
   userSummary: z.enum(["true", "false"]).transform(value => value === "true").or(z.boolean()).optional(),
   layer: RecallMemoryLayerSchema.optional(),
   status: MemoryStatusSchema.optional(),
@@ -872,6 +873,7 @@ export type PanelAnalysisOutput = z.infer<typeof PanelAnalysisOutputSchema>;
 
 /** Schema for panel items output. */
 export const PanelItemsOutputSchema = z.object({
+  sourceAgents: z.array(z.string()).optional(),
   items: z.array(PanelMemoryListItemSchema),
   page: z.number().int().positive(),
   pageSize: z.literal(20),
@@ -938,6 +940,7 @@ export const PanelBrowseInputSchema = z.object({
 });
 export type PanelBrowseInput = z.infer<typeof PanelBrowseInputSchema>;
 export const PanelBrowsePageSchema = z.object({
+  sourceAgents: z.array(z.string()).optional(),
   viewId:z.string(), instanceId:z.string(), safety:z.string(), createdAt:IsoTimeSchema,
   page:z.number().int().positive(), pageSize:z.literal(20), total:z.number().int().nonnegative(),totalPages:z.number().int().positive(),hasNext:z.boolean(),hasPrev:z.boolean(),
   items:z.array(PanelMemoryListItemSchema).optional(), tasks:z.array(PanelTaskSummarySchema).optional(), serverTime:IsoTimeSchema

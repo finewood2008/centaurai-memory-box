@@ -4,12 +4,26 @@ import { probeEndpoint } from "./octop/probe.mjs";
 import { validateApplicationConnectionOptions } from "./applications/backend-scope.mjs";
 
 const HEALTH_INTERVAL_MS = 30_000;
+const HEALTH_CONFIRMATION_DELAY_MS = 1000;
 const RECOVERY_DELAYS_MS = [1000, 2000, 5000, 10_000, 30_000, 60_000];
+const NETWORK_FALLBACK_ATTEMPT = 4;
 const AUTH_FAILURES = new Set([
   "auth_required", "auth_failed", "auth_expired", "auth_unsupported",
   "NETWORK_DEVICE_ACCESS_DENIED", "ACCOUNT_LOGIN_REQUIRED",
   "BOX_PLATFORM_AUTH_FAILED", "LOCAL_BOX_AUTH_FAILED",
 ]);
+
+function isAuthorizationFailure(error) {
+  return error.status === 401 || error.status === 403 || AUTH_FAILURES.has(error.code || error.message);
+}
+
+function networkDisrupted(state, selected) {
+  if (selected.mode !== "netbird") return false;
+  if (state.phase === "recovering" || state.phase === "unavailable") return true;
+  if (state.phase !== "ready") return false;
+  const host = new URL(selected.url).hostname.replace(/^\[|\]$/g, "");
+  return !state.peers.some(peer => peer.ip === host && peer.connected);
+}
 
 /** Owns only this application's connections, never the shared NetBird daemon. */
 export function createClient({
@@ -156,21 +170,21 @@ export function createClient({
     }
   }
 
-  function scheduleHealthCheck(generation, delayMs = recovery ? RECOVERY_DELAYS_MS[Math.min(Math.max(0, recovery.attempt - 1), RECOVERY_DELAYS_MS.length - 1)] : HEALTH_INTERVAL_MS) {
+  function scheduleHealthCheck(generation, delayMs = recovery ? RECOVERY_DELAYS_MS[Math.min(Math.max(0, recovery.attempt - 1), RECOVERY_DELAYS_MS.length - 1)] : HEALTH_INTERVAL_MS, confirming = false) {
     // Local sessions have signed one-second heartbeats and an active watchdog.
     // The legacy unauthenticated/CA health probe is not a second trust path.
     if (boxSession?.kind === "local-trust-v1") return;
     if (closed || generation !== epoch || !connection) return;
     clearTimeout(healthTimer);
     healthTimer = setTimeout(() => {
-      const task = checkHealth(generation);
+      const task = checkHealth(generation, confirming);
       healthChecks.add(task);
       task.then(() => healthChecks.delete(task), () => healthChecks.delete(task));
     }, delayMs);
     healthTimer.unref?.();
   }
 
-  async function checkHealth(generation) {
+  async function checkHealth(generation, confirming) {
     const live = () => !closed && generation === epoch && Boolean(connection);
     if (!live() || healthController) return;
     const controller = new AbortController();
@@ -178,6 +192,7 @@ export function createClient({
     const check = (endpoint = activeEndpoint) => measure(recovery ? "box.recovery.health" : "box.healthcheck", () => probe(endpoint.url, {
       agent: endpoint.agent, signal: controller.signal,
     }));
+    let needsConfirmation = false;
     try {
       if (!recovery) {
         try {
@@ -187,8 +202,16 @@ export function createClient({
           reason = null;
           emit();
           return;
-        } catch {
+        } catch (error) {
           if (!live()) return;
+          if (isAuthorizationFailure(error)) {
+            await disconnect("connection_authorization_required");
+            return;
+          }
+          if (!confirming && !networkDisrupted(network.snapshot(), connection)) {
+            needsConfirmation = true;
+            return;
+          }
           recovery = { deviceId: connection.deviceId, attempt: 0, status: "retrying" };
         }
       }
@@ -196,6 +219,7 @@ export function createClient({
       phase = "recovering";
       reason = "network_unavailable";
       emit();
+      if (!live()) return;
       try {
         // Repair only this client's path. Keep the gateway and application leases
         // alive; reconnecting via connectBox would unnecessarily require Admin SSO.
@@ -206,9 +230,18 @@ export function createClient({
           await check(endpoint);
         } catch (error) {
           if (!live()) return;
+          const code = error.code || error.message;
           // Let a restarting engine receive its peer map before asking it to
           // restart again. A healthy endpoint needs no engine recovery at all.
-          if (connection.mode !== "netbird" || ["netbird_peer_unknown", "netbird_peer_disconnected"].includes(error.code || error.message)) throw error;
+          if (connection.mode !== "netbird" || isAuthorizationFailure(error) ||
+              ["netbird_peer_unknown", "netbird_peer_disconnected"].includes(code)) throw error;
+          // When the peer resolves, give WANX time to come back on the existing
+          // tunnel. An invalid HTTP health response already proves it works.
+          // For an ambiguous transport failure, try once early, then at the
+          // longest retry interval to recover a stale tunnel.
+          const mayRetryTunnel = recovery.attempt === NETWORK_FALLBACK_ATTEMPT ||
+            recovery.attempt > RECOVERY_DELAYS_MS.length;
+          if (endpoint && (code === "health_invalid" || !mayRetryTunnel)) throw error;
           await measure("box.recovery.network", () => network.networkChanged());
           if (!live()) return;
           endpoint = await measure("box.recovery.endpoint", () => network.resolveEndpoint(connection));
@@ -252,7 +285,7 @@ export function createClient({
         emit();
       } catch (error) {
         if (!live()) return;
-        if ([401, 403].includes(error.status) || AUTH_FAILURES.has(error.code || error.message)) {
+        if (isAuthorizationFailure(error)) {
           await disconnect("connection_authorization_required");
           return;
         }
@@ -262,7 +295,8 @@ export function createClient({
       }
     } finally {
       if (healthController === controller) healthController = null;
-      scheduleHealthCheck(generation);
+      if (needsConfirmation) scheduleHealthCheck(generation, HEALTH_CONFIRMATION_DELAY_MS, true);
+      else scheduleHealthCheck(generation);
     }
   }
 
@@ -273,15 +307,6 @@ export function createClient({
         void disconnect("connection_authorization_required");
         return;
       }
-      const lostPeer =
-        connection &&
-        state.phase === "ready" &&
-        !state.peers.some(
-          (peer) =>
-            peer.ip ===
-              new URL(connection.url).hostname.replace(/^\[|\]$/g, "") &&
-            peer.connected,
-        );
       if (
         !state.enabled ||
         state.phase === "auth_required" ||
@@ -296,8 +321,7 @@ export function createClient({
       if (connection) {
         // Peer/control status is advisory: an existing data path may still work.
         // Confirm health before interrupting app views or announcing an outage.
-        const disrupted = ["recovering", "unavailable"].includes(state.phase) || lostPeer;
-        if (disrupted && !recovery && !healthController) scheduleHealthCheck(epoch, 0);
+        if (!recovery && !healthController && networkDisrupted(state, connection)) scheduleHealthCheck(epoch, 0);
         phase = recovery ? "recovering" : "ready";
         reason = phase === "recovering" ? "network_unavailable" : null;
       }

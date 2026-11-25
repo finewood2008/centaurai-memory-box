@@ -10,6 +10,7 @@
 | 空间 Drive | `host.drive` | [Drive API](drive-api.md) |
 | 星图 | `host.request` 与 `X-Xingtu-Key` | [星图 API](starlink-api.md) |
 | 已部署专家应用 | `host.request`，合同 `wanx.expert-app.v1@1.0.0` | [专家应用 API](expert-app-api.md) |
+| 盒端 OCR、ASR 与 LLM 总结 | `host.request`、`host.openStream` 与实例媒体授权 | [盒端媒体 API](media-api.md) |
 
 ## 合同文件
 
@@ -22,6 +23,7 @@
 - `types.d.ts`：应用侧 TypeScript 类型。
 - `schemas/`：请求、响应、事件和配置的 JSON Schema。
 - `contract-status.v1.json`：合同完成状态与正式开放前的真实盒子验收门槛。
+- [`homeai-media.v1.json`](homeai-media.v1.json) 描述盒端媒体服务的 v1 路由、能力、传输和限制。接入前按目标盒和实例核对授权。
 
 `ready-for-acceptance` 表示公共请求/响应、错误、权限和兼容规则已经写入 Kit，但尚未完成真实盒子验收和版本登记。应用开发方可以据此开发适配层和 Mock；只有状态为 `open` 的能力才能作为生产开放能力依赖。
 

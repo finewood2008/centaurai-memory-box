@@ -85,6 +85,8 @@ async function rawState() {
 }
 
 const actions = {
+  "space-volumes": input => ipcRenderer.invoke("wanx-client:space-volumes", input),
+  "accessories-preview": input => ipcRenderer.invoke("wanx-client:accessories-preview", input),
   starlink: input => ipcRenderer.invoke('wanx-client:starlink', input),
   "help.faq": input => ipcRenderer.invoke("wanx-client:help-faq", { etag: input?.etag }),
   "help.feedback": async input => {
@@ -329,7 +331,9 @@ contextBridge.exposeInMainWorld(
     },
     onNavigate(listener) {
       const receive = (_event, page) => {
-        if (["my-ai", "memory", "ai-dialogue", "space", "boxes", "settings", "profile", "credits", "notifications"].includes(page)) listener(page);
+        if (page?.destination === "guide-capture" && ["会议录音智能体","随身录音智能体"].includes(page.label) && ["on","off","unknown"].includes(page.capture)) {
+          listener({destination:"guide-capture",label:page.label,capture:page.capture});
+        } else if (["my-ai", "memory", "ai-dialogue", "space", "boxes", "settings", "profile", "credits", "notifications","guide-capture","global-guide"].includes(page)) listener(page);
       };
       ipcRenderer.on("wanx-client:navigate", receive);
       return () => ipcRenderer.removeListener("wanx-client:navigate", receive);

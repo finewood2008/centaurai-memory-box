@@ -4,7 +4,9 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { prepareDesktopRuntime, resolveDesktopApplication, syncDesktopNativeBinaries } from "../tools/start-desktop.mjs";
+import { prepareDesktopRuntime, resolveDesktopApplication } from "../tools/start-desktop.mjs";
+import { nativeBinaryPaths } from "../shell/native-binaries.mjs";
+import { prepareClientBuild } from "../../builder/tools/client-build-directory.mjs";
 
 test("macOS development bundle presents MemoBox while preserving Electron and account identity", { skip: process.platform !== "darwin" }, async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "wanx-desktop-seam-"));
@@ -28,8 +30,8 @@ test("macOS development bundle presents MemoBox while preserving Electron and ac
   const bundle = path.join(root, "release/dev", `${config.build.productName}.app`);
   assert.equal(executable, path.join(bundle, "Contents/MacOS/Electron"));
   const plist = JSON.parse(execFileSync("/usr/bin/plutil", ["-convert", "json", "-o", "-", path.join(bundle, "Contents/Info.plist")], { encoding: "utf8" }));
-  assert.equal(plist.CFBundleDisplayName, "半人马AI记忆盒子");
-  assert.equal(plist.CFBundleName, "半人马AI记忆盒子");
+  assert.equal(plist.CFBundleDisplayName, "半人马AI-记忆盒子");
+  assert.equal(plist.CFBundleName, "半人马AI-记忆盒子");
   assert.equal(plist.CFBundleIdentifier, config.build.appId);
   assert.equal(plist.NSBluetoothAlwaysUsageDescription, config.build.mac.extendInfo.NSBluetoothAlwaysUsageDescription);
   assert.deepEqual(await readFile(path.join(bundle, "Contents/Resources", plist.CFBundleIconFile)), icon);
@@ -64,20 +66,23 @@ test("development startup requires the assembled app and never falls back to sou
   assert.equal(await resolveDesktopApplication(root), application);
 });
 
-test("development native helpers are refreshed inside the assembled app", async t => {
+test("development network helpers remain available after rebuilding the app", async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), "wanx-development-native-"));
   t.after(() => rm(root, { recursive: true, force: true }));
+  execFileSync("git", ["init", "-q"], { cwd: root });
+  await writeFile(path.join(root, "package.json"), "{}");
+  await writeFile(path.join(root, ".gitignore"), "/build/\n/native/bin/\n");
+  const appPath = path.join(root, "build/app");
   const source = path.join(root, "native/bin");
-  const target = path.join(root, "build/app/native/bin");
-  await mkdir(source, { recursive: true });
-  await writeFile(path.join(source, "wanx-helper"), "current native bytes");
-  await mkdir(target, { recursive: true });
-  await writeFile(path.join(target, "obsolete-helper"), "old bytes");
-  await syncDesktopNativeBinaries(root);
-  assert.equal(await readFile(path.join(target, "wanx-helper"), "utf8"), "current native bytes");
-  await assert.rejects(readFile(path.join(target, "obsolete-helper")), { code: "ENOENT" });
-  await writeFile(path.join(source, "wanx-helper"), "rebuilt bytes");
-  await syncDesktopNativeBinaries(root);
-  assert.equal(await readFile(path.join(target, "wanx-helper"), "utf8"), "rebuilt bytes");
-  assert.equal(await readFile(path.join(source, "wanx-helper"), "utf8"), "rebuilt bytes");
+  const oldRuntime = path.join(appPath, "native/bin");
+  const helpers = ["wanx-netbird-darwin-arm64", "wanx-discovery-darwin-arm64"];
+  for (const directory of [source, oldRuntime]) {
+    await mkdir(directory, { recursive: true });
+    for (const helper of helpers) await writeFile(path.join(directory, helper), helper);
+  }
+  const paths = nativeBinaryPaths({ appPath, resourcesPath: path.join(root, "electron/Resources"),
+    packaged: false, platform: "darwin", arch: "arm64" });
+  await prepareClientBuild(root, { edition: "personal", dependencies: false });
+  await assert.rejects(readFile(path.join(oldRuntime, helpers[0])), { code: "ENOENT" });
+  assert.deepEqual(await Promise.all(Object.values(paths).map(file => readFile(file, "utf8"))), helpers);
 });

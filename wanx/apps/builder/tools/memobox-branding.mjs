@@ -4,8 +4,8 @@ import {readFile,writeFile,readdir} from 'node:fs/promises';
 import path from 'node:path';
 
 const copy = [
- ['半人马AI 私人记忆盒子','半人马AI记忆盒子'], ['半人马AI-记忆盒子','半人马AI记忆盒子'],
- ['半人马·万象·星图','知识星图'], ['半人马AI-万象','半人马AI记忆盒子'],
+ ['半人马AI 私人记忆盒子','半人马AI-记忆盒子'], ['半人马AI记忆盒子','半人马AI-记忆盒子'],
+ ['半人马·万象·星图','知识星图'], ['半人马AI-万象','半人马AI-记忆盒子'],
  ['CentaurAI-WANX','CentaurAI MemoBox'], ['CentaurAI-MemoBox','CentaurAI MemoBox'], ['CentaurAI-WanX','CentaurAI MemoBox'],
  ['万象·星图','知识星图'], ['万象星图','知识星图'], ['万象·对话','AI 对话'],
  ['万象小助理','AI 助手'], ['万象工坊','应用工坊'], ['万象·开物','应用工坊'],
@@ -26,7 +26,7 @@ const copy = [
  ['Minimum WANX version','Minimum box service version'], ['WANX account identity','cloud account identity'], ['WANX user ID','User ID'], ['connection in WANX','connection in MemoBox'],
 ];
 // These are existing filesystem/registry identities, not display copy.
-const legacyIdentities = new Set(['万象.app','半人马AI-万象.app','万象记忆库']);
+const legacyIdentities = new Set(['万象.app','半人马AI-万象.app','万象记忆库','半人马AI记忆盒子.app','半人马AI记忆盒子 开发版.app']);
 export function memoboxCopy(text) {
  text=text.replace(/\\u([0-9a-f]{4})/gi,(escape,hex)=>{const char=String.fromCharCode(parseInt(hex,16));return /[\u3400-\u9fff]/.test(char)?char:escape;});
  for (const [from,to] of copy) text=text.replaceAll(from,to);

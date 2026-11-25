@@ -3,28 +3,52 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>半人马AI记忆盒子 · CentaurAI MemoBox</title>
+    <title>半人马AI-记忆盒子</title>
     <link rel="icon" type="image/png" href="../../resources/icon.png" />
     <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./box-connection.css" />
     <link rel="stylesheet" href="./space-document-preview.css" />
     <link rel="stylesheet" href="./space-annotation-workbench.css" />
-    <link rel="stylesheet" href="./space-agent-hub.css" />
     <link rel="stylesheet" href="./shared-note.css" />
     <link rel="stylesheet" href="./ai-dialogue.css" />
     <link rel="stylesheet" href="./academy.css" />
     <link rel="stylesheet" href="./data.css" />
     <link rel="stylesheet" href="./memory.css" />
+    <link rel="stylesheet" href="./accessory-tab.css" />
   </head>
   <body data-wanx-surface="main">
     <main id="app"></main>
     <div id="academy-drawer-root"></div>
+    <template id="memo-guide-template">
+      <section id="memo-guide-panel" class="ai-dialogue" aria-label="CentaurAI 引导对话">
+        <div class="ai-dialogue-heading"><small data-context></small></div>
+        <div class="ai-chat-workspace">
+          <div class="guide-connection" data-guide-connection hidden></div>
+          <div class="ai-transcript" role="log" aria-label="引导对话" aria-live="polite"></div>
+          <form class="ai-composer">
+            <textarea data-chat-input rows="2" maxlength="2000" aria-label="向 CentaurAI 提问" placeholder="想了解哪个功能，或想去哪一页？"></textarea>
+            <div class="ai-composer-bottom">
+              <button type="button" class="guide-suggestions-toggle" popovertarget="guide-suggestions" hidden>提问建议</button>
+              <div id="guide-suggestions" class="guide-page-questions" popover="auto" role="group" aria-label="当前页面可以问的问题"></div>
+              <button class="ai-send" type="submit" aria-label="发送" title="发送" disabled>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M12 19V5m-6 6 6-6 6 6"/>
+                </svg>
+              </button>
+            </div>
+          </form>
+        </div>
+      </section>
+    </template>
+    <link rel="stylesheet" href="./global-guide.css">
+    <script type="module" src="./global-guide.mjs"></script>
     <script src="./device-setup.bundle.js"></script>
     <script src="./discovery-selection.js"></script>
     <script src="./wallet.bundle.js"></script>
     <script src="./space-workspaces.js"></script>
     <script src="./space-previews.js"></script>
     <script src="./super-clipboard.js"></script>
-    <script src="./space-agent-hub.js"></script>
+    <script src="./space-volumes.js"></script>
     <link rel="stylesheet" href="./space-shares.css">
     <script src="./space-shares.js"></script>
     <script src="./space-annotation-workbench.js"></script>
@@ -48,6 +72,7 @@
 <script src="./workshop.js"></script>
 <script src="./action-menus.js"></script>
 <script src="./memory.js"></script>
+<script src="./accessory-tab.js"></script>
 <script src="./renderer.js"></script>
   <link rel="stylesheet" href="./material-theme.css">
   <link rel="stylesheet" href="./academy-dialogue.css">

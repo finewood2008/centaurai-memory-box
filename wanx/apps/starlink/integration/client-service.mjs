@@ -120,6 +120,16 @@ export function createStarlinkPanelService({ client, personalSpace, selectSave, 
           if (action === 'delete-warehouse' && (typeof input.token !== 'string' || !input.token.length ||
               typeof input.typedName !== 'string' || !input.typedName.trim())) throw fail('INVALID_RESOURCE');
         }
+        // The global guide uses the box model connection without opening a project data session.
+        if (action === 'starxiaotu-answer' && input.applicationGuide === true) {
+          const value = {key: key(), revision, link: await client.applicationConnection()};
+          try {
+            live(value);
+            const answer = await answerStarxiaotu({client, link:value.link, input, live:() => live(value)});
+            live(value);
+            return {ok:true, value:answer};
+          } finally { value.link.close?.(); }
+        }
         const value = await entry(); live(value);
         if (action === 'launch-target') return { ok: true, value: null };
         if (action === 'launch-target-applied') return { ok: true, value: { applied: true } };

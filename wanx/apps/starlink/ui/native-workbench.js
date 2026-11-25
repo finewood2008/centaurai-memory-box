@@ -81,11 +81,16 @@ export function createWorkbenchHost({ call, warehouse, container, onView, onImpo
         current = { frame, warehouse: warehouse(), controls: null };
         if (onAssistantTerm || onOutsideClick) frame.addEventListener('load', () => {
           if (!trusted(frame.contentWindow)) return;
+          frame.contentDocument?.addEventListener('keydown',event=>{
+            if(trusted(frame.contentWindow) && !event.repeat && (event.metaKey||event.ctrlKey) && event.shiftKey && event.key.toLowerCase()==='k') {
+              event.preventDefault();window.semantica?.openGuide?.();
+            }
+          });
           frame.contentDocument?.addEventListener('click', event => {
             if (!trusted(frame.contentWindow)) return;
             const marker = event.target.closest?.('[data-starxiaotu-term]');
-            if (marker) onAssistantTerm?.(marker.dataset.starxiaotuTerm);
-            else onOutsideClick?.();
+            if (marker) onAssistantTerm?.(marker.dataset.starxiaotuTerm,marker);
+            else onOutsideClick?.(event);
           });
         });
         frame.src = url.href;

@@ -441,7 +441,7 @@ it("offers box and backup shortcuts, showing the saved schedule and active backu
   try {
     await render();
     const backup = host.querySelector(".my-ai-flow--capture li:last-child")!;
-    const box = host.querySelector(".my-ai-flow--context li:first-child")!;
+    const box = host.querySelector('[aria-label="资料授权连接提示"]')!;
     expect(backup.textContent).toContain("每 30 分钟自动备份");
     expect(backup.querySelector(".my-ai-flow-step-icon--busy")).toBeNull();
     expect(box.textContent).toContain("盒子未连接");
@@ -452,7 +452,7 @@ it("offers box and backup shortcuts, showing the saved schedule and active backu
 
     mocks.backup = { ...mocks.backup, connected: true, phase: "backing-up", intervalMinutes: 60 };
     await render();
-    expect(button("连接盒子", box)).toBeUndefined();
+    expect(host.querySelector('[aria-label="资料授权连接提示"]')).toBeNull();
     expect(backup.textContent).toContain("每 1 小时自动备份");
     expect(backup.textContent).toContain("正在备份记忆库");
     expect(backup.querySelector(".my-ai-flow-step-icon--busy")).toBeTruthy();
@@ -630,4 +630,11 @@ it("shows all three selections on a second line and sends the chosen memory scop
   expect(memory.dataset.selected).toBe("false");
   expect(posts.filter(item => item.action === "agent-context/selection" && item.body.selection).at(-1)?.body)
     .toEqual({ agent: "codex", selection: { folderId: "docs-one", warehouseId: "warehouse-one", memoryEnabled: false } });
+});
+
+it("omits the accessory agent section and its capture controls from My AI", async () => {
+  await render();
+  const sidebar = host.querySelector(".my-ai-agents")!;
+  expect(sidebar.textContent).not.toMatch(/配件智能体|会议录音智能体|随身录音智能体/);
+  expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes("/my-ai/recording/"))).toBe(false);
 });

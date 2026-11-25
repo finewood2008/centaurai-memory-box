@@ -1,4 +1,4 @@
-import { ensurePanelCache, panelAnalysisLogs, panelMemoryStats, panelVisibleMemoryIds } from "../../storage/panel-cache.js";
+import { ensurePanelCache, panelL1Sources, panelAnalysisLogs, panelMemoryStats, panelVisibleMemoryIds } from "../../storage/panel-cache.js";
 import type { MemoryRow } from "../../types.js";
 import { effectiveEpisodeMemoryIds } from "../../storage/memory-relations.js";
 import {externalEvidenceNamespaceForMemory} from "../external-evidence-source.js";
@@ -490,12 +490,14 @@ export class PanelReadModel {
     q?: string;
     tags?: string[];
     sourceAgent?: string;
+    sourceMatch?: "exact";
     excludedSourceAgents?: string[];
     page?: number;
     limit?: number;
     cursor?: string | number;
   }): {
     items: PanelMemoryListItem[];
+    sourceAgents?: string[];
     page: number;
     pageSize: number;
     total: number;
@@ -557,6 +559,7 @@ export class PanelReadModel {
       status: input.status,
       tags: input.tags,
       agentId: input.sourceAgent,
+      sourceMatch: input.sourceMatch,
       excludedAgentIds: input.excludedSourceAgents
     };
     const total = input.q?.trim()
@@ -575,6 +578,7 @@ export class PanelReadModel {
         ).map((hit) => hit.id))
       : this.deps.repos.memories.listForPanel(filter, pageSize, offset);
     return {
+      ...(input.layer === "L1" && { sourceAgents: panelL1Sources(this.deps.repos.db) }),
       items: this.displayItems(memories,!input.namespace?.userId),
       page,
       pageSize,
@@ -636,7 +640,7 @@ export class PanelReadModel {
       return this.deps.repos.userMemories.panelMemberIds({userId, query: input.q, sourceAgent: input.sourceAgent, status: input.status === "activated" ? "active" : input.status});
     }
     ensurePanelCache(this.deps.repos.db,["memories"]);
-    return this.deps.repos.memories.panelMemberIds({panelSource: true, panelVisible: true, memoryLayer: input.layer, status: input.status, tags:input.tags, agentId: input.sourceAgent, excludedAgentIds:input.excludedSourceAgents}, input.q);
+    return this.deps.repos.memories.panelMemberIds({panelSource: true, panelVisible: true, memoryLayer: input.layer, status: input.status, tags:input.tags, agentId: input.sourceAgent, sourceMatch: input.sourceMatch, excludedAgentIds:input.excludedSourceAgents}, input.q);
   }
 
   panelPageByIds(ids: string[], input: Parameters<PanelReadModel["panelMembers"]>[0]) {
@@ -648,7 +652,10 @@ export class PanelReadModel {
       })};
     }
     const visible=panelVisibleMemoryIds(this.deps.repos.db,ids);
-    return {items: this.displayItems(this.deps.repos.memories.getManyForPanel(ids.filter(id=>visible.has(id))),!input.namespace?.userId)};
+    return {
+      ...(input.layer === "L1" && { sourceAgents: panelL1Sources(this.deps.repos.db) }),
+      items: this.displayItems(this.deps.repos.memories.getManyForPanel(ids.filter(id=>visible.has(id))),!input.namespace?.userId)
+    };
   }
 
   panelTasks(input: RequestEnvelope & { q?: string; sourceAgent?: string; page?: number }): {

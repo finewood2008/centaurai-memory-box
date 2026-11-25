@@ -152,7 +152,7 @@ function date(value: string): string {
 function applicationName(value: string): string {
   const known: Record<string, string> = {
     "com.TickTick.task.mac": "TickTick",
-    "cn.memtensor.memmy": "半人马AI记忆盒子",
+    "cn.memtensor.memmy": "半人马AI-记忆盒子",
     "com.openai.codex": "Codex",
     "com.openai.chat": "ChatGPT",
     "com.google.Chrome": "Chrome",

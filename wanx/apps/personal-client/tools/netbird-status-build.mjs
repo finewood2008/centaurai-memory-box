@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import { mkdtemp, readFile, writeFile, rm, readdir, cp, chmod, mkdir, rename } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 const execute = promisify(execFile);
 
@@ -77,9 +78,17 @@ export async function createStatusBuild(nativeDirectory) {
       await writableDirectories(stage);
       await chmod(path.join(stage, "client/embed/embed.go"), 0o644);
       await writeFile(path.join(stage, "client/embed/embed.go"), patched);
-      try { await rename(stage, sdk); }
-      catch (error) { if (!["EEXIST", "ENOTEMPTY"].includes(error.code)) throw error; }
-    } finally { await rm(stage, { recursive: true, force: true }); }
+      for (let attempt = 1; ; attempt++) {
+        try { await rename(stage, sdk); break; }
+        catch (error) {
+          // A concurrent invocation may have published the same SDK. Windows
+          // can also briefly hold the freshly copied directory open.
+          if (await readFile(replacement, "utf8").catch(() => null) === patched) break;
+          if (process.platform !== "win32" || !["EPERM", "EACCES", "EBUSY"].includes(error.code) || attempt === 6) throw error;
+          await delay(attempt * 500);
+        }
+      }
+    } finally { await rm(stage, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 }); }
     if (await readFile(replacement, "utf8") !== patched) throw new Error("Invalid staged NetBird SDK");
   }
   const temporary = await mkdtemp(path.join(build, "invocation-"));

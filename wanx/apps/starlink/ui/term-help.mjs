@@ -1,5 +1,5 @@
 import { getStarlinkTerm, starlinkGlossary } from '../shared/starlink-glossary.mjs';
-import { starxiaotuIcon } from './starxiaotu.mjs';
+import {guideMark} from '../shared/application-guide.mjs';
 
 const escape = value => value.replace(/[&<>"']/g, character =>
   ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[character]);
@@ -8,8 +8,8 @@ export function starxiaotuTermMarker(key) {
   const term = getStarlinkTerm(key);
   if (!term) return '';
   return '<button type="button" class="sx-term" data-starxiaotu-term="' + escape(term.key) +
-    '" aria-label="向星小图了解' + escape(term.label) + '" aria-description="' + escape(term.definition) +
-    '" title="' + escape(term.label + "：" + term.definition) + '">' + starxiaotuIcon + '</button>';
+    '" aria-label="让 CentaurAI 解释' + escape(term.label) + '" aria-description="' + escape(term.definition) +
+    '" title="' + escape("让 CentaurAI 解释" + term.label) + '">' + guideMark + '</button>';
 }
 
 export function mountTermGlossary(dialog) {

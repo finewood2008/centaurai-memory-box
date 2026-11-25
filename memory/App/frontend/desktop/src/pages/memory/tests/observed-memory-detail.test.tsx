@@ -49,7 +49,7 @@ describe("observed memory detail", () => {
     expect(html).toContain("已整理为记忆");
     expect(html).not.toContain("尚未经你核实");
     expect(html).toContain("TickTick");
-    expect(html).toContain("Memmy");
+    expect(html).toContain("电脑使用记录");
     expect(html).toContain("memory-observation-app");
     expect(html).toContain('<h4 class="memory-markdown__heading">后续上下文</h4>');
     expect(html).toContain("录音设备采购仍有审批和报销事项需要跟进。");

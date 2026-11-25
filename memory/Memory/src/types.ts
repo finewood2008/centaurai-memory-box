@@ -195,6 +195,7 @@ export interface MemoryFilter {
   sessionId?: string;
   conversationId?: string;
   agentId?: string;
+  sourceMatch?: "exact";
   excludedAgentIds?: string[];
   /** Panel producer filtering only; ordinary ownership/retrieval filters keep their semantics. */
   panelSource?: boolean;

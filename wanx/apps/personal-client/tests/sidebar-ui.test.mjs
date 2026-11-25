@@ -28,7 +28,7 @@ async function runSidebarFixture(t, notesOnly = false) {
 }
 
 const options = { skip: process.env.WANX_TEST_ELECTRON !== "1", timeout: 40_000 };
-test("The personal window shares the right sidebar without losing notes or conversation state",
+test("Starxiaotu uses the right drawer and preserves chat drafts when saving notes",
   options, t => runSidebarFixture(t));
 test("Shared notes can be created, switched and deleted without changing the original",
   options, t => runSidebarFixture(t, true));

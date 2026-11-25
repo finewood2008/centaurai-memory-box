@@ -331,6 +331,7 @@ class ServiceSessionVerifier:
         upstream_token: str | None = None,
         authority: dict[str, Any] | None = None,
         upstream_expires_at: float | None = None,
+        homeai_space_destination: dict[str, Any] | None = None,
     ) -> str:
         record = self._record(service_id)
         now = int(self.now())
@@ -359,6 +360,10 @@ class ServiceSessionVerifier:
         }
         if space_id is not None:
             claims["spaceId"] = space_id
+        if homeai_space_destination is not None:
+            if service_id != "wanx.homeai" or space_id != "personal":
+                raise BridgeAuthError("HOMEAI_SPACE_ACCESS_DENIED", 403)
+            claims["homeaiSpaceDestination"] = homeai_space_destination
         token = self._encode(claims)
         if upstream_token is not None:
             if not isinstance(upstream_token, str) or not upstream_token:

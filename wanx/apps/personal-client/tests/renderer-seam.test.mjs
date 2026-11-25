@@ -244,6 +244,7 @@ async function harness(initial = state(), installed = [application], options = {
   }
   vm.runInNewContext(source, {
     window, setInterval() {}, clearInterval() {},
+    ResizeObserver: class { observe() {} disconnect() {} },
     Date, URL, crypto: globalThis.crypto,
     setTimeout, clearTimeout, TextEncoder, queueMicrotask,
     document: { body:{dataset:{},classList:{toggle(){}},append(){}},createElement:()=>({dataset:{},setAttribute(){}}),addEventListener() {}, getElementById: (id) => id === "app" ? app : null, querySelector: (selector) => selector === "#app" ? app : selector === "#account-name" ? { value: forms.get("auth")?.values.username || "" } : null },
@@ -324,7 +325,7 @@ test("global settings omit memory settings while My AI and Memory keep their tab
   await h.click("show-my-ai");
   assert.match(h.app.innerHTML, /data-action="show-my-ai" aria-current="page"\s*>我的 AI<\/button>/);
   assert.match(h.app.innerHTML, /wanx-section-banner my-ai-banner/);
-  assert.match(h.app.innerHTML, /半人马AI记忆盒子/);
+  assert.match(h.app.innerHTML, /<strong>半人马AI-记忆盒子<\/strong>/);
   assert.match(h.app.innerHTML, /CentaurAI MemoBox/);
   assert.doesNotMatch(h.app.innerHTML, /个人版/);
   assert.match(h.app.innerHTML, /class="memory-host" data-memory-section="my-ai"/);
@@ -332,6 +333,9 @@ test("global settings omit memory settings while My AI and Memory keep their tab
   assert.match(h.app.innerHTML, /data-action="show-memory" aria-current="page"\s*>记忆<\/button>/);
   assert.match(h.app.innerHTML, /wanx-section-banner memory-banner/);
   assert.match(h.app.innerHTML, /智能体记忆.*agent memory/);
+  assert.match(h.app.innerHTML, /记忆连接提示/);
+  assert.doesNotMatch(h.app.innerHTML, /class="memory-host"/);
+  h.update(state("ready", "ready", "box-102"));
   assert.match(h.app.innerHTML, /class="memory-host" data-memory-section=""/);
 });
 
@@ -339,6 +343,8 @@ test("My AI shortcuts open Boxes and deep-link to backup without changing ordina
   const h = await harness();
   const open = destination => h.window.dispatchEvent(new CustomEvent("wanx:my-ai-destination", { detail: destination }));
   open("backup");
+  assert.match(h.app.innerHTML, /记忆连接提示/);
+  h.update(state("ready", "ready", "box-102"));
   assert.match(h.app.innerHTML, /data-memory-section="" data-memory-agent="" data-memory-page="backup"/);
   await h.click("show-memory");
   assert.match(h.app.innerHTML, /data-memory-page=""/);
@@ -685,7 +691,7 @@ test("native menu navigation reaches settings and home while preserving login an
   assert.match(h.app.innerHTML, /设备管理/);
   h.navigate("memory");
   await flushActions();
-  assert.match(h.app.innerHTML, /class="memory-host" data-memory-section=""/);
+  assert.match(h.app.innerHTML, /记忆连接提示/);
   h.navigate("my-ai");
   await flushActions();
   assert.match(h.app.innerHTML, /class="memory-host" data-memory-section="my-ai"/);
@@ -2176,12 +2182,13 @@ test("box maintenance opens the current box terminal and desktop through trusted
   await h.click("maintenance-open", { tool: "terminal" });
   assert.equal(h.dashboards.at(-1).deviceId, "box-103");
   h.update({ ...state("ready", "ready", "box-103"), phase: "recovering" });
-  assert.match(h.app.innerHTML, /正在恢复连接/);
-  assert.match(h.app.innerHTML, /data-tool="terminal" disabled/);
+  assert.match(h.app.innerHTML, /正在重连盒子/);
+  assert.match(h.app.innerHTML, /盒子运维工具连接提示/);
+  assert.doesNotMatch(h.app.innerHTML, /data-tool="terminal"/);
   await h.click("maintenance-open", { tool: "desktop" });
   assert.equal(h.dashboards.length, 3);
   h.update(state());
-  assert.match(h.app.innerHTML, /请先连接一台盒子/);
+  assert.match(h.app.innerHTML, /连接盒子后可使用盒子运维工具/);
   await h.click("maintenance-open", { tool: "terminal" });
   assert.equal(h.dashboards.length, 3);
   h.update({ account: { phase: "signed_out" } });
@@ -2462,13 +2469,13 @@ test("pending network cleanup explains server recovery instead of blaming the lo
   assert.doesNotMatch(h.app.innerHTML, /请检查本机网络后重试连接/);
 });
 
-test('assistant navigation opens the drawer and the browser remains independent', async () => {
+test('retired assistant navigation leaves the current page and model settings accessible', async () => {
   const h = await harness();
   const nav = h.app.innerHTML.match(/<nav class="main-nav"[\s\S]*?<\/nav>/)[0];
-  assert.deepEqual([...nav.matchAll(/data-action="show-([a-z-]+)"/g)].map(match => match[1]), ['my-ai', 'memory', 'data', 'space', 'boxes']);
+  assert.deepEqual([...nav.matchAll(/data-action="show-([a-z-]+)"/g)].map(match => match[1]), ['my-ai', 'memory', 'data', 'space', 'boxes', 'accessories']);
   assert.doesNotMatch(h.app.innerHTML, /browser-host|show-browser/);
   await h.click('show-ai-dialogue');
-  assert.equal(h.academy.mode, 'dialogue');
+  assert.equal(h.academy.mode, null);
   assert.match(h.app.innerHTML, /class="memory-host"/);
   assert.equal(h.launches.length, 0);
   await h.click('show-settings');
@@ -2512,7 +2519,7 @@ test('local identity opens the ordinary shell without cloud login and keeps host
   assert.equal(h.dashboards.length, 0);
   await h.click('show-settings');
   assert.match(h.app.innerHTML, /data-action="cloud-login"/);
-  assert.match(h.app.innerHTML, /aria-label="空间 MCP"/);
+  assert.doesNotMatch(h.app.innerHTML, /aria-label="空间 MCP"|盒子运维工具/);
   assert.doesNotMatch(h.app.innerHTML, /本地设备安全|data-action="device-trust-open"/);
   await h.click('cloud-login');
   assert.match(h.app.innerHTML, /data-form="auth"/);
@@ -2571,13 +2578,23 @@ test('personal module banners retain consistent bilingual identity when disconne
   for (const [route, name, english] of [
     ['my-ai', '我的 AI', 'My AI'], ['memory', '智能体记忆', 'agent memory'],
     ['space', '私有云空间', 'Private Cloud'], ['boxes', '我的设备', 'Devices'],
+    ['accessories', '配件', 'Accessories'],
   ]) {
     await h.click('show-' + route);
     assert.match(h.app.innerHTML, new RegExp('wanx-section-banner[^>]*data-section="' + route + '"'));
     assert.match(h.app.innerHTML, new RegExp('<h2>' + name + ' <span class="wanx-section-english">' + english + '</span></h2>'));
   }
+  assert.match(h.app.innerHTML, /连接盒子后可使用配件功能/);
+  assert.doesNotMatch(h.app.innerHTML, /accessories-tab-host|data-guide-term="capture"/);
+  h.update(state("ready", "ready", "box-102"));
+  assert.match(h.app.innerHTML, /wanx-section-banner[^>]*data-section="accessories"/);
+  assert.match(h.app.innerHTML, /accessories-tab-host/);
+  assert.doesNotMatch(h.app.innerHTML, /连接盒子后可使用配件功能|记忆采集/);
+  h.update(state());
+  assert.match(h.app.innerHTML, /连接盒子后可使用配件功能/);
+  assert.doesNotMatch(h.app.innerHTML, /accessories-tab-host/);
   await h.click('show-data');
-  assert.match(h.app.innerHTML,/连接盒子后，创建知识仓/);
+  assert.match(h.app.innerHTML, /连接盒子后可使用星图/);
   assert.doesNotMatch(h.app.innerHTML,/精简版|打开完整版/);
   assert.equal(h.calls.some(call=>call[0]==='workshop'),false);
 });
@@ -2647,21 +2664,20 @@ test('wallet login takes one snapshot and page navigation controls subsequent id
   assert.equal(balances, 4, 'click navigation also pauses the idle wallet');
 });
 
-test("main-window navigation ignores retired application pages and opens dialogue over the active module", async () => {
+test("main-window navigation ignores retired application pages and the hidden dialogue", async () => {
   const h = await harness();
-  assert.equal(h.academy.available, true);
+  assert.equal(h.academy.available, false);
   assert.match(h.app.innerHTML, /data-section="my-ai"/);
-  assert.equal(h.academy.context.module, "general");
+  assert.equal(h.academy.context, undefined);
   h.navigate("space");
   await flushActions();
   assert.match(h.app.innerHTML, /data-section="space"/);
   for (const retired of ["applications", "application-detail", "workshop"]) {
     h.navigate(retired);
     assert.match(h.app.innerHTML, /data-section="space"/);
-    assert.equal(h.academy.context.module, "space");
   }
   h.navigate("ai-dialogue");
-  assert.equal(h.academy.mode, "dialogue");
+  assert.equal(h.academy.mode, null);
   assert.match(h.app.innerHTML, /data-section="space"/);
   assert.deepEqual(h.launches, []);
 });

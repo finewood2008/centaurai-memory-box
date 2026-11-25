@@ -135,3 +135,6 @@ h2 { font-size: 12px; font-weight: 600; margin: 0; letter-spacing: .3px; color: 
 @media(max-width:760px){.topbar .brand-copy{display:grid}.topbar .brand-copy strong{font-size:14px}.topbar .brand-copy small{display:block;font-size:9px}.topbar .brand-edition{font-size:9px}.topbar{gap:10px}}
 
 #panel .brand-edition{font-size:9px}
+
+/* The personal client has no main-window dialogue destination in this release. */
+#panel-assistant [data-mini-expand] { display: none; }

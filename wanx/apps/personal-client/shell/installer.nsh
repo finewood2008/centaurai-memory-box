@@ -18,13 +18,8 @@
   ; unpacking error after hundreds of megabytes were already written.
   IfSilent wxSilentGuard wxSilentGuardDone
   wxSilentGuard:
-    Call WanxAssertInstallPathLength
-    Call WanxExtractAclTool
-    nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wanx-windows-install-acl.ps1" -Mode Preflight -Path "$INSTDIR"'
-    Pop $0
-    Pop $1
+    Call WanxCheckInstallPath
     ${If} $0 != 0
-      Call WanxWriteAclFailureLog
       SetErrorLevel 1603
       Quit
     ${EndIf}
@@ -36,9 +31,25 @@
 !macroend
 
 !macro customPageAfterChangeDir
+  ; The builder has registered the update flag plugin before invoking this hook.
+Function WanxPreflightPage
+  ; Match electron-builder's directory normalization before validating it.
+  !ifdef allowToChangeInstallationDirectory
+    Call instFilesPre
+  !endif
+  Call WanxCheckInstallPath
+  ${If} $0 == 0
+    Abort
+  ${EndIf}
+  ${If} ${isUpdated}
+    MessageBox MB_ICONSTOP|MB_OK "$1"
+    SetErrorLevel 1603
+    Quit
+  ${EndIf}
+  Call WanxShowPathError
+FunctionEnd
   Page custom WanxPreflightPage
   !define MUI_PAGE_CUSTOMFUNCTION_SHOW WanxInstallShow
-  !define MUI_PAGE_CUSTOMFUNCTION_LEAVE WanxInstallLeave
 !macroend
 
 Function WanxExtractAclTool
@@ -53,32 +64,24 @@ Function WanxWriteAclFailureLog
   FileClose $2
 FunctionEnd
 
-Function WanxAssertInstallPathLength
+Function WanxCheckInstallPath
   StrLen $0 "$INSTDIR"
   ${If} $0 > ${WANX_MAX_INSTALL_DIR_LENGTH}
-    StrCpy $1 "WINDOWS_INSTALL_PATH_TOO_LONG|$INSTDIR"
+    StrCpy $1 "安装路径过长（当前 $0 个字符，最多 ${WANX_MAX_INSTALL_DIR_LENGTH} 个）。请选择更短的目录。"
+    StrCpy $0 1603
+  ${Else}
+    Call WanxExtractAclTool
+    nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wanx-windows-install-acl.ps1" -Mode Preflight -Path "$INSTDIR"'
+    Pop $0
+    Pop $1
+    ${If} $0 == 0
+      Return
+    ${EndIf}
     Call WanxWriteAclFailureLog
-    IfSilent +2
-    MessageBox MB_ICONSTOP|MB_OK "安装路径过长（当前 $0 个字符，最多 ${WANX_MAX_INSTALL_DIR_LENGTH} 个）。请选择更短的目录后重新安装。"
-    SetErrorLevel 1603
-    Quit
+    StrCpy $1 "无法在该目录安全安装。请选择当前用户有权限的本机 NTFS 目录。"
+    Return
   ${EndIf}
-FunctionEnd
-
-Function WanxPreflightPage
-  Call WanxAssertInstallPathLength
-  Call WanxExtractAclTool
-  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wanx-windows-install-acl.ps1" -Mode Preflight -Path "$INSTDIR"'
-  Pop $0
-  Pop $1
-  ${If} $0 != 0
-    DetailPrint "$1"
-    Call WanxWriteAclFailureLog
-    MessageBox MB_ICONSTOP|MB_OK "所选位置不支持安全安装，请选择当前用户有权限的本机 NTFS 目录。诊断日志已保存到临时目录。"
-    SetErrorLevel 1603
-    Quit
-  ${EndIf}
-  Abort
+  Call WanxWriteAclFailureLog
 FunctionEnd
 
 !macro customInstall

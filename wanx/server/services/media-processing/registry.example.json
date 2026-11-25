@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "services": {
+    "wanx.media": {
+      "enabled": true,
+      "upstream": "http://127.0.0.1:19094",
+      "uid": 10009,
+      "tokenAudience": "wanx-bridge",
+      "protocolVersion": 1,
+      "minWanxVersion": ">=1.5.2",
+      "routes": [
+        {
+          "prefix": "/api/services/wanx.media/v1",
+          "methods": [
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE"
+          ],
+          "sse": false,
+          "websocket": true
+        }
+      ],
+      "health": {
+        "liveness": "/healthz",
+        "readiness": "/readyz",
+        "version": "/version"
+      },
+      "servicePublicKeyFile": "/data/wanx-bridge/wanx-media.pub",
+      "activation": {
+        "mode": "legacy"
+      }
+    }
+  }
+}

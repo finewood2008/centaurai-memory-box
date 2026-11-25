@@ -74,8 +74,14 @@ export async function packageClient({ version, arch = process.arch, out, notaryP
     const check = spawnSync("xcrun", ["notarytool", "history", "--keychain-profile", notaryProfile], { encoding: "utf8" });
     if (check.error) throw check.error;
     if (check.status !== 0) {
-      const detail = (check.stderr || check.stdout).trim();
-      throw new Error(`公证凭据检查失败：${detail}\n请先运行 xcrun notarytool store-credentials ${notaryProfile} --apple-id <Apple ID> --team-id <Team ID>，再重新打包。`);
+      const detail = (check.stderr || check.stdout || "").trim();
+      if (/required agreement is missing or has expired|requires an in-effect agreement/i.test(detail)) {
+        throw new Error(`Apple 公证因开发者团队协议未生效而受阻：${detail}\n请让团队的 Account Holder 登录 https://developer.apple.com/account/，接受待处理的协议或续订已到期的会员资格，然后重试公证。`);
+      }
+      if (/HTTP status code:\s*401\b|no keychain password item found/i.test(detail)) {
+        throw new Error(`公证凭据检查失败：${detail}\n请核对钥匙串配置 ${notaryProfile}，必要时用 xcrun notarytool store-credentials 重新保存后再打包。`);
+      }
+      throw new Error(`公证预检失败：${detail || check.signal || check.status}`);
     }
   }
   const name = test ? TEST_PRODUCT_NAME : pkg.build.productName;

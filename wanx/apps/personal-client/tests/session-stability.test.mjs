@@ -24,7 +24,8 @@ async function connected(t, renew) {
   const originalAgent = {}, replacementAgent = {};
   let agent = originalAgent, disrupted = false;
   const network = {
-    snapshot: () => ({ enabled: true, phase: "ready", peers: [] }), subscribe: () => () => {},
+    snapshot: () => ({ enabled: true, phase: "ready", peers: [{ ip: "100.90.1.2", connected: true }] }),
+    subscribe: () => () => {},
     resolveEndpoint: async input => ({ url: input.url, agent }),
     networkChanged: async () => { agent = replacementAgent; }, close() {},
   };
@@ -40,7 +41,13 @@ async function connected(t, renew) {
       initial = false; return { getToken: () => "fixture-token", close() {} };
     },
   });
-  return { client, disrupt: () => { disrupted = true; } };
+  return {
+    client,
+    async disrupt() {
+      disrupted = true;
+      for (const delay of [30_000, 1000, 1000, 2000, 5000]) await tick(t, delay);
+    },
+  };
 }
 
 for (const [status, body] of [[502, "<html>upstream unavailable</html>"], [503, "{"], [429, ""]])
@@ -52,7 +59,7 @@ for (const [status, body] of [[502, "<html>upstream unavailable</html>"], [503, 
       if (unavailable) throw failure;
       return { getToken: () => "fresh-token", close() {} };
     });
-    h.disrupt(); await tick(t, 30000);
+    await h.disrupt();
     assert.equal(h.client.snapshot().phase, "recovering");
     assert.equal(h.client.snapshot().connection.deviceId, "box");
     for (let i = 0; i < 4; i++) await tick(t, 60000);
@@ -66,7 +73,7 @@ for (const status of [401, 403]) test(`HTTP ${status} during recovery closes the
   const failure = await boxFailure(status, "<html>denied</html>");
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const h = await connected(t, async () => { throw failure; });
-  h.disrupt(); await tick(t, 30000);
+  await h.disrupt();
   assert.equal(h.client.snapshot().phase, "disconnected");
   assert.equal(h.client.snapshot().connection, null);
   assert.equal(h.client.snapshot().reason, "connection_authorization_required");
@@ -76,7 +83,8 @@ for (const stop of ["disconnect", "close"]) test(`late session renewal cannot re
   t.mock.timers.enable({ apis: ["setTimeout"] });
   let release, disposed = false;
   const h = await connected(t, () => new Promise(resolve => { release = resolve; }));
-  h.disrupt(); await tick(t, 30000); assert.equal(typeof release, "function");
+  await h.disrupt();
+  assert.equal(typeof release, "function");
   const stopping = h.client[stop]();
   release({ getToken: () => "late-token", close() { disposed = true; } });
   await stopping; await tick(t, 60000);

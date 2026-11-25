@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import json
 import os
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
@@ -13,6 +15,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from wanx_bridge import __main__ as runtime
+from wanx_bridge import service_activation, service_registry
 from wanx_bridge.config import PlatformConfig
 from wanx_bridge.upstream import BridgeUpstreamError
 
@@ -240,6 +243,45 @@ async def test_supervision_orders_startup_and_closes_both(supervision):
     assert all(server.should_exit for server in servers)
     assert events[-2:] == ["adapter_closed", "auth_closed"]
     assert "private_stopped" in events and "public_stopped" in events
+
+
+@pytest.mark.parametrize("valid", [True, False])
+async def test_only_the_loaded_ota_registry_produces_media_evidence(
+    supervision, platform, settings, monkeypatch, tmp_path, valid
+):
+    events, _, _, stop = supervision
+    overlay = tmp_path / "media.json"
+    service = {
+        "enabled": True, "upstream": "http://127.0.0.1:19094", "uid": 10009,
+        "tokenAudience": "wanx-bridge", "protocolVersion": 1, "minWanxVersion": ">=0.1.0",
+        "routes": [{"prefix": "/api/services/wanx.media/v1", "methods": ["GET"], "websocket": True}],
+        "health": {"liveness": "/healthz", "readiness": "/readyz", "version": "/version"},
+        "servicePublicKeyFile": str(tmp_path / "media.pub"),
+        "activation": {
+            "mode": "ota", "path": str(service_registry.MEDIA_ACTIVATION),
+            "profiles": [service_registry.MEDIA_PROFILE],
+        } if valid else {"mode": "legacy"},
+    }
+    overlay.write_text(json.dumps({"schemaVersion": 1, "services": {"wanx.media": service}}))
+    overlay.chmod(0o600)
+    platform.state_dir.mkdir(mode=0o700)
+    evidence = platform.state_dir / "media-ota-evidence.json"
+    evidence.write_text("stale")
+
+    monkeypatch.setattr(runtime.RuntimeConfig, "from_env", lambda: replace(settings, media_registry_file=overlay))
+    monkeypatch.setattr(runtime, "bridge_build_metadata", lambda: {"buildId": "current-image"})
+    process = {"pid": 1, "startTimeTicks": "80", "bootId": "current-boot"}
+    monkeypatch.setattr(service_activation, "running_process_identity", lambda: process)
+    await runtime.run(stop)
+
+    assert "public_started" in events
+    assert (platform.state_dir / "ota-evidence.json").exists()
+    if valid:
+        assert json.loads(evidence.read_bytes()) == {
+            "schemaVersion": 1, "bridgeProtocol": 1, "bridgeBuildId": "current-image", "process": process,
+        }
+    else:
+        assert not evidence.exists()
 
 
 async def test_model_poll_is_supervised_and_closed_without_blocking_public(

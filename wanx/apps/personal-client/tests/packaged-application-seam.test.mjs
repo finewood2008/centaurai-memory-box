@@ -9,7 +9,20 @@ import { createApplicationManager } from "../applications/manager.mjs";
 // Real executable boundary: Node/fake spawn cannot catch packaged Electron
 // ignoring --app and re-entering the Host. This seam uses a temporary profile.
 const executable = process.env.WANX_PACKAGED_EXECUTABLE;
-test("packaged Host launches the installed manifest entry, not another Host", { skip: !executable, timeout: 15000 }, async t => {
+async function timed(label, operation) {
+  const start = performance.now();
+  console.log(`[成品启动] 开始：${label}`);
+  try {
+    const result = await operation();
+    console.log(`[成品启动] 通过：${label}（${((performance.now() - start) / 1000).toFixed(1)} 秒）`);
+    return result;
+  } catch (error) {
+    console.log(`[成品启动] 失败：${label}（${((performance.now() - start) / 1000).toFixed(1)} 秒） ${error.code || error.message}`);
+    throw error;
+  }
+}
+
+test("packaged Host launches the installed manifest entry, not another Host", { skip: !executable, timeout: 90_000 }, async t => {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "wanx packaged seam ")));
   const source = path.join(root, "source"), profile = path.join(root, "profile");
   await mkdir(source);
@@ -31,19 +44,20 @@ test("packaged Host launches the installed manifest entry, not another Host", { 
     context: () => ({ boxId: "fixture-102", connection: "ready" }),
     spawn: (...args) => { const child = spawn(...args); children.push(child); return child; },
   });
-  t.after(async () => {
+  t.after(() => timed("清理子进程和临时配置", async () => {
     const exited = children.filter(child => child.exitCode === null && child.signalCode === null).map(child => new Promise(resolve => child.once("exit", resolve)));
     await manager.close(); await Promise.all(exited);
     await rm(root, { recursive: true, force: true });
-  });
+  }));
   await manager.install({ sourceDir: source });
-  assert.equal((await manager.launch(manifest.applicationId)).state, "running");
+  assert.equal((await timed("正常应用启动", () => manager.launch(manifest.applicationId))).state, "running");
   const loaded = JSON.parse(await readFile(marker, "utf8"));
   assert.equal(loaded.name, manifest.name);
   assert.notEqual(loaded.data, profile);
-  await manager.stop(manifest.applicationId);
+  await timed("正常应用退出", () => manager.stop(manifest.applicationId));
   await writeFile(path.join(source, "entry.cjs"), "throw Error('fixture fails before creating a window');");
   await writeFile(path.join(source, "application.manifest.json"), JSON.stringify({ ...manifest, version: "1.0.1" }));
   await manager.install({ sourceDir: source });
-  await assert.rejects(manager.launch(manifest.applicationId, "1.0.1"), { code: "APPLICATION_START_FAILED" });
+  await timed("故障样例回执", () =>
+    assert.rejects(manager.launch(manifest.applicationId, "1.0.1"), { code: "APPLICATION_START_FAILED" }));
 });

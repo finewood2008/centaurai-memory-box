@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import {GuideTerm} from './guide-term.js';
 import { Cloud, LoaderCircle } from "lucide-react";
 
 export interface BackupStatus {
@@ -175,7 +176,7 @@ export function MemorySyncSummary({ sessionToken, children, onRestored, statusOn
 
   return <>
     {content}
-    <section id="my-ai-backup" className="my-ai-sync-overview" aria-label="备份与恢复" tabIndex={-1}>
+    <section id="my-ai-backup" className="my-ai-sync-overview" data-guide-enabled={status?.enabled} data-guide-snapshots={selectedSource?.snapshots.length} aria-label="备份与恢复" tabIndex={-1}>
     <div className="my-ai-sync-summary">
       <div className="my-ai-sync-title"><h2>备份与恢复</h2></div>
       <div className="my-ai-backup-control">
@@ -194,7 +195,7 @@ export function MemorySyncSummary({ sessionToken, children, onRestored, statusOn
     </div>
     {error && <p className="my-ai-feedback error" role="alert">{error}</p>}
     {catalog && <div className="my-ai-restore-confirm" role="group" aria-label="选择恢复来源">
-      <p>按来源设备或安装选择备份快照。</p>
+      <p>按来源设备或安装选择备份快照。<GuideTerm name="backup"/></p>
       {catalog.sourcesError && <p>{catalog.sourcesError}</p>}
       {!status?.connected && <p>连接盒子后可查看空间快照。</p>}
       {status?.connected && !catalog.sourcesError && !catalog.sources.length && <p>盒子上暂无记忆备份。</p>}

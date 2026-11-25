@@ -64,8 +64,6 @@
 }
 
 /* Context help is mounted outside #app so updates never rebuild setup inputs. */
-.settings-actions:has(> .box-faq-entry) { flex-wrap: wrap; }
-.box-faq-entry { flex-basis: 100%; text-align: right; }
 .setup-faq-entry { display: block; margin: 12px 0; }
 body.faq-drawer-open { overflow: hidden; }
 .faq-drawer { position: fixed; inset: 0; z-index: 1000; display: flex; justify-content: flex-end; background: #302d294d; }

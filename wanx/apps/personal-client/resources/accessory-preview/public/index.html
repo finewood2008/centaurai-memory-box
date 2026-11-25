@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>录音智能体 · 记忆盒子</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/accessories.css">
+<link rel="stylesheet" href="/box-connection.css">
+</head>
+<body>
+<div class="app accessory-embedded" id="recordingApp">
+  <header class="accessory-topnav" id="accessoryHeader" hidden>
+    <div class="accessory-brand">
+      <img src="/centaurai-mark.png" alt="" width="40" height="40">
+      <span><strong>半人马AI</strong><small>私人记忆盒子</small></span>
+    </div>
+    <nav class="accessory-tabs" id="accessoryTabs" aria-label="主导航">
+      <span>我的 AI</span><span>记忆</span><span>星图</span><span>空间</span>
+      <a href="/accessories/boxes" id="accessoryBoxesTab">盒子</a>
+      <a href="/accessories" id="accessoriesTab">配件</a>
+    </nav>
+    <div class="accessory-header-actions">
+      <span class="accessory-preview">独立演示</span>
+    </div>
+  </header>
+  <header class="top" id="recordingHeader">
+    <div class="brand"><img src="/centaurai-mark.png" alt="" width="34" height="34"><div><strong>半人马AI记忆盒子</strong><small>CentaurAI MemoBox</small></div></div>
+    <div class="app-name">录音智能体 <small id="modeBadge">独立模块</small></div>
+    <details class="app-menu" id="appMenu"><summary aria-label="更多">···</summary>
+      <nav id="nav" aria-label="更多功能">
+        <a href="#" data-view="templates">总结偏好</a>
+        <a href="#" data-view="space">试用空间</a>
+        <a href="#" data-view="starmap">试用星图</a>
+        <a href="#" data-view="memory">试用记忆</a>
+      </nav>
+    </details>
+  </header>
+  <div class="body" id="recordingBody">
+    <aside class="side" id="recordingSidebar">
+      <div class="side-h"><h2>录音记录</h2><button class="btn sm" id="newMeeting" type="button">＋ 新录音</button></div>
+      <div class="mlist" id="meetingList" role="list"></div>
+    </aside>
+    <main id="main" tabindex="-1"></main>
+  </div>
+</div>
+<div id="modalRoot"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

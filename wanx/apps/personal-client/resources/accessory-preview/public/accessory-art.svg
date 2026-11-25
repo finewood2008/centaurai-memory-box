@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg">
+  <symbol id="disk" viewBox="0 0 300 170">
+    <g fill="none" stroke="#705743" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round">
+      <ellipse opacity=".32" cx="150" cy="137" rx="100" ry="15"/>
+      <path d="M65 88v21c0 18 38 33 85 33s85-15 85-33V88"/>
+      <ellipse cx="150" cy="88" rx="85" ry="33"/>
+      <ellipse opacity=".67" cx="150" cy="86.5" rx="73" ry="26"/>
+      <ellipse opacity=".32" cx="150" cy="86.5" rx="59" ry="19"/>
+      <path opacity=".67" d="M142 83v7m8-11v15m8-11v7"/>
+      <path opacity=".52" d="M73 111c10 15 41 24 77 24s67-9 77-24"/>
+      <path opacity=".32" d="M103 68l3 3m88-3-3 3m-88 33 3-3m88 3-3-3"/>
+      <circle cx="150" cy="128" r="2" stroke-width="1.3"/>
+    </g>
+  </symbol>
+  <symbol id="clip" viewBox="0 0 300 170">
+    <g fill="none" stroke="#705743" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round">
+      <ellipse opacity=".32" cx="157" cy="144" rx="67" ry="11"/>
+      <path d="M180 56l21 7c8 3 10 9 5 16l-36 54c-4 6-10 9-18 7l-34-8c-5-1-8-4-8-7"/>
+      <path opacity=".67" d="M199 81l-34 51c-2 3-5 5-10 4l-29-7m59-66 15 6m-42 61 9 2m-5-8 9 2m-5-8 9 2"/>
+      <path d="M143 35c5-7 13-9 22-6l26 9c9 3 12 12 7 20l-39 58c-6 8-13 11-24 8l-27-8c-9-3-12-12-7-20Z"/>
+      <path d="M101 96l-4 7c-5 8-2 16 7 19l28 9c11 3 20 0 26-8L197 65c3-4 4-10 2-14"/>
+      <path opacity=".52" d="M144 40c4-6 9-7 17-5l25 8c6 2 8 6 4 12l-37 56c-4 6-10 9-17 7l-25-8c-6-2-8-6-4-12Z"/>
+      <path opacity=".67" d="M155 51c2-3 4-3 7-2l12 4c3 1 4 3 2 6l-3 5c-2 2-4 3-7 2l-12-4c-3-1-4-3-2-6Z"/>
+      <path opacity=".52" d="M158 54l13 4m-15 0 13 4"/>
+      <circle cx="148" cy="79" r="2.2"/>
+    </g>
+  </symbol>
+
+  <defs>
+    <pattern id="disc-grille" width="4.2" height="2.8" patternUnits="userSpaceOnUse" patternTransform="rotate(-6)">
+      <path d="M.7 1.1h.8" stroke="#987956" stroke-width=".7" stroke-linecap="round"/>
+    </pattern>
+    <pattern id="clip-grille" width="4" height="4" patternUnits="userSpaceOnUse">
+      <circle cx="1.5" cy="1.5" r=".8" fill="#697b63"/>
+    </pattern>
+  </defs>
+  <symbol id="studio-disk" viewBox="0 0 300 170">
+    <g fill="none" stroke="#b79874" stroke-width=".6">
+      <ellipse cx="153" cy="113" rx="137" ry="38" stroke-dasharray="2 4"/>
+      <path d="M5 116l34-7m224-10 33-7M158 156l-1 6"/>
+      <path d="M59 58q32-22 80-23m-89 17q37-25 87-26m54 9q30 3 50 13" opacity=".8"/>
+    </g>
+    <g transform="rotate(-7 151 90)" stroke="#70513c" stroke-linejoin="round">
+      <path d="M52 85v17a99 35 0 0 0 198 0V85" fill="#dfcaab" stroke-width="1.55"/>
+      <path d="M53 99a98 34 0 0 0 195 0" fill="none" stroke-width=".65"/>
+      <ellipse cx="151" cy="85" rx="99" ry="35" fill="#f9eed8" stroke-width="1.6"/>
+      <ellipse cx="151" cy="84" rx="91" ry="30" fill="url(#disc-grille)" stroke-width=".85"/>
+      <ellipse cx="151" cy="83.5" rx="42" ry="14.5" fill="#fbf2df" stroke-width="1.05"/>
+      <ellipse cx="151" cy="83.5" rx="34" ry="10.7" fill="none" stroke-width=".5"/>
+      <path d="M142 84v-2m4 4v-6m5 8v-10m5 8v-6m4 4v-2" stroke-linecap="round" stroke-width="1.65"/>
+      <path d="M139 128q12 1.2 24-.1" stroke="#967055" stroke-width="2.6" stroke-linecap="round"/>
+      <path d="M210 119l13-3.5" stroke-width="2" stroke-linecap="round"/>
+    </g>
+  </symbol>
+  <symbol id="studio-clip" viewBox="0 0 300 170">
+    <g fill="none" stroke="#93a28a" stroke-width=".7">
+      <ellipse cx="154" cy="133" rx="96" ry="16" stroke-dasharray="2 4"/>
+      <path d="M43 114q10 1 19 0t17-4m-26-3q12 1 22-3m145-38q8 3 15 1m-17-6q12 3 23 0"/>
+    </g>
+    <g transform="translate(149 82) rotate(34)" stroke="#4d6350" stroke-linejoin="round">
+      <rect x="-4" y="-51" width="35" height="111" rx="13" fill="#d3dfc9" stroke-width="1.4"/>
+      <path d="M22-38v79q0 11-9 12H3" fill="none" stroke-width="1"/>
+      <rect x="-31" y="-60" width="53" height="117" rx="16" fill="#c1d0b8" stroke-width="1.5"/>
+      <rect x="-34" y="-63" width="51" height="115" rx="15" fill="#eff3e5" stroke-width="1.55"/>
+      <rect x="-29.5" y="-58" width="42" height="105" rx="12" fill="none" stroke-width=".55"/>
+      <rect x="-23" y="-50" width="29" height="30" rx="7" fill="url(#clip-grille)" stroke-width=".9"/>
+      <circle cx="-9" cy="1" r="7" fill="#dce5d0" stroke-width="1.1"/>
+      <path d="M-12 1h6m-3-3v6M-14 33h10" fill="none" stroke-linecap="round" stroke-width="1.5"/>
+    </g>
+  </symbol>
+  <symbol id="storage" viewBox="0 0 300 170">
+    <g fill="none" stroke="#6c7060" stroke-width="1.7" stroke-linejoin="round">
+      <ellipse cx="152" cy="144" rx="88" ry="8" opacity=".22"/>
+      <path d="M81 51l38-21 100 12v84l-34 18-104-12z M81 51l104 12 34-21 M185 63v81"/>
+      <path d="M92 63l31 4v56l-31-4z M132 68l31 4v56l-31-4z M99 106l17 2 M139 111l17 2 M173 82v7 M173 95v3"/>
+    </g>
+  </symbol>
+</svg>

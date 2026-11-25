@@ -1284,7 +1284,7 @@ export class MemoryRepository {
   panelMemberIds(filter: MemoryFilter = {}, query?: string): string[] {
     // Only management reads can use the displayed-source projection. Ownership
     // and other repository filters retain their existing source-table semantics.
-    const cachedKeys = new Set(["panelSource", "panelVisible", "memoryLayer", "status", "agentId", "excludedAgentIds", "tags"]);
+    const cachedKeys = new Set(["sourceMatch", "panelSource", "panelVisible", "memoryLayer", "status", "agentId", "excludedAgentIds", "tags"]);
     if (filter.panelSource && filter.panelVisible &&
         Object.entries(filter).every(([key, value]) => value === undefined || cachedKeys.has(key))) {
       ensurePanelCache(this.db, ["memories"]);
@@ -1302,7 +1302,7 @@ export class MemoryRepository {
         }
       }
       const source = filter.agentId?.trim()
-        ? agentIdMatchClause("sources.source", filter.agentId)
+        ? agentIdMatchClause("sources.source", filter.agentId, filter.sourceMatch)
         : agentIdExclusionClause("sources.source", filter.excludedAgentIds ?? []);
       if (source) {
         // Match aliases once per distinct producer, then use the source index.
@@ -8315,8 +8315,9 @@ function normalizedAgentIdSql(column: string): string {
  * ids derived from them ("memmy-onboarding" under "memmy-agent"), because the panel
  * shows all of them as the same Agent.
  */
-export function agentIdMatchClause(column: string, value: string): { sql: string; params: string[] } {
+export function agentIdMatchClause(column: string, value: string, match?: "exact"): { sql: string; params: string[] } {
   const normalizedColumn = normalizedAgentIdSql(column);
+  if (match === "exact") return { sql: `${normalizedColumn} = ?`, params: [value.trim().toLowerCase().replace(/[- ]/g, "_")] };
   const roots = agentSourceFamilyRoots(value);
   if (roots.length === 0) {
     return { sql: `${normalizedColumn} = ?`, params: [normalizeAgentIdKey(value)] };
@@ -8406,7 +8407,7 @@ function buildMemoryWhere(filter: MemoryFilter, db: Database.Database): { where:
       ? "panel_source(CASE WHEN json_type(info_json, '$.source')='text' THEN json_extract(info_json, '$.source') END, CASE WHEN json_type(properties_json, '$.internal_info.source')='text' THEN json_extract(properties_json, '$.internal_info.source') END, session_id, conversation_id, agent_id, app_id)"
       : "agent_id");
     if (value?.trim()) {
-      const match = agentIdMatchClause(displayedSource, value);
+      const match = agentIdMatchClause(displayedSource, value, filter.sourceMatch);
       clauses.push(match.sql);
       params.push(...match.params);
       return;

@@ -66,6 +66,8 @@ export function registerControlActions({
   selectApplicationArchive,
   market,
   personalSpace,
+  accessoriesPreview,
+  spaceVolumes,
   superClipboard,
   spaceLinks,
   confirmSpacePurge,
@@ -112,6 +114,10 @@ export function registerControlActions({
       return Promise.resolve(result).finally(() => publishState());
     });
   };
+  reads.add("space-volumes");
+  register("space-volumes", input => spaceVolumes(input));
+  reads.add("accessories-preview");
+  register("accessories-preview", input => accessoriesPreview?.(input) ?? { status: "unavailable" });
   reads.add("memory-open");
   register("memory-open", () => openMemoryWorkspace?.() ?? { available: false });
   reads.add("local-memory-storage");

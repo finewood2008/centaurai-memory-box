@@ -50,6 +50,12 @@ func (s *service) dispatch(ctx context.Context, method string, raw json.RawMessa
 		return s.beginLogin(ctx, p)
 	case "login_wait":
 		return s.waitLogin(ctx)
+	case "homeai_request":
+		var request homeAIRequest
+		if json.Unmarshal(raw, &request) != nil {
+			return nil, failure("invalid_params")
+		}
+		return s.requestHomeAI(ctx, request)
 	default:
 		return nil, failure("unknown_method")
 	}

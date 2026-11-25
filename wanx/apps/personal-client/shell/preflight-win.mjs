@@ -37,12 +37,9 @@ export function preflight() {
     if (!existsSync(path.join(root, "shell", name))) throw new Error(`PACKAGE_INPUT_MISSING:${name}`);
   for (const name of ["resources/icon.ico", "local-ui/renderer/index.html", "local-ui/panel/index.html", "local-ui/panel/panel.js", "local-ui/panel-preload.cjs", "shell/provisioning-trust.json"])
     if (!existsSync(path.join(root, name))) throw new Error(`PACKAGE_INPUT_MISSING:${name}`);
-  for (const name of ["header", "sidebar", "feature-1", "feature-2", "feature-3", "overview"])
+  for (const name of ["header", "sidebar"])
     if (!existsSync(path.join(root, "resources", "installer", `${name}.bmp`)))
       throw new Error(`INSTALLER_ARTWORK_MISSING:${name}`);
-  for (const density of [1, 2, 3])
-    if (!existsSync(path.join(root, "resources", "installer", `poster-loop-${density}x.avi`)))
-      throw new Error(`INSTALLER_POSTER_LOOP_MISSING:${density}x`);
   return {
     sourceCommit: execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim(),
     version: pkg.version,

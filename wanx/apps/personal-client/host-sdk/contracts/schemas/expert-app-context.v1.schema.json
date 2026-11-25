@@ -169,6 +169,67 @@
         "resources",
         "bindings"
       ]
+    },
+    "dashboardPanels": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "agentId",
+        "modules"
+      ],
+      "properties": {
+        "agentId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        },
+        "modules": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "channels"
+          ],
+          "properties": {
+            "channels": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "weixin",
+                  "qq",
+                  "wecom",
+                  "feishu",
+                  "yuanbao",
+                  "dingtalk",
+                  "telegram",
+                  "discord",
+                  "xiaoyi",
+                  "mqtt"
+                ]
+              }
+            },
+            "ownerVerification": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "weixin",
+                  "qq",
+                  "wecom",
+                  "feishu",
+                  "yuanbao",
+                  "dingtalk",
+                  "telegram",
+                  "discord",
+                  "xiaoyi",
+                  "mqtt"
+                ]
+              }
+            }
+          }
+        }
+      }
     }
   },
   "required": [

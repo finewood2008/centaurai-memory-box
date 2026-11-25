@@ -22,7 +22,6 @@ import { createMockMemoryRuntimeClient } from "./memory-runtime-fixtures.js";
 import { displayMemoryTitle, independentGeneratedTitle, memoryDisplaySource, showsGeneratedSummaryRow } from "../memory-display.js";
 import {
   MEMORY_SOURCE_AGENT_EXCLUSIONS,
-  OTHER_MEMORY_SOURCE_AGENT
 } from "../memory-agent-filter.js";
 
 describe("MemoriesSubPage", () => {
@@ -106,11 +105,7 @@ describe("MemoriesSubPage", () => {
     expect(buildPanelItemsInput({ sourceAgent: "cursor" })).toEqual({
       layer: "L1",
       sourceAgent: "cursor",
-      page: 1
-    });
-    expect(buildPanelItemsInput({ sourceAgent: OTHER_MEMORY_SOURCE_AGENT })).toEqual({
-      layer: "L1",
-      excludedSourceAgents: MEMORY_SOURCE_AGENT_EXCLUSIONS,
+      sourceMatch: "exact",
       page: 1
     });
   });
@@ -118,12 +113,12 @@ describe("MemoriesSubPage", () => {
   it("在 L1 搜索框内展示带图标的 Agent 筛选", () => {
     const html = renderMemories({ status: "ready", data: panelItemsOutput([]), detail: null });
 
-    expect(html).toContain("memory-source-search-control");
-    expect(html).toContain('id="memory-l1-agent-filter"');
-    expect(html).toContain("memory-source-filter__all-icon");
-    expect(html.match(/memory-source-filter__all-avatar/g)).toHaveLength(3);
-    expect(html).toContain("centaurai-mark.png");
-    expect(html).not.toContain("lucide-bot");
+    expect(html).toMatch(/class="memory-source-control"><div[^>]*memory-source-filter[^>]*>.*id="memory-l1-agent-filter"/);
+    expect(html).not.toContain("memory-source-filter__all-avatar");
+    const populated = renderMemories({ status: "ready", data: {
+      ...panelItemsOutput([]), sourceAgents: ["meeting_recording", "codex"]
+    }, detail: null });
+    expect(populated.match(/memory-source-filter__all-avatar/g)).toHaveLength(2);
     expect(html).toContain("全部 Agent");
     expect(html).toContain("按来源 Agent 筛选");
     expect(MEMORY_AGENT_SOURCE_VALUES).not.toContain("computer_history");
@@ -131,7 +126,7 @@ describe("MemoriesSubPage", () => {
   });
 
   it("配件记忆按来源筛选，并从带有项目编号的详情返回工作台", () => {
-    expect(buildPanelItemsInput({ sourceAgent: "accessories" })).toEqual({ layer: "L1", sourceAgent: "accessories", page: 1 });
+    expect(buildPanelItemsInput({ sourceAgent: "accessories" })).toEqual({ layer: "L1", sourceAgent: "accessories", sourceMatch: "exact", page: 1 });
     const item = { ...memoryDetailFixture.item, metadata: { source: "accessories" }, tags: ["clip", "m-20261123-123456-abcdef"] };
     const renderItem = (tags: string[]) => renderMemories({ status: "ready", data: panelItemsOutput([]),
       detail: { status: "ready", data: { ...memoryDetailFixture, item: { ...item, tags } } } });
@@ -141,8 +136,10 @@ describe("MemoriesSubPage", () => {
 
   it("筛选器和详情共用统一的 Agent 名称格式", () => {
     expect(MEMORY_AGENT_SOURCE_VALUES.map(agentSourceDisplayName)).toEqual([
-      "半人马AI记忆盒子",
-      "配件",
+      "盒子内置记录",
+      "配件记录（旧版录音、硬盘问答）",
+      "会议录音智能体",
+      "随身录音智能体",
       "Cursor",
       "Claude Code",
       "Claude 客户端",
@@ -156,8 +153,8 @@ describe("MemoriesSubPage", () => {
       "Pi",
       "QwenWork"
     ]);
-    expect(agentSourceDisplayName("MEMMY_AGENT")).toBe("半人马AI记忆盒子");
-    expect(agentSourceDisplayName("computer_history")).toBe("半人马AI记忆盒子");
+    expect(agentSourceDisplayName("MEMMY_AGENT")).toBe("盒子内置记录");
+    expect(agentSourceDisplayName("computer_history")).toBe("电脑使用记录");
     expect(agentSourceDisplayName("claude-code")).toBe("Claude Code");
     expect(agentSourceDisplayName("OPENCLAW")).toBe("OpenClaw");
   });
@@ -205,7 +202,7 @@ describe("MemoriesSubPage", () => {
     const html = renderMemories({ status: "ready", data: panelItemsOutput([item]), detail: null });
 
     expect(memoryDisplaySource(item)).toBe("computer_history");
-    expect(html).toContain('aria-label="来源: 半人马AI记忆盒子"');
+    expect(html).toContain('aria-label="来源: 电脑使用记录"');
     expect(html).not.toContain('aria-label="来源: 电脑历史"');
   });
 

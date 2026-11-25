@@ -75,6 +75,8 @@
 
 .sx-title-anchor{position:relative;display:inline-block;width:12px;height:0;vertical-align:baseline;white-space:nowrap}
 .sx-title-anchor>.sx-context{position:absolute;left:5px;top:-10px;transform:translate(-50%,-50%);display:inline-grid;place-items:center;width:24px;height:24px;padding:0;border:0;border-radius:6px;background:transparent;color:#98553d;line-height:1;cursor:pointer}
+#page-title .sx-title-anchor:has(>[data-starxiaotu-context="conversation"]) { width:24px; margin-inline-start:8px; }
+#page-title [data-starxiaotu-context="conversation"] { left:0; transform:translateY(-50%); }
 .sx-title-anchor>.sx-context .sx-sparkles{width:12px;height:12px}
 .sx-title-anchor>.sx-context:hover{color:#793b27}
 .sx-title-anchor>.sx-context:focus-visible{outline:2px solid #98553d;outline-offset:1px;background:#fff6ea}

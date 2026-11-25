@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import hashlib
 import json
+import logging
 import os
 import secrets
 import signal
@@ -38,7 +39,9 @@ from .semantica import configured_origin as semantica_origin
 from .semantica.model_relay import ModelRelay
 from .server import create_app
 from .service_activation import ActivationError, write_bridge_evidence
-from .service_registry import SERVICE_REGISTRY_ENV, ServiceRegistry, ServiceRegistryError
+from .service_registry import (
+    MEDIA_REGISTRY_ENV, MEDIA_SERVICE_ID, SERVICE_REGISTRY_ENV, ServiceRegistry, ServiceRegistryError,
+)
 from .service_sessions import ServiceSessionVerifier
 from .upstream import BridgeUpstreamError, OctopAdapter
 from .version import bridge_build_metadata
@@ -60,6 +63,7 @@ class RuntimeConfig:
     credentials_file: Path
     semantica_url: str = SEMANTICA_URL
     service_registry_file: Path | None = None
+    media_registry_file: Path | None = None
 
     @property
     def issuer(self) -> str:
@@ -80,6 +84,7 @@ class RuntimeConfig:
                 ),
                 semantica_origin(),
                 Path(os.environ[SERVICE_REGISTRY_ENV]) if os.getenv(SERVICE_REGISTRY_ENV) else None,
+                Path(os.environ[MEDIA_REGISTRY_ENV]) if MEDIA_REGISTRY_ENV in os.environ else None,
             )
             if (
                 config.oidc_host not in {"127.0.0.1", "::1"}
@@ -276,6 +281,13 @@ async def run(stop: asyncio.Event | None = None) -> None:
         service_registry = ServiceRegistry.load(runtime.service_registry_file)
     except ServiceRegistryError as exc:
         raise RuntimeFailure("BOX_BRIDGE_SERVICE_REGISTRY_INVALID") from exc
+    if runtime.media_registry_file is not None:
+        try:
+            service_registry = service_registry.with_media_ota(runtime.media_registry_file)
+        except ServiceRegistryError:
+            # Remote access and unrelated services survive a broken media config.
+            service_registry = service_registry.without_media()
+            logging.getLogger(__name__).warning("MEDIA_OTA_REGISTRY_INVALID")
     provider = await asyncio.to_thread(load_provider, config, runtime)
     auth = PlatformAuthService(config)
     adapter = OctopAdapter(runtime.upstream_url, provider, runtime.credentials_file)
@@ -366,6 +378,7 @@ async def run(stop: asyncio.Event | None = None) -> None:
                 semantica_desktop_url=os.getenv("WANX_BRIDGE_SEMANTICA_URL"),
                 resources=resources,
                 service_registry=service_registry,
+                homeai_output_target=private_app,
                 service_session_verifier=ServiceSessionVerifier(
                     service_registry, config.box_key,
                     state_path=config.state_dir / "service-tasks.enc",
@@ -381,12 +394,21 @@ async def run(stop: asyncio.Event | None = None) -> None:
         tasks.append(asyncio.create_task(_serve(public)))
         await _started(public, tasks[-1])
         evidence_path = Path(os.getenv("WANX_BRIDGE_OTA_EVIDENCE_FILE", str(config.state_dir / "ota-evidence.json")))
+        metadata = bridge_build_metadata()
         try:
-            await asyncio.to_thread(write_bridge_evidence, evidence_path, bridge_build_metadata())
+            await asyncio.to_thread(write_bridge_evidence, evidence_path, metadata)
         except (ActivationError, OSError) as exc:
             # Missing optional OTA evidence cannot take existing applications down.
             # The updater requires valid evidence before it may install a service.
             print(getattr(exc, "code", "BRIDGE_BUILD_EVIDENCE_PATH_INVALID"), file=sys.stderr)
+        media_evidence = config.state_dir / "media-ota-evidence.json"
+        try:
+            if runtime.media_registry_file is not None and service_registry.get(MEDIA_SERVICE_ID) is not None:
+                await asyncio.to_thread(write_bridge_evidence, media_evidence, metadata)
+            else:
+                await asyncio.to_thread(media_evidence.unlink, missing_ok=True)
+        except (ActivationError, OSError):
+            logging.getLogger(__name__).warning("MEDIA_OTA_BRIDGE_EVIDENCE_UNAVAILABLE")
         done, _ = await asyncio.wait([stopping, *tasks], return_when=asyncio.FIRST_COMPLETED)
         if stopping not in done:
             for task in done:

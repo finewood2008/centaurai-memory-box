@@ -29,7 +29,11 @@
     },
     {
       "file": "memory.png",
-      "sha256": "60ec1c08d412827e87fb92cb619b5a197d1f9fac51afd82a36a6deaf9b12e5e6"
+      "sha256": "2a002a1a809a8bcc803a6691bb55171e9f6eae84fe8b8393dc02344183062226"
+    },
+    {
+      "file": "accessories.png",
+      "sha256": "085afb320e65078613272c1fd4a5d5096278122a38af4cadd2d2b29df64385d6"
     }
   ]
 }

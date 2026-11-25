@@ -1,6 +1,6 @@
 import { overviewHTML, knowledgeHTML } from './starlink-pages.mjs';
-import { createStarxiaotu, starxiaotuIcon } from './starxiaotu.mjs';
-import { getStarlinkTerm } from '../shared/starlink-glossary.mjs';
+import { createStarxiaotu } from './starxiaotu.mjs';
+import {concepts, guideMark, isGuideBackgroundClick, guideShortcut} from '../shared/application-guide.mjs';
 import { mountTermGlossary, starxiaotuTermMarker } from './term-help.mjs';
 import { starxiaotuRecords, starxiaotuOverview, starxiaotuSearchFailure, revealStarxiaotuRecord } from './starxiaotu-records.mjs';
 import { createWorkbenchHost, readWorkbenchReply } from "./native-workbench.js";
@@ -175,7 +175,7 @@ function starxiaotuScope(warehouseId=state.warehouseId) {
     state.identity.accountId,state.identity.boxId,state.identity.user.id,warehouseId,
   ]) : null;
 }
-const starxiaotu = createStarxiaotu({
+const starxiaotu = bridge?.openGuide ? null : createStarxiaotu({
   identifyIntent:body=>call('assistant-intent',{body}),
   hasProject:()=>!!state.warehouseId,
   root:$('#content'), rail:$('#starlink-rail'), scope:starxiaotuScope,
@@ -228,15 +228,34 @@ const starxiaotu = createStarxiaotu({
   navigate:navigateStarxiaotu,
 });
 function starxiaotuMarker(context) {
-  return `<span class="sx-title-anchor"><button type="button" class="sx-context" data-starxiaotu-context="${context}" aria-label="向星小图了解${{overview:'概览',ontology:'本体',conversation:'资料库',knowledge:'数据列表',graph:'星图',data:'数据列表',models:'模型设置',warehouses:'项目'}[context] || '当前板块'}">${starxiaotuIcon}</button></span>`;
+  return `<span class="sx-title-anchor"><button type="button" class="sx-context" data-starxiaotu-context="${context}" aria-label="让 CentaurAI 解释${{overview:'概览',ontology:'本体',conversation:'资料库',knowledge:'数据列表',graph:'星图',data:'数据列表',models:'模型设置',warehouses:'项目'}[context] || '当前板块'}">${guideMark}</button></span>`;
 }
-function explainStarxiaotuTerm(key) {
-  const term = getStarlinkTerm(key);
-  if (term) starxiaotu.explain(term.guide, term.label, term.definition);
+function explainStarxiaotuTerm(key, anchor) {
+  const term=concepts.get(key);
+  if (!term) return;
+  if (bridge?.openGuide) {
+    bridge.openGuide(term.key);
+  } else {
+    anchor?.closest('#help-dialog')?.close();
+    starxiaotu.explain(term.guide,term.label,term.definition);
+  }
+}
+function dismissGuideOnBackground(event) {
+  if (bridge?.dismissGuide && isGuideBackgroundClick(event)) bridge.dismissGuide();
+}
+if (bridge?.openGuide) {
+  document.addEventListener('click',dismissGuideOnBackground);
+  document.addEventListener('toggle',event=>{
+    if(event.target.matches('dialog'))bridge.setGuideView?.(state.view);
+  },true);
+  document.addEventListener('keydown',event=>{
+    if (guideShortcut(event)){event.preventDefault();bridge.openGuide();}
+  });
 }
 mountTermGlossary($('#help-dialog'));
 function syncStarxiaotu() {
-  starxiaotu.sync();
+  starxiaotu?.sync();
+  bridge?.setGuideView?.(state.view);
   const title=$('#page-title');
   if(['overview','ontology','conversation','knowledge'].includes(state.view) && !title.querySelector('.sx-context'))
     title.insertAdjacentHTML('beforeend',starxiaotuMarker(state.view));
@@ -251,7 +270,7 @@ async function navigateStarxiaotu(target) {
     return revealStarxiaotuRecord(section?.querySelector('h1,h2,h3') || section);
   };
   const currentView=state.view==='graph'&&state.mode==='list'?'data':state.view;
-  if(target.guide && target.view===currentView)return revealPage(currentView);
+  if(target.guide && !target.configuration && target.view===currentView && target.view!=='ontology')return revealPage(currentView);
   if(!workbench.canLeave())return false;
   if(target.configuration==='create-project') {
     await openWarehouseSetup();
@@ -261,7 +280,7 @@ async function navigateStarxiaotu(target) {
     if(state.view!=='models')setView('models');
     return state.view==='models' && revealStarxiaotuRecord($('#starxiaotu-model-settings'));
   }
-  if(!state.warehouseId)return false;
+  if(!state.warehouseId && !['warehouses','models'].includes(target.view))return false;
   const generation=state.generation;
   if(target.configuration==='material') {
     if(state.view!=='conversation')setView('conversation');
@@ -325,9 +344,14 @@ document.addEventListener('click',event=>{
   if (!button) return;
   event.preventDefault();
   if (button.dataset.starxiaotuTerm) {
-    button.closest('#help-dialog')?.close();
-    explainStarxiaotuTerm(button.dataset.starxiaotuTerm);
-  } else starxiaotu.explain(button.dataset.starxiaotuContext);
+    explainStarxiaotuTerm(button.dataset.starxiaotuTerm,button);
+  } else {
+    const view=button.dataset.starxiaotuContext;
+    const termKey={ontology:'ontology',conversation:'library',knowledge:'entity',data:'relation'}[view];
+    if (bridge?.openGuide) bridge.openGuide(termKey || view);
+    else if (termKey) explainStarxiaotuTerm(termKey,button);
+    else starxiaotu.explain(view);
+  }
 });
 const explorer = createGraphExploration({state,pick:$,esc,call,readReply:readWorkbenchReply,
   present:graphLayout,motion:graphMotion,redraw:() => {renderFilters();renderGraph();},
@@ -493,7 +517,7 @@ function connection(ready) {
 function invalidate() {
   if (state.invalid) return;
   state.invalid = true;
-  starxiaotu.invalidate();
+  starxiaotu?.invalidate();
   state.saving = state.sourceLoading = false;
   stopConversation();
   onboarding.reset();
@@ -961,7 +985,7 @@ function selectEdge(id) {
   if (changed) { fitGraph(); transformScene(); }
 }
 const skillsUi = createSkillsUI({call,state,esc,toast,errorText});
-const workbench = createWorkbenchHost({ call, onAssistantTerm: explainStarxiaotuTerm, onOutsideClick: starxiaotu.dismiss, warehouse: () => state.invalid ? null : state.warehouseId,
+const workbench = createWorkbenchHost({ call, onAssistantTerm: explainStarxiaotuTerm, onOutsideClick(event) { starxiaotu?.dismiss(); dismissGuideOnBackground(event); }, warehouse: () => state.invalid ? null : state.warehouseId,
   container: () => $("#mw-editor-content")||$("#view-workbench"),
   onView: view => { if (!$('#mw-editor-dialog')&&workbench.has(state.view) && pages[view]) setView(view, true); },
   onImport: openMaterialFromWorkbench,
@@ -975,10 +999,115 @@ const workbench = createWorkbenchHost({ call, onAssistantTerm: explainStarxiaotu
     }
   },
 });
+async function findGuideRecords(query, area) {
+  const id=state.warehouseId, generation=state.generation, view=state.view;
+  if (!panelVisible || !state.ready || state.invalid || !query) return [];
+  if(view==='warehouses'){
+    return state.warehouses.filter(w=>w.name?.toLowerCase().includes(query.toLowerCase())).slice(0,8).map(w=>({
+      key:w.id,title:w.name,source:'我的项目',open:async()=>{
+        if(!panelVisible || state.invalid || state.generation!==generation || state.view!==view ||
+          !state.warehouses.some(live=>live.id===w.id) || !workbench.canLeave() || document.querySelector('dialog[open]'))return false;
+        await selectWarehouse(w.id,'overview');return state.warehouseId===w.id;
+      }
+    }));
+  }
+  if(!id)return [];
+  const activeDoc=()=>$('#source-dialog')?.open ? state.source?.document?.id :
+    state.view==='conversation' ? conversationFlow?.state.librarySelection?.document?.id : undefined;
+  const documentId=area==='material' ? activeDoc() : undefined;
+  if (area==='material' && !documentId) return [];
+  const stillHere=()=>panelVisible && !state.invalid && generation===state.generation && id===state.warehouseId &&
+    view===state.view && (!documentId || activeDoc()===documentId);
+  if(area==='summary'){
+    const payload=starxiaotuOverview({warehouse:currentWarehouse(),documents:state.documents,graph:state.graph});
+    return (payload.results || []).map(item=>({key:item.id,title:item.title,source:'当前项目资料库',excerpt:item.excerpt,
+      open:()=>stillHere() && !document.querySelector('dialog[open]') && navigateStarxiaotu(item.target)}));
+  }
+  if(area==='rules'){
+    const payload=readWorkbenchReply(await call('conversation-ontologies',{},id));
+    if(!stillHere())return [];
+    const versions=payload?.items || [];
+    const published=versions.find(x=>x.status==='published');
+    return versions.slice(0,8).map(item=>{
+      const types=[...(item.schema?.entity_types || []),...(item.schema?.relation_types || [])];
+      const ordered=types.slice().sort((a,b)=>Number(query.includes(b.label))-Number(query.includes(a.label)));
+      const status=item===published?'生效版本':item.status==='draft'?'草稿':'历史版本';
+      const excerpt=ordered.slice(0,6).map(t=>t.label+(t.properties?.length?'：'+t.properties.slice(0,5).map(p=>p.label+(p.required===true?'（必填）':'')).join('、'):'')).join('；');
+      return {key:item.id,title:item.name+' · '+status,source:'本体版本列表',excerpt,
+        open:()=>stillHere() && workbench.canLeave() && navigateStarxiaotu({view:'ontology',guide:true})};
+    });
+  }
+  let items=[];
+  if (area==='material' || area==='project') {
+    const result=await call('search',{query,...(documentId && {documentIds:[documentId]})},id);
+    if(!stillHere())return [];
+    // Use the same output policy as the original model-backed Starlink agent.
+    if(result?.sensitive?.enabled===true && !['policy_changed','data_changed'].includes(result.sensitive.status))
+      items=(result.items || []).filter(i=>['clean','masked'].includes(i.sensitive_status) && (!documentId || i.document_id===documentId));
+  }
+  const graph=documentId ? {nodes:[],edges:[]} : state.graph;
+  const documents=documentId ? state.documents.filter(d=>d.id===documentId) : state.documents;
+  return starxiaotuRecords({graph,documents,resolvedQuery:true},query,{items}).results.slice(0,8).map(item=>({
+    key:item.id,title:item.title,exactId:item.exactId,source:item.target.kind==='document'?'项目资料库':'当前星图',excerpt:item.excerpt,
+    open:()=>{
+      if(!stillHere())return false;
+      const dialog=document.querySelector('dialog[open]');
+      if(dialog && (dialog.id!=='source-dialog' || state.editing || item.target.documentId!==activeDoc()))return false;
+      return navigateStarxiaotu(item.target);
+    },
+  }));
+}
+function currentGuideFacts(question = '') {
+  if (!panelVisible || !state.ready || state.invalid || !state.hostNavigationReady) return {};
+  const view = state.view === 'graph' && state.mode === 'list' ? 'data' : state.view;
+  const warehouse = currentWarehouse();
+  const facts = {子页面: pages[state.view]?.[0], 当前项目: warehouse?.name};
+  if (view==='warehouses') return {子页面:facts.子页面, 可见项目数:state.warehouses.length};
+  if (!warehouse) return facts;
+  Object.assign(facts, {项目资料数: warehouse.document_count, 项目实体数: warehouse.entity_count, 项目关系数: warehouse.relation_count});
+  const rules = state.graphOntology;
+  if (rules) {
+    const types = rules.schema?.entity_types, relations = rules.schema?.relation_types;
+    const label=t=>t.label || t.name;
+    const examples=items=>[...(items || [])].sort((a,b)=>Number(question.includes(label(b)))-Number(question.includes(label(a))));
+    const labels=new Map((types || []).map(t=>[t.name,label(t)]));
+    const ends=keys=>keys?.map(k=>labels.get(k) || k).slice(0,3).join('、');
+    const properties=examples(types).filter(t=>t.properties?.length).slice(0,3).map(t=>
+      label(t)+'：'+t.properties.slice(0,4).map(p=>label(p)+(p.required===true?'（必填）':p.required===false?'（选填）':'')).join('、'));
+    Object.assign(facts, {属性规则示例:properties.join('；'), 生效本体:rules.name, 生效版本:rules.version_number,
+      实体类型数:types?.length, 关系类型数:relations?.length,
+      实体类型示例:examples(types).slice(0,8).map(label).join('、'),
+      关系规则示例:examples(relations).slice(0,4).map(r=>[ends(r.source_types),label(r),ends(r.target_types)].filter(Boolean).join(' → ')).join('、')});
+  }
+  if (view === 'graph' && state.graphFingerprint && !state.graphError) {
+    const graph = visibleGraph();
+    const selected = graph.nodes.find(n=>n.id===state.selectedNode);
+    const edge = graph.edges.find(e=>e.id===state.selectedEdge);
+    Object.assign(facts, {画面可见实体数:graph.nodes.length, 画面可见关系数:graph.edges.length,
+      已选实体:selected?.name, 已选实体类型:selected && typeDisplay(selected.type).label,
+      已选关系:edge && [node(edge.s)?.name,edge.label,node(edge.t)?.name].filter(Boolean).join(' → '), 图谱视图:state.graphOverview?'概览':'明细'});
+  }
+  if (view === 'conversation') {
+    const doc = conversationFlow?.state.librarySelection?.document || state.source?.document;
+    if (doc && !doc.deleted_at && doc.status!=='deleted') Object.assign(facts,{已选资料:doc.original_name || doc.name, 资料状态:doc.status});
+  }
+  return facts;
+}
 let panelVisible = true;
 bridge?.register?.({
   visible(value) { panelVisible = value; transformScene(); },
-  dismissAssistant: starxiaotu.dismiss,
+  guideContext:()=>({ready:state.hostNavigationReady && state.ready && !state.invalid,project:state.invalid ? null : state.warehouseId,
+    name:currentWarehouse()?.name || '', view:state.view,
+    path:[!['warehouses','models'].includes(state.view) && currentWarehouse()?.name, pages[state.view]?.[0],
+      state.view==='ontology' && (state.ontologyCategory==='drafts' ? '本体修改' : '规则总览'),
+      state.view==='ontology' && ontologyHeadings[state.ontologySection]?.[0],
+      state.view==='graph' && (state.mode==='list' ? '关系列表' : '3D 视图'),
+      document.querySelector('dialog[open] h2')?.textContent?.trim()]}),
+  guideRecords:findGuideRecords,
+  guideFacts:currentGuideFacts,
+  guideNavigate:navigateStarxiaotu,
+  canLeave:()=>!document.querySelector('dialog[open]') && !onboarding.busy && conversationFlow?.importer.canLeaveSource()!==false && workbench.canLeave(),
+  dismissAssistant: starxiaotu?.dismiss,
   openGraph() {
     if (!state.ready || state.invalid || state.view === 'graph' || document.querySelector('dialog[open]') ||
         !workbench.canLeave()) return;
@@ -1005,7 +1134,7 @@ const pages = {
   review: ["知识核对", "REVIEW WITH EVIDENCE", "对照原始材料核对实体与关系，保留修改和发布依据。"],
   releases: ["版本历史", "KNOWLEDGE THROUGH TIME", "查看知识发布记录，对比变化，追溯每个版本的来源。"],
   skills: ["Skill 管理", "METHODS FOR YOUR KNOWLEDGE", "按星图保管推理方法，给其他 AI 应用可靠的分析路径。"],
-  models: ["模型设置", "KNOW HOW YOUR KNOWLEDGE IS BUILT", "选择星小图模型，查看和调整资料处理模型。"],
+  models: ["模型设置", "KNOW HOW YOUR KNOWLEDGE IS BUILT", "选择 CentaurAI 模型，查看和调整资料处理模型。"],
   warehouses: ["我的项目", "", "每个项目有独立的资料、本体和星图。"],
   data: [
     "数据管理",
@@ -1154,7 +1283,7 @@ function renderConversation() {
   if(conversationRoot._renderedMarkup===markup&&conversationRoot.dataset.disclosureScope===disclosureScope)return;
   conversationRoot.innerHTML=markup;conversationRoot._renderedMarkup=markup;
   mountMaterialWorkspace(conversationRoot);
-  starxiaotu.sync();
+  starxiaotu?.sync();
   conversationRoot.querySelectorAll('[data-intake-segment]').forEach(el=>{el.style.height='auto';el.style.height=el.scrollHeight+'px';});
   if(sourceScroll!==undefined&&$('#view-conversation .cv-source-review'))$('#view-conversation .cv-source-review').scrollTop=sourceScroll;
   conversationRoot.dataset.disclosureScope=disclosureScope;
@@ -2932,6 +3061,7 @@ async function selectWarehouse(id, nextView, onboardingHandoff = false) {
   state.processing = null; state.externalEmbedding = false;
   void loadProcessingSummary();
   rememberWarehouse(id);
+  bridge?.rememberGuideProject?.(id);
   state.refreshing = false;
   state.documents = [];
   state.jobs = [];
