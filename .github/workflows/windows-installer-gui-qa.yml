@@ -34,12 +34,12 @@ jobs:
           $script = 'wanx/apps/personal-client/tools/verify-installer-ui.mjs'
           $old = '  ${uninstall ? "" : "!insertmacro customInstall"}'
           $addition = @'
-          ${uninstall ? "" : `!insertmacro customInstall
-          Sleep 11000
-          SetOutPath "$INSTDIR"
+          ${uninstall ? "" : `SetOutPath "$INSTDIR"
           FileOpen $0 "$INSTDIR\fixture-marker.exe" w
           FileWrite $0 "installer-test-fixture"
-          FileClose $0`}
+          FileClose $0
+          !insertmacro customInstall
+          Sleep 11000`}
           '@
           $text = Get-Content -Raw $script
           if (-not $text.Contains($old)) { throw 'Cannot prepare compile-check fixture' }
@@ -48,7 +48,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Fixture did not compile' }
       - name: Inspect the real native dialog using the lightweight fixture
         shell: powershell
-        run: .github/scripts/windows-installer-gui-qa.ps1 -Installer "$env:RUNNER_TEMP/fixture/install-compile-check.exe" -OutputPath "$env:RUNNER_TEMP/memobox-gui-qa"
+        run: .github/scripts/windows-installer-gui-qa.ps1 -Installer "$env:RUNNER_TEMP/fixture/install-compile-check.exe" -OutputPath "$env:RUNNER_TEMP/memobox-gui-qa" -OverviewBitmap "wanx/apps/personal-client/resources/installer/illustrated/windows-overview.bmp"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
