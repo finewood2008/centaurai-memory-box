@@ -615,20 +615,19 @@ test("scope navigation flushes a draft and can return to the parent range", asyn
   assert.equal(h.calls.filter(call => call.op === "open").at(-1).parent, id(9999));
 });
 
-test("space integrates toolbar, multiselection and folder entry without changing the original navigation", async () => {
+test("space opens the workbench from the sidebar, multiselection and folders", async () => {
   const events = new Map(), opens = [], data = rows(2), root = { addEventListener(type, handler) { events.set(type, handler); }, focus() {} };
   const folder = { ...data[0], kind: "folder", name: "合成目录" };
   const wb = { active: () => false, open: async value => opens.push(value), reset() {}, render: () => "", retainEditor: () => false };
   const window = { createSpaceAnnotationWorkbench: () => wb, wanxClient: { async action(name) { return { ok: true, value: name === "space.refresh" ? { phase: "ready", tasks: [], annotationAvailable: true } : { items: [folder, data[1]], breadcrumbs: [] } }; }, onSpaceState() {} } };
   vm.runInNewContext(spaceSource, { window, document: { querySelector: () => root, querySelectorAll: () => [], addEventListener() {} }, setInterval() {}, setTimeout, requestAnimationFrame: () => 1, cancelAnimationFrame() {}, queueMicrotask, URL, Blob, atob, TextDecoder });
-  const space = window.wanxSpace; space.bind({ notesInAssistant: true, render() {} }); space.hostState({ route: "applications", canLaunchApplications: true, account: { accountId: "synthetic" }, activeDeviceId: "box" }); space.activate(true); await tick();
-  assert.match(space.headerActions(), /data-action="space-workbench"[^>]*>标注工作台/);
-  assert.doesNotMatch(space.headerActions(), /clipboard-toggle/);
-  assert.doesNotMatch(space.view(), /data-action="space-workbench"/);
+  const space = window.wanxSpace; space.bind({ compactActions: true, notesInAssistant: true, render() {} }); space.hostState({ route: "applications", canLaunchApplications: true, account: { accountId: "synthetic" }, activeDeviceId: "box" }); space.activate(true); await tick();
+  assert.equal(space.headerActions(), "");
+  assert.match(space.view(), /class="space-sidebar-bottom"><button[^>]*data-action="space-recycle"[^>]*>[\s\S]*?回收站<\/button><button[^>]*data-action="space-workbench"/);
   space.bind({ render() {} });
   assert.match(space.headerActions(), /data-action="clipboard-toggle"/);
   assert.match(space.view(), /data-action="space-workbench"/);
-  space.bind({ notesInAssistant: true, render() {} });
+  space.bind({ compactActions: true, notesInAssistant: true, render() {} });
   const click = (name, item = "") => events.get("click")({ target: { closest: () => ({ dataset: { action: `space-${name}`, id: item } }) } });
   await click("workbench"); assert.equal(opens[0].parent, "");
   await click("select", data[1].id); await click("workbench-selected"); assert.deepEqual(Array.from(opens[1].ids), [data[1].id]);

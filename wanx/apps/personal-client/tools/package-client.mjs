@@ -119,6 +119,10 @@ export async function packageClient({ version, arch = process.arch, out, notaryP
   if (test) await writeFile(testCASnapshot, testCA, { mode: 0o600 });
   await writeFile(configurationFile, JSON.stringify({ ...pkg.build, appId, productName: name,
     afterPack: path.join(root, "tools/package-client-native.mjs"),
+    ...(test ? { dmg: { ...pkg.build.dmg, title: name,
+      artifactName: "${productName}-${version}-${arch}.${ext}",
+      contents: pkg.build.dmg?.contents?.map(item => item.type === "file" ? { ...item, name: `${name}.app` } : item),
+    } } : {}),
     forceCodeSigning: true, mac: { ...pkg.build.mac, defaultArch: "x64" },
     directories: { ...pkg.build.directories, output: outputDir }, extraMetadata: { version, wanxEdition: pkg.wanxEdition, wanxBuild: build,
       ...(test ? { name: TEST_PACKAGE_NAME, productName: TEST_PRODUCT_NAME, main: "updates/test-entry.mjs" } : {}) },
