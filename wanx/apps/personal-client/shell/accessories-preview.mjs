@@ -113,7 +113,7 @@ export function createAccessoriesPreview({ app, window, BrowserWindow, navigate,
     } catch (error) {
       if (runtime !== view || closed || capturedAccount !== accountId() || openedOn !== connectionKey()) return;
       setWaitingForGrant(error.code === 'MEDIA_GRANT_PENDING');
-      if (interactive && !waitingForGrant) await dialog.showMessageBox(window, {type:'info', message:'万象录音授权', detail:error.message});
+      if (interactive && !waitingForGrant) await dialog.showMessageBox(window, {type:'info', message:'录音授权', detail:error.message});
     } finally {
       connecting = false;
       const pending = requestAfterCheck;
