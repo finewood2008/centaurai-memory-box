@@ -118,7 +118,7 @@ func validateHomeAIQuery(method string, path *url.URL) error {
 			}
 		case method == http.MethodGet && path.Path == homeAIPath+"/assets":
 			switch key {
-			case "q", "tag", "date", "mediaType", "source", "limit", "offset":
+			case "q", "tag", "date", "mediaType", "source", "suggestedTag", "limit", "offset":
 				continue
 			}
 		case method == http.MethodGet && path.Path == homeAIPath+"/space-destination/folders":

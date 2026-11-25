@@ -86,9 +86,14 @@ test("NetBird address reset is wired through management and preserves the select
   await bridge.manage("mcp-issue", {name: "Test Agent"});
   const key = f.saved.spaceMcp[0].credential;
   const first = (await bridge.manage("mcp-state")).url;
+  const starlink = await bridge.mcpDetails("starlink");
+  assert.equal(starlink.url, new URL("/mcp/starlink", first).href);
+  assert.equal(starlink.localOnly, true);
+  assert.equal(starlink.configuration.mcpServers["wanx-starlink"].url, starlink.url);
   const renewed = await bridge.manage("mcp-reset-endpoint");
   assert.notEqual(renewed.url, first);
   assert.equal((await bridge.mcpDetails()).url, renewed.url);
+  assert.equal((await bridge.mcpDetails("starlink")).url, new URL("/mcp/starlink", renewed.url).href);
   assert.equal(f.saved.spaceMcp[0].credential, key);
   f.change("other-owner", "box-b");
   const other = (await bridge.manage("mcp-state")).url;

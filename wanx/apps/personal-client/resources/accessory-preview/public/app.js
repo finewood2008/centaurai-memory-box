@@ -185,7 +185,7 @@ async function init() {
   if (accessoryAgent && hid) await openAccessoryLocation();
   else if (PROJECT_ID.test(hid) && S.meetings.some((m) => m.id === hid)) await selectMeeting(hid);
   else render();
-  if (accessoryAgent) window.addEventListener('recording-authorization', () => loadHealth().then(() => { if (!S.edit) renderMain(); }));
+  if (accessoryAgent) window.addEventListener('recording-media-status', () => loadHealth().then(() => { if (!S.edit) renderMain(); }));
   setInterval(loadHealth, 20000);
   setInterval(poll, 600);
   if (accessoryAgent) setInterval(() => {
@@ -204,7 +204,7 @@ async function loadHealth() {
   const connection = S.health?.media;
   $('modeBadge').textContent = connection?.connected ? '盒端已连接' : '独立模块';
   if (JSON.stringify(previous) !== JSON.stringify(connection) && S.view === 'meeting' && !S.edit) {
-    if (!S.currentId || S.meeting?.transcript?.status === 'offline') renderMain();
+    if (!S.currentId || ['offline', 'done'].includes(S.meeting?.transcript?.status)) renderMain();
   }
 }
 let listRequest = 0;
@@ -602,8 +602,8 @@ function renderAccessoryCatalog(main) {
             kind === 'storage' ? '打开空间' : '打开' + accessoryAgents[kind].title)))))));
 }
 
-function authorizationLink() {
-  return h('a', {href:'/accessories/connect'}, S.health?.media?.waitingForGrant ? '检查开通状态' : '授权盒端转写');
+function mediaReconnectLink() {
+  return S.health?.desktop ? h('a', {href:'/accessories/connect'}, '重新连接媒体服务') : null;
 }
 
 let captureEnabled = null;
@@ -642,8 +642,7 @@ function renderAccessoryWorkbench(main) {
   const media = S.health?.media;
   const disk = accessoryPage === 'disk';
   const statusText = (capability, label) => media?.[capability] ? (capability === 'transcribe' ? '可转写' : label+'已就绪')
-    : media?.waitingForGrant ? label+'等待开通'
-    : media?.connected && media.granted?.includes(capability === 'live' ? 'audio.transcribe.streaming' : 'audio.transcribe') ? label+'待盒端就绪' : media?.connected ? label+'待开通' : label+'待授权';
+    : media?.connected ? label+'待盒端就绪' : label+'暂不可用';
   const file = h('input', { type: 'file', hidden: true, accept: 'audio/*,.wav,.flac,.m4a,.mp3,.ogg',
     onchange: e => { if (e.target.files[0]) void importClip(e.target.files[0]); } });
   const begin = async () => {
@@ -673,7 +672,7 @@ function renderAccessoryWorkbench(main) {
     disk && !S.rec ? micPanel() : null,
     h('div', {class:'studio-service'},
       h('span', null, [disk && statusText('live','实时字幕'), statusText('transcribe','文件转写')].filter(Boolean).join(' · ')),
-      S.health?.desktop && (!media?.granted?.includes('audio.transcribe') || (disk && !media?.granted?.includes('audio.transcribe.streaming'))) ? authorizationLink() : null),
+      !media?.transcribe || (disk && !media?.live) ? mediaReconnectLink() : null),
     media?.summaryLocation === 'cloud' ? h('small', {class:'muted'}, '总结时由盒子将转录文本发送到云模型。') : null,
     profile && !S.rec ? h('details', {class:'studio-method', open:S.methodOpen,
       ontoggle:e => { if (e.target.isConnected) S.methodOpen = e.target.open; }},
@@ -1299,6 +1298,7 @@ function renderInterrupted(main) {
 // —— 录音总结 ——
 async function openRegenerate(m) {
   const initial = m.minutes.template?.rules || m.minutesTemplate?.rules || templateById(S.templateCatalog?.defaultId)?.rules || '';
+  const cloudSummary = S.health?.media?.summaryLocation === 'cloud';
   const requirements = h('textarea', { value: initial, rows: 5, maxlength: 2000, required: true });
   const feedback = h('p', { class: 'err', role: 'alert' });
   const cancel = h('button', { class: 'btn', type: 'button', onclick: () => dialog.close() }, '取消');
@@ -1319,9 +1319,10 @@ async function openRegenerate(m) {
       submit.disabled = cancel.disabled = requirements.disabled = false;
     }
   } },
-  h('div', { class: 'm-h' }, h('h2', { id: 'regenTitle' }, '调整这次总结')),
+  h('div', { class: 'm-h' }, h('h2', { id: 'regenTitle' }, m.minutes.status === 'waiting' ? '生成录音总结' : '调整这次总结')),
   h('div', { class: 'm-b' },
     h('label', { class: 'field' }, '你希望 AI 怎样总结？', requirements),
+    cloudSummary ? h('p', { class: 'muted' }, '生成总结时，盒子会将这条录音的转录文本和总结要求发送给已配置的云模型。') : null,
     m.review.status === 'confirmed' ? h('p', { class: 'muted' }, '重新生成会创建草稿，原确认版仍可在试用空间查看。') : null,
     feedback),
   h('div', { class: 'm-f' }, cancel, submit)));
@@ -1376,6 +1377,18 @@ function renderReview(main) {
   const player = getPlayer(m);
   const editor = S.edit?.id === m.id ? S.edit : null;
   const canSummarize = m.transcript.status === 'done' && m.transcript.segments.length > 0;
+  const media = S.health?.media;
+  const awaitingSummary = canSummarize && media?.summaryOnRequest && m.minutes.status === 'waiting';
+  let summaryUnavailable = '';
+  if (accessoryAgent && !media?.summarize) {
+    if (!media) summaryUnavailable = '正在检查盒端总结服务。';
+    else if (!media.connected) summaryUnavailable = '请先连接盒子，再生成总结。';
+    else if (media.summaryLocation === 'cloud') summaryUnavailable = '当前盒子的云端总结模型尚未就绪。';
+    else summaryUnavailable = '当前盒子的总结服务暂不可用。';
+  }
+  const summaryAction = (label) => h('button', { class: 'btn sm', type: 'button',
+    disabled: !!summaryUnavailable, onclick: () => openRegenerate(m) }, label);
+  const reconnectSummary = media?.connected === false ? mediaReconnectLink() : null;
 
   const paragraph = (text, source) => h('p', { class: 'summary-paragraph' }, text,
     player && Number.isFinite(source?.startMs) ? ts(source.startMs) : null);
@@ -1389,7 +1402,7 @@ function renderReview(main) {
   };
   const more = h('details', { class: 'summary-more' }, h('summary', { 'aria-label': '总结操作' }, '···'),
     h('div', { class: 'menu-panel' },
-      canSummarize ? h('button', { type: 'button', onclick: () => { more.open = false; openRegenerate(m); } }, '调整这次总结') : null,
+      canSummarize && !awaitingSummary && !summaryUnavailable ? h('button', { type: 'button', onclick: () => { more.open = false; openRegenerate(m); } }, '调整这次总结') : null,
       accessoryAgent ? null : h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: m.memoryEnabled, onchange: async (e) => {
         try { const next = await api(`/api/meetings/${m.id}`, { method: 'PATCH', json: { memoryEnabled: e.target.checked } }); if (S.currentId === m.id) S.meeting = next; }
         catch (err) { toast(err.message); e.target.checked = !e.target.checked; }
@@ -1438,13 +1451,15 @@ function renderReview(main) {
     const stage = m.audio.status !== 'saved' ? 'audio' : !canSummarize && ['offline', 'error', 'partial'].includes(m.transcript.status) ? 'transcript' : 'minutes';
     const error = m[stage].error;
     body = h('div', { class: 'summary-document' },
+      awaitingSummary ? h('p', { class: 'notice info' },
+        summaryUnavailable || '转写已完成，可以生成录音总结。', summaryAction('生成总结'), reconnectSummary) : null,
       error && ['error', 'offline', 'partial'].includes(m[stage].status) ? h('p', { class: 'notice info' },
-        stage === 'audio' ? '录音保存失败。' : stage === 'transcript' ? (m.transcript.status === 'partial' ? `转录尚未完成，${error}。` : '转录暂不可用。') : '这次未能生成总结。',
+        stage === 'audio' ? '录音保存失败。' : stage === 'transcript' ? (m.transcript.status === 'partial' ? `转录尚未完成，${error}。` : '转录暂不可用。') : summaryUnavailable || '这次未能生成总结。',
         stage === 'transcript' && m.audio.status === 'saved' && !S.health?.media?.transcribe && accessoryAgent ?
-          h('span', null, ' 原音已保存在本机，可随时回听。', S.health?.media?.granted?.includes('audio.transcribe')
-            ? h('span', null, '盒端转写尚未就绪。', h('button', {class:'btn sm', type:'button', onclick:e => retry(stage, e.currentTarget)}, '重试转写'))
-            : h('span', null, S.health?.media?.waitingForGrant ? '转写等待开通。' : '', authorizationLink())) :
-        stage === 'minutes' ? h('button', { class: 'btn sm', type: 'button', onclick: () => openRegenerate(m) }, '重试') :
+          h('span', null, ' 原音已保存在本机，可随时回听。',
+            S.health?.media?.connected ? '盒端转写尚未就绪。' : '请确认已连接盒子。',
+            mediaReconnectLink()) :
+        stage === 'minutes' ? [summaryAction('重试'), reconnectSummary] :
           h('button', { class: 'btn sm', type: 'button', onclick: (e) => retry(stage, e.currentTarget) }, stage === 'transcript' ? '重试转写' : '重试')) : null,
       currentText ? renderText() : h('div', { class: 'summary-message' }, h('p', { class: 'muted' }, '还没有总结。'),
         h('button', { class: 'btn sm', type: 'button', onclick: () => { S.edit = { id: m.id, rev: m.minutes.rev, text: '' }; renderMain(); $('summaryText').focus(); } }, '手动编写')));

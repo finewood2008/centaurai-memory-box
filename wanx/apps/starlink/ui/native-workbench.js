@@ -3,7 +3,7 @@ export function materialAccessLost(error) {
   return error?.status === 401 || error?.status === 403 ||
     error?.status === 404 && !['SEMANTICA_OPERATION_NOT_ALLOWED','SEMANTICA_UPGRADE_REQUIRED'].includes(error?.code);
 }
-const targetViews = { ontology: "ontology", review: "materials", releases: "releases", sensitive: "sensitive" };
+const targetViews = { ontology: "ontology", review: "materials", releases: "releases" };
 export function readWorkbenchReply(reply) {
   if (reply?.ok === true) return reply.value;
   const refused = reply?.ok === false && typeof reply.code === 'string' && /^[A-Z][A-Z_]{1,95}$/.test(reply.code);
@@ -67,7 +67,7 @@ export function createWorkbenchHost({ call, warehouse, container, onView, onImpo
       wantedDocument=documentId;wantedReview=reviewTarget;return this.show('review');
     },
     show(view, ontologyAction) {
-      if (!warehouse()) return false;
+      if (!warehouse() || !Object.hasOwn(targetViews, view)) return false;
       const action = view === "ontology" ? ontologyAction : undefined;
       wanted = targetViews[view];
       wantedOntologyAction = action;

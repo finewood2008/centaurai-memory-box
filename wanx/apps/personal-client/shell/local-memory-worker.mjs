@@ -197,8 +197,15 @@ async function run(sourceRoot, runtimeHome, descriptor, apiDatabasePath) {
   process.once("SIGTERM", close);
 }
 
-run(...process.argv.slice(2)).catch(error => {
+run(...process.argv.slice(2)).then(() => {
+  if (process.connected) process.disconnect();
+}).catch(error => {
   const code = /^MEMORY_[A-Z_]+$/.test(error?.message) ? error.message : "MEMORY_SERVICE_START_FAILED";
   process.stderr.write(code + "\n");
   process.exitCode = 1;
+  if (process.connected) {
+    process.send({ type: "memory-startup-error", code }, () => {
+      if (process.connected) process.disconnect();
+    });
+  }
 });

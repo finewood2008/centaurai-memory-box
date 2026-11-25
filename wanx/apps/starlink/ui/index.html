@@ -39,7 +39,6 @@
             <button type="button" class="nav-item" data-view="conversation"><span data-icon="files"></span><span>资料库</span></button>
             <button type="button" class="nav-item" data-view="ontology" data-ontology-action="published"><span data-icon="network"></span><span>本体</span></button>
             <button type="button" class="nav-item" data-view="knowledge"><span data-icon="list"></span><span>数据列表</span></button>
-            <button type="button" class="nav-item" data-view="sensitive"><span data-icon="shield"></span><span>脱敏规则</span></button>
           </nav>
         </div>
         <div class="starlink-rail-group">
@@ -218,7 +217,7 @@
                           markerHeight="7"
                           refX="6"
                           refY="3.5"
-                          orient="auto"
+                          orient="auto-start-reverse"
                         >
                           <path
                             d="M1 1 L5 3.5 L1 6"
@@ -233,7 +232,7 @@
                           markerHeight="7"
                           refX="6"
                           refY="3.5"
-                          orient="auto"
+                          orient="auto-start-reverse"
                         >
                           <path
                             d="M1 1 L5 3.5 L1 6"
@@ -285,7 +284,7 @@
                   <div class="graph-footer">
                     <div class="tally">
                       <span><b class="mono" id="nodes-total">0</b> 个实体</span
-                      ><span><b class="mono" id="edges-total">0</b> 条关系</span
+                      ><span><b class="mono" id="edges-total">0</b> <span id="edges-unit">条连线</span></span
                       ><span
                         ><b class="mono" id="source-count">0</b> 份材料</span
                       >
@@ -326,7 +325,7 @@
                 <div class="model-config-fields">
                   <label>模型选择方式<select id="model-mode"><option value="automatic">跟随万象底座默认模型</option><option value="manual">手动指定模型</option></select></label>
                   <div id="model-selectors"><label for="model-extraction"><span>知识抽取与脱敏模型<span data-starxiaotu-glossary="extraction"></span></span><select id="model-extraction"></select></label></div>
-                  <div id="model-thinking-controls"><label>思考模式<select id="model-thinking"><option value="auto">沿用模型默认设置</option></select></label><p id="model-thinking-note" class="detail-note"></p></div>
+                  <input id="model-thinking" type="hidden" value="off">
                 </div>
                 <p class="detail-note model-save-impact">保存后，所有星图的新处理任务将使用此配置。已入队任务保留原配置。</p>
                 <div class="actions"><button class="btn btn-primary" id="model-save" disabled>检查并保存</button><span id="model-save-status" role="status"></span></div>

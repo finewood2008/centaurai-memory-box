@@ -154,9 +154,8 @@ function param(v, re, what) {
   return v;
 }
 
-let waitingForGrant = false;
 async function health() {
-  return { ok: true, app: '录音智能体', profile: PROFILE, desktop: typeof process.send === 'function', media: { ...await media.status(), waitingForGrant } };
+  return { ok: true, app: '录音智能体', profile: PROFILE, desktop: typeof process.send === 'function', media: await media.status() };
 }
 
 async function acceptRecordingFile(req, name, params) {
@@ -220,7 +219,6 @@ async function route(req, res, url) {
   if (p === '/api/health' && is('GET')) return send(res, 200, await health());
   if (p === '/api/import-audio' && is('POST')) {
     const imported = await acceptRecordingFile(req, url.searchParams.get('name') || '', url.searchParams);
-    process.send?.({type:'recording-first-use'});
     return send(res, 202, imported);
   }
   if (p === '/api/recording-capture' && PROFILE === 'accessories') {
@@ -241,7 +239,6 @@ async function route(req, res, url) {
     if (is('POST')) {
       const b = await readJsonBody(req);
       const project = await M.createMeeting({ title: b.title, inputLabel: b.inputLabel, memoryEnabled: b.memoryEnabled, source: b.source, sampleRate: b.sampleRate, channels: b.channels, templateId: b.templateId, templateRevision: b.templateRevision });
-      process.send?.({type:'recording-first-use'});
       return send(res, 201, project);
     }
   }
@@ -350,11 +347,6 @@ if (PROFILE === 'accessories') {
   }, 60000).unref();
 }
 process.on('message', message => {
-  if (message?.type === 'recording-grant-pending') {
-    waitingForGrant = message.waiting === true;
-    if (process.connected) process.send({type:'recording-media-ready'});
-    return;
-  }
   if (message?.type !== 'recording-media') return;
   attachMedia(message.env);
   void M.openLegacyProjects(message.legacy).catch(() => console.warn('读取旧版录音档案失败'))

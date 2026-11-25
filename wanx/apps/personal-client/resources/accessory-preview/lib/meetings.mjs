@@ -316,11 +316,11 @@ export async function retryStage(id, stage, { templateId, templateRevision, rev,
   if (rev !== undefined && rev !== m.minutes.rev) throw new HttpError(409, '纪要已更新，请重新打开后操作');
   const selected = template && templateSnapshot(template);
   const requested = instruction !== undefined ? { ...selected, name: '本次自定义', rules: validateInstruction(instruction), revision: 1 } : selected;
-  runPipeline(id, stage, requested, true);
+  runPipeline(id, stage, requested, true, stage === 'minutes');
   return view(id);
 }
 
-function runPipeline(id, from, template, retryFailed = false) {
+function runPipeline(id, from, template, retryFailed = false, summaryRequested = false) {
   if (pipelines.has(id)) return;
   pipelines.add(id);
   (async () => {
@@ -336,7 +336,7 @@ function runPipeline(id, from, template, retryFailed = false) {
       }
     }
     if (i <= 1 && !(await finalTranscript(id, retryFailed))) return;
-    await makeMinutes(id, template, retryFailed);
+    await makeMinutes(id, template, retryFailed, summaryRequested);
   })().catch((e) => console.error(`会后流程异常 ${id}: ${e.stack || e.message}`))
     .finally(() => pipelines.delete(id));
 }
@@ -447,7 +447,12 @@ async function finalTranscript(id, retryFailed) {
   }
 }
 
-async function makeMinutes(id, requestedTemplate, retryFailed) {
+async function makeMinutes(id, requestedTemplate, retryFailed, summaryRequested) {
+  const service = media;
+  if (service.summaryOnRequest && !summaryRequested && must(id).transcript.segments.length) {
+    await update(id, mm => { mm.minutes = { ...mm.minutes, status: 'waiting', error: '' }; });
+    return;
+  }
   const m = await update(id, (mm) => { mm.minutes = { ...mm.minutes, status: 'running', error: '' }; });
   if (!m.transcript.segments.length) {
     await update(id, (mm) => { mm.minutes = { ...mm.minutes, status: 'empty', error: '转录为空，没有可提取的内容；可手动编写纪要' }; mm.review.status = 'draft'; });
@@ -455,7 +460,6 @@ async function makeMinutes(id, requestedTemplate, retryFailed) {
   }
   try {
     const template = requestedTemplate || m.minutes.template || m.minutesTemplate || templateSnapshot(await resolveMinutesTemplate(DEFAULT_TEMPLATE_ID));
-    const service = media;
     await assertMediaScope(m, service);
     const r = await generateMinutes(id, m.transcript.segments, template, m.minutes.rev, retryFailed, service);
     if (!r.sections.length && !r.text?.trim()) throw new Error('盒端未生成有效总结');

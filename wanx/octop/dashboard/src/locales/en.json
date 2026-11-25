@@ -3264,6 +3264,7 @@
     "fetchingModels": "Fetching…",
     "fetchModelsSuccess": "Fetched {{count}} models (disabled by default)",
     "fetchModelsMerged": "Added {{count}} new models to list (existing ones unchanged)",
+    "fetchModelsSynced": "Updated {{count}} models. Save to apply.",
     "fetchModelsNoNew": "No new models to add",
     "fetchModelsFailed": "Failed to fetch models: {{error}}",
     "fetchModelsUnsupportedKind": "Auto-fetch is only supported for OpenAI-compatible providers",

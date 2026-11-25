@@ -1,3 +1,4 @@
+import {logicalSourcesHTML, logicalSourceGroups, taskUnitLabel, extractionCountsHTML} from './logical-source-view.mjs';
 import { overviewHTML, knowledgeHTML } from './starlink-pages.mjs';
 import { createStarxiaotu } from './starxiaotu.mjs';
 import {concepts, guideMark, isGuideBackgroundClick, guideShortcut} from '../shared/application-guide.mjs';
@@ -19,6 +20,7 @@ import {openMaterialDelete} from './material-deletion.mjs';
 import {continueMaterial,canContinueMaterial} from './material-continuation.mjs';
 import {nextConversationStep} from './conversation-next.mjs';
 import {currentCandidateGraph} from './conversation-candidate-graph.mjs';
+import {extractionFailuresHTML, extractionValidationHTML} from './extraction-diagnostics.mjs';
 let conversationFlow=null,conversationTimer=null,conversationReady=null,basicMaterialWarehouse=null;
 function stopConversation(){clearTimeout(conversationTimer);document.getElementById('mw-upload-dialog')?.remove();document.getElementById('mw-delete-dialog')?.remove();conversationFlow?.dispose();conversationFlow=null;basicMaterialWarehouse=null;}
 import { createSkillsUI } from "./native-skills.js";
@@ -28,7 +30,7 @@ import { createGraphMotion } from './graph-motion.mjs';
 import { createGraphExploration } from './graph-exploration-view.mjs';
 const graphMotion = createGraphMotion();
 let graphAutoRotate = false;
-import {createGraphPresentation, presentGraph} from './graph-presentation.mjs';
+import {createGraphPresentation, graphConnections, presentGraph} from './graph-presentation.mjs';
 const $ = (selector) => document.querySelector(selector);
 const esc = (value) =>
   String(value ?? "").replace(
@@ -335,7 +337,7 @@ async function navigateStarxiaotu(target) {
     $('[data-mode="'+mode+'"]').click();
     return state.view==='graph'&&state.mode===mode && (target.guide ? revealPage() : true);
   }
-  if(!['overview','ontology','conversation','knowledge','graph','models','warehouses','tasks','sensitive'].includes(target.view))return false;
+  if(!['overview','ontology','conversation','knowledge','graph','models','warehouses','tasks'].includes(target.view))return false;
   setView(target.view,false,target.view==='ontology'?'published':undefined);
   return state.view===target.view && (!target.guide || revealPage());
 }
@@ -770,7 +772,6 @@ function renderGraph() {
   $("#graph-auto-rotate").disabled = g.nodes.length < 2;
   $("#nodes-total").textContent = g.nodes.length;
   $("#graph-show-isolated").checked = state.showIsolated;
-  $("#edges-total").textContent = g.edges.length;
   $("#source-count").textContent = new Set(
     g.edges.flatMap((e) => e.evidence.map((v) => v.document_id)),
   ).size;
@@ -791,22 +792,25 @@ function renderGraph() {
   });
   const positions = new Map(g.nodes.map(n => [n.id,n]));
   const look = explorer.enabled() ? explorer.appearance(g) : null;
-  const groups = new Map();
-  for (const e of g.edges) {
-    const key = JSON.stringify([e.s,e.t].sort());
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(e.id);
-  }
-  $("#graph-scene").innerHTML = '<g class="graph-space-floor" aria-hidden="true"></g><g class="graph-space-links">' + g.edges.map(e => {
+  const relations = g.edges.filter(edge => !look?.omitted.has(edge.id));
+  const connections = graphConnections(relations);
+  $("#edges-total").textContent = state.mode === "graph" ? connections.length : relations.length;
+  $("#edges-unit").textContent = state.mode === "graph" ? "条连线" : "条关系";
+  $("#graph-scene").innerHTML = '<g class="graph-space-floor" aria-hidden="true"></g><g class="graph-space-links">' + connections.map(e => {
     const a = positions.get(e.s), b = positions.get(e.t);
-    const group = groups.get(JSON.stringify([e.s,e.t].sort()));
-    const path = edgeGeometry(a,b,group.indexOf(e.id),group.length);
-    const chosen = e.id === state.selectedEdge;
+    const path = edgeGeometry(a,b);
+    const relationIds = e.relations.map(relation => relation.id);
+    const chosen = relationIds.includes(state.selectedEdge);
     const connected = state.selectedNode && (e.s === state.selectedNode || e.t === state.selectedNode);
-    const labeled = chosen || connected || g.edges.length <= 12;
-    const appearance = look ? [look.edgeClasses.get(e.id),look.highlight && !look.markedEdges.has(e.id) && !chosen && 'explore-muted',
-      look.omitted.has(e.id) && 'explore-omitted'].filter(Boolean).join(' ') : '';
-    return `<g class="graph-link ${connected ? "connected" : ""} ${chosen ? "chosen" : ""} ${appearance}"><title>${esc(node(e.s)?.name)} → ${esc(e.label)} → ${esc(node(e.t)?.name)}</title><path class="graph-edge-hit" d="${path.d}" data-edge="${esc(e.id)}"/><path class="graph-edge ${chosen ? "selected" : ""}" d="${path.d}" data-edge="${esc(e.id)}" marker-end="url(#${chosen ? "arrow-selected" : "arrow"})"/>${labeled ? `<text class="graph-edge-label" transform="translate(${path.x} ${path.y}) rotate(${path.angle})" text-anchor="middle" y="-7">${esc(e.label)}</text>` : ""}${look?.queued.has(e.id) ? '<text class="explore-flag" aria-hidden="true">⚑</text>' : ''}</g>`;
+    const appearance = look ? [...new Set(relationIds.map(id => look.edgeClasses.get(id))),
+      look.highlight && !relationIds.some(id => look.markedEdges.has(id)) && !chosen && 'explore-muted'].filter(Boolean).join(' ') : '';
+    const title = e.relations
+      .map(relation => `${node(relation.s)?.name} → ${relation.label} → ${node(relation.t)?.name}`).join("\n");
+    const labels = [...new Set(e.relations.map(relation => relation.label))];
+    const label = labels.length > 2 ? `${labels.length} 种关系` : labels.join(" / ");
+    const marker = chosen ? "arrow-selected" : "arrow";
+    const startMarker = e.bidirectional ? ` marker-start="url(#${marker})"` : "";
+    return `<g class="graph-link ${connected ? "connected" : ""} ${chosen ? "chosen" : ""} ${appearance}"><title>${esc(title)}</title><path class="graph-edge-hit" d="${path.d}" data-edge="${esc(e.id)}"/><path class="graph-edge ${chosen ? "selected" : ""}" d="${path.d}" data-edge="${esc(e.id)}" marker-end="url(#${marker})"${startMarker}/><text class="graph-edge-label" transform="translate(${path.x} ${path.y}) rotate(${path.angle})" text-anchor="middle" y="-7">${esc(label)}</text>${relationIds.some(id => look?.queued.has(id)) ? '<text class="explore-flag" aria-hidden="true">⚑</text>' : ''}</g>`;
   }).join("") + '</g><g class="graph-space-nodes">' + g.nodes.map(n => {
     const selected = n.id === state.selectedNode;
     const match = $("#graph-query").value.trim() && n.name.toLocaleLowerCase().includes($("#graph-query").value.trim().toLocaleLowerCase());
@@ -819,7 +823,7 @@ function renderGraph() {
   transformScene();
   $(
     "#relation-list",
-  ).innerHTML = `<h2 class="sx-data-heading">数据列表${starxiaotuMarker('data')}</h2><table class="relation-table"><thead><tr><th>主体</th><th>关系${starxiaotuTermMarker('relation')}</th><th>客体</th><th>来源证据${starxiaotuTermMarker('evidence')}</th></tr></thead><tbody>${g.edges.filter(edge => !look?.omitted.has(edge.id))
+  ).innerHTML = `<h2 class="sx-data-heading">数据列表${starxiaotuMarker('data')}</h2><table class="relation-table"><thead><tr><th>主体</th><th>关系${starxiaotuTermMarker('relation')}</th><th>客体</th><th>来源证据${starxiaotuTermMarker('evidence')}</th></tr></thead><tbody>${relations
     .map(
       (e) =>
         `<tr data-edge="${esc(
@@ -833,7 +837,7 @@ function renderGraph() {
         } 个片段</td></tr>`,
     )
     .join("")}</tbody></table>${
-    !g.edges.length ? '<div class="empty">当前没有可显示的关系</div>' : ""
+    !relations.length ? '<div class="empty">当前没有可显示的关系</div>' : ""
   }`;
   renderDetails(g);
   const tools = $("#graph-explore-details");
@@ -1152,11 +1156,6 @@ const pages = {
     "FROM MATERIALS TO KNOWLEDGE",
     "查看当前星图的处理进度和失败原因。",
   ],
-  sensitive: [
-    "脱敏规则",
-    "",
-    "设置对外提供知识时的脱敏方式。",
-  ],
 };
 const ontologyHeadings = {
   "add-entity": ["添加实体类型", "设置要从材料中识别的实体及其属性。"],
@@ -1181,7 +1180,7 @@ function updateCurrentNavigation() {
 }
 function setView(view, fromWorkbench = false, ontologyAction, onboardingHandoff = false, materialDocumentId, materialCitation) {
   // This built-in panel exposes the migrated knowledge workflows only.
-  if (['skills', 'api', 'data', 'releases'].includes(view)) view = 'warehouses';
+  if (['skills', 'api', 'data', 'releases', 'sensitive'].includes(view)) view = 'warehouses';
   if(view==='review'&&!fromWorkbench){if(!state.ready||state.invalid)return;view='conversation';}
   // Skill management is temporarily hidden; keep its implementation for later.
   if (view === "skills" || view === "api") view = "warehouses";
@@ -1624,19 +1623,42 @@ const jobNames = {
 const jobStates = {
   queued: "排队中",
   awaiting_index: "等待正文索引",
+  discovering_ontology: "识别新实体类型和关系",
+  extracting_joint: "联合抽取类型、实体和关系",
+  extracting_entities: "抽取实体",
+  extracting_relations: "抽取关系",
+  extracting: "抽取知识",
+  extracting_parallel: "并行抽取知识",
   running: "处理中",
   succeeded: "已完成",
   failed: "失败",
   cancelled: "已取消",
 };
+function taskProgress(job) {
+  if (job.status === 'succeeded' && job.metrics?.joint_validation?.publication_blocked === true) return '待核对抽取结果';
+  if (job.status !== 'running') return jobStates[job.status] || jobStates[job.stage] || job.stage || '等待处理';
+  if (job.metrics?.extraction_protocol === 'joint-ontology-facts-v1') {
+    const completed = Number.isSafeInteger(job.completed_units) && job.completed_units > 0 ? job.completed_units : 0;
+    return '联合抽取类型、实体和关系' + (!job.total_units && completed ? ` · 已完成 ${completed} 批次` : '');
+  }
+  const progress = job.metrics?.ontology_discovery_progress;
+  if (progress && ['document_analysis', 'document_review'].includes(progress.phase)) {
+    const count = key => Number.isSafeInteger(progress[key]) && progress[key] >= 0 ? progress[key] : 0;
+    const label = progress.phase === 'document_review' ? `复核本体建议 · 第 ${count('review_round')} 轮` : '读取材料并识别类型';
+    return `${label} · 已完成 ${count('completed_batches')} 批次 · 已发起 ${count('requests')} 次请求` +
+      (progress.state === 'recovering' ? ' · 正在拆分重试' : '');
+  }
+  return jobStates[job.stage] || jobNames[job.stage] || job.stage || '处理中';
+}
 function renderTasks() {
-  const active = state.jobs.filter(j => j.status === "running" || j.status === "queued").length;
-  const failed = state.jobs.filter(j => j.status === "failed").length;
-  $("#jobs-page-summary").textContent = state.jobs.length ? `本页待处理或处理中 ${active} 项 · 失败 ${failed} 项` : "";
+  const jobs = state.jobs.filter(j => j.kind !== 'sensitive_scan');
+  const active = jobs.filter(j => j.status === "running" || j.status === "queued").length;
+  const failed = jobs.filter(j => j.status === "failed").length;
+  $("#jobs-page-summary").textContent = jobs.length ? `本页待处理或处理中 ${active} 项 · 失败 ${failed} 项` : "";
   const rows = $("#tasks-body");
   const openModels = new Set([...rows.querySelectorAll(".task-model-details[open]")].map(item => item.dataset.jobId));
   rows.innerHTML =
-    state.jobs
+    jobs
       .map(
         (j) =>
           `<article class="task-row"><div class="task-mark" style="${
@@ -1650,29 +1672,35 @@ function renderTasks() {
           )}</div><div class="task-content"><strong>${esc(
             jobNames[j.kind] || "处理任务",
           )}</strong><p class="task-document">${esc(j.document_name || doc(j.document_id)?.original_name || "当前星图")}</p>
-          <p class="task-progress">${esc(jobStates[j.stage] || jobNames[j.stage] || j.stage || jobStates[j.status] || "等待处理")}${
-            j.total_units ? " · " + (j.completed_units ?? 0) + " / " + j.total_units + " 单元" : ""
+          <p class="task-progress">${esc(taskProgress(j))}${
+            j.total_units ? " · " + (j.completed_units ?? 0) + " / " + j.total_units + " " + taskUnitLabel(j) : ""
           }</p>${j.error_message ? `<p class="task-error">${esc(j.error_message)}</p>` : ""}
+          ${extractionCountsHTML(j)}
+          ${extractionFailuresHTML(j)}
+          ${extractionValidationHTML(j)}
           <details class="task-model-details" data-job-id="${esc(j.id)}" ${openModels.has(String(j.id)) ? "open" : ""}>
             <summary>模型与用量</summary><p class="model-actual">${esc(actualModel(j.metrics?.processing, j.kind === "sensitive_scan" ? "sensitive" : "extraction"))}${j.metrics?.model_calls?.length ? " · 用量：" + esc(modelUsage(j.metrics.model_calls)) : ""}</p>
           </details>${
+            j.metrics?.automatic_ontology_publication?.entity_types || j.metrics?.automatic_ontology_publication?.relation_types
+              ? `<p>本体已自动发布 · 新增 ${esc(j.metrics.automatic_ontology_publication.entity_types)} 个实体类型、${esc(j.metrics.automatic_ontology_publication.relation_types)} 种关系</p>`
+              : ""
+          }${
+            j.metrics?.ontology_discovery?.status === "failed"
+              ? `<p class="task-error">本体发现未完成。${esc(j.metrics.ontology_discovery.message || "")}</p>`
+              : ""
+          }${
             j.knowledge_summary
-              ? `<p>候选 ${
-                  j.knowledge_summary.candidate_relations ??
-                  j.knowledge_summary.total_candidates ??
-                  0
-                } · 入图 ${
-                  j.knowledge_summary.published_relations ?? 0
-                } 条关系</p>`
+              ? `<p>候选 ${esc(j.knowledge_summary.candidate_entities ?? 0)} 个实体、${esc(j.knowledge_summary.candidate_relations ?? 0)} 条关系 · 入图 ${esc(j.knowledge_summary.published_entities ?? 0)} 个实体、${esc(j.knowledge_summary.published_relations ?? 0)} 条关系</p>`
               : ""
           }</div><div class="task-end"><span class="pill ${
             j.status === "succeeded"
-              ? "green"
+              ? (j.metrics?.joint_validation?.publication_blocked === true ? "amber" : "green")
               : j.status === "failed"
               ? "error"
               : "amber"
           }">${
-            jobStates[j.status] || esc(j.status)
+            j.status === "succeeded" && j.metrics?.joint_validation?.publication_blocked === true
+              ? "待核对" : jobStates[j.status] || esc(j.status)
           }</span><span class="mono">${date(j.updated_at)}</span>${
             j.status === "failed" && j.kind === "ontology_suggest"
               ? `<button class="text-link" ${j.document_id ? `data-overview-document="${esc(j.document_id)}"` : 'data-view="conversation"'}>前往资料库</button>`
@@ -1683,8 +1711,8 @@ function renderTasks() {
               : ""
           }</div></article>`,
       )
-      .join("") || '<div class="empty">当前没有处理任务。</div>';
-  $("#jobs-label").textContent = state.jobTotal;
+      .join("") || `<div class="empty">${state.jobTotal?'当前页没有材料处理任务，请翻页查看其他记录。':'当前没有处理任务。'}</div>`;
+  $("#jobs-label").textContent = `历史记录 ${state.jobTotal} 条 · 本页显示 ${jobs.length} 项`;
   renderPager("jobs", state.jobOffset, state.jobTotal);
   $("#task-count").hidden = active === 0;
   $("#task-count").textContent = active;
@@ -2137,8 +2165,8 @@ function renderSource() {
             locator(state.sourceEvidence.locator_json),
           )}</span><p>${esc(state.sourceEvidence.excerpt)}</p></div>`
         : ""
-    }<p class="model-actual">实际知识处理：${esc(actualModel(d.processing))}</p><article class="source-page">${
-      s.segments
+    }<p class="small muted">原文 ${esc(total)} 个片段 · 已加载 ${s.segments.length} 个原文片段 · ${logicalSourceGroups(s.segments).length} 个阅读分组</p><p class="model-actual">实际知识处理：${esc(actualModel(d.processing))}</p><article class="source-page">${
+      (!state.editing ? logicalSourcesHTML(s.segments, {location:v=>locator(v.source_locator)}) : s.segments
         .map(
           (v) =>
             `<div class="source-segment"><label for="segment-${esc(
@@ -2153,10 +2181,10 @@ function renderSource() {
                 : `<p>${esc(v.text)}</p>`
             }</div>`,
         )
-        .join("") || "<p>材料仍在处理中，正文将在解析后显示。</p>"
+        .join("")) || "<p>材料仍在处理中，正文将在解析后显示。</p>"
     }${
       s.segments.length < total
-        ? `<button class="load-more-button" data-action="source-more" ${state.sourceLoading || state.saving || state.editing ? "disabled" : ""}>${state.sourceLoading ? "正在读取…" : "加载更多片段"}</button>`
+        ? `<button class="load-more-button" data-action="source-more" ${state.sourceLoading || state.saving || state.editing ? "disabled" : ""}>${state.sourceLoading ? "正在读取…" : "继续读取正文"}</button>`
         : ""
     }</article><p class="modal-warning">${
       state.editing
@@ -2405,7 +2433,11 @@ $("#file-list").addEventListener("click", event => {
   if (button) void removePending(button.dataset.removeFile).catch(error => toast(errorText(error)));
 });
 function pendingFileStatus(file) {
-  if (file.done) return file.reused ? "已复用星图中的材料" : "已交给盒端处理";
+  if (file.done) {
+    if (file.reused) return "已复用星图中的材料";
+    if (file.replacing) return "已提交同名覆盖";
+    return "已交给盒端处理";
+  }
   if (file.error) return errorText(file.error);
   if (file.progress != null) return `正在导入 ${Math.floor(file.progress * 100)}%`;
   return "等待导入";
@@ -2472,6 +2504,7 @@ async function uploadFiles() {
       f.documentId = r.document?.id;
       f.annotationIndex = r.annotationIndex;
       f.reused = r.reused === true;
+      f.replacing = r.job?.replaces_original === true && !f.reused;
     } catch (e) {
       f.error = e;
       if (state.invalid) break;
@@ -2489,12 +2522,16 @@ async function uploadFiles() {
   state.jobOffset = 0;
   if (state.files.every((f) => f.done)) {
     const reused = state.files.filter(f => f.reused).length;
-    const created = state.files.length - reused;
+    const replaced = state.files.filter(f => f.replacing).length;
+    const created = state.files.length - reused - replaced;
     $("#import-dialog").close();
     setView("conversation");
-    toast(reused
-      ? `已复用星图中的 ${reused} 份材料。${created ? `新导入的 ${created} 份材料将在解析后等待核对。` : ""}`
-      : "材料已导入，解析完成后可在资料库核对正文。");
+    toast([
+      created ? `已导入 ${created} 份新材料。` : "",
+      replaced ? `已提交 ${replaced} 份同名覆盖。` : "",
+      reused ? `已复用 ${reused} 份相同材料。` : "",
+      created || replaced ? "解析完成后可在资料库核对正文。" : "",
+    ].join(""));
   }
   await refresh();
 }
@@ -2720,7 +2757,7 @@ document.addEventListener("click", (event) => {
       });
       $("#graph-space").hidden = state.mode !== "graph";
       $("#relation-list").hidden = state.mode !== "list";
-      transformScene();
+      renderGraph();
     } else if (el.dataset.setting) await saveSetting(el);
     else if (el.dataset.retry) {
       await call("retry-job", {
@@ -2935,9 +2972,6 @@ function renderWarehouseCollection(container, query, compact) {
         const reviewButton=document.createElement('button');
         reviewButton.className='text-link';reviewButton.dataset.warehouseView='ontology';
         reviewButton.textContent='本体';card.querySelector('footer>div').prepend(reviewButton);
-        const deliveryButton=document.createElement('button');
-        deliveryButton.className='text-link';deliveryButton.dataset.warehouseView='sensitive';
-        deliveryButton.textContent='脱敏规则';reviewButton.after(deliveryButton);
         card.querySelectorAll("[data-warehouse-view]").forEach(b => b.dataset.warehouseId = w.id);
       }
     }
@@ -2974,9 +3008,6 @@ function renderWarehouseCollection(container, query, compact) {
       const reviewButton=card.querySelector('[data-warehouse-view="ontology"]');
       reviewButton.hidden=state.preview || state.identity?.dataScope!=='personal';
       reviewButton.disabled=blocked || w.state!=='active';
-      const delivery=card.querySelector('[data-warehouse-view="sensitive"]');
-      delivery.hidden=state.preview || state.identity?.dataScope!=='personal';
-      delivery.disabled=blocked || w.state!=='active';
       card.querySelector('[data-warehouse-view="graph"]').setAttribute("aria-label", `打开星图「${w.name}」`);
       card.querySelector('[data-warehouse-view="conversation"]').setAttribute("aria-label", `管理「${w.name}」的资料`);
     }
@@ -3326,7 +3357,7 @@ function actualModel(config, role = "extraction") {
   const name = [item?.name, item?.model].find(value => typeof value === 'string' && value.trim());
   if (!name) return "历史处理记录未提供模型配置";
   const location = {local: "本地", cloud: "云端 / 外部服务"}[item.location] || "运行位置未记录";
-  const thinking = {auto: "思考：模型默认", on: "思考：开启", off: "思考：关闭"}[config?.inference_options?.thinking_mode] || "思考设置未记录";
+  const thinking = {auto: "思考：模型默认", on: "思考：开启", off: "思考：优先关闭"}[config?.inference_options?.thinking_mode] || "思考设置未记录";
   const revision = Number.isSafeInteger(config?.revision) && config.revision >= 0 ? `配置 v${config.revision}` : "配置版本未记录";
   return `${name.trim()} · ${location} · ${thinking} · ${revision}`;
 }
@@ -3506,22 +3537,12 @@ function renderModelEditor() {
     $("#model-"+role).value = current[role]?.id || "";
   }
   $("#model-mode").value = current.mode === "automatic" ? "automatic" : "manual";
-  // The backend resolves the default for new tasks; always show its actual value.
-  renderThinkingOptions(current.inference_options?.thinking_mode || "auto");
+  // Processing uses fixed off independently of saved thinking preferences.
+  renderThinkingOptions();
   updateModelControls();
 }
-function renderThinkingOptions(selected = $("#model-thinking").value || null) {
-  const item = $("#model-mode").value === "automatic" ? state.modelDefault
-    : state.modelCatalog.find(m => m.id === $("#model-extraction").value);
-  const modes = item?.inference_options?.thinking_modes || ["auto"];
-  if (selected === null) selected = modes.includes("off") ? "off" : "auto";
-  const labels = {auto: "沿用模型默认设置", on: "开启思考", off: "关闭思考"};
-  $("#model-thinking").innerHTML = Object.entries(labels).map(([mode,label]) =>
-    `<option value="${mode}" ${modes.includes(mode) ? "" : "disabled"}>${label}${modes.includes(mode) ? "" : "（当前模型不支持）"}</option>`).join("");
-  $("#model-thinking").value = selected;
-  $("#model-thinking-note").textContent = modes.length > 1
-    ? "抽取与脱敏共用此设置，保存后应用于新任务。"
-    : "该模型使用默认思考模式。";
+function renderThinkingOptions() {
+  $("#model-thinking").value = "off";
 }
 function updateModelControls() {
   const automatic = $("#model-mode").value === "automatic";
@@ -3539,7 +3560,7 @@ async function saveModels() {
   const identity = state.identity;
   const mode = $("#model-mode").value;
   const revision = state.modelConfig.revision;
-  const inference_options = {thinking_mode: $("#model-thinking").value || "auto"};
+  const inference_options = {thinking_mode: "off"};
   const request = state.modelRequest;
   const status = $("#model-save-status");
   try {
@@ -3547,8 +3568,6 @@ async function saveModels() {
     const extraction = mode === "automatic" ? state.modelDefault?.id : $("#model-extraction").value;
     const model = state.modelCatalog.find(item => item.id === extraction && item.available);
     if (!model) throw {publicMessage:"请先选择万象中的可用模型。"};
-    if (inference_options.thinking_mode !== "auto" && !model.inference_options?.thinking_modes?.includes(inference_options.thinking_mode))
-      throw {publicMessage:"当前模型不支持所选思考模式，请重新选择。"};
     const cloud = model.location !== "local";
     if (cloud && !confirm(`确认所有星图使用云端 / 外部模型？\n${model.provider} · ${model.name}\n\n此配置适用于当前盒子上现有和新建的星图。抽取知识与检测敏感信息时，可能将未经脱敏的正文片段发送给所选服务。交付脱敏在返回结果时生效。\n\n是否继续检查并保存？`)) return;
     status.textContent = "正在用示例检查模型…";
@@ -3634,9 +3653,6 @@ async function reprocessModels() {
 }
 $("#model-mode").addEventListener("change",updateModelControls);
 $("#model-extraction").addEventListener("change",updateModelControls);
-$("#model-thinking").addEventListener("change",()=>{
-  $("#model-status").textContent = "思考模式尚未保存。点击“检查并保存”后对新任务生效，已有任务和重试保留原设置。";
-});
 $("#model-refresh").addEventListener("click",()=>{void loadStarxiaotuModel();void loadModels();});
 $("#model-save").addEventListener("click",()=>void saveModels());
 $("#model-sync-retry").addEventListener("click",()=>void retryModelSync());

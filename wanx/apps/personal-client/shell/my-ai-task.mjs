@@ -23,7 +23,10 @@ function retrievalInstructions({ folder, warehouse, memoryEnabled, memoryAgent }
   return [
     "\n\n## 资料检索",
     folder && `- 空间文件 ${JSON.stringify(folder.name)}。用 space_search 检索子目录、文件名和正文，再用 space_read 读取相关文件。`,
-    warehouse && `- 星图仓库 ${JSON.stringify(warehouse.name)}。使用 Semantica MCP 的 xingtu_search 检索知识，再用 xingtu_evidence 的 evidence_id 参数读取依据。其他 xingtu_* 工具也只允许操作这个仓库。`,
+    warehouse && (`- 星图仓库 ${JSON.stringify(warehouse.name)}。用 xingtu_search 检索正文和图谱路径。问题涉及中间实体或正文证据不足时，`
+      + "检查 graph.paths。需要跨实体关联时，查找 hops=2 的路径，核对中间实体和两步关系的方向。"
+      + "需要原文时，从对应步骤的 evidence_ids 取 ID，传给 xingtu_evidence 的 evidence_id。"
+      + "路径缺失或受保护时，按可用证据说明缺口。所有 xingtu_* 调用限于这个仓库。"),
     memoryEnabled && `- 历史记忆${memoryAgent === null ? "（全部 Agent）" : memoryAgent ? "（" + JSON.stringify(memoryAgent) + "）" : ""}。用 memory_search 检索，再用 memory_read 核对正文；先核实记忆里的路径和环境。`,
     "先检索所选范围，再执行任务并引用依据。无法读取时说明原因。",
   ].filter(Boolean).join("\n");

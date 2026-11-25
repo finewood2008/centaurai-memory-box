@@ -7,6 +7,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { lstat, mkdir, open, readdir, realpath, rename, rm } from "node:fs/promises";
 import { verifyEnvelope } from "./descriptor.mjs";
 import { createApplicationSession } from "../app-host/session.mjs";
+import { createForegroundMediaGrantReader } from "../app-host/media-grant.mjs";
 import { createApplicationInstaller } from "./installer.mjs";
 import { createApplicationLauncher } from "./launcher.mjs";
 import { assertApplicationCompatibility } from "./compatibility.mjs";
@@ -36,8 +37,10 @@ export async function createApplicationManager({
   openWorkshop,
   assertClientUsable = () => {},
   getDataIdentity,
+  getRecordingBoxState,
 } = {}) {
   applicationRoot = path.resolve(applicationRoot);
+  const readForegroundMediaGrant = createForegroundMediaGrantReader(applicationRoot);
   const defaultApplicationDeliveryStore = createDefaultApplicationStore(path.join(applicationRoot, ".delivery"));
   const profileKey = () => { const identity = getDataIdentity?.(); return identity?.profileId ? localApplicationProfile(identity) : null; };
   const storageContext = () => {
@@ -342,6 +345,8 @@ export async function createApplicationManager({
           hostApplicationId: applicationId,
           applicationId: record.applicationId,
           installPath: record.installPath,
+          foregroundMediaGrant: () => readForegroundMediaGrant(record.applicationId),
+          recordingBoxState: record.applicationId === "centaurai.wanx.homeai" ? getRecordingBoxState : undefined,
           capabilities: record.capabilities,
           backendContracts: record.compatibility?.backendContracts || [],
           openWorkshop,

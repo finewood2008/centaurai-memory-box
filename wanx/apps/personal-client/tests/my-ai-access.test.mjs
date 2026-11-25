@@ -11,6 +11,31 @@ import { createCodexContext } from "../shell/codex-context.mjs";
 import { createCodexContextSources } from "../shell/codex-context-sources.mjs";
 import { nativeCatalog, nativeResult, warehouseA, warehouseB } from "./fixtures/semantica-mcp.mjs";
 
+test("an unavailable saved warehouse remains editable while new selections still require validation", async () => {
+  const warehouseId = "a1c4c496-d58b-4b3c-b6d3-1b3d25c20110";
+  let available = true;
+  let saved;
+  const access = createMyAiAccess({
+    agents: ["codex"], owner: () => "owner-a", box: () => "box-a", scope: () => "scope-a",
+    store: { load: async () => saved, save: async value => { saved = structuredClone(value); } },
+    sources: { async validate(_folder, warehouse, check) {
+      check();
+      if (!available) throw Object.assign(new Error("无法访问所选星图仓库。"), { status: 403 });
+      return { warehouseId: warehouse, warehouseName: "工程资料" };
+    } },
+    makeContext: () => ({ invalidate() {} }),
+  });
+  const selected = { warehouseId, memoryEnabled: true, memoryAgent: "codex" };
+  await access.selection("codex", selected);
+  available = false;
+  assert.deepEqual(await access.selection("codex"), {
+    selection: selected, resources: {}, warning: "无法访问所选星图仓库。",
+  });
+  await assert.rejects(access.selection("codex", selected), /无法访问所选星图仓库/);
+  assert.deepEqual((await access.selection("codex", { memoryEnabled: true, memoryAgent: "codex" })).selection,
+    { memoryEnabled: true, memoryAgent: "codex" });
+});
+
 test("one Agent connection registers all three sources and revokes them across scope changes", async t => {
   const home = await mkdtemp(path.join(tmpdir(), "my-ai-access-"));
   t.after(() => rm(home, { force: true, recursive: true }));
@@ -37,9 +62,12 @@ test("one Agent connection registers all three sources and revokes them across s
         check(); assert.equal(id, warehouse);
         assert.equal(args.warehouseId, undefined); assert.equal(args.task_id, undefined);
         if (name === "xingtu_warehouse") return nativeResult({ id });
-        if (name === "xingtu_search") return nativeResult({ items: [{ evidence_id: "evidence_1" }] });
-        assert.equal(args.evidence_id, "evidence_1");
-        return nativeResult({ text: "Project evidence." });
+        if (name === "xingtu_search") return nativeResult({
+          items: [{ id: "evidence_1" }],
+          graph: { paths: [{ hops: 2, steps: [{ evidence_ids: ["evidence_1"] }, { evidence_ids: ["evidence_2"] }] }] },
+        });
+        assert.equal(args.evidence_id, "evidence_2");
+        return nativeResult({ id: args.evidence_id, excerpt: "Project evidence.", sensitive_status: "clean" });
       },
     },
     nativeImage: { createFromBuffer(bytes) {
@@ -145,7 +173,10 @@ test("one Agent connection registers all three sources and revokes them across s
   await call("space_read", { fileId: photoId });
   assert.equal((await call("xingtu_warehouse")).id, warehouse);
   const starlink = await call("xingtu_search", { warehouseId: warehouse, query: "Project" });
-  assert.equal((await call("xingtu_evidence", { warehouseId: warehouse, evidence_id: starlink.items[0].evidence_id })).text, "Project evidence.");
+  const [graphPath] = starlink.graph.paths;
+  assert.equal(graphPath.hops, 2);
+  const [evidenceId] = graphPath.steps[1].evidence_ids;
+  assert.equal((await call("xingtu_evidence", { warehouseId: warehouse, evidence_id: evidenceId })).excerpt, "Project evidence.");
   assert.equal((await access.status(check)).claude_code.available, true);
   await call("space_list", { folderId: reserved }, true);
   assert.equal((await access.status(check)).claude_code.available, false);

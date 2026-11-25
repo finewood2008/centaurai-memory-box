@@ -17,7 +17,7 @@ import type {
 } from "../../useProviders";
 import { isEmbeddingModel } from "../../useProviders";
 import { CodexOAuthConnect } from "../CodexOAuthConnect";
-import { fetchProviderModels, testProviderDraft } from "../../providerApi";
+import { fetchProviderModels, mergeFetchedProviderModels, testProviderDraft } from "../../providerApi";
 import { ModelListEditor } from "./ModelListEditor";
 import styles from "../../index.module.less";
 
@@ -120,26 +120,13 @@ export function PresetProviderModal({
         return;
       }
       const fetched = result.models ?? [];
-      if (fetched.length === 0) {
+      const { changed } = mergeFetchedProviderModels(draftModels, fetched);
+      if (changed === 0) {
         message.info(t("models.fetchModelsNoNew"));
         return;
       }
-      const existingIds = new Set(draftModels.map((m) => m.id));
-      const missing: ProviderModel[] = fetched
-        .filter((m) => !existingIds.has(m.id))
-        .map((m) => ({
-          id: m.id,
-          name: m.name || m.id,
-          enabled: false,
-          input: ["text"],
-          thinking: null,
-        }));
-      if (missing.length === 0) {
-        message.info(t("models.fetchModelsNoNew"));
-        return;
-      }
-      setDraftModels((prev) => [...prev, ...missing]);
-      message.success(t("models.fetchModelsMerged", { count: missing.length }));
+      setDraftModels((prev) => mergeFetchedProviderModels(prev, fetched).models);
+      message.success(t("models.fetchModelsSynced", { count: changed }));
     } catch (err) {
       if (err && typeof err === "object" && "errorFields" in err) return;
       message.error(

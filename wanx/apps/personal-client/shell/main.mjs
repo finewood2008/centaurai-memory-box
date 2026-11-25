@@ -351,6 +351,7 @@ if (process.argv.includes("--wanx-managed-app")) {
         runtimeArgs: process.defaultApp ? [app.getAppPath()] : [],
         applicationId: "wanx-host",
         context: () => client.applicationContext(),
+        getRecordingBoxState: () => client.snapshot(),
         request: (input) => client.applicationRequest(input),
         stream: (input) => client.applicationStream(input),
         createConnection: (applicationId, options) => client.applicationConnection(applicationId, options),

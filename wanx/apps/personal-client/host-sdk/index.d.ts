@@ -24,7 +24,8 @@ export interface HostContext {
   clientId?: string;
   boxId: string;
   user: { id: number; [key: string]: unknown };
-  connection: 'ready' | 'recovering';
+  connection: 'ready' | 'recovering' | 'disconnected';
+  hostFeatures?: { foregroundMedia?: boolean; ephemeralTerminal?: boolean };
   applicationId?: string;
   artifactId?: string;
   resourceBindings?: ResourceBinding[];

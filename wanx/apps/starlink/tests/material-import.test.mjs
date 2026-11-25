@@ -696,3 +696,21 @@ test('canonical text rejects stalled or mismatched ranges and accepts Unicode co
   }
   h.textReply(base);await f.importer.text();assert.deepEqual(f.importer.view.textWindow,base);
 });
+
+test('published materials finish at publication and hide historical delivery scans from reader progress',async()=>{
+  const h=fixture(),f=h.f;await f.importer.first();await f.importer.confirm();
+  h.workflow({processing_mode:'automatic',stage:'published',publication:{id:'run',status:'published',document_version_id:'v',entity_count:2,relation_count:1},
+    tasks:[{kind:'sensitive_scan',status:'running'}]});
+  await f.importer.read('d');
+  f.state.materialOperation={documentId:'d',receipt:{document_id:'d',document_version_id:'v',waits_for_source_index:true},
+    current:{stage:'published',is_current:true,publication_performed:true}};
+  for(const sensitive_status of ['pending','running','failed','completed','not_required']){
+    f.importer.view.source.processing={sensitive_status};
+    const html=materialImportHTML(f,'');
+    assert.doesNotMatch(html,/脱敏|交付检测|对外交付暂缓|查看脱敏规则/);
+    assert.match(html,/依次建立索引、抽取和发布知识/);
+    assert.match(html,/>处理完成</);
+    assert.match(html,/>发布知识<\/dt><dd>已发布/);
+    assert.doesNotMatch(html,/aria-current="step"/);
+  }
+});

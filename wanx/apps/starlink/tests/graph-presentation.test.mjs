@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createGraphPresentation,presentGraph,DEFAULT_GRAPH_COLOR} from '../ui/graph-presentation.mjs';
+import {createGraphPresentation,graphConnections,presentGraph,DEFAULT_GRAPH_COLOR} from '../ui/graph-presentation.mjs';
 import {selectGraph} from '../ui/graph.js';
 const schema={entity_types:[{name:'POSITION',label:'研发岗位'},{name:'TECH_SOLUTION',label:'技术方案'},{name:'ORG',label:'协作组织'}],relation_types:[{name:'USES',label:'采用方案'}]};
 const raw={nodes:[{id:'a',entity_type:'POSITION',canonical_name:'工程师'},{id:'b',entity_type:'TECH_SOLUTION',canonical_name:'分层设计'},{id:'c',entity_type:'CUSTOM_UNKNOWN',canonical_name:'未定义实体'}],edges:[{id:'r',subject_entity_id:'a',object_entity_id:'b',relation_type:'USES',properties_json:'{"n":1}',evidence:[{excerpt:'原文'}]}]};
@@ -35,4 +35,48 @@ test('missing labels fall back to the original code and missing type is not inve
   assert.equal(p.entity('CUSTOM').label,'CUSTOM');assert.equal(p.relation('REL'),'REL');
   const graph=presentGraph({nodes:[{id:'x',canonical_name:'无类型'}],edges:[]},p);
   assert.equal(graph.nodes[0].type,undefined);assert.equal('entity_type' in graph.nodes[0],false);
+});
+
+test('the nine section pairs draw nine connections and retain both sets of evidence', () => {
+  const edges = Array.from({length: 9}, (_, i) => [
+    {id: `section-of-${i}`, s: `section-${i}`, t: 'document', relation_type: 'SECTION_OF', evidence: [{id: `reverse-${i}`}]},
+    {id: `has-section-${i}`, s: 'document', t: `section-${i}`, relation_type: 'HAS_SECTION', evidence: [{id: `forward-${i}`}]},
+  ]).flat();
+  const original = structuredClone(edges);
+  const connections = graphConnections(edges);
+  assert.equal(connections.length, 9);
+  for (const [i, connection] of connections.entries()) {
+    assert.equal(connection.id, `has-section-${i}`);
+    assert.equal(connection.evidence[0].id, `forward-${i}`);
+    assert.equal(connection.bidirectional, true);
+    assert.equal(connection.relations[0].id, `section-of-${i}`);
+    assert.equal(connection.relations[0].evidence[0].id, `reverse-${i}`);
+  }
+  assert.deepEqual(edges, original);
+});
+
+test('different predicates with the same endpoints share one connection without replacing a fact', () => {
+  const edges = [
+    {id: 'a', s: 'semantica', t: 'graph-builder', relation_type: 'HAS_CAPABILITY', evidence: [{id: 'source-a'}]},
+    {id: 'b', s: 'semantica', t: 'graph-builder', relation_type: 'HAS_FUNCTION_MODULE', evidence: [{id: 'source-b'}]},
+    {id: 'c', s: 'semantica', t: 'other-module', relation_type: 'HAS_FUNCTION_MODULE'},
+    {id: 'd', s: 'loop', t: 'loop', relation_type: 'ABOUT'},
+    {id: 'e', s: 'loop', t: 'loop', relation_type: 'TESTS'},
+  ];
+  const connections = graphConnections(edges);
+  assert.deepEqual(connections.map(connection => connection.relations.map(relation => relation.id)), [
+    ['a', 'b'], ['c'], ['d', 'e'],
+  ]);
+  assert.deepEqual(connections.map(connection => connection.bidirectional), [false, false, false]);
+  assert.equal(connections[0].relations[1].evidence[0].id, 'source-b');
+  assert.equal(graphConnections([edges[1]])[0].id, 'b');
+});
+
+test('a pair with unrelated predicates in opposite directions draws two arrows on the same connection', () => {
+  const forward = {id: 'a', s: 'product', t: 'module', relation_type: 'USES'};
+  const reverse = {id: 'b', s: 'module', t: 'product', relation_type: 'SUPPORTS'};
+  const [connection] = graphConnections([forward, reverse]);
+  assert.equal(connection.bidirectional, true);
+  assert.deepEqual(connection.relations, [forward, reverse]);
+  assert.equal(graphConnections([reverse])[0].bidirectional, false);
 });

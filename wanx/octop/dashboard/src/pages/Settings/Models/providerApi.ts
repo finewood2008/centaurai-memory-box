@@ -1,4 +1,5 @@
 import { request } from "../../../api/request";
+import type { ProviderModel } from "./useProviders";
 
 export interface TestProviderDraftParams {
   name: string;
@@ -44,12 +45,46 @@ export interface FetchProviderModelsParams {
 export interface FetchedProviderModel {
   id: string;
   name: string;
+  context_window?: number;
+  max_tokens?: number;
+  max_input_tokens?: number;
 }
 
 export interface FetchProviderModelsResult {
   ok: boolean;
   models?: FetchedProviderModel[];
   error?: string;
+}
+
+export function mergeFetchedProviderModels(
+  existing: ProviderModel[],
+  fetched: FetchedProviderModel[],
+): { models: ProviderModel[]; changed: number } {
+  let changed = 0;
+  const byId = new Map(fetched.map((model) => [model.id, model]));
+  const models = existing.map((model) => {
+    const remote = byId.get(model.id);
+    byId.delete(model.id);
+    if (!remote) return model;
+    const capacity: Partial<ProviderModel> = {};
+    for (const key of ["context_window", "max_tokens", "max_input_tokens"] as const) {
+      if (model[key] == null && remote[key] != null) capacity[key] = remote[key];
+    }
+    if (Object.keys(capacity).length === 0) return model;
+    changed += 1;
+    return { ...model, ...capacity };
+  });
+  for (const remote of byId.values()) {
+    models.push({
+      ...remote,
+      name: remote.name || remote.id,
+      enabled: false,
+      input: ["text"],
+      thinking: null,
+    });
+    changed += 1;
+  }
+  return { models, changed };
 }
 
 export async function fetchProviderModels(

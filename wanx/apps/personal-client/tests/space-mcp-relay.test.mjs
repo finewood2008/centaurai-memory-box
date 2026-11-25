@@ -5,6 +5,7 @@ import net from "node:net";
 import {createSpaceMcpRelay} from "../shell/space-mcp-relay.mjs";
 
 const key = "k".repeat(43);
+const warehouseKey = "xg_" + "w".repeat(43);
 const headers = {authorization: "Bearer " + key, accept: "application/json, text/event-stream", "content-type": "application/json"};
 async function fixture(t, handler) {
   const calls = [], state = {}, target = "http://100.98.0.5:8088";
@@ -13,7 +14,8 @@ async function fixture(t, handler) {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     calls.push({method: req.method, path: req.url, headers: req.headers, body: Buffer.concat(chunks).toString()});
-    if (req.headers.authorization !== headers.authorization) { res.writeHead(401); res.end("invalid key"); return; }
+    const expected = req.url === "/mcp/starlink" ? "Bearer " + warehouseKey : headers.authorization;
+    if (req.headers.authorization !== expected) { res.writeHead(401); res.end("invalid key"); return; }
     if (handler) return handler(req, res);
     res.writeHead(200, {"content-type": "application/json", "mcp-session-id": "box-session"});
     res.end(JSON.stringify({jsonrpc: "2.0", id: 1, result: {ok: true}}));
@@ -59,6 +61,29 @@ test("MCP uses the app transport and original key, protocol headers and body wit
   assert.ok(!JSON.stringify(f.saved).includes(key));
   const invalid = await fetch(url, {method: "POST", headers: {...headers, authorization: "Bearer " + "z".repeat(43)}, body});
   assert.equal(invalid.status, 401); assert.equal(await invalid.text(), "invalid key");
+});
+
+test("routes exported Starlink calls through NetBird with the original warehouse key", async t => {
+  const f = await fixture(t), origin = await f.relay.url();
+  const url = new URL("/mcp/starlink", origin);
+  const body = JSON.stringify({jsonrpc: "2.0", id: 1, method: "tools/call",
+    params: {name: "xingtu_search", arguments: {query: "synthetic"}}});
+  const starlinkHeaders = {...headers, authorization: "Bearer " + warehouseKey};
+  const response = await fetch(url, {method: "POST", headers: starlinkHeaders, body});
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).result.ok, true);
+  assert.equal(f.calls[0].path, "/mcp/starlink");
+  assert.equal(f.calls[0].headers.authorization, starlinkHeaders.authorization);
+  assert.equal(f.calls[0].body, body);
+  assert.ok(!JSON.stringify(f.saved).includes(warehouseKey));
+
+  const wrongKey = await fetch(url, {method: "POST", headers, body});
+  assert.equal(wrongKey.status, 401);
+  await wrongKey.text();
+  const wrongPath = await fetch(new URL("/mcp/starlink/other", origin), {method: "POST", headers: starlinkHeaders, body});
+  assert.equal(wrongPath.status, 404);
+  await wrongPath.text();
+  assert.equal(f.calls.length, 2);
 });
 
 test("rejects browser origins, unrelated paths, missing keys and alternate Host values before forwarding", async t => {

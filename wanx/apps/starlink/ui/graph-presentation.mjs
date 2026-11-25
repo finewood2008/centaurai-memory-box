@@ -35,3 +35,18 @@ export function presentGraph(raw, presentation = createGraphPresentation()) {
   })).filter(e => ids.has(e.s) && ids.has(e.t));
   return {nodes, edges};
 }
+
+// A connection is a drawing of an entity pair. Each fact keeps its own direction and evidence.
+export function graphConnections(edges) {
+  const pairs = new Map();
+  for (const edge of edges) {
+    const key = JSON.stringify([edge.s, edge.t].sort());
+    if (!pairs.has(key)) pairs.set(key, []);
+    pairs.get(key).push(edge);
+  }
+  return [...pairs.values()].map(relations => {
+    const edge = relations.find(relation => relation.relation_type === 'HAS_SECTION') || relations[0];
+    const bidirectional = edge.s !== edge.t && relations.some(relation => relation.s === edge.t);
+    return {...edge, relations, bidirectional};
+  });
+}

@@ -1,3 +1,4 @@
+import {logicalSourcesHTML, logicalSourceGroups} from '../ui/logical-source-view.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
@@ -17,7 +18,7 @@ function renderedModel(processing) {
     source: { document: { original_name: 'synthetic-integration.txt', document_format: 'txt', size_bytes: 231, processing },
       processing: { text_ready: true, index_ready: true, graph_status: 'published' },
       version: { version_number: 1 }, segments: [{ id: 'segment-1', text: '合成材料原文', source_locator: { line_number: 1 } }] } };
-  const context = { state, $, esc: value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;'),
+  const context = { state, $, logicalSourcesHTML, logicalSourceGroups, esc: value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;'),
     bytes: value => value + ' B', locator: () => '第 1 行' };
   vm.createContext(context); vm.runInContext(formatter + render, context);
   context.renderSource();
@@ -37,7 +38,7 @@ test('source dialog treats the actual legacy-local empty placeholder as unrecord
 
 test('source dialog keeps recorded cloud and local models separate from the current default', () => {
   assert.equal(renderedModel({ revision: 4, extraction: { name: 'recorded-cloud-model', location: 'cloud' },
-    inference_options: { thinking_mode: 'off' } }), '实际知识处理：recorded-cloud-model · 云端 / 外部服务 · 思考：关闭 · 配置 v4');
+    inference_options: { thinking_mode: 'off' } }), '实际知识处理：recorded-cloud-model · 云端 / 外部服务 · 思考：优先关闭 · 配置 v4');
   assert.equal(renderedModel({ revision: 0, extraction: { name: 'recorded-local-model', location: 'local' },
     inference_options: { thinking_mode: 'auto' } }), '实际知识处理：recorded-local-model · 本地 · 思考：模型默认 · 配置 v0');
 });

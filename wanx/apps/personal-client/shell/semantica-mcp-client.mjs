@@ -3,12 +3,15 @@ import https from "node:https";
 
 const warehouseId = /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/;
 const toolName = /^xingtu_[a-z0-9_]{1,100}$/;
+const readTools = new Set(["xingtu_warehouse", "xingtu_documents", "xingtu_graph", "xingtu_search", "xingtu_evidence"]);
+const transientSocketErrors = new Set(["ECONNRESET", "ECONNREFUSED", "EPIPE", "ETIMEDOUT", "ENETUNREACH", "EHOSTUNREACH"]);
 const messages = {
   SEMANTICA_MCP_UPGRADE_REQUIRED: "当前盒子尚未提供 Semantica MCP，请更新并重启盒端服务。",
   SEMANTICA_MCP_ACCESS_DENIED: "Semantica MCP 拒绝访问，请检查仓库权限与 Key 状态。",
   SEMANTICA_MCP_UNAVAILABLE: "无法连接 Semantica MCP，请检查当前盒子连接。",
 };
 const failure = code => Object.assign(new Error(messages[code] ?? code), { code, status: 400 });
+const unavailable = retryable => Object.assign(failure("SEMANTICA_MCP_UNAVAILABLE"), { retryable });
 
 // Only the main process sees warehouse keys. The app's existing MCP transport
 // supplies the direct/NetBird connection; never export its URL or credentials.
@@ -87,7 +90,7 @@ export function createSemanticaMcpClient({ client, scope, starlink, issueKey, no
         }, response => {
           const chunks = [];
           let size = 0;
-          response.on("error", () => reject(failure("SEMANTICA_MCP_UNAVAILABLE")));
+          response.on("error", error => reject(unavailable(!controller.signal.aborted && transientSocketErrors.has(error.code))));
           response.on("data", chunk => {
             size += chunk.length;
             if (size > 2 * 1024 * 1024) {
@@ -101,7 +104,8 @@ export function createSemanticaMcpClient({ client, scope, starlink, issueKey, no
               endpoint.context();
               if (response.statusCode === 401 || response.statusCode === 403) throw failure("SEMANTICA_MCP_ACCESS_DENIED");
               if (response.statusCode === 404) throw failure("SEMANTICA_MCP_UPGRADE_REQUIRED");
-              if (response.statusCode < 200 || response.statusCode >= 300) throw failure("SEMANTICA_MCP_UNAVAILABLE");
+              if (response.statusCode < 200 || response.statusCode >= 300)
+                throw unavailable([502, 503, 504].includes(response.statusCode));
               if (notification) return resolve();
               let value;
               try { value = JSON.parse(Buffer.concat(chunks).toString("utf8")); }
@@ -112,7 +116,7 @@ export function createSemanticaMcpClient({ client, scope, starlink, issueKey, no
             } catch (error) { reject(error); }
           });
         });
-        outgoing.on("error", () => reject(failure("SEMANTICA_MCP_UNAVAILABLE")));
+        outgoing.on("error", error => reject(unavailable(!controller.signal.aborted && transientSocketErrors.has(error.code))));
         outgoing.end(body);
       });
     } finally { clearTimeout(deadline); requests.delete(controller); }
@@ -158,7 +162,14 @@ export function createSemanticaMcpClient({ client, scope, starlink, issueKey, no
       const { tools } = await discover(check);
       guard(expected, check);
       if (!tools.some(tool => tool.name === name)) throw failure("SEMANTICA_MCP_TOOL_UNAVAILABLE");
-      const result = await rpc(id, "tools/call", { name, arguments: args }, expected, check);
+      const params = { name, arguments: args };
+      let result;
+      try { result = await rpc(id, "tools/call", params, expected, check); }
+      catch (error) {
+        if (!readTools.has(name) || error.code !== "SEMANTICA_MCP_UNAVAILABLE" || !error.retryable) throw error;
+        guard(expected, check);
+        result = await rpc(id, "tools/call", params, expected, check);
+      }
       if (!Array.isArray(result.content)) throw failure("SEMANTICA_MCP_INVALID_REPLY");
       return result;
     },

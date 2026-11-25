@@ -6,7 +6,7 @@ on:
       version:
         description: 'Preview version matching the client base version'
         required: true
-        default: 1.5.4-windows-preview.2
+        default: 1.5.5-windows-preview.1
         type: string
       publish_release:
         description: 'Publish the verified build to GitHub Releases'
@@ -150,6 +150,8 @@ jobs:
         run: |
           node --test tests/memory-source-profile.test.mjs tests/local-memory-runtime.test.mjs tests/local-memory-unified.test.mjs tests/local-memory-unified-worker.test.mjs tests/memory-backup.test.mjs tests/memory-workspace.test.mjs tests/my-ai-workspace-routing.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Mixed collection runtime validation failed' }
+          node --test --test-name-pattern='^Windows detects the registered Codex package' tests/my-ai-task-catalog.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Windows Codex draft delivery validation failed' }
       - name: Validate source-profile upgrade and rollback
         working-directory: memory
         run: |

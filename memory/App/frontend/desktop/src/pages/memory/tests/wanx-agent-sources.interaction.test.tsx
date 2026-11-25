@@ -67,3 +67,29 @@ it('shows a missing box as a routine status and reloads the available sources', 
   expect(host.querySelector('.my-ai-source-feedback')).toBeNull();
   expect(memory().disabled).toBe(false);
 });
+
+it('keeps source pickers available when a saved warehouse needs to be replaced', async () => {
+  const onSourcesChange = vi.fn();
+  const onReady = vi.fn();
+  request = vi.fn(async (action, _signal, data) => {
+    const input = data as { selection?: object };
+    if (action === 'agent-context/status') return { boxReady: true };
+    if (action === 'agent-context/catalog') return { warehouses: [{ id: 'new-warehouse', name: '新仓库' }] };
+    if (input.selection) return { selection: input.selection, resources: {} };
+    return { selection: { warehouseId: 'old-warehouse', memoryEnabled: false }, resources: {}, warning: '无法访问所选星图仓库。' };
+  }) as MyAiRequest;
+  await act(async () => root.render(<I18nProvider language="zh-CN"><AgentSources request={request} agent="codex" name="Codex"
+    refresh={0} sources={{ warehouse: { id: 'old-warehouse', name: '已保存的星图仓库' }, memoryEnabled: false }}
+    onSourcesChange={onSourcesChange} onReady={onReady} disabled={false}/></I18nProvider>));
+  expect(host.textContent).toContain('无法访问所选星图仓库。');
+  expect(onSourcesChange).toHaveBeenLastCalledWith(expect.objectContaining({ warehouse: { id: 'old-warehouse', name: '已保存的星图仓库' } }));
+  expect(onReady).toHaveBeenLastCalledWith(true);
+  expect(memory().disabled).toBe(false);
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="参考星图"]')!.click());
+  const replacement = [...document.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === '新仓库');
+  await act(async () => replacement!.click());
+  expect(request).toHaveBeenLastCalledWith('agent-context/selection', expect.any(AbortSignal), expect.objectContaining({
+    selection: { warehouseId: 'new-warehouse', memoryEnabled: false },
+  }));
+  expect(host.textContent).not.toContain('无法访问所选星图仓库。');
+});

@@ -254,7 +254,7 @@ export function createGraphMotion({getSvg = () => document.querySelector('#graph
     }
 
     const relations = [];
-    for (const edge of graph.edges) {
+    for (const edge of scene.drawnEdges) {
       const element = scene.edges.get(edge.id);
       if (!element) continue;
       if (element.classList.contains('explore-omitted')) continue;
@@ -366,7 +366,7 @@ export function createGraphMotion({getSvg = () => document.querySelector('#graph
     const tick = () => {
       frame = 0;
       if (state !== scene || !scene.svg.isConnected || document.hidden) return;
-      stepForces(scene.nodes, scene.graph.edges, scene.pointer?.node?.id, scene.heat);
+      stepForces(scene.nodes, scene.drawnEdges, scene.pointer?.node?.id, scene.heat);
       paint(scene);
       scene.heat *= .91;
       if (scene.pointer?.node || scene.heat > .015) frame = raf(tick);
@@ -444,8 +444,9 @@ export function createGraphMotion({getSvg = () => document.querySelector('#graph
     const nodeLayer = svg.querySelector('.graph-space-nodes');
     const elements = new Map([...nodeLayer.querySelectorAll('.graph-node')].map(el => [el.dataset.node, el]));
     const edges = new Map([...svg.querySelectorAll('.graph-edge-hit')].map(el => [el.dataset.edge, el.parentElement]));
+    const drawnEdges = graph.edges.filter(edge => edges.has(edge.id));
     const groups = new Map();
-    for (const edge of graph.edges) {
+    for (const edge of drawnEdges) {
       const pair = JSON.stringify([edge.s, edge.t].sort());
       if (!groups.has(pair)) groups.set(pair, []);
       groups.get(pair).push(edge.id);
@@ -469,7 +470,7 @@ export function createGraphMotion({getSvg = () => document.querySelector('#graph
     const ranked = [...nodes].sort((a,b) => Number(b.id===selected)-Number(a.id===selected) ||
       (sizeBy.counts.get(b.id)?.relations ?? 0)-(sizeBy.counts.get(a.id)?.relations ?? 0) || b.degree-a.degree);
     const scene = state = {
-      svg, graph, nodes, nodeLayer, elements, edges, groups, floor, sizeBy, depthOrder: [],
+      svg, graph, nodes, nodeLayer, elements, edges, drawnEdges, groups, floor, sizeBy, depthOrder: [],
       duplicateLine:svg.querySelector('.explore-duplicate-line'),
       anchors, relationLabels, ranked,
       byId: new Map(nodes.map(node => [node.id, node])),

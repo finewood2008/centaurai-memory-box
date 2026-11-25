@@ -5,6 +5,7 @@ import {candidateHTML,mergeHTML,factsHTML} from './conversation-view.mjs';
 import {visibleMaterialIntents} from './material-continuation.mjs';
 import {currentMaterialWorkflow,materialWorkflowLabel,publishedMaterial} from './material-state.mjs';
 import {extractionFailuresHTML} from './extraction-diagnostics.mjs';
+import {materialAutomaticNoCandidates} from './material-agent.mjs';
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const btn=(action,label,off=false,id='')=>`<button type="button" class="btn btn-secondary" data-cv="${action}" data-id="${esc(id)}" ${off?'disabled':''}>${label}</button>`;
 const locked=f=>f.state.busy||!f.state.loaded||!!f.saved.pending||!!f.reviewPending||!!f.claimPending||!!f.releasePending;
@@ -16,7 +17,7 @@ export function materialStatusHTML(flow){
   const pendingPublication={queued:'等待发布',running:'正在发布',failed:'发布失败',cancelled:'发布已取消'}[publication?.status];
   const newIntent=changes?.record.previousIntent&&!d?.review?.draft_id;
   const automatic=flow?.agent?.current?.current;
-  const automaticLabel=automatic?.is_current?(automatic.stage==='published'&&automatic.publication_performed!==true?'发布状态待确认':{queued:'自动抽取排队中',running:'正在自动抽取',publishing:'正在自动发布',published:'自动抽取已发布',awaiting_review:'抽取完成，待核对',failed:'自动处理失败',cancelled:'自动处理已停止'}[automatic.stage]):null;
+  const automaticLabel=automatic?.is_current?(materialAutomaticNoCandidates(automatic)?'本次无可发布候选':automatic.stage==='published'&&automatic.publication_performed!==true?'发布状态待确认':{queued:'自动抽取排队中',running:'正在自动抽取',publishing:'正在自动发布',published:'自动抽取已发布',awaiting_review:'抽取完成，待核对',failed:'自动处理失败',cancelled:'自动处理已停止'}[automatic.stage]):null;
   const status=automaticLabel||(['cancelled','stale'].includes(d?.status)&&!retainedMaterialResults(d)?states[d.status]:d?.document_version_id&&d.source_status!=='available'?'来源已变化':flow?.intake?.record&&!flow.intake.sourceReviewed&&!retainedMaterialResults(d)?(flow.intake.unavailable?(states[d?.status]&&['failed','stale','cancelled'].includes(d?.status)?states[d.status]:'来源已变化'):flow.intake.source?(flow.intake.record.confirmed?'正文已核对':'解析完成，待核对正文'):'正在解析正文'):changes?.record.pending?'请求结果待恢复':pendingPublication||
     (changes?.state.summary?.status==='discarded'||!changes?.state.summary&&d?.review?.status==='discarded'?'草稿已放弃':newIntent&&states[d?.status]?states[d.status]:changes?.state.summary?.status==='editing'?'草稿待核对':progress.published?'已发布并读取生效知识':publicationCurrent(d)?'待读取生效知识':retainedMaterialResults(d)?'已停止抽取，已有结果可继续核对':changes?.record.draftId&&flow.saved.materialContinuations?.[d?.id]?.mode==='draft'?'继续核对已有草稿':states[d?.status]||'等待上传材料'));
   const otherStatus=i=>{const r=flow?.saved.intakeReviews?.[i.id];return r&&['awaiting_goal','ready_for_confirmation'].includes(i.status)?r.stage==='goal'?(i.status==='ready_for_confirmation'&&!r.goalNeedsConfirmation?'目标已确认':'明确整理目标'):r.confirmed?'正文已核对':'待核对正文':i.publication_effective?'服务端已发布':states[i.status]||i.status;};

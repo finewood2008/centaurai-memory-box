@@ -1,9 +1,10 @@
+import {logicalSourcesHTML, logicalSourceGroups} from './logical-source-view.mjs';
 import { starxiaotuTermMarker } from './term-help.mjs';
 import {warehouseMaterialEntries} from './material-library.mjs';
 import {materialAccessLost} from './native-workbench.js';
 import {materialAnnotationHTML} from './import-annotation.mjs';
 import {materialListHTML} from './material-workspace.mjs';
-import {materialAutomaticCard,materialAutomaticPublished,materialProcessingActive,materialReviewPending,materialRecoveryHTML} from './material-agent.mjs';
+import {materialAutomaticCard,materialAutomaticPublished,materialAutomaticNoCandidates,materialProcessingActive,materialReviewPending,materialRecoveryHTML} from './material-agent.mjs';
 import {materialRoundsHTML,unfinishedRound} from './material-rounds.mjs';
 import {automaticMaterialReview,materialDraftChanges,materialWorkflowLabel,publishedMaterial,publishedMaterialQuality} from './material-state.mjs';
 import {createGraphPresentation} from './graph-presentation.mjs';
@@ -417,9 +418,13 @@ export class MaterialImport {
     f.rounds.offer(w,previous);
   }
   async reviewAutomatic(openEditor){
-    const f=this.f,id=f.agent.documentId;if(!id)return;
+    const f=this.f,id=f.agent.documentId||f.agent.current?.receipt?.document_id;
+    const unavailable=()=>f.run(async()=>{throw fail('CORRECTION_REVIEW_NOT_READY');});
+    if(!id||materialAutomaticNoCandidates(f.agent.current?.current))return unavailable();
     if(f.state.materialPage!=='import'||this.view?.documentId!==id)await this.select(id);
-    if(f.state.error||f.state.materialPage!=='import'||this.view?.documentId!==id)return;
+    if(f.state.error)return;
+    if(f.state.materialPage!=='import'||this.view?.documentId!==id)return unavailable();
+    if(!materialReviewPending(f,this.view.workflow)&&!publishedMaterialQuality(this.view.workflow))return unavailable();
     return this.review(openEditor);
   }
   dialogue(){if(!this.f.readerOnly)return this.f.rounds.enter();}
@@ -459,6 +464,7 @@ function importStepsHTML(f,v,off){
   const reviewCard=`<div class="mw-import-complete"><div><h3>${processing?'材料正在处理中':esc(materialWorkflowLabel(v.workflow)||'抽取结果待核对')}</h3><p>${processing?'请等待当前任务完成后继续核对。':automaticReview?`${published?'原有发布结果仍然有效。':''}本轮自动抽取结果需要人工核对。查看候选并选择加入草稿，保存、核对后确认发布。`:changed===true?`草稿存在实际待发布变更，请核对后确认发布。${published?'原有发布结果仍然有效。':''}`:published?changed===false?'当前已发布结果仍然有效。核对草稿没有实际变更，无需重复抽取或发布。':'当前已发布结果仍然有效。已有核对草稿，是否存在待发布变更请打开核对确认。':draft?'打开草稿核对当前结果；只有实际变更才需要确认发布。':'已有抽取结果可继续核对。'}</p>${reason?`<p>未自动发布原因：${esc(reason)}</p>`:''}</div><div class="mw-import-actions"><button class="btn btn-primary" data-cv="import-review" ${processingOff?'disabled':''}>${automaticReview?'查看抽取候选':draft?'继续核对草稿':'继续核对抽取结果'}</button><button class="btn btn-secondary" data-cv="import-auto-switch" ${processingOff||!complete||!automaticAllowed?'disabled':''}>${published?'重新抽取':'自动抽取'}</button></div></div>`;
   const failed=['failed','cancelled'].includes(v.workflow.document.status);
   const operation=currentImportOperation(f,v),stage=operation?.current.stage;
+  const noCandidates=materialAutomaticNoCandidates(operation?.current);
   const waitingIndex=operation?.receipt.waits_for_source_index===true&&stage==='queued'&&!complete;
   const canStart=f.importer.canProcessSource;
   const extracting=['queued','running','publishing'].includes(stage);
@@ -466,23 +472,18 @@ function importStepsHTML(f,v,off){
   const interrupted=['failed','cancelled','stale'].includes(stage);
   const publishedNow=materialAutomaticPublished(operation?.current);
   const chained=canStart||operation?.receipt.waits_for_source_index===true;
-  const detectionStatus=v.source.processing?.sensitive_status;
-  const detecting=publishedNow&&!['completed','not_required','failed'].includes(detectionStatus);
-  const detectionFailed=publishedNow&&detectionStatus==='failed';
-  const detectionComplete=publishedNow&&['completed','not_required'].includes(detectionStatus);
   const indexInterrupted=waitingIndex&&['failed','blocked','cancelled'].includes(index);
-  const afterPublication={completed:'处理完成',not_required:'处理完成',running:'正在脱敏检测',failed:'脱敏检测未完成'}[detectionStatus]||'等待脱敏检测';
-  const autoStatus=indexInterrupted?'索引未完成，等待重试':waitingIndex?'等待索引':({queued:'等待抽取',running:'正在抽取',publishing:'正在发布',
-    awaiting_review:'待核对发布',published:publishedNow?afterPublication:'待确认',failed:'处理失败',cancelled:'已停止',stale:'已失效'}[stage]||'待开始');
-  const automaticState=detectionComplete?'done':interrupted||indexInterrupted||detectionFailed?'failed':
-    extracting||detecting||stage==='awaiting_review'?'active':'waiting';
+  const autoStatus=indexInterrupted?'索引未完成，等待重试':waitingIndex?'等待索引':noCandidates?'无可发布候选':({queued:'等待抽取',running:'正在抽取',publishing:'正在发布',
+    awaiting_review:'待核对发布',published:publishedNow?'处理完成':'待确认',failed:'处理失败',cancelled:'已停止',stale:'已失效'}[stage]||'待开始');
+  const automaticState=noCandidates?'done':publishedNow?'done':interrupted||indexInterrupted?'failed':
+    extracting||stage==='awaiting_review'?'active':'waiting';
   const items=chained?[
     {title:'核对正文',hint:'确认当前正文版本',state:confirmed?'done':'active',status:reviewExempt?'无需重复确认':confirmed?'已确认':'待确认'},
-    {title:'自动处理',hint:'依次建立索引、抽取、发布和脱敏检测',state:automaticState,status:autoStatus},
+    {title:'自动处理',hint:'依次建立索引、抽取和发布知识',state:automaticState,status:autoStatus},
   ]:operation&&!waitingIndex?[
     {title:'正文与索引',hint:'沿用当前正文版本',state:complete?'done':'waiting',status:complete?'已就绪':'待确认'},
     {title:interrupted?'本轮知识处理':'抽取知识',hint:interrupted?'查看处理记录与恢复操作':'按当前规则抽取',state:extractionDone?'done':interrupted?'failed':extracting?'active':'waiting',status:extractionDone?'已完成':({queued:'排队中',running:'进行中',failed:'处理失败',cancelled:'已停止',stale:'已失效'}[stage]||'待确认')},
-    {title:stage==='awaiting_review'?'核对并发布':'发布知识',hint:stage==='awaiting_review'?'核对结果后确认发布':'以本轮发布回执为准',state:publishedNow?'done':['publishing','awaiting_review'].includes(stage)?'active':'waiting',status:publishedNow?'已发布':({publishing:'进行中',awaiting_review:'待核对',published:'待确认'}[stage]||'未开始')},
+    {title:stage==='awaiting_review'&&!noCandidates?'核对并发布':'发布知识',hint:noCandidates?'本轮没有可发布候选':stage==='awaiting_review'?'核对结果后确认发布':'以本轮发布回执为准',state:publishedNow?'done':!noCandidates&&['publishing','awaiting_review'].includes(stage)?'active':'waiting',status:publishedNow?'已发布':noCandidates?'无候选':({publishing:'进行中',awaiting_review:'待核对',published:'待确认'}[stage]||'未开始')},
   ]:[
     {title:'解析材料',hint:'识别文本与结构',state:ready?'done':failed?'failed':'active',status:ready?'已完成':failed?'未完成':'进行中'},
     {title:'核对正文',hint:reviewExempt?'沿用当前正文版本':'检查并确认内容',state:confirmed?'done':ready?'active':'waiting',status:reviewExempt?'无需重复确认':confirmed?'已完成':ready?'待确认':'待处理'},
@@ -494,17 +495,14 @@ function importStepsHTML(f,v,off){
   const indexProgress=['building','queued'].includes(index)?`<progress aria-label="索引建立进度" ${known?`max="${progress.total_units}" value="${Math.min(progress.completed_units,progress.total_units)}"`:''}></progress>${known?`<small>已完成 ${progress.completed_units} / ${progress.total_units} 单元</small>`:''}`:'';
   const retry=confirmed&&progress?.retryable?`<button class="btn btn-secondary" data-cv="import-index-retry" ${off?'disabled':''}>重试建立索引</button>`:'';
   const heading=operation?.receipt.waits_for_source_index?'本次材料处理':operation?'本次自动抽取流程':'材料处理流程';
-  const detection=chained&&!publishedNow?'待发布后检测':
-    ({pending:'待检测',running:'检测中',completed:'已检测',failed:'检测未完成',not_required:'仅强制拦截密钥'}[detectionStatus]||'状态未回读');
   const extraction=published||publishedNow||extractionDone||reviewPending?'已完成':
     stage==='failed'?'处理失败':extracting&&!waitingIndex?'抽取中':'未开始';
-  const publication=published||publishedNow?'已发布':reviewPending||stage==='awaiting_review'?'待核对发布':
+  const publication=noCandidates?(published?'保留已有知识':'无可发布候选'):published||publishedNow?'已发布':reviewPending||stage==='awaiting_review'?'待核对发布':
     stage==='publishing'?'正在发布':'未发布';
   const status = (title, detail, action='') =>
     `<div class="mw-reader-next"><div><strong>${title}</strong><p>${detail}</p></div>${action}</div>`;
   const button = (command, label, disabled=off) =>
     `<button class="btn btn-primary" data-cv="${command}" ${disabled?'disabled':''}>${label}</button>`;
-  const pausedDelivery = (published || publishedNow) && ['pending','running','failed'].includes(detectionStatus);
   let next = '';
   if (waitingIndex || confirmed && ['queued','building','failed','blocked','cancelled'].includes(index)) {
     next = status(indexInterrupted?'索引未完成，等待重试':indexStatusText,
@@ -515,16 +513,14 @@ function importStepsHTML(f,v,off){
     next = `<div class="mw-import-task-progress" role="status">${materialAutomaticCard(f)}</div>`;
   } else if (recovery) {
     next = recovery;
+  } else if (noCandidates) {
+    next = materialAutomaticCard(f);
   } else if (reviewPending) {
     next = status('待核对知识','在右侧对照正文核对抽取结果。');
   } else if (canStart) {
     next = status(confirmed?'正文已确认':'待核对正文',
       '确认后建立索引，并按当前规则抽取知识。',
       button('import-process-source',confirmed?'开始自动处理':'确认正文并处理'));
-  } else if (pausedDelivery) {
-    next = status('知识已入图 · 对外交付暂缓',
-      detectionStatus==='failed'?'交付检测未完成，可查看原因并重试。':'正在等待交付检测结果。',
-      '<button class="btn btn-secondary" data-view="sensitive">查看脱敏规则</button>');
   } else if (processing) {
     next = status('材料正在处理中','可继续阅读正文，并在处理记录查看进度。');
   } else if (quality) {
@@ -548,7 +544,7 @@ function importStepsHTML(f,v,off){
       <header><strong>${heading}</strong><span>${Number.isSafeInteger(v.source.version?.version_number)?`正文 v${v.source.version.version_number}`:'以最近读取的服务端状态为准'}</span></header>
       <ol class="mw-import-steps">${items.map((item,n)=>`<li class="is-${item.state}" ${item.state==='active'?'aria-current="step"':''}><span class="mw-step-number" aria-hidden="true">${item.state==='done'?'✓':n+1}</span><div><strong>${item.title}</strong><small>${item.hint}</small></div><span class="mw-step-status">${item.status}</span></li>`).join('')}</ol>
       ${indexProgress}
-      <dl class="mw-import-status"><div><dt>建立索引</dt><dd>${indexStatusText}</dd></div><div><dt>抽取知识</dt><dd>${extraction}</dd></div><div><dt>发布知识</dt><dd>${publication}</dd></div><div><dt>交付检测</dt><dd>${detection}</dd></div></dl>
+      <dl class="mw-import-status"><div><dt>建立索引</dt><dd>${indexStatusText}</dd></div><div><dt>抽取知识</dt><dd>${extraction}</dd></div><div><dt>发布知识</dt><dd>${publication}</dd></div></dl>
       <p class="mw-import-limit">${progress?.error?esc(progress.error.detail||progress.error.code):''}${!automaticAllowed&&v.workflow.actions?.prepare_automatic?.reason?esc(v.workflow.actions.prepare_automatic.reason):''}</p>
       ${reviewPending&&!recovery?reviewCard:''}
       ${materialAnnotationHTML(v.source)}
@@ -584,26 +580,31 @@ function sourceEditHTML(edit){
 }
 function readerParagraph(segment,match){
   const text=String(segment.text||'').replace(/\r\n/g,'\n');
+  const tag=segment.kind==='heading'?'h3':'p';
   const quote=match?.excerpt;
   const index=typeof quote==='string'&&quote?text.indexOf(quote):-1;
   if(index>=0&&text.indexOf(quote,index+1)<0){
-    return `<p>${esc(text.slice(0,index))}<mark>${esc(quote)}</mark>${esc(text.slice(index+quote.length))}</p>`;
+    return `<${tag}>${esc(text.slice(0,index))}<mark>${esc(quote)}</mark>${esc(text.slice(index+quote.length))}</${tag}>`;
   }
   const heading=text.match(/^(#{1,6}) +([^\n]+)(?:\n+([\s\S]*))?$/);
-  if(!heading)return `<p>${esc(text)}</p>`;
+  if(!heading)return `<${tag}>${esc(text)}</${tag}>`;
   const level=Math.min(heading[1].length+2,6);
   return `<h${level}>${esc(heading[2])}</h${level}>${heading[3]?`<p>${esc(heading[3])}</p>`:''}`;
 }
 function importSourceHTML(v,off,importer){
   const total=v.source.document.segment_count;
-  const count=Number.isSafeInteger(total)&&total>=0?`${total} 个内容片段`:'正文片段数量待确认';
+  const count=Number.isSafeInteger(total)&&total>=0?`原文 ${total} 个片段${v.textWindow?'':` · 当前页 ${logicalSourceGroups(v.source.segments).length} 个阅读分组`}`:'正文片段数量待确认';
   const match=v.sourceMatch,evidence=match&&readerEvidence(v.knowledge?.items?.[match.index],v);
   const citation=v.textWindow&&v.readerCitation?.start===v.textWindow.start?v.readerCitation:null;
   return `<section class="mw-import-source mw-reader-source"><header><div class="mw-source-heading"><h3>材料正文</h3>${sourceEditable(v)?`<button type="button" class="btn btn-secondary" data-cv="import-edit-source" ${importer.sourceBlocked?'disabled':''}>编辑正文</button>`:''}</div><span>${count}</span></header>
     ${importer.sourceNotice?`<p role="status">${esc(importer.sourceNotice)}</p>`:''}
     ${v.readerHandoffNotice?`<p class="mw-reader-citation-note" role="status">${esc(v.readerHandoffNotice)}</p>`:''}
     ${v.textWindow?`<div class="mw-full-text" ${citation?`data-reader-match="citation-${citation.start}" tabindex="-1"`:''}>${citation?`<small>星图引用位置 · 正文 v${esc(v.source.version.version_number)}</small>`:''}${readerParagraph(v.textWindow,citation)}</div><div class="mw-source-pagination"><small>${v.textWindow.start}–${v.textWindow.end} / ${v.textWindow.total_chars} 字符</small><button class="btn btn-secondary" data-cv="import-text-prev" ${off||!v.textWindow.start?'disabled':''}>上一段正文</button><button class="btn btn-secondary" data-cv="import-text-next" ${off||v.textWindow.end>=v.textWindow.total_chars?'disabled':''}>下一段正文</button></div>`:
-    `<div class="mw-source-segments">${v.source.segments.map(s=>`<article ${evidence&&s.id===match.id?`data-reader-match="${match.request}" tabindex="-1"`:''}>${readerParagraph(s,evidence&&s.id===match.id?evidence:null)}${s.text_truncated?`<small>此长段落仅显示部分内容。</small><button class="btn btn-secondary" data-cv="import-text" ${off?'disabled':''}>读取完整正文</button>`:''}</article>`).join('')||'<p class="mw-source-empty">正文尚未准备好。</p>'}</div>
+    `<div class="mw-source-segments">${logicalSourcesHTML(v.source.segments, {
+      render:s=>readerParagraph(s,evidence&&s.id===match.id?evidence:null),
+      attributes:s=>evidence&&s.id===match.id?`data-reader-match="${esc(match.request)}" tabindex="-1"`:'',
+      suffix:s=>s.text_truncated?`<small>此长段落仅显示部分内容。</small><button class="btn btn-secondary" data-cv="import-text" ${off?'disabled':''}>读取完整正文</button>`:''
+    })||'<p class="mw-source-empty">正文尚未准备好。</p>'}</div>
     ${v.offset||v.source.segments.length<total?`<div class="mw-source-pagination"><small>${v.source.segments.length?`显示 ${v.offset+1}–${v.offset+v.source.segments.length} 个片段`:''}</small><button class="btn btn-secondary" data-cv="import-prev" ${off||!v.offset?'disabled':''}>上一页</button><button class="btn btn-secondary" data-cv="import-next" ${off||!v.source.segments.length||v.offset+v.source.segments.length>=(total||0)?'disabled':''}>下一页</button></div>`:''}`}
   </section>`;
 }

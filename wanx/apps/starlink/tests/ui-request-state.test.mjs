@@ -4,6 +4,7 @@ import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import {pendingAnnotationHTML} from '../ui/import-annotation.mjs';
+import {logicalSourcesHTML, logicalSourceGroups} from '../ui/logical-source-view.mjs';
 
 const source = await readFile(new URL('../ui/app.js', import.meta.url), 'utf8');
 const section = (start, end) => source.slice(source.indexOf(start), source.indexOf(end));
@@ -23,7 +24,7 @@ function fixture() {
   const context = vm.createContext({ state, bridge: null, $, CSS: {escape: String}, crypto: { randomUUID }, document: { querySelectorAll: () => [] },
     currentSetup:()=>null, currentWarehouse: () => ({ state: 'active' }), onboarding: { visible: false }, basicMaterialWarehouse: null,
     esc: value => String(value ?? ''), highlight: value => value, icon: () => '', locator: () => '', bytes: () => '', actualModel: () => '', doc: () => null,
-    pendingAnnotationHTML, syncStarxiaotu() {},
+    pendingAnnotationHTML, logicalSourcesHTML, logicalSourceGroups, syncStarxiaotu() {},
     errorText: error => error.message, toast: text => notices.push(text), refresh: async () => {},
     call: (action, input) => { const pending = deferred(); calls.push({ action, input, ...pending }); return pending.promise; },
   });

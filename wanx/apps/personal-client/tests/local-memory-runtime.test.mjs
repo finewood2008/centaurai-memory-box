@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { createMemoryRuntimeSupervisor } from "../shell/local-memory-runtime.mjs";
 
@@ -54,4 +55,58 @@ test("model errors do not relaunch a reachable ready memory database", async t =
   await runtime.ensure();
   await runtime.ensure();
   assert.equal(starts, 0);
+});
+
+test("startup preserves worker error codes across concurrent callers and allows another attempt", async t => {
+  const root = await mkdtemp(path.join(tmpdir(), "wanx-memory-failure-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let starts = 0;
+  const runtime = createMemoryRuntimeSupervisor({
+    runtimeFile: path.join(root, "runtime.json"), appPath: root, source: root, appData: root, home: root,
+    env: {}, retryMs: 1,
+    start: (_executable, _args, options) => {
+      starts++;
+      assert.deepEqual(options.stdio, ["ignore", "ignore", "ignore", "ipc"]);
+      const child = new EventEmitter();
+      child.unref = () => queueMicrotask(() => {
+        child.emit("message", { type: "memory-startup-error", code: "MEMORY_DATABASE_UNAVAILABLE" });
+        child.emit("exit", 1);
+      });
+      return child;
+    },
+  });
+  const pending = runtime.ensure();
+  assert.equal(runtime.ensure(), pending);
+  await assert.rejects(pending, { message: "MEMORY_DATABASE_UNAVAILABLE" });
+  await assert.rejects(runtime.ensure(), { message: "MEMORY_DATABASE_UNAVAILABLE" });
+  assert.equal(starts, 2);
+});
+
+test("an unexpected child exit keeps the generic startup failure", async t => {
+  const root = await mkdtemp(path.join(tmpdir(), "wanx-memory-exit-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const runtime = createMemoryRuntimeSupervisor({
+    runtimeFile: path.join(root, "runtime.json"), appPath: root, source: root, appData: root, home: root,
+    env: {}, retryMs: 1,
+    start: () => {
+      const child = new EventEmitter();
+      child.unref = () => queueMicrotask(() => {
+        child.emit("message", { type: "memory-startup-error", code: "private diagnostic text" });
+        child.emit("exit", null, "SIGTERM");
+      });
+      return child;
+    },
+  });
+  await assert.rejects(runtime.ensure(), { message: "MEMORY_RUNTIME_START_FAILED" });
+});
+
+test("the actual worker reports its startup error through the supervisor IPC channel", async t => {
+  const root = await mkdtemp(path.join(tmpdir(), "wanx-memory-worker-failure-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const runtime = createMemoryRuntimeSupervisor({
+    runtimeFile: path.join(root, "runtime.json"), source: root, appData: root, home: root,
+    appPath: fileURLToPath(new URL("../", import.meta.url)),
+    env: { ...process.env, MEMMY_HOME: "relative-path" }, retryMs: 10, timeoutMs: 5000,
+  });
+  await assert.rejects(runtime.ensure(), { message: "MEMORY_RUNTIME_ARGUMENTS_INVALID" });
 });

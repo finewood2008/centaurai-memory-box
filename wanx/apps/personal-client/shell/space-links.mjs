@@ -49,7 +49,7 @@ export async function createSpaceLinkBridge({client,store,serviceURL,onChanged=(
    throw fail('SPACE_ACTION_INVALID',400);
   },
   async mcpDetails(kind='space'){
-   if(!['space','starlink'].includes(kind))throw fail('MCP_SURFACE_INVALID');const bound=scope();assertScope(bound);const local=kind==='space'&&client.snapshot().connection.mode==='netbird';const u=new URL(local?await mcpEndpoint():client.snapshot().connection.url);u.pathname='/mcp/'+kind;u.search='';u.hash='';assertScope(bound);
+   if(!['space','starlink'].includes(kind))throw fail('MCP_SURFACE_INVALID');const bound=scope();assertScope(bound);const local=client.snapshot().connection.mode==='netbird';const u=new URL(local?await mcpEndpoint():client.snapshot().connection.url);u.pathname='/mcp/'+kind;u.search='';u.hash='';assertScope(bound);
    return {url:u.href,transport:'Streamable HTTP',authentication:'Authorization: Bearer <访问 Key>',configuration:{mcpServers:{[kind==='space'?'wanx-space':'wanx-starlink']:{url:u.href,headers:{Authorization:'Bearer <访问 Key>'}}}},serverHosted:true,localOnly:local};
   },
   async close(){closed=true;unsubscribe();for(const c of controllers)c.abort();await relay.close();await writes.catch(()=>{});}

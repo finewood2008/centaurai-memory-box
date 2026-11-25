@@ -7,6 +7,7 @@ import { validateCompatibility } from "../applications/compatibility.mjs";
 
 export const updateError = code => Object.assign(new Error(code), { code });
 export const MAX_BLOCK_MAP_BYTES = 16 * 1024 * 1024;
+export const BOX_MEDIA_EXTENSION = "wanx.media-ota.v1";
 export const errorCode = error => /^[A-Z][A-Z0-9_]{1,100}$/.test(error?.code || error?.message || "")
   ? (error.code || error.message) : "UPDATE_REQUEST_FAILED";
 export function canonicalJSON(value) {
@@ -30,7 +31,7 @@ export function verifyRelease(envelope, { keys = {}, product, now = Date.now(), 
   const extensions = payload?.requiredExtensions ?? [];
   if (!payload || payload.schemaVersion !== 1 || payload.purpose !== "wanx.release.v1" ||
       payload.product !== product || !Array.isArray(extensions) || new Set(extensions).size !== extensions.length ||
-      extensions.some(extension => !(product === "wanx-box" && extension === "wanx.foundation-modules.v1") &&
+      extensions.some(extension => !(product === "wanx-box" && ["wanx.foundation-modules.v1", BOX_MEDIA_EXTENSION].includes(extension)) &&
         !(product === "wanx-client" && extension === TEST_EXTENSION && isTestClientIdentity(testIdentity))) ||
       payload.backendContract !== 1 || payload.hostProtocol !== 1 || payload.dataPolicy !== "backward-compatible")
     throw updateError("CONTRACT_UNSUPPORTED");
@@ -81,6 +82,23 @@ export function verifyRelease(envelope, { keys = {}, product, now = Date.now(), 
     }
   }
   if (product === "wanx-box") {
+    const media = payload.components.media;
+    const mediaArtifacts = payload.artifacts.filter(artifact => artifact.component === "media");
+    if (Boolean(media) !== extensions.includes(BOX_MEDIA_EXTENSION))
+      throw updateError("CONTRACT_UNSUPPORTED");
+    if (media) {
+      if (payload.platform.os !== "linux" || payload.platform.osId !== "ubuntu" ||
+          payload.platform.osVersion !== "26.04" || payload.platform.arch !== "x64" ||
+          !semver.valid(payload.minUpdaterVersion) || semver.lt(payload.minUpdaterVersion, "1.9.57"))
+        throw updateError("CONTRACT_UNSUPPORTED");
+      const [artifact] = mediaArtifacts;
+      if (Object.keys(media).sort().join(",") !== "buildId,sha256,sourceCommit,version" ||
+          ![media.buildId, media.version].every(value => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value)) ||
+          typeof media.sourceCommit !== "string" || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(media.sourceCommit) ||
+          mediaArtifacts.length !== 1 || Object.keys(artifact).sort().join(",") !== "component,kind,sha256,sizeBytes,url" ||
+          artifact.kind !== "service-tar" || artifact.sizeBytes > 2 * 1024 ** 3)
+        throw updateError("UPDATE_INVALID_ARTIFACT");
+    }
     const foundation = payload.artifacts.filter(artifact => ["discovery", "p2p"].includes(artifact.component));
     if (foundation.length && !extensions.includes("wanx.foundation-modules.v1") ||
         extensions.includes("wanx.foundation-modules.v1") &&

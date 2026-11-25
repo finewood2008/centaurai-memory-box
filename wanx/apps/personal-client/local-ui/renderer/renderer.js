@@ -1303,7 +1303,7 @@ function scheduleBoxVersionRead() {
 
 
 function boxComponentRow(name, value) {
-  const names = { base: "基础配置", docker: "容器环境", discovery: "设备发现", p2p: "盒子连接", wanx: "盒端记忆盒子", semantica: "语义服务", updater: "升级器" };
+  const names = { base: "基础配置", docker: "容器环境", discovery: "设备发现", p2p: "盒子连接", wanx: "盒端记忆盒子", semantica: "语义服务", media: "媒体服务", updater: "升级器" };
   const evidence = { verified: "已核验", drifted: "运行状态与安装记录不一致", unknown: "缺少运行核验证据（不代表服务停止）" };
   const health = { healthy: "运行正常", unhealthy: "运行异常", stopped: "未运行", starting: "正在启动", degraded: "运行受限", unknown: "未报告服务状态" };
   const running = value.runningVersion || (["base", "docker"].includes(name) ? "安装记录（不提供独立运行版本）" : "待核验（未取得运行版本）");
