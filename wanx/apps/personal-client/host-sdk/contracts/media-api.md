@@ -15,12 +15,12 @@
 | 盒内后台文件处理 | 对应的文件能力及限时委托 | 受信盒内服务使用回环接口 |
 
 1. 从平台团队领取匹配版本的 **App Kit**。桌面应用在清单中声明 `identity.read` 和 `http.request`，通过万象启动，登录后连接目标盒。Host 与 Bridge 均须支持媒体转发。实时 ASR 还要求该盒的媒体注册允许 WebSocket。
-2. 向盒端安装方提供目标盒、测试账号、空间、应用实例标识和需要的能力。安装方为该实例单独签发授权，签发包包含 `grantId`、`instance` 和 `grant`。应用主进程在 HTTPS 或受信交付渠道接收凭据，按盒子、账号、空间及实例保存到操作系统安全存储。应用开发团队使用自己的授权。
-3. 在 Electron 主进程用 `fromEnvironment()` 创建 Host，调用 `host.context()` 并确认连接已就绪。向媒体 HTTP 请求添加 `X-Media-Grant: <grant>`。Host 与 Bridge 负责请求身份，应用端无需签发 JWT。媒体服务用 Bridge 身份校验盒子、账号和空间，再以凭据绑定的实例及能力隔离作业。
-4. 先调 `GET /capabilities`，核对返回的 `instance` 和目标能力的 `configured`。能力项缺失表示当前凭据未授予该项，`configured: false` 表示该能力的运行配置尚未就绪。`configured: true` 后，用小样本验证实际推理。
-5. 订阅 `host.onSessionInvalidated`。会话失效时停止采集、上传和轮询，关联 UI 提示重新从万象启动。切换盒子后重新核对能力与凭据。
+2. 应用收到系统麦克风许可后即可本地录音。采集、保存和回听原音独立于盒端转写、实时字幕及总结。
+3. 在 Electron 主进程用 `fromEnvironment()` 创建 Host。连接已登录的盒子后，文件转写、实时字幕和总结的前台 HTTP 调用直接用 `host.request()`，省略 `X-Media-Grant`。新版 Host 自动注入应用专属凭据，Bridge 签发当前账号和已绑定空间的身份，媒体服务据此隔离作业和模板。个人版和企业版采用相同接入方式。
+4. OCR、图像处理和后台委托沿用显式实例授权。安装方签发 `grantId`、`instance` 和 `grant` 并通过受信渠道交付到应用安全存储。调用这些接口、领取旧作业或管理旧实例模板时，发送原来的 `X-Media-Grant: <grant>`。
+5. 先调 `GET /capabilities` 核对目标能力和其 `configured`。模型配置未就绪时仍可本地录音和回听。订阅 `host.onSessionInvalidated`，会话失效时结束字幕连接和盒端上传、轮询，保留本地录音。
 
-试点按盒子和实例开通。102 的盒端语音已完成实测，OCR 需要另行确认目标盒的本地引擎、中文语言包和 `image.ocr` 授权。本文的已验证应用入口是桌面 Host。独立 Web、安卓或 iOS 应用如需直连，须让平台团队确认其身份、路由和密钥交付方案。
+默认调用需要同时更新桌面 Host、Bridge 和媒体服务，适用于使用平台登录会话连接的盒子。支持自动凭据的 Host 在 `host.context()` 返回 `hostFeatures.foregroundMedia: true`。旧盒仍可使用显式实例授权。独立 Web、安卓或 iOS 入口沿用各自的接入协议。
 
 ## 2. 能力发现
 
@@ -155,7 +155,7 @@
 
 ## 4. 实时 ASR WebSocket
 
-1. 用 HTTP `POST /asr/sessions` 创建会话，空请求体，正常携带 `X-Media-Grant`。成功为 201，返回 `id`、`streamPath`、`ticket`、`ticketExpiresAt`、`audio`、`maxFrameBytes`、`idleTimeoutSeconds`、`maxDurationSeconds`。一次性票据最长有效 30 秒，也受授权期限约束。票据和连接路径按原样使用。
+1. 用 HTTP `POST /asr/sessions` 创建会话，空请求体，由桌面 Host 提供默认凭据。成功为 201，返回 `id`、`streamPath`、`ticket`、`ticketExpiresAt`、`audio`、`maxFrameBytes`、`idleTimeoutSeconds`、`maxDurationSeconds`。一次性票据最长有效 30 秒，也受授权期限约束。票据和连接路径按原样使用。
 2. 同一 Host 会话中调用 `host.openStream(streamPath, {protocols: ['wanx.asr.v1', 'wanx.asr.ticket.' + ticket]})`。按此顺序设置两个子协议，服务端协商 `wanx.asr.v1`。凭据仅通过对应的 HTTP 头或 WebSocket 子协议传递，连接路径不带查询参数。为套接字立即注册事件，收到 `ready` 后再发送音频。
 3. 按采集速率发送 16 kHz、单声道、带符号 16 位小端的裸 PCM。帧为非空偶数字节，最多 6400 字节，推荐 100 ms 即 3200 字节。发送速率为每秒 32000 字节，允许短时突发但应持续按采集节奏。每盒只允许一路活跃实时会话，15 秒无音频触发空闲关闭，单会话最长 3600 秒。
 4. 录制结束时发送文本 JSON `{"type":"end"}`，等待剩余 `final` 和 `end` 回执。连接断开后重新申请会话和票据，应用可以保存本地已采集原音。
@@ -174,7 +174,7 @@
 
 ### 创建总结任务
 
-`POST /summaries` 接收 UTF-8 JSON 并返回 HTTP 202 及标准作业回执。调用需要应用实例的 `text.summarize` 授权。使用 `GET /capabilities` 确认该能力已配置，再提交一份合成文本验证云端推理。
+`POST /summaries` 接收 UTF-8 JSON 并返回 HTTP 202 及标准作业回执。桌面 Host 默认提供 `text.summarize`。用户主动生成总结时，先告知转写文本会发往云端，再提交请求。使用 `GET /capabilities` 确认该能力已配置，再提交一份合成文本验证云端推理。
 
 ```json
 {
@@ -185,6 +185,7 @@
 
 - `text` 为已经获准用于云端总结的 ASR 转写稿、OCR 文本或其他纯文本，最多 32768 个 UTF-8 字节。该文本和所选模板的指令经设备配置的模型通道发送至云端。超过模型上下文的长稿可先按业务语义分段。模型输出上限为 1024 tokens。
 - `templateId` 可省略，也可传 `null`，两者均使用本实例的当前默认模板。实例初始默认是内置「通用总结」`builtin-default`，也可以显式传它。传指定模板 ID 时会核对归属。
+- 新作业的中文总结默认使用简体中文。模板可以明确指定繁体中文或其他语言，作业按提交时的设置重试。
 - 提交时即入队并保存所用模板的版本和指令。重复提交同一授权下相同 `requestId`、文本和模板选择，返回已有作业。更新、删除或切换模板只影响新的请求标识，已有作业重试沿用提交时的模板。
 - 总结与文件识别共用盒端异步队列。作业沿用 `GET /jobs/{id}`、`GET /jobs/{id}/result`、`POST /jobs/{id}/retry` 和 `DELETE /jobs/{id}`。应用轮询到 `done` 后读取结果。
 
@@ -230,13 +231,13 @@
 
 `name` 和 `instructions` 去除首尾空白后分别为 1–100 和 1–4000 字符。每个作用域最多保存 100 个自定义模板。修改后版本递增，更新与删除须使用上一次读取的 `revision`。内置模板只可读取、选为默认或用于总结。删除当前自定义默认模板后，系统恢复「通用总结」。
 
-总结默认经万象托管模型转发。平台维护方也可为设备显式配置 HTTPS 直连云端模型。应用使用已签发的 `text.summarize` 实例授权，提交文本和所选模板，模型标识和调用凭据由安装方管理。此接口使用支持新路由的桌面 Host 和已启用云端总结的媒体服务。
+总结默认经万象托管模型转发。平台维护方也可为设备显式配置 HTTPS 直连云端模型。应用提交文本和所选模板，模型标识和云端调用凭据由盒端维护方管理。
 
 从本地总结迁移到云端时，已生成的结果仍可按作业权限读取。原先排队或失败的本地总结作业需要由调用方确认文本可传云后，以新的 `requestId` 提交。
 
 ## 6. Electron 主进程示例
 
-以下两个示例在同一个主进程模块中使用。`grant` 从安装方交付并经应用安全存储读取。`expectedInstance` 使用申请授权时登记的实例标识。
+以下示例在同一个 Electron 主进程模块中使用。前台录音能力直接调用 `connectMedia()`。OCR 或旧作业使用安装方交付的 `grant` 和已登记的 `expectedInstance`。
 
 ```js
 const { fromEnvironment } = require('@centaurai/wanx-host-sdk');
@@ -251,7 +252,7 @@ async function connectMedia(grant, expectedInstance, onInvalidated = () => {}) {
   if (!host) throw new Error('请从万象打开应用并连接盒子');
   host.onSessionInvalidated(onInvalidated);
   async function call(path, { method = 'GET', body, signal } = {}) {
-    const headers = { 'X-Media-Grant': grant };
+    const headers = grant ? { 'X-Media-Grant': grant } : {};
     if (Buffer.isBuffer(body)) headers['Content-Type'] = 'application/octet-stream';
     const response = await host.request(base + path, { method, headers, body, signal });
     const data = await response.json().catch(() => null);
@@ -269,7 +270,7 @@ async function connectMedia(grant, expectedInstance, onInvalidated = () => {}) {
     const context = await host.context();
     if (context.connection !== 'ready') throw new Error('NETWORK_NOT_READY');
     const capabilities = await call('/capabilities');
-    if (capabilities.instance !== expectedInstance) throw new Error('MEDIA_INSTANCE_MISMATCH');
+    if (expectedInstance && capabilities.instance !== expectedInstance) throw new Error('MEDIA_INSTANCE_MISMATCH');
     return { host, call, capabilities };
   } catch (error) {
     host.close();
@@ -393,6 +394,7 @@ async function streamPcmFixture(media, pcmBytes, onCaption) {
 | --- | --- | --- |
 | Host 会话失效或网络未就绪 | `HOST_SESSION_EXPIRED`、`NETWORK_NOT_READY` | 停止旧会话操作，从万象恢复连接或重新启动 |
 | 授权缺失、失效或不匹配 | 401 `MEDIA_AUTH_REQUIRED`、403 `GRANT_REQUIRED`、`CAPABILITY_DENIED` | 核对当前盒子、空间、账号、实例和能力，必要时由安装方换发 |
+| 盒端未能确认前台调用范围 | 403 `FOREGROUND_CONTEXT_REQUIRED` | 核对 Bridge 和媒体服务版本，使用万象当前已登录会话 |
 | 作业不可见或过期 | 404 `JOB_NOT_FOUND`、410 `JOB_EXPIRED` | 停止查询旧作业，需要重新处理时用新的请求标识 |
 | 续传或状态冲突 | 409 `OFFSET_OR_SIZE_CONFLICT`、`REQUEST_CONFLICT`、`UPLOAD_INCOMPLETE`、`RESULT_NOT_READY`、`RETRY_NOT_ALLOWED` | 重新查询作业回执，按实际偏移或状态恢复 |
 | 分块、输入或摘要不合法 | 413 `CHUNK_TOO_LARGE`，422 `FULL_CHUNK_REQUIRED`、`DIGEST_MISMATCH`、`INVALID_OPTIONS` 或字段校验错误 | 修正块长、原文件、摘要或请求字段后再提交 |
@@ -411,6 +413,8 @@ async function streamPcmFixture(media, pcmBytes, onCaption) {
 
 ## 8. 授权撤销与盒内后台委托
 
+本节接口使用安装方签发的显式授权。
+
 | 调用 | 请求和响应 |
 | --- | --- |
 | `DELETE /grant/self` | 吊销当前应用持有的媒体授权，返回 `{"revoked":true}` |
@@ -418,7 +422,7 @@ async function streamPcmFixture(media, pcmBytes, onCaption) {
 | `GET /delegations` | 查当前父授权的有效委托，返回 `{"delegations":[...]}`，列表不含 `token` |
 | `DELETE /delegations/{id}` | 由父授权撤销自己的委托，返回 `{"revoked":true}` |
 
-委托只供已接入并获用户授权的同盒后台服务。能力须为父授权的子集，允许项是 `image.fingerprint`、`image.embedding`、`image.labels`、`image.ocr` 和 `audio.transcribe`，实时字幕仅用前台授权。`ttlSeconds` 为 1–604800，且实际到期时间取父授权剩余时间和该期限的较小值。`token` 仅在签发回执中返回，通过受信的同盒渠道交付。
+委托只供已接入并获用户授权的同盒后台服务。能力须为父授权的子集，允许项是 `image.fingerprint`、`image.embedding`、`image.labels`、`image.ocr`、`text.embedding` 和 `audio.transcribe`，实时字幕仅用前台授权。家庭照片检索用同盒的 `text.embedding` 编码已登录用户提交的搜索词，按空间授权和相同模型摘要匹配照片向量。`ttlSeconds` 为 1–604800，且实际到期时间取父授权剩余时间和该期限的较小值。`token` 仅在签发回执中返回，通过受信的同盒渠道交付。
 
 已获委托的盒内服务使用 `X-Media-Delegation` 访问媒体服务的回环前缀 `/internal/media/v1`，调用 `GET /context`、`GET /capabilities`、前述文件作业接口，或以 `DELETE /delegation/self` 自行撤销。当前 `audience` 为 `wanx.homeai`，其他盒内应用服务接入须与平台维护方确认。该前缀只提供给盒内受信服务。父授权到期或撤销会使子委托和未归档的作业失效。应用在上传前和归档前仍须确认原件与目标空间权限。
 

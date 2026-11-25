@@ -25,7 +25,7 @@ import { useTranslation } from "react-i18next";
 import { request } from "../../../../../api/request";
 import type { ProviderRow, ProviderModel } from "../../useProviders";
 import { isEmbeddingModel } from "../../useProviders";
-import { fetchProviderModels, testProviderDraft } from "../../providerApi";
+import { fetchProviderModels, mergeFetchedProviderModels, testProviderDraft } from "../../providerApi";
 import { getProviderDocs } from "../../../../../assets/providers";
 import { ollamaModelApi } from "../../../../../api/modules/ollamaModel";
 import { onnxModelApi } from "../../../../../api/modules/onnxModel";
@@ -890,28 +890,15 @@ export function ProviderConfigModal({
         return;
       }
       const fetched = result.models ?? [];
-      if (fetched.length === 0) {
+      const { changed } = mergeFetchedProviderModels(draftModels, fetched);
+      if (changed === 0) {
         message.info(t("models.fetchModelsNoNew"));
         return;
       }
 
-      const existingIds = new Set(draftModels.map((m) => m.id));
-      const missing = fetched.filter((m) => !existingIds.has(m.id));
-      if (missing.length === 0) {
-        message.info(t("models.fetchModelsNoNew"));
-        return;
-      }
-
-      const added: ProviderModel[] = missing.map((m) => ({
-        id: m.id,
-        name: m.name || m.id,
-        enabled: false,
-        input: ["text"],
-        thinking: null,
-      }));
-      setDraftModels((prev) => [...prev, ...added]);
+      setDraftModels((prev) => mergeFetchedProviderModels(prev, fetched).models);
       setFormDirty(true);
-      message.success(t("models.fetchModelsMerged", { count: missing.length }));
+      message.success(t("models.fetchModelsSynced", { count: changed }));
     } catch (err) {
       message.error(
         err instanceof Error

@@ -2,7 +2,7 @@ import { requestJson, RequestError } from './request.ts';
 import type {ReviewReference} from './extractionReview.ts';
 
 export type Evidence = { segment_id: string; document_id?: string; document_version_id?: string;
-  start?: number; end?: number; excerpt?: string; locator?: Record<string, unknown> };
+  start?: number; end?: number; ranges?: number[][]; excerpt?: string; locator?: Record<string, unknown> };
 export type Issue = { item_id: string; code: string; message: string; severity: "error" | "warning" | "info"; reviewed?: boolean; requires_review?: boolean; property_name?: string };
 export type Item = { id: string; kind: "entity" | "relation"; payload: Record<string, unknown>;
   evidence: Evidence[]; review_note?: string; review_basis?: string; issues?: Issue[];
@@ -127,5 +127,14 @@ export function swapDirection(item: Item): Item {
 // The exact envelope survives a failed response; a later retry never invents a
 // new operation id or silently changes the payload of an uncertain save.
 export function operationEnvelope(revision: number, upserts: Item[], removeIds: string[], note: string, operationId: string) {
-  return { operation_id: operationId, expected_revision: revision, upserts: upserts.map(editable), remove_ids: [...removeIds], note };
+  const items = upserts.map(item => {
+    const value = editable(item);
+    value.evidence = value.evidence.map(source => {
+      if (!Number.isInteger(source.start) || !Number.isInteger(source.end)) return source;
+      const {segment_id, document_id, document_version_id, start, end, ranges} = source;
+      return {segment_id, document_id, document_version_id, start, end, ...(ranges && {ranges})};
+    });
+    return value;
+  });
+  return { operation_id: operationId, expected_revision: revision, upserts: items, remove_ids: [...removeIds], note };
 }

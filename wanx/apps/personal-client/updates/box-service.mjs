@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { digestPayload, errorCode, updateError, verifyRelease } from "./contracts.mjs";
+import { BOX_MEDIA_EXTENSION, digestPayload, errorCode, updateError, verifyRelease } from "./contracts.mjs";
 
 const prefix = "/app-api/v1/upgrades";
 const id = value => {
@@ -144,7 +144,16 @@ export async function createBoxUpdates({ request, getScope, captureSession, keys
           digestPayload(plan.baseline) !== plan.baselineDigest || digestPayload(baseline(state.inventory)) !== plan.baselineDigest ||
           !Number.isFinite(Date.parse(plan.expiresAt)) || Date.parse(plan.expiresAt) <= now() || plan.dataPolicy !== "backward-compatible" ||
           plan.impact?.dataMigration !== false) throw updateError("PLAN_STALE");
-      if (verified.release.requiredExtensions?.includes("wanx.foundation-modules.v1")) {
+      if (verified.release.requiredExtensions?.includes(BOX_MEDIA_EXTENSION)) {
+        const changed = ["base", "discovery", "p2p", "wanx", "semantica", "media"].filter(name => {
+          const target = verified.release.components[name], source = plan.baseline.components[name];
+          return target && (target.sha256 !== source?.artifactDigest ||
+            (target.imageId ?? null) !== (source?.imageId ?? null));
+        });
+        if (!changed.length || JSON.stringify(plan.steps) !== JSON.stringify(changed) ||
+            changed.includes("media") && plan.baseline.components.media?.evidenceStatus === "not_installed" && !changed.includes("wanx"))
+          throw updateError("PLAN_STALE");
+      } else if (verified.release.requiredExtensions?.includes("wanx.foundation-modules.v1")) {
         const changed = ["discovery", "p2p", "wanx", "semantica"].filter(name => verified.release.components[name] &&
           verified.release.components[name].sha256 !== plan.baseline.components[name]?.artifactDigest);
         if (!changed.length || JSON.stringify(plan.steps) !== JSON.stringify(changed)) throw updateError("PLAN_STALE");

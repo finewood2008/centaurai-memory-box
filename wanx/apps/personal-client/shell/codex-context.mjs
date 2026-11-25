@@ -159,14 +159,16 @@ export function createCodexContext({ sources, scope, configure, descriptor, prot
       } else if (name === "xingtu_evidence") {
         let data = result.structuredContent;
         try { data ??= JSON.parse(result.content.find(item => item.type === "text").text); } catch {}
-        if (data) observed("starlink_evidence", data, selection);
+        if (data && [undefined, "clean", "masked"].includes(data.sensitive_status))
+          observed("starlink_evidence", data, selection);
       }
       return result;
     }
+    const excerpt = name === "starlink_evidence" ? result?.excerpt : undefined;
     if (name === "memory_save" && result?.saved === true && typeof result.memoryId === "string") evidence.memorySaved = result.memoryId;
     else if (["memory_read", "space_read", "starlink_evidence"].includes(name) && (
         (name === "space_read" && result?.image?.data) ||
-        [result?.text, result?.body, result?.summary].some(value => typeof value === "string" && value.trim()))) {
+        [result?.text, result?.body, result?.summary, excerpt].some(value => typeof value === "string" && value.trim()))) {
       const source = name.split("_")[0];
       evidence.verifiedSources[source] = true;
       evidence.verifiedScopes[source] = selection.allPersonalReadOnly ? "all-personal"

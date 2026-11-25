@@ -22,7 +22,7 @@ export const ACCESSORY_SCHEME = "wanx-accessories";
 const catalogFiles = new Set(["/accessories", "/app.js", "/style.css", "/accessories.css",
   "/box-connection.css", "/accessory-art.svg", "/centaurai-mark.png", "/favicon.svg"]);
 
-export function createAccessoriesPreview({ app, window, BrowserWindow, navigate, resourceDirectory, dataDirectory, memoryFile, ensureMemory, client, account, dialog, safeStorage }) {
+export function createAccessoriesPreview({ app, window, BrowserWindow, navigate, resourceDirectory, dataDirectory, memoryFile, ensureMemory, client, account, dialog, safeStorage, onError }) {
   let worker, catalog, revision = 0;
   let runtime;
   const windows = new Map();
@@ -30,9 +30,10 @@ export function createAccessoriesPreview({ app, window, BrowserWindow, navigate,
   const validKind = kind => kind === "disk" || kind === "clip";
   let localAccount;
   const accountId = () => account?.snapshot().phase === 'authenticated' ? account.getIdentity()?.accountId : null;
-  const owner = { app, window, client, dialog, safeStorage };
+  const owner = { app, client, safeStorage };
   const connectionKey = () => dataInteractionKey(client.snapshot());
   let lastConnection = connectionKey();
+  let connectionRevision = 0;
   function sendConnection(contents) {
     return contents.executeJavaScript("window.dispatchEvent(new CustomEvent('recording-box-connection',{detail:" + Boolean(connectionKey()) + "}))");
   }
@@ -40,26 +41,27 @@ export function createAccessoriesPreview({ app, window, BrowserWindow, navigate,
     const next = connectionKey();
     if (next === lastConnection) return;
     lastConnection = next;
+    ++connectionRevision;
     invalidateCatalog();
     if (mediaSession || !next) attachSession(null);
     for (const agentWindow of windows.values()) {
       if (!agentWindow.isDestroyed()) void sendConnection(agentWindow.webContents).catch(() => {});
     }
-    if (next && windows.size) void authorizeMedia(false);
+    if (next && windows.size) void connectMedia();
   }
   function requireBox(expected = connectionKey()) {
     if (!expected || expected !== connectionKey()) throw Object.assign(new Error("连接盒子后可使用配件功能。"), {code:"BOX_CONNECTION_REQUIRED"});
     return expected;
   }
-  let mediaSession, unwatch, connecting = false, requestAfterCheck = false;
-  let waitingForGrant = false;
-  function setWaitingForGrant(waiting) {
-    if (waitingForGrant === waiting) return;
-    waitingForGrant = waiting;
-    if (worker?.connected) worker.send({type:'recording-grant-pending', waiting}, () => {});
+  let mediaSession, unwatch, connecting = false;
+  function refreshMediaView() {
+    for (const agentWindow of windows.values()) {
+      if (!agentWindow.isDestroyed()) {
+        void agentWindow.webContents.executeJavaScript("window.dispatchEvent(new Event('recording-media-status'))").catch(() => {});
+      }
+    }
   }
   function attachSession(next) {
-    setWaitingForGrant(false);
     const previous = mediaSession;
     unwatch?.();
     unwatch = undefined;
@@ -76,7 +78,6 @@ export function createAccessoriesPreview({ app, window, BrowserWindow, navigate,
   function resetRuntime() {
     runtime = undefined;
     invalidateCatalog();
-    waitingForGrant = false;
     for (const agentWindow of windows.values()) agentWindow.destroy();
     windows.clear();
     const processHandle = worker;
@@ -96,33 +97,30 @@ export function createAccessoriesPreview({ app, window, BrowserWindow, navigate,
     catalog = undefined;
   }
 
-  async function authorizeMedia(interactive) {
+  async function connectMedia(retry = false) {
     const openedOn = connectionKey();
-    if (!runtime || closed || !openedOn) return;
-    if (connecting) { if (interactive) requestAfterCheck = true; return; }
-    const view = runtime, capturedAccount = localAccount;
+    if (closed || !runtime || !windows.size || !openedOn || localAccount !== accountId()) return;
+    if (connecting || (!retry && mediaSession)) return;
+    const view = runtime, capturedAccount = localAccount, generation = connectionRevision;
+    const current = () => !closed && runtime === view && capturedAccount === accountId()
+      && openedOn === connectionKey() && generation === connectionRevision;
     connecting = true;
     try {
-      const selected = await recordingSession(owner, interactive);
-      if (!selected) {
-        if (runtime === view) setWaitingForGrant(false);
-        return;
-      }
-      if (runtime !== view || closed || capturedAccount !== accountId() || openedOn !== connectionKey()) { await selected.session.close(); return; }
+      const selected = await recordingSession(owner);
+      if (!selected) return;
+      if (!current()) { await selected.session.close(); return; }
       attachSession(selected);
     } catch (error) {
-      if (runtime !== view || closed || capturedAccount !== accountId() || openedOn !== connectionKey()) return;
-      setWaitingForGrant(error.code === 'MEDIA_GRANT_PENDING');
-      if (interactive && !waitingForGrant) await dialog.showMessageBox(window, {type:'info', message:'录音授权', detail:error.message});
+      if (!current()) return;
+      if (retry) onError?.(error);
+      refreshMediaView();
     } finally {
       connecting = false;
-      const pending = requestAfterCheck;
-      requestAfterCheck = false;
-      if (pending && !interactive && !mediaSession && runtime === view) void authorizeMedia(true);
+      if (!current()) void connectMedia();
     }
   }
   const refresh = setInterval(() => {
-    if (windows.size && !mediaSession) void authorizeMedia(false);
+    void connectMedia();
   }, 30000);
   refresh.unref();
   function startWorker(viewKey) {
@@ -145,7 +143,6 @@ export function createAccessoriesPreview({ app, window, BrowserWindow, navigate,
       stdio: ["ignore", "pipe", "pipe", "ipc"],
       windowsHide: true,
     });
-    let offered = false;
     processHandle.on("message", async message => {
       if (worker !== processHandle) return;
       if (message?.type === 'nas-request') {
@@ -160,12 +157,7 @@ export function createAccessoriesPreview({ app, window, BrowserWindow, navigate,
         return;
       }
       if (message?.type === 'recording-media-ready') {
-        for (const agentWindow of windows.values()) void agentWindow.webContents.executeJavaScript("window.dispatchEvent(new Event('recording-authorization'))").catch(() => {});
-        return;
-      }
-      if (message?.type === "recording-first-use" && !offered && !mediaSession && !waitingForGrant && client.snapshot().phase === 'ready') {
-        offered = true;
-        void authorizeMedia(true);
+        refreshMediaView();
         return;
       }
       const active = mediaSession;
@@ -281,7 +273,7 @@ export function createAccessoriesPreview({ app, window, BrowserWindow, navigate,
         window.show();window.focus();navigate(target);return;
       }
       if (destination.pathname === "/accessories/connect") {
-        void authorizeMedia(true);
+        void connectMedia(true);
       }
     });
     contents.on("will-redirect", event => event.preventDefault());
@@ -307,7 +299,7 @@ export function createAccessoriesPreview({ app, window, BrowserWindow, navigate,
       try { await agentWindow.loadURL(url.href); }
       catch (error) { if (!agentWindow.isDestroyed()) agentWindow.destroy(); throw error; }
       await sendConnection(agentWindow.webContents);
-      void authorizeMedia(false);
+      void connectMedia();
     } else if (id) {
       await agentWindow.webContents.executeJavaScript("window.dispatchEvent(new CustomEvent('recording-open-project',{detail:" + JSON.stringify(id) + "}))");
     }

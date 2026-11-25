@@ -63,6 +63,23 @@ test("foundation releases require the known box extension, module archive and ne
   assert.throws(() => verify({ ...payload, components: { discovery: { ...payload.components.discovery, imageId: null } } }), { code: "UPDATE_INVALID_ARTIFACT" });
 });
 
+test("media release is bound to the native archive and supported box platform", () => {
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+  const keys = { media: publicKey.export({ type: "spki", format: "pem" }) };
+  const component = { version: "build-media", buildId: "build-media", sha256: "d".repeat(64), sourceCommit: "e".repeat(40) };
+  const artifact = { component: "media", kind: "service-tar", sizeBytes: 512,
+    sha256: component.sha256, url: "https://artifacts.example.test/media.tar.gz" };
+  const payload = { ...plan.release.payload, requiredExtensions: ["wanx.media-ota.v1"], minUpdaterVersion: "1.9.57",
+    platform: { os: "linux", osId: "ubuntu", osVersion: "26.04", arch: "x64" },
+    components: { media: component }, artifacts: [artifact] };
+  const verify = value => verifyRelease({ payload: value, signature: { algorithm: "ed25519", keyId: "media",
+    signatureBase64: sign(null, Buffer.from(canonicalJSON(value)), privateKey).toString("base64") } },
+  { product: "wanx-box", keys, now });
+  assert.deepEqual(verify(payload).release.components.media, component);
+  assert.throws(() => verify({ ...payload, requiredExtensions: [] }), /CONTRACT_UNSUPPORTED/);
+  assert.throws(() => verify({ ...payload, artifacts: [{ ...artifact, kind: "docker-gzip" }] }), /UPDATE_INVALID_ARTIFACT/);
+});
+
 test("foundation inventory capabilities remain outside the legacy plan baseline", async () => {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
   const foundationKeys = { foundation: publicKey.export({ type: "spki", format: "pem" }) };

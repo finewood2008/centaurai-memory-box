@@ -1,6 +1,7 @@
 import http from "node:http";
 import https from "node:https";
 
+const routes = new Set(["/mcp/space", "/mcp/starlink"]);
 const requestHeaders = ["authorization", "accept", "content-type", "mcp-protocol-version", "mcp-session-id", "last-event-id"];
 const responseHeaders = ["content-type", "mcp-protocol-version", "mcp-session-id", "www-authenticate", "allow", "retry-after"];
 const select = (headers, names) => Object.fromEntries(names.filter(name => headers[name] !== undefined).map(name => [name, headers[name]]));
@@ -24,7 +25,8 @@ export function createSpaceMcpRelay({state, persist, scope, storageScope, assert
       if (req.headers.host !== new URL(origin).host || req.headers.origin ||
           ["cross-site", "same-site"].includes(req.headers["sec-fetch-site"]))
         return reject(res, 403, "MCP_ORIGIN_DENIED");
-      if (req.url !== "/mcp/space") return reject(res, 404, "MCP_NOT_FOUND");
+      const route = req.url;
+      if (!routes.has(route)) return reject(res, 404, "MCP_NOT_FOUND");
       if (!["GET", "POST", "DELETE"].includes(req.method)) return reject(res, 405, "MCP_METHOD_NOT_ALLOWED");
       if (!/^Bearer [A-Za-z0-9_-]{20,100}$/.test(req.headers.authorization || ""))
         return reject(res, 401, "MCP_KEY_REQUIRED");
@@ -41,7 +43,7 @@ export function createSpaceMcpRelay({state, persist, scope, storageScope, assert
         assertScope(bound);
         endpoint.context();
         if (controller.signal.aborted || storageScope() !== owner) throw failure("SPACE_CONTEXT_CHANGED");
-        const target = new URL("/mcp/space", endpoint.url);
+        const target = new URL(route, endpoint.url);
         const transport = target.protocol === "https:" ? https : http;
         const upstream = transport.request(target, {
           method: req.method, agent: endpoint.agent ?? false,

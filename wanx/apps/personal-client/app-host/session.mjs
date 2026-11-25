@@ -1,4 +1,4 @@
-import { acceptsMediaGrant, isMediaAsrStream } from "./media-grant.mjs";
+import { acceptsForegroundMediaGrant, acceptsMediaGrant, FOREGROUND_MEDIA_PREFIX, isMediaAsrStream } from "./media-grant.mjs";
 import http from "node:http";
 import { randomBytes, randomUUID } from "node:crypto";
 import { pipeline } from "node:stream/promises";
@@ -8,11 +8,13 @@ import { localApplicationProfile } from "../applications/data-profile.mjs";
 const fail = (code, status = 401) => Object.assign(new Error(code), { code, status });
 const MAX_WS_PAYLOAD = 32 * 1024 * 1024;
 const TERMINAL = new Set(["NETWORK_CHANGED", "SESSION_CLOSED", "GATEWAY_CLOSED", "PLATFORM_SESSION_EXPIRED", "HOST_SESSION_EXPIRED"]);
+const RECORDING_DISCONNECTS = new Set(["NETWORK_CHANGED", "NETWORK_NOT_READY", "GATEWAY_CLOSED", "SESSION_CLOSED", "UPDATE_SESSION_CHANGED"]);
 const REQUEST_HEADERS = new Set(["accept", "accept-language", "content-type", "x-octop-agent-id", "x-content-sha256", "range", "if-none-match", "if-modified-since", "if-range", "if-match", "last-event-id", "idempotency-key", "x-wanx-data-context", "x-space-link"]);
 
 // Own the launch's credentials and local resources, but borrow its fixed box connection.
 export async function createApplicationSession({
-  hostApplicationId, applicationId, installPath, createConnection, authorizeRelease, capabilities, backendContracts = [], signal, openWorkshop, mediaGrant,
+  hostApplicationId, applicationId, installPath, createConnection, authorizeRelease, capabilities,
+  backendContracts = [], foregroundMediaGrant, recordingBoxState, signal, openWorkshop, mediaGrant,
 } = {}) {
   signal?.throwIfAborted();
   const launchId = randomBytes(32).toString("base64url"), token = randomUUID() + randomUUID();
@@ -29,9 +31,31 @@ export async function createApplicationSession({
   let unsubscribeInvalidated;
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_WS_PAYLOAD, perMessageDeflate: false,
     handleProtocols: (_protocols, req) => req.selectedProtocol || false });
+  let recordingContext;
+  function connectionContext() {
+    if (local || !recordingBoxState) return connection.context();
+    const snapshot = recordingBoxState();
+    if (recordingContext) {
+      const { account, dataIdentity, connection: selected } = snapshot;
+      if (account?.phase !== "authenticated" || account.accountId !== recordingContext.accountId ||
+          account.clientId !== recordingContext.clientId || dataIdentity?.profileId ||
+          (selected?.deviceId && selected.deviceId !== recordingContext.boxId))
+        throw fail("HOST_SESSION_EXPIRED");
+      if (snapshot.phase !== "ready") return { ...recordingContext, connection: "disconnected" };
+    }
+    try {
+      const current = connection.context();
+      if (current.connection === "ready" && current.accountId && current.boxId) recordingContext = current;
+      return current;
+    } catch (error) {
+      if (recordingContext && RECORDING_DISCONNECTS.has(error.code || error.message))
+        return { ...recordingContext, connection: "disconnected" };
+      throw error;
+    }
+  }
   function state() {
     if (invalid) throw fail("HOST_SESSION_EXPIRED");
-    try { releasePermit?.assertLive(); return connection.context(); }
+    try { releasePermit?.assertLive(); return connectionContext(); }
     catch { invalidate(); throw fail("HOST_SESSION_EXPIRED"); }
   }
   function clearRelease() {
@@ -105,11 +129,16 @@ export async function createApplicationSession({
     return raw;
   }
   function headersFor(req) {
-    const headers = Object.fromEntries(Object.entries(req.headers).filter(([name]) => REQUEST_HEADERS.has(name) || (name === "x-media-grant" && acceptsMediaGrant(req.url)) || (name === "x-xingtu-key" && /^\/api\/semantica\/open\/v1\//.test(req.url.split("?")[0]))));
-    if (mediaGrant && acceptsMediaGrant(req.url)) {
+    const mediaRequest = acceptsMediaGrant(req.url);
+    const headers = Object.fromEntries(Object.entries(req.headers).filter(([name, value]) => REQUEST_HEADERS.has(name) || (name === "x-media-grant" && mediaRequest && !String(value).startsWith(FOREGROUND_MEDIA_PREFIX)) || (name === "x-xingtu-key" && /^\/api\/semantica\/open\/v1\//.test(req.url.split("?")[0]))));
+    if (mediaGrant && mediaRequest) {
       const grant = mediaGrant();
-      if (!grant) throw fail("MEDIA_GRANT_REQUIRED", 403);
-      headers['x-media-grant'] = grant;
+      if (grant) headers["x-media-grant"] = grant;
+      else {
+        if (local || !foregroundMediaGrant || !acceptsForegroundMediaGrant(req.url))
+          throw fail("MEDIA_GRANT_REQUIRED", 403);
+        delete headers["x-media-grant"];
+      }
     }
     return headers;
   }
@@ -133,9 +162,12 @@ export async function createApplicationSession({
         if (req.method !== "GET") throw fail("HOST_METHOD_NOT_ALLOWED", 405);
         if (req.url === "/__wanx/context") {
           res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+          const context = !local && foregroundMediaGrant ? {
+            ...current, hostFeatures: { ...current.hostFeatures, foregroundMedia: true },
+          } : current;
           return res.end(JSON.stringify(backendContracts.some(contract => contract?.id === "wanx-bridge.huohua" && contract.features?.includes("terminal")) ? {
-            ...current, hostFeatures: { ...current.hostFeatures, ephemeralTerminal: true },
-          } : current));
+            ...context, hostFeatures: { ...context.hostFeatures, ephemeralTerminal: true },
+          } : context));
         }
         res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" });
         res.write(`data: ${JSON.stringify({ type: "connection", connection: current.connection })}\n\n`);
@@ -164,7 +196,15 @@ export async function createApplicationSession({
       operations.add(abort);
       res.once("close", abort);
       req.once("aborted", abort);
-      const result = await connection.request({ path, method: req.method, headers: headersFor(req),
+      const requestHeaders = headersFor(req);
+      if (!local && foregroundMediaGrant && !requestHeaders["x-media-grant"] && acceptsForegroundMediaGrant(path)) {
+        const grant = await foregroundMediaGrant(path);
+        if (!grant) throw fail("MEDIA_GRANT_REQUIRED", 403);
+        requestHeaders["x-media-grant"] = grant;
+        checkReady();
+        if (controller.signal.aborted) return;
+      }
+      const result = await connection.request({ path, method: req.method, headers: requestHeaders,
         body: req, stream: true, signal: controller.signal });
       if (invalid || controller.signal.aborted) { result.body?.destroy?.(); return; }
       if (result.status === 401) {
@@ -178,6 +218,9 @@ export async function createApplicationSession({
       if (result.body?.pipe) await pipeline(result.body, res);
       else res.end(result.body);
     } catch (error) {
+      if (recordingContext && RECORDING_DISCONNECTS.has(error.code || error.message) && !invalid) {
+        try { checkReady(); } catch (stateError) { error = stateError; }
+      }
       if (TERMINAL.has(error.code || error.message)) {
         operations.delete(abort);
         if (abort) res.removeListener("close", abort);
@@ -230,6 +273,9 @@ export async function createApplicationSession({
       });
     } catch (error) {
       upstream?.terminate();
+      if (recordingContext && RECORDING_DISCONNECTS.has(error.code || error.message) && !invalid) {
+        try { checkReady(); } catch (stateError) { error = stateError; }
+      }
       if (TERMINAL.has(error.code || error.message)) { invalidate(); error = fail("HOST_SESSION_EXPIRED"); }
       if (!socket.destroyed) socket.end(`HTTP/1.1 ${error.status || 503} Rejected\r\nConnection: close\r\nContent-Length: 0\r\nX-Wanx-Error: ${error.status ? error.code : "HOST_UPSTREAM_UNAVAILABLE"}\r\n\r\n`);
     } finally { operations.delete(abort); }

@@ -128,7 +128,11 @@ test("Codex MCP connects once and keeps concurrent grants separate, expiring or 
   const submit = codexContext => task("handoff", { agent: "codex", text: "Inspect the test resource", codexContext }, assertScope);
   assert.deepEqual(await submit(first), { opened: true, delivery: "draft" });
   assert.deepEqual(await submit(second), { opened: true, delivery: "draft" });
-  const ids = urls.map(url => url.searchParams.get("prompt").match(/task_id: ([a-f0-9]{36})/)[1]);
+  const ids = urls.map(url => {
+    const prompt = url.searchParams.get("prompt");
+    assert.match(prompt, /graph\.paths.*hops=2.*evidence_ids.*xingtu_evidence.*evidence_id/);
+    return prompt.match(/task_id: ([a-f0-9]{36})/)[1];
+  });
   assert.notEqual(ids[0], ids[1]);
   const { port, token } = JSON.parse(await readFile(descriptor, "utf8"));
   const headers = { authorization: "Bearer " + token, "content-type": "application/json" };

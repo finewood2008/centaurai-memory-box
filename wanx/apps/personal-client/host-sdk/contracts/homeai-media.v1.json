@@ -13,14 +13,21 @@
       "instance",
       "capability"
     ],
-    "grantIssuer": "Trusted box installation operator",
-    "authorizationMode": "Read and write checked per operation; durable worker rechecks expiring grant before claim, while running and at result publication."
+    "grantIssuer": "Desktop Host for foreground defaults; trusted box installation operator for explicit grants",
+    "authorizationMode": "Read and write checked per operation; durable worker rechecks expiring grant before claim, while running and at result publication.",
+    "foregroundDesktop": {
+      "capabilities": ["audio.transcribe", "audio.transcribe.streaming", "text.summarize"],
+      "request": "Use the authenticated desktop Host connection and omit X-Media-Grant. The Host supplies an app-specific credential.",
+      "space": "Server-bound space, or personal if the platform session has no bound space",
+      "requires": "Compatible desktop Host, Bridge and media service on a platform-authenticated box connection",
+      "legacy": "Explicit grants remain supported for existing jobs, templates, image capabilities and background delegations"
+    }
   },
   "streaming": {
     "capability": "audio.transcribe.streaming",
     "create": "POST /asr/sessions",
     "createStatus": 201,
-    "createRequest": "empty body, authenticated through Bridge with X-Media-Grant",
+    "createRequest": "empty body, authenticated through Bridge using the Host default credential or an explicit grant",
     "createResponse": "id, streamPath, ticket, ticketExpiresAt (Unix seconds), audio, maxFrameBytes, idleTimeoutSeconds, maxDurationSeconds",
     "connect": "WebSocket at streamPath on the same trusted Bridge; no query string",
     "subprotocols": ["wanx.asr.v1", "wanx.asr.ticket.<ticket>"],
@@ -301,6 +308,7 @@
         "image.embedding",
         "image.labels",
         "image.ocr",
+        "text.embedding",
         "audio.transcribe"
       ],
       "limits": "Interactive Bearer/instance grant, forwarding headers, non-loopback peers and attempts to re-delegate are denied. Do not register this prefix in Bridge or an external proxy. Household service must also recheck each private input and destination owner before upload or archive."

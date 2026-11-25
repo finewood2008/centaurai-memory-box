@@ -16,6 +16,11 @@ async function fixture(t) {
     requests.push({ path: request.url, headers: request.headers, body });
     if (body.method === "notifications/initialized") { response.writeHead(202).end(); return; }
     if (mode === "wait" && body.method === "tools/call") { waiting?.(); return; }
+    if ((mode === "drop-once" || mode === "drop") && body.method === "tools/call") {
+      if (mode === "drop-once") mode = undefined;
+      request.socket.destroy();
+      return;
+    }
     if (mode === "denied") { response.writeHead(403).end(); return; }
     if (mode === "missing") { response.writeHead(404).end(); return; }
     const result = body.method === "initialize" ? { serverInfo: { name: "wanx-starlink" }, capabilities: { tools: {} } }
@@ -93,6 +98,21 @@ test("scope changes abort old requests and revoke old keys; concurrent expiry re
   await h.provider.close();
   assert.ok(h.revoked.includes(h.issued[2].token));
   await assert.rejects(h.provider.discover(check), { code: "HOST_SESSION_EXPIRED" });
+});
+
+test("starlink retries a dropped read once and leaves reasoning calls single-attempt", async t => {
+  const h = await fixture(t), check = () => {};
+  await h.provider.discover(check);
+  const countCalls = () => h.requests.filter(row => row.body.method === "tools/call").length;
+  h.mode("drop-once");
+  await h.provider.call(warehouseA, "xingtu_evidence", { evidence_id: "example" }, check);
+  assert.equal(countCalls(), 2);
+  h.mode("drop");
+  await assert.rejects(h.provider.call(warehouseA, "xingtu_search", { query: "x" }, check), { code: "SEMANTICA_MCP_UNAVAILABLE" });
+  assert.equal(countCalls(), 4);
+  await assert.rejects(h.provider.call(warehouseA, "xingtu_reasoning_search", { arguments: { query: "x" } }, check),
+    { code: "SEMANTICA_MCP_UNAVAILABLE" });
+  assert.equal(countCalls(), 5);
 });
 
 for (const [mode, code] of [["denied", "SEMANTICA_MCP_ACCESS_DENIED"], ["missing", "SEMANTICA_MCP_UPGRADE_REQUIRED"], ["invalid", "SEMANTICA_MCP_INVALID_REPLY"]]) {

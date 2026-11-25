@@ -20,7 +20,7 @@ export async function fileDigest(file) {
   return hash.digest('hex');
 }
 
-export function createMedia(host, grant, mode = 'box', expectedInstance) {
+export function createMedia(host, grant, mode = 'box', expectedInstance, summaryOnRequest = false) {
   let discovery;
   let ownerScope;
   let invalidated = false;
@@ -29,8 +29,8 @@ export function createMedia(host, grant, mode = 'box', expectedInstance) {
     return Object.assign(new Error(reason), { offline: true });
   }
   async function call(route, { method = 'GET', body } = {}) {
-    if (!host) throw unavailable('需要匹配的桌面 Host 会话和媒体授权');
-    if (invalidated) throw unavailable('盒子会话已失效，请使用新的授权会话');
+    if (!host) throw unavailable('请在万象中连接目标盒子');
+    if (invalidated) throw unavailable('盒子会话已失效，请重新连接');
     const headers = grant ? { 'X-Media-Grant': grant } : {};
     if (Buffer.isBuffer(body)) headers['Content-Type'] = 'application/octet-stream';
     const response = await host.request(PREFIX + route, { method, body, headers, signal: AbortSignal.timeout(25000) });
@@ -44,12 +44,12 @@ export function createMedia(host, grant, mode = 'box', expectedInstance) {
   }
   async function capabilities() {
     if (discovery && Date.now() < discovery.validUntil) return discovery.result;
-    if (!host) throw unavailable('等待盒子授权接入');
+    if (!host) throw unavailable('请在万象中连接目标盒子');
     const context = await host.context();
     if (context?.connection !== 'ready') throw unavailable('请先连接目标盒子');
     const result = await call('/capabilities');
     if (result.processingLocation !== 'box' || !Array.isArray(result.capabilities)) throw new Error('盒端媒体能力回执无效');
-    if (mode === 'box' && expectedInstance && result.instance !== expectedInstance) throw unavailable('媒体授权实例不匹配');
+    if (mode === 'box' && expectedInstance && result.instance !== expectedInstance) throw unavailable('媒体录音实例不匹配');
     const userId = context.principalId || context.accountId || context.user?.id;
     if (mode === 'box' && (!context.boxId || !userId || !result.instance)) throw unavailable('盒端用户或应用身份不完整');
     ownerScope = mode === 'demo' ? 'demo' : createHash('sha256').update(JSON.stringify([context.boxId, userId, result.instance])).digest('hex');
@@ -206,11 +206,11 @@ export function createMedia(host, grant, mode = 'box', expectedInstance) {
     try {
       const info = await capabilities();
       const ready = (id) => info.capabilities.some((c) => c.id === id && c.configured === true);
-      return { mode, connected: mode === 'box', granted:info.capabilities.map(c => c.id), transcribe: ready(ASR), live: ready(LIVE), summarize: ready(SUMMARY), summaryLocation: info.capabilities.find(c => c.id === SUMMARY)?.processingLocation || info.processingLocation };
-    } catch (e) { return { mode, connected: false, transcribe: false, live: false, summarize: false, reason: e.offline ? e.message : '盒子媒体能力暂不可用' }; }
+      return { mode, connected: mode === 'box', granted:info.capabilities.map(c => c.id), transcribe: ready(ASR), live: ready(LIVE), summarize: ready(SUMMARY), summaryLocation: info.capabilities.find(c => c.id === SUMMARY)?.processingLocation || info.processingLocation, summaryOnRequest };
+    } catch (e) { return { mode, connected: false, transcribe: false, live: false, summarize: false, summaryOnRequest, reason: e.offline ? e.message : '盒子媒体能力暂不可用' }; }
   };
   const scope = async () => { await capabilities(); return ownerScope; };
-  return { mode, drive: host?.drive, scope, capabilities, requireCapability, transcribe, summarize, ensureTemplate, openLive, status };
+  return { mode, summaryOnRequest, drive: host?.drive, scope, capabilities, requireCapability, transcribe, summarize, ensureTemplate, openLive, status };
 }
 
 let hostClient;
@@ -222,7 +222,8 @@ export function attachMedia(env) {
   if (!env?.WANX_HOST_TRANSPORT || !env.MEMOBOX_MEDIA_INSTANCE) return;
   const sdk = createRequire(import.meta.url)(env.MEMOBOX_HOST_SDK_PATH || '@centaurai/wanx-host-sdk');
   hostClient = sdk.fromEnvironment(env);
-  media = createMedia(hostClient, env.MEMOBOX_MEDIA_GRANT, 'box', env.MEMOBOX_MEDIA_INSTANCE);
+  media = createMedia(hostClient, env.MEMOBOX_MEDIA_GRANT, 'box', env.MEMOBOX_MEDIA_INSTANCE,
+    env.MEMOBOX_MEDIA_SUMMARY_ON_REQUEST === '1');
 }
 attachMedia(process.env);
 

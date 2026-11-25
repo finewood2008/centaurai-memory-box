@@ -39,7 +39,7 @@ test('a saved delivery policy invalidates the selected warehouse search results'
   globalThis.document={baseURI:'http://synthetic.invalid/ui/index.html',createElement:()=>({contentWindow:{},setAttribute(){},remove(){}})};
   const host=createWorkbenchHost({warehouse:()=> 'w',container:()=>({replaceChildren:value=>frame=value}),
     onView(){},call:()=>reply,onSensitivePolicyChanged:()=>{changed++;}});
-  host.show('sensitive');
+  assert.equal(host.show('review'),true);
   const input={method:'POST',url:'/api/sensitive/settings'};
   await window.starlinkWorkbench.request(frame.contentWindow,{method:'GET',url:input.url});
   await window.starlinkWorkbench.request(frame.contentWindow,{method:'POST',url:'/api/sensitive/preview'});

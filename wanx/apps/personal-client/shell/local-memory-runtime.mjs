@@ -79,17 +79,25 @@ export function createMemoryRuntimeSupervisor({
     const database = path.join(appData, "Memmy", "app.sqlite");
     const worker = path.join(appPath, "shell", "local-memory-worker.mjs");
     const child = start(executable, [worker, root, runtimeHome, runtimeFile, database], {
-      windowsHide: true, detached: true, stdio: "ignore",
+      windowsHide: true, detached: true, stdio: ["ignore", "ignore", "ignore", "ipc"],
       env: { ...env, ELECTRON_RUN_AS_NODE: "1", MEMMY_RUNTIME_CONFIG_PATH: runtimeFile },
     });
-    let failed = false;
-    child.once("error", () => { failed = true; });
-    child.once("exit", code => { failed = code !== 0; });
+    let failure;
+    child.on("message", message => {
+      if (message?.type === "memory-startup-error" && typeof message.code === "string" && /^MEMORY_[A-Z_]+$/.test(message.code)) {
+        failure = new Error(message.code);
+      }
+    });
+    child.once("error", () => { failure ??= new Error("MEMORY_RUNTIME_START_FAILED"); });
+    child.once("exit", code => {
+      if (code !== 0) failure ??= new Error("MEMORY_RUNTIME_START_FAILED");
+    });
     child.unref();
+    child.channel?.unref();
     const deadline = Date.now() + timeoutMs;
     do {
       if (await ready()) return;
-      if (failed) throw new Error("MEMORY_RUNTIME_START_FAILED");
+      if (failure) throw failure;
       await delay(retryMs);
     } while (Date.now() < deadline);
     throw new Error("MEMORY_RUNTIME_START_TIMEOUT");

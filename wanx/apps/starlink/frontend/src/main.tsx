@@ -341,6 +341,9 @@ type SensitiveSettings = {
 };
 
 type LLMSettings = {
+  budget_limits?: {max_tokens: number; min_context_tokens: number};
+  context_limits?: Partial<Record<"ollama" | "openai_compatible" | "sensitive", number | null>>;
+  managed_extraction_output_limit?: number | null;
   revision: number;
   llm_provider: "openai_compatible" | "ollama";
   openai_base_url: string;
@@ -385,6 +388,7 @@ const jobStageText: Record<string, string> = {
   accepted: "等待执行",
   retry_queued: "等待重试",
   extracting: "知识抽取中",
+  discovering_ontology: "识别新实体类型和关系",
   extracting_entities: "识别实体（等待模型响应）",
   extracting_relations: "识别关系（等待模型响应）",
   extracting_joint: "联合识别实体与关系（等待模型响应）",
@@ -1465,7 +1469,7 @@ function SearchView({
         {!result && <div className="empty">输入问题或原文中的关键词，查看对应证据。正文索引就绪后即可检索；已发布的实体关系可辅助检索，未发布草稿不参与。{documentId&&' 当前已限定材料，可在上方切换为全部材料。'}</div>}
         {result?.message && <div className="review-warning" role="status">{result.message}</div>}
         {result && !result.items.length && !result.sensitive?.confirmation_count && !result.sensitive?.withheld && <div className="empty">没有找到符合当前版本与筛选条件的证据。</div>}
-        {!!result?.sensitive?.withheld && <div className="review-warning">{result.sensitive.withheld} 条结果的正文尚未完成脱敏检测，暂不显示。请在“脱敏规则”查看扫描状态并重试失败的扫描。</div>}
+        {!!result?.sensitive?.withheld && <div className="review-warning">{result.sensitive.withheld} 条结果的正文尚未完成脱敏检测，暂不显示。请在处理任务中查看扫描状态并重试失败的任务。</div>}
         {!!result?.sensitive?.confirmation_count && <div className="review-warning">
           {result.sensitive.confirmation_count} 条结果包含需要确认的敏感信息。
           <button type="button" disabled={confirming} onClick={() => void confirmSensitive(true)}>确认并脱敏查看</button>
@@ -1591,6 +1595,7 @@ function LLMConfigPanel({ report: onReport, onSaved, onLeaveState }: { report: (
     <details className="llm-advanced">
       <summary>高级处理设置 · 本地小模型与任务预算</summary>
       <p className="muted">默认单并发、分步抽取。本地小模型建议先保持单并发；云端可从 2 路开始对照测试。联合抽取需要验证所用模型的质量。</p>
+      <p className="muted">外部 API 的上下文和输出额度由模型供应商决定。正文超出供应商容量时拆分处理。Ollama 仍按部署容量规划分块。</p>
       <section className="llm-parameter-group"><h4>知识抽取</h4><div className="llm-form">
         <label>抽取策略<select value={form.extraction_strategy} onChange={(e) => setForm({ ...form, extraction_strategy: e.target.value as LLMSettings["extraction_strategy"] })}>
           <option value="two_stage">分步抽取（默认）</option><option value="joint">联合抽取（需验证）</option>
@@ -1599,40 +1604,37 @@ function LLMConfigPanel({ report: onReport, onSaved, onLeaveState }: { report: (
           <option value="on">按预算合并相邻页面</option><option value="off">每页独立抽取</option>
         </select><small>保留原始页码与证据位置，只调整知识抽取批次。</small></label>
         {([
-          ["llm_concurrency", "LLM 并发数", 1, 4], ["llm_context_tokens", "上下文 token", 2048, 131072],
-          ["llm_extraction_input_tokens", "抽取正文预算", 256, 16000], ["llm_extraction_output_tokens", "抽取输出预算", 128, 8192],
+          ["llm_concurrency", "LLM 并发数", 1, 4],
+        ] as const).map(([key, label, min, max]) => <label key={key}>{label}<input type="number" min={min} max={max} value={form[key]} onChange={(e) => setForm({ ...form, [key]: Number(e.target.value) })} /></label>)}
+        {form.llm_provider === 'ollama' && ([
+          ["llm_context_tokens", "Ollama 上下文预算", form.budget_limits?.min_context_tokens ?? 2048, form.budget_limits?.max_tokens],
+          ["llm_extraction_output_tokens", "Ollama 抽取输出上限", 128, form.budget_limits?.max_tokens],
         ] as const).map(([key, label, min, max]) => <label key={key}>{label}<input type="number" min={min} max={max} value={form[key]} onChange={(e) => setForm({ ...form, [key]: Number(e.target.value) })} /></label>)}
       </div></section>
       <section className="llm-parameter-group"><h4>脱敏检测预算</h4><div className="llm-form">
-        {([
+        {form.llm_provider === 'ollama' && ([
           ["llm_sensitive_input_tokens", "Ollama 脱敏输入预算", 256, 16000], ["llm_sensitive_output_tokens", "脱敏输出预算", 128, 8192],
           ["llm_sensitive_batch_size", "Ollama 脱敏批次上限", 1, 8],
         ] as const).map(([key, label, min, max]) => <label key={key}>{label}<input type="number" min={min} max={max} value={form[key]} onChange={(e) => setForm({ ...form, [key]: Number(e.target.value) })} /></label>)}
         {form.llm_provider === 'openai_compatible' && ([
           ["openai_sensitive_batch_size", "外部接口脱敏批次上限", 1, 16],
-          ["openai_sensitive_input_tokens", "外部接口脱敏输入预算", 256, 16000],
-          ["openai_sensitive_context_tokens", "外部接口脱敏上下文预算", 2048, 131072],
+          ["openai_sensitive_input_tokens", "脱敏分段大小（估算 token）", 256, form.budget_limits?.max_tokens ?? 16000],
         ] as const).map(([key, label, min, max]) => <label key={key}>{label}<input type="number" min={min} max={max}
           value={form[key]} onChange={(e) => setForm({ ...form, [key]: Number(e.target.value) })} /></label>)}
       </div></section>
       <section className="llm-parameter-group"><h4>推理与输出</h4><div className="llm-form">
         {form.llm_provider === "ollama" ? <>
           <label>模型驻留时间<input value={form.ollama_keep_alive} placeholder="10m" onChange={(e) => setForm({ ...form, ollama_keep_alive: e.target.value })} /></label>
-          <label>推理模式<select value={form.ollama_think} onChange={(e) => setForm({ ...form, ollama_think: e.target.value as LLMSettings["ollama_think"] })}>
-            <option value="auto">模型默认</option><option value="off">关闭（模型支持时）</option><option value="on">启用（模型支持时）</option>
-          </select></label>
+          <p className="muted">抽取与脱敏固定优先关闭思考，模型不支持关闭时继续执行。</p>
         </> : <>
-        <label>推理模式<select value={form.openai_think ?? "off"} onChange={(e) => setForm({ ...form, openai_think: e.target.value as LLMSettings["openai_think"] })}>
-          <option value="auto">模型默认</option><option value="off">关闭（服务商支持时）</option><option value="on">启用（服务商支持时）</option>
-        </select><small>新连接默认关闭。未知兼容接口需指定支持的参数格式；不支持关闭时请选择模型默认。关闭后请对照检查关系抽取和敏感信息漏检情况。</small></label>
-        {form.openai_think && form.openai_think !== "auto" && <label>推理参数格式<select value={form.openai_thinking_format ?? "auto"} onChange={(e) => setForm({ ...form, openai_thinking_format: e.target.value as LLMSettings["openai_thinking_format"] })}>
+        <p className="muted">抽取与脱敏固定优先关闭思考，模型不支持关闭时继续执行。</p>
+        <label>推理参数格式<select value={form.openai_thinking_format ?? "auto"} onChange={(e) => setForm({ ...form, openai_thinking_format: e.target.value as LLMSettings["openai_thinking_format"] })}>
           <option value="auto">自动识别服务商 / 模型</option><option value="thinking">Thinking（DeepSeek / 火山方舟）</option><option value="enable_thinking">Enable Thinking（Qwen）</option><option value="reasoning_effort">Reasoning Effort（支持 none 的接口）</option>
-        </select></label>}
+        </select></label>
         <label>结构化输出能力<select value={form.openai_structured_output} onChange={(e) => setForm({ ...form, openai_structured_output: e.target.value as LLMSettings["openai_structured_output"] })}>
           <option value="text">文本 JSON + 本地校验</option><option value="json_object">JSON Object</option><option value="json_schema">JSON Schema</option>
         </select></label></>}
       </div></section>
-      {form.llm_provider === "openai_compatible" && <p className="muted">文本兼容模式沿用服务端输出上限；JSON Object / Schema 模式使用上方输出预算。推理模型的预算可能同时包含思考 token，出现截断时需适当增加。</p>}
     </details>
     </fieldset>
     <div className="llm-actions"><span>{form.llm_configured ? "当前连接已配置" : "当前连接未配置"}</span>
@@ -1811,7 +1813,7 @@ function SensitiveView({ report: onReport, onSavingChange, onDirtyChange }: {
         body: JSON.stringify({ workspace_id: workspaceId, text: preview, ...(hosted ? { expected_revision: revision } : {}) }),
       });
       if (controller.signal.aborted || revision !== savedSettings.current?.revision) return;
-      const status = { clean: '未命中', masked: '已脱敏', block: '拒绝交付', confirm: '需要确认', pending: '等待检测' }[next.status] ?? next.status;
+      const status = { disabled: '交付脱敏已关闭，未执行检测', clean: '未命中', masked: '已脱敏', block: '拒绝交付', confirm: '需要确认', pending: '等待检测' }[next.status] ?? next.status;
       setPreviewResult({label: status, text: next.text});
     } catch (reason) { if (!controller.signal.aborted) report(reason instanceof Error ? reason.message : "测试失败", true); }
     finally { previewRequest.current = null; setPreviewing(false); }
@@ -1897,7 +1899,7 @@ function SensitiveView({ report: onReport, onSavingChange, onDirtyChange }: {
       </div>
       <details className="sensitive-scope">
         <summary>保护设置</summary>
-        <label className="sensitive-toggle"><input type="checkbox" disabled={cannotSave} checked={visibleToggles.enabled} onChange={(event) => void updateGlobalToggle("enabled", event.target.checked)} /><span><strong>启用交付脱敏</strong><small>密钥保护始终生效。</small></span></label>
+        <label className="sensitive-toggle"><input type="checkbox" disabled={cannotSave} checked={visibleToggles.enabled} onChange={(event) => void updateGlobalToggle("enabled", event.target.checked)} /><span><strong>启用交付脱敏</strong><small>关闭后跳过全部检测，包括本地密钥检查。</small></span></label>
         <label className="sensitive-toggle"><input type="checkbox" disabled={cannotSave} checked={visibleToggles.semantic_enabled} onChange={(event) => void updateGlobalToggle("semantic_enabled", event.target.checked)} /><span><strong>使用模型识别语义敏感信息</strong><small>与知识抽取共用模型。开关修改即时生效。</small></span></label>
         <p className="settings-location">{hosted ? "可在星图「模型设置」中调整模型。" : "可在「设置」中调整共用模型。"}</p>
       </details>
@@ -1964,7 +1966,7 @@ function SensitiveView({ report: onReport, onSavingChange, onDirtyChange }: {
         <label>替换字符或文本<input value={editingRule.masking.replacement} maxLength={32} disabled={editingRule.protected} onChange={(event) => updateMasking(editingRule, { replacement: event.target.value })} /></label>
         {editingRule.masking.strategy === "keep_edges" && <><label>保留前缀字符数<input type="number" min={0} max={editingRule.id === "email" || editingRule.id === "person" ? 1 : editingRule.id === "phone" ? 3 : editingRule.id === "id_card" ? 6 : 32} value={editingRule.masking.prefix_characters} onChange={(event) => updateMasking(editingRule, { prefix_characters: Number(event.target.value) })} /></label><label>保留后缀字符数<input type="number" min={0} max={editingRule.id === "phone" || editingRule.id === "id_card" ? 4 : editingRule.id === "email" || editingRule.id === "person" ? 0 : 32} value={editingRule.masking.suffix_characters} onChange={(event) => updateMasking(editingRule, { suffix_characters: Number(event.target.value) })} /></label></>}
       </fieldset>
-      <p>内置规则的识别器保持不变；密钥规则始终启用并拒绝交付。保存后再运行下方测试。</p>
+      <p>交付脱敏关闭时跳过全部检测，包括密钥检查。重新开启后，密钥规则启用并拒绝交付。保存后再运行下方测试。</p>
       <button className="primary" disabled={cannotSave || draftPromptUsed > settings.rule_capacity.prompt_limit} onClick={() => void save()}>保存脱敏设置</button>
     </div></WorkbenchDrawer>}
 
@@ -1972,7 +1974,10 @@ function SensitiveView({ report: onReport, onSavingChange, onDirtyChange }: {
 }
 
 function App() {
-  const [view, setView] = useState<"materials" | "ontology" | "review" | "graph" | "search" | "sensitive" | "skills" | "releases">((new URLSearchParams(location.search).get("view") as "ontology" | "materials" | "releases" | "sensitive") || "materials");
+  const [view, setView] = useState<"materials" | "ontology" | "review" | "graph" | "search" | "sensitive" | "skills" | "releases">(() => {
+    const requested = new URLSearchParams(location.search).get("view") as "ontology" | "materials" | "releases" | "sensitive" | null;
+    return requested === "sensitive" ? "materials" : requested || "materials";
+  });
   const [ontologyNavigation, setOntologyNavigation] = useState<{ action: OntologyAction }>();
   const clearOntologyNavigation = useCallback(() => setOntologyNavigation(undefined), []);
   const [searchDocumentId,setSearchDocumentId]=useState('');
@@ -2002,6 +2007,7 @@ function App() {
     return true;
   }
   function navigate(target:typeof view,documentId='') {
+    if (target === 'sensitive') target = 'materials';
     if(target!==view&&!canLeaveView())return false;
     if(target!==view){materialInteraction.current++;if(view==='materials'){setEditing(false);setDrafts({});}}
     if(target==='skills')setSkillsOpened(true);
@@ -2037,7 +2043,7 @@ function App() {
   const jobPagination = useRef({ page: 1, size: 10 });
   const jobRequestId = useRef(0);
   const jobRequestPending = useRef<{ id: number; pagination: { page: number; size: number }; promise: Promise<void> } | null>(null);
-  const orderedJobs = useMemo(() => [...jobs].sort((first, second) => {
+  const orderedJobs = useMemo(() => jobs.filter(job => job.kind !== 'sensitive_scan').sort((first, second) => {
     // Compare the original UTC strings to preserve sub-millisecond precision.
     for (const field of ["updated_at", "created_at", "id"] as const) {
       if (first[field] !== second[field]) return first[field] < second[field] ? 1 : -1;
@@ -2239,12 +2245,8 @@ function App() {
   }, [selectedId, editing]);
 
   const foregroundJobCount = jobActivity?.foreground_count ?? 0;
-  const sensitiveJob = jobActivity?.sensitive_job;
   const runtimeText = !jobActivity ? "正在获取任务状态…" : foregroundJobCount
-    ? `${foregroundJobCount} 个材料/索引任务处理中${sensitiveJob ? ` · 脱敏扫描${sensitiveJob.status === "running" ? "中" : "排队中"}` : ""}`
-    : sensitiveJob
-      ? `后台脱敏扫描${sensitiveJob.status === "running" ? "中" : "排队中"}${sensitiveJob.metrics?.pending_texts != null ? ` · 本轮新检测 ${sensitiveJob.metrics.new_detected_texts ?? 0}/${sensitiveJob.metrics.pending_texts} 种文本` : ""}`
-      : "任务队列空闲";
+    ? `${foregroundJobCount} 个材料/索引任务处理中` : "任务队列空闲";
   const selectedDocument = documents.find((item) => item.id === selectedId) ?? null;
   const selectedSegment =
     detail?.segments.find((segment) => segment.id === selectedSegmentId) ??
@@ -2566,9 +2568,8 @@ function App() {
           ["releases", "版本历史"],
           ["graph", "知识网络"],
           ["search", "知识检索"],
-          ["sensitive", "脱敏规则"],
           ["skills", "推理方法"],
-        ] as const).filter(([key]) => !new URLSearchParams(location.search).has("native") || ["materials","ontology","releases","sensitive"].includes(key)).map(([key, label]) => (
+        ] as const).filter(([key]) => !new URLSearchParams(location.search).has("native") || ["materials","ontology","releases"].includes(key)).map(([key, label]) => (
           <button
             type="button"
             className={view === key ? "active" : ""}
@@ -2585,7 +2586,7 @@ function App() {
       </aside>
       <div className="app-workspace">
       <header className="app-topbar"><div className="breadcrumb"><span>工作台</span><span>/</span><strong>{pageNames[view]}</strong></div>
-        <div className="topbar-actions"><span className="runtime"><i className={foregroundJobCount || sensitiveJob ? 'pulse' : 'dot'} />{runtimeText}</span>
+        <div className="topbar-actions"><span className="runtime"><i className={foregroundJobCount ? 'pulse' : 'dot'} />{runtimeText}</span>
           <button type="button" onClick={() => setTasksOpen(true)}><DesignIcon name="tasks" />任务中心</button>
           <span title="正文、知识与类型建议分别处理；可在任务中心查看进度。" aria-label="使用说明"><DesignIcon name="help" /></span></div></header>
       <div className="app-content">
@@ -2730,7 +2731,6 @@ function App() {
                 <span>{detail.processing.text_ready ? "正文可查看" : "正文解析中"}</span>
                 <span>{detail.processing.index_ready ? "文本检索就绪" : "文本索引待更新"}</span>
                 <span>{({ published: "图谱就绪", empty: "处理完成，未形成有效关系", failed: "图谱处理失败", cancelled: "图谱已取消", pending: "图谱待处理", retracted: "图谱已撤回", stale: "图谱结果已失效" } as Record<string, string>)[detail.processing.graph_status] ?? "图谱处理中"}</span>
-                <span>{({ succeeded: "交付检测完成", failed: "交付检测失败", cancelled: "交付检测已取消", disabled: "交付脱敏未启用", index_required: "交付检测等待索引", not_started: "交付检测待处理", queued: "交付检测排队中", pending: "交付检测待处理" } as Record<string, string>)[detail.processing.delivery_status] ?? "交付检测中"}</span>
               </div>}
               {detail.processing?.knowledge_summary && <details className="document-knowledge-outcome"><summary>查看抽取结果与未入图原因</summary>
                 <KnowledgeOutcome summary={detail.processing.knowledge_summary} />
@@ -2869,9 +2869,9 @@ function App() {
           成功或取消的任务在最后更新 {status.job_history_retention_days} 天后移出列表。后台定期清理不再被业务使用的过期记录；排队、运行和失败任务继续保留。材料、知识网络及检索索引不会随任务历史清理而删除。
         </p>}
         <p className="job-retention-notice">{status?.job_auto_retry_enabled
-          ? `抽取和敏感检测失败后可有限自动重试：网络异常最多 ${status.job_auto_retry_delays_seconds?.length ?? 3} 次，模型输出异常补偿 1 次。单个片段异常会跳过并继续；成功结果可复用。等待重试时可以取消。`
+          ? `抽取失败后可有限自动重试：网络异常最多 ${status.job_auto_retry_delays_seconds?.length ?? 3} 次，模型输出异常补偿 1 次。单个片段异常会跳过并继续；成功结果可复用。等待重试时可以取消。`
           : "自动重试未开启，失败任务可检查原因后手工重试。"}</p>
-        {!jobs.length && <div className="empty">{jobsLoading ? "正在加载任务…" : jobTotal ? "当前页没有任务，请刷新或选择其他页。" : "暂无文档任务。"}</div>}
+        {!orderedJobs.length && <div className="empty">{jobsLoading ? "正在加载任务…" : jobTotal ? "当前页没有材料处理任务，请刷新或选择其他页。" : "暂无文档任务。"}</div>}
         {orderedJobs.map((job) => {
           const mergedScan = isMergedScan(job);
           const document = documents.find((item) => item.id === job.document_id);
@@ -2947,7 +2947,7 @@ function App() {
             <label>每页 <select value={jobPageSize} disabled={jobsLoading} onChange={(event) => changeJobPage(1, Number(event.target.value))}>
               <option value={10}>10</option><option value={20}>20</option><option value={50}>50</option>
             </select> 条</label>
-            <span>共 {jobTotal} 条{jobs.length > 0 ? ` · 当前第 ${(jobPage - 1) * jobPageSize + 1}–${(jobPage - 1) * jobPageSize + jobs.length} 条` : ""}</span>
+            <span>历史记录 {jobTotal} 条 · 本页显示 {orderedJobs.length} 项{jobs.length > 0 ? ` · 记录位置 ${(jobPage - 1) * jobPageSize + 1}–${(jobPage - 1) * jobPageSize + jobs.length}` : ""}</span>
           </div>
           <div className="job-page-controls">
             <button type="button" disabled={jobsLoading || jobPage <= 1} onClick={() => changeJobPage(1)}>首页</button>

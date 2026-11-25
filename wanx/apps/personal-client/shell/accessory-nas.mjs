@@ -37,7 +37,14 @@ async function request({app,client,memoryFile,dialog,window}, op, input, spaceRe
     const ctx = session.assertLive();
     const scope = hash(JSON.stringify([ctx.boxId,ctx.principalId || ctx.accountId,ctx.dataIdentity?.profileId]));
     const configFile = path.join(app.getPath('userData'),'nas-accessory',scope,'connection.json');
-    const file = await open(configFile,constants.O_RDONLY | (constants.O_NOFOLLOW || 0)).catch(() => { throw Error('当前账号和盒子还没有接入授权目录。'); });
+    const file = await open(configFile,constants.O_RDONLY | (constants.O_NOFOLLOW || 0)).catch(error => {
+      if (error.code !== 'ENOENT') throw error;
+      return null;
+    });
+    if (!file) {
+      if (op === 'space/volumes') return [];
+      throw Error('当前账号和盒子还没有接入授权目录。');
+    }
     let config;
     try {
       const st = await file.stat();
@@ -45,6 +52,7 @@ async function request({app,client,memoryFile,dialog,window}, op, input, spaceRe
       config = JSON.parse(await file.readFile('utf8'));
     } finally { await file.close(); }
     if (config.box!==ctx.boxId || config.user!==String(ctx.user?.id) || !Number.isInteger(config.port) || config.port<1 || config.port>65535 || !/^[\w-]{40,128}$/.test(config.token)) throw Error('设备授权不匹配');
+    if (op === 'space/volumes' && !config.spaceReadToken) return [];
     const edit = op === 'space/text-save' || op === 'space/text-open';
     const diskToken = edit ? config.spaceEditToken : spaceRead ? config.spaceReadToken : config.token;
     if (!/^[\w-]{40,128}$/.test(diskToken || '')) throw Error(edit ? 'SPACE_TEXT_EDIT_UNAVAILABLE' : '空间硬盘浏览尚未配置');

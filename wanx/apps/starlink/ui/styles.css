@@ -2048,6 +2048,18 @@ dialog::backdrop {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.logical-source-group { padding: 8px 0; }
+.logical-source-location { color: var(--muted); font-size: 10px; }
+.logical-source-group p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.logical-table-scroll { max-width: 100%; overflow: auto; margin: 10px 0; }
+.logical-table table { border-collapse: collapse; width: 100%; font-size: inherit; }
+.logical-table :is(td, th) { border: 1px solid var(--border); padding: 8px 12px; min-width: 100px; vertical-align: top; text-align: left; }
+.logical-table th { background: var(--surface-alt, #f5efe6); }
+.logical-table caption { text-align: left; color: var(--muted); font-size: 12px; padding: 4px 0; }
+.logical-table .logical-table-gap { color: var(--muted); text-align: center; min-width: 0; }
+.logical-table p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.logical-table-rows > div { padding: 8px 0; border-bottom: 1px solid var(--border); }
+.task-source-counts { color: var(--muted); font-size: 12px; }
 .file-preview {
   flex-wrap: wrap;
 }
@@ -2877,6 +2889,10 @@ textarea.form-input {
   font-size: 10px;
   fill: var(--muted);
   stroke-width: 5px;
+  opacity: 0;
+}
+.graph-link:hover .graph-edge-label {
+  opacity: 1;
 }
 .graph-link.connected .graph-edge-label {
   fill: var(--ink);

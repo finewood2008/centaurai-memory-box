@@ -335,7 +335,6 @@ function CorrectionSession({ workspace, documentId, documentName, close, initial
   }
   function attach(source: Source) {
     if (!selected || !summary) return;
-    if (selected.evidence.length >= 8) { setError("最多保留 8 条来源，请先移除不需要的依据。"); return; }
     if (selected.evidence.some(e => e.segment_id === source.segment_id && e.start === source.start && e.end === source.end)) return;
     update({ ...selected, evidence: [...selected.evidence, { segment_id: source.segment_id, document_id: documentId,
       document_version_id: summary.document_version_id, start: source.start, end: source.end, excerpt: source.text, locator: source.locator }] });
@@ -453,8 +452,8 @@ function CorrectionSession({ workspace, documentId, documentName, close, initial
             </div>
             <section className="correction-evidence"><h4>来源依据</h4><p>规范名称可以与原文提及不同；引用内容保留原文。</p>
               {inline && sources && <div className="correction-source-picker">{sourceChoices}</div>}
-              {selected.evidence.map((e, index) => <article className="correction-quote" key={index}><div className="correction-source-actions"><span>{sourceLabel(e.locator ?? {})}</span><button onClick={() => update({ ...selected, evidence: selected.evidence.filter((_, i) => i !== index) })}>移除此引用</button><button onClick={() => void run(signal => evidence(signal))}>选择来源依据</button></div><blockquote>{e.excerpt || "该引用需要重新选择有效来源"}</blockquote></article>)}
-              {!selected.evidence.length && <button onClick={() => void run(signal => evidence(signal))}>选择来源依据</button>}
+              <button onClick={() => void run(signal => evidence(signal))}>选择来源依据</button>
+              <EvidencePreview key={selected.id} evidence={selected.evidence} render={(e, index) => <article className="correction-quote" key={index}><div className="correction-source-actions"><span>{sourceLabel(e.locator ?? {})}</span><button onClick={() => update({ ...selected, evidence: selected.evidence.filter((_, i) => i !== index) })}>移除此引用</button></div><blockquote>{e.excerpt || "该引用需要重新选择有效来源"}</blockquote></article>} />
             </section>
             {selected.kind === "entity" ? <label>别名（每行一个）<textarea value={Array.isArray(selected.payload.aliases) ? selected.payload.aliases.join("\n") : ""} onChange={e => payload("aliases", e.target.value ? e.target.value.split("\n") : [])} /></label>
               : <div className="correction-endpoints">{(["source_candidate_key", "target_candidate_key"] as const).map(field => <div key={field}><span>{field === "source_candidate_key" ? "起点" : "终点"}：{selected.endpoints?.[field]?.name ?? "尚未选择"}</span><button onClick={() => { setKeyword(""); void run(signal => choose(signal, field)); }}>选择{field === "source_candidate_key" ? "起点" : "终点"}</button></div>)}
@@ -674,6 +673,15 @@ function PropertyInput({ value, change }: { value: unknown; change: (value: unkn
   if (value && typeof value === "object") return <div>{Object.entries(value).map(([key, v]) => <label key={key}>{key}<PropertyInput value={v} change={next => change({ ...value, [key]: next })} /></label>)}</div>;
   return <input type={typeof value === "number" ? "number" : "text"} value={String(value ?? "")} onChange={e => change(typeof value === "number" && e.target.value !== "" ? Number(e.target.value) : e.target.value)} />;
 }
+function EvidencePreview({evidence, render}: {evidence: Item["evidence"]; render: (value: Item["evidence"][number], index: number) => ReactNode}) {
+  const visible = 8;
+  return <>{evidence.slice(0, visible).map(render)}
+    {evidence.length > visible && <details><summary>其余 {evidence.length - visible} 条来源</summary>
+      {evidence.slice(visible).map((value, index) => render(value, index + visible))}
+    </details>}
+  </>;
+}
+
 function CandidateView({item, ontology}: {item:Item; ontology:Summary['ontology']}) {
   const definition=(item.kind==='entity'?ontology.entity_types:ontology.relation_types).find(type=>type.name===item.payload.type);
   const properties=Object.entries(item.payload.properties as Record<string,unknown> ?? {});
@@ -685,7 +693,7 @@ function CandidateView({item, ontology}: {item:Item; ontology:Summary['ontology'
     <h5>{entity?'对象属性':'关系属性'}</h5>
     {properties.length?<dl className="candidate-properties">{properties.map(([key,value])=><div key={key}><dt>{definition?.properties.find(property=>property.name===key)?.label??key}{!definition?.properties.some(property=>property.name===key)&&'（类型中未定义）'}</dt><dd><ValueView value={value}/></dd></div>)}</dl>:<p className="muted">未提取到属性值，请结合原文核对；这里不会根据日期等独立候选自动补填属性。</p>}
     <h5>原文依据</h5>
-    {item.evidence.length?item.evidence.map((e,index)=><div key={index}><small>{sourceLabel(e.locator??{})}</small><blockquote>{e.excerpt||'该引用需要重新选择有效来源'}</blockquote></div>):<p className="correction-warning">缺少来源依据，加入草稿后需补充。</p>}
+    {item.evidence.length ? <EvidencePreview key={item.id} evidence={item.evidence} render={(e, index) => <div key={index}><small>{sourceLabel(e.locator ?? {})}</small><blockquote>{e.excerpt || '该引用需要重新选择有效来源'}</blockquote></div>} /> : <p className="correction-warning">缺少来源依据，加入草稿后需补充。</p>}
   </>;
 }
 
@@ -695,7 +703,7 @@ function ChangeView({ change, action }: { change: Change; action?: ReactNode }) 
     <div className="correction-before-after">{[change.before, change.after].map((value, i) => <div key={i}><h4>{i === 0 ? "修改前" : "修改后"}</h4>{value ? <><p>{value.kind === "entity" ? String(value.payload.name) : itemLabel(value)} · {String(value.payload.type)}</p>
       {Object.entries(value.payload.properties as Record<string, unknown> ?? {}).map(([k, v]) => <div key={k}>{k}：<ValueView value={v} /></div>)}
       {Array.isArray(value.payload.aliases) && <p>别名：{value.payload.aliases.join("、") || "无"}</p>}
-      {value.evidence.map((e, index) => <blockquote key={index}>{e.excerpt}</blockquote>)}{value.review_note && <p>复核说明：{value.review_note}</p>}</> : <p>无</p>}</div>)}</div></article>;
+      <EvidencePreview key={value.id} evidence={value.evidence} render={(e, index) => <blockquote key={index}>{e.excerpt}</blockquote>} />{value.review_note && <p>复核说明：{value.review_note}</p>}</> : <p>无</p>}</div>)}</div></article>;
 }
 
 function ValueView({ value }: { value: unknown }) {

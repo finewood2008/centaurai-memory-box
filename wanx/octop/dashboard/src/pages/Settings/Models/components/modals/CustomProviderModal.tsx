@@ -10,7 +10,7 @@ import { useTranslation } from "react-i18next";
 import { request } from "../../../../../api/request";
 import type { ProviderModel, ProviderRow } from "../../useProviders";
 import { isEmbeddingModel } from "../../useProviders";
-import { fetchProviderModels, testProviderDraft } from "../../providerApi";
+import { fetchProviderModels, mergeFetchedProviderModels, testProviderDraft } from "../../providerApi";
 import { ModelListEditor } from "./ModelListEditor";
 import styles from "../../index.module.less";
 
@@ -121,24 +121,13 @@ export function CustomProviderModal({
         );
         return;
       }
-      const remote: ProviderModel[] = (result.models ?? []).map((m) => ({
-        id: m.id,
-        name: m.name || m.id,
-        enabled: false,
-        input: ["text"],
-        thinking: null,
-      }));
-      let addedCount = 0;
-      setModels((prev) => {
-        const existing = new Set(prev.map((m) => m.id));
-        const added = remote.filter((m) => !existing.has(m.id));
-        addedCount = added.length;
-        return [...prev, ...added];
-      });
-      if (addedCount === 0) {
+      const fetched = result.models ?? [];
+      const { changed } = mergeFetchedProviderModels(models, fetched);
+      if (changed === 0) {
         message.info(t("models.fetchModelsNoNew"));
       } else {
-        message.success(t("models.fetchModelsMerged", { count: addedCount }));
+        setModels((prev) => mergeFetchedProviderModels(prev, fetched).models);
+        message.success(t("models.fetchModelsSynced", { count: changed }));
       }
     } catch (err) {
       if (err && typeof err === "object" && "errorFields" in err) return;
@@ -167,6 +156,7 @@ export function CustomProviderModal({
         };
         if (m.max_tokens != null) entry.max_tokens = m.max_tokens;
         if (m.context_window != null) entry.context_window = m.context_window;
+        if (m.max_input_tokens != null) entry.max_input_tokens = m.max_input_tokens;
         if (m.reasoning) entry.reasoning = true;
         if (isEmbeddingModel(m)) {
           entry.embedding = true;

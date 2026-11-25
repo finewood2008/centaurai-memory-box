@@ -52,13 +52,13 @@ for (const mode of ['manual','automatic']) {
     assert.match(h.$('#model-save-status').textContent, /所有星图的新任务/);
   });
 }
-test('unsupported explicit choice is not silently changed or saved', async () => {
+test('missing disable capability does not block checking and saving fixed off', async () => {
   const h = setup({supported: ['auto']});
   h.context.updateModelControls();
   assert.equal(h.$('#model-thinking').value, 'off');
   await h.context.saveModels();
-  assert.equal(h.calls.length, 0);
-  assert.match(h.$('#model-save-status').textContent, /不支持/);
+  assert.equal(h.calls.length, 2);
+  assert.equal(h.calls[0].payload.config.inference_options.thinking_mode, 'off');
 });
 test('declining the shared cloud model confirmation leaves the profile unsaved', async () => {
   const h = setup();
@@ -103,13 +103,13 @@ test('switching boxes during the check discards the old check receipt', async ()
   assert.deepEqual(h.calls, ['check-models']);
 });
 
-test('automatic auto mode is checked before saving too', async () => {
+test('automatic mode cannot restore configured auto thinking', async () => {
   const h = setup({mode: 'automatic', thinking: 'auto'});
   h.context.updateModelControls();
   assert.equal(h.$('#model-save').disabled, false);
   await h.context.saveModels();
   assert.deepEqual(h.calls.map(c => c.action), ['check-models', 'save-models']);
-  assert.equal(h.calls[0].payload.config.inference_options.thinking_mode, 'auto');
+  assert.equal(h.calls[0].payload.config.inference_options.thinking_mode, 'off');
   assert.equal(h.calls[1].payload.config.inference_options, undefined);
 });
 
@@ -128,33 +128,32 @@ test('retrying pending old project updates uses the saved shared revision withou
   assert.match(h.$('#model-save-status').textContent, /所有星图的新任务/);
 });
 
-test('new draft defaults off while missing capabilities allow only auto', () => {
+test('new draft preserves requested off when capabilities are missing', () => {
   const h = setup();
   h.context.renderThinkingOptions(null);
   assert.equal(h.$('#model-thinking').value, 'off');
   delete h.state.modelCatalog[0].inference_options;
   h.context.renderThinkingOptions(null);
-  assert.equal(h.$('#model-thinking').value, 'auto');
-  assert.match(h.$('#model-thinking').innerHTML, /value="on" disabled/);
-  assert.match(h.$('#model-thinking').innerHTML, /value="off" disabled/);
+  assert.equal(h.$('#model-thinking').value, 'off');
+  assert.equal(h.$('#model-thinking').value, 'off');
 });
 
-test('saved explicit choices remain unchanged', () => {
+test('saved explicit choices cannot override the fixed processing policy', () => {
   const h = setup();
   for (const mode of ['auto', 'on', 'off']) {
     h.context.renderThinkingOptions(mode);
-    assert.equal(h.$('#model-thinking').value, mode);
+    assert.equal(h.$('#model-thinking').value, 'off');
   }
 });
 
-test('editor always shows the backend effective mode even without a saved profile', () => {
+test('editor keeps its hidden mode off even when the backend returns old modes', () => {
   const h = setup();
   for (const mode of ['auto', 'off', 'on']) {
     h.state.modelConfig = {revision:0, default_revision:0, inherit:false,
       affected_warehouses:[], stages:[], effective:{mode:'automatic',
         extraction:h.state.modelDefault, inference_options:{thinking_mode:mode}}};
     h.context.renderModelEditor();
-    assert.equal(h.$('#model-thinking').value, mode);
+    assert.equal(h.$('#model-thinking').value, 'off');
   }
 });
 
@@ -181,12 +180,14 @@ for (const code of ['MODEL_THINKING_UNSUPPORTED', 'MODEL_OPTIONS_INVALID', 'MODE
     assert.equal(h.state.modelSaving, false);
   });
 }
-test('model changes update supported thinking modes without requiring a project', () => {
+test('model capability changes cannot restore a visible thinking control', async () => {
   const h = setup();
   h.context.updateModelControls();
-  assert.equal(h.$('#model-thinking-controls').hidden, false);
   assert.equal(h.$('#model-thinking').disabled, false);
   h.state.modelCatalog[0].inference_options.thinking_modes = ['auto'];
   h.context.updateModelControls();
-  assert.match(h.$('#model-thinking').innerHTML, /value="off" disabled/);
+  assert.equal(h.$('#model-thinking').value, 'off');
+  const markup = await readFile(new URL('../ui/index.html', import.meta.url), 'utf8');
+  assert.match(markup, /<input id="model-thinking" type="hidden" value="off">/);
+  assert.doesNotMatch(markup, /<select[^>]+id="model-thinking"/);
 });

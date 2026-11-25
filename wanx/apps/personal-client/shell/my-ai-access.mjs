@@ -399,8 +399,16 @@ export function createMyAiAccess({ makeContext, agents, sources, memory, store, 
       if (!access.has(agent)) throw failure("此 Agent 不在当前管理目录。");
       if (input === undefined) {
         await changes; await loaded;
-        const { selection, resources } = await resolveSelection(chosen(agent), guard(assertScope));
-        return { selection, resources };
+        const selection = chosen(agent);
+        const check = guard(assertScope);
+        try {
+          const resolved = await resolveSelection(selection, check);
+          return { selection: resolved.selection, resources: resolved.resources };
+        } catch (error) {
+          check();
+          if (![400, 403, 404].includes(error.status)) throw error;
+          return { selection, resources: {}, warning: error.message };
+        }
       }
       return serialize(async () => {
         const check = guard(assertScope);

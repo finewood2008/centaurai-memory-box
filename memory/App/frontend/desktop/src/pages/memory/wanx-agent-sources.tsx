@@ -10,6 +10,7 @@ interface SourceCatalog { folders?: TaskSource[]; warehouses?: TaskSource[]; age
 interface SelectionResponse {
   selection?: TaskSelection;
   resources?: TaskSources;
+  warning?: string;
   folderId?: string;
   warehouseId?: string;
   memoryEnabled?: boolean;
@@ -83,6 +84,7 @@ export function AgentSources({ request, agent, mode, name, refresh, sources, mem
       });
       setReady(true);
       readiness.current(true);
+      if (saved.warning) setFeedback({ text: saved.warning });
     }).catch(cause => {
       if (!controller.signal.aborted) setFeedback({ text: cause instanceof Error ? cause.message : "无法读取已保存的资料范围。" });
     });
