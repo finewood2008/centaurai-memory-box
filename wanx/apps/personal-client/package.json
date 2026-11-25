@@ -129,13 +129,15 @@
       }
     },
     "dmg": {
-      "background": "resources/installer/illustrated/macos-dmg-background.jpg",
+      "title": "半人马AI-记忆盒子",
+      "artifactName": "Memobox-${version}-macOS-${arch}.${ext}",
+      "background": "resources/installer/illustrated/macos-dmg-background.png",
       "icon": "resources/icon.icns",
       "iconSize": 76,
-      "iconTextSize": 13,
+      "iconTextSize": 14,
       "contents": [
-        { "x": 195, "y": 185, "type": "file" },
-        { "x": 525, "y": 185, "type": "link", "path": "/Applications" }
+        { "x": 119, "y": 202, "type": "file", "name": "Memobox.app" },
+        { "x": 280, "y": 202, "type": "link", "path": "/Applications" }
       ]
     },
     "win": {
