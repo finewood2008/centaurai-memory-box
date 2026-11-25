@@ -711,12 +711,19 @@ test('main preserves true submission errors and manual pauses during unrelated a
 test('compact personal actions follow the current folder and omit write controls in trash or unsupported service', async()=>{
  const h=harness(async action=>ok(action==='space.refresh'?{phase:'ready',tasks:[]}:listed('file.txt')));
  h.space.bind({render(){},compactActions:true});h.space.hostState(connected('box'));h.space.activate(true);await tick();
- assert.match(h.space.headerActions(),/上传选项/);assert.match(h.space.headerActions(),/space-upload-folder/);
- assert.doesNotMatch(h.space.headerActions(),/space-share-list|space-mkdir|空间更多操作|data-agent-hub-open/);assert.match(h.space.view(),/space-mcp-entry.*data-agent-hub-open>空间 MCP<\/button><button[^>]+space-mkdir[^>]*>新建文件夹<\/button><button[^>]+space-share-list[^>]*>分享链接/);
- assert.doesNotMatch(h.space.view(),/data-action="space-upload"/);
- await h.click('recycle');assert.doesNotMatch(h.space.headerActions(),/space-upload|space-mkdir/);
- h.emit({accountId:'owner',boxId:'box',phase:'unsupported',tasks:[]});assert.doesNotMatch(h.space.headerActions(),/space-upload|space-mkdir/);
- h.space.hostState({...connected('box'),canLaunchApplications:false});assert.match(h.space.headerActions(),/连接盒子/);
+ const toolbar = () => h.space.view().split('<div class="space-toolbar"')[1].split('<div class="space-pathbar"')[0];
+ assert.equal(h.space.headerActions(),'');
+ assert.match(toolbar(),/space-mkdir[^>]*>新建文件夹<\/button><button[^>]+space-share-list[^>]*>分享链接<\/button><details/);
+ assert.match(toolbar(),/data-action="space-upload-folder"[^>]*>上传文件夹<\/button>\s*<\/div>\s*<\/details><\/div><\/div>/);
+ await h.click('select','a'.repeat(32));
+ assert.match(toolbar(),/已选 1 项[\s\S]+data-action="space-upload"/);
+ assert.doesNotMatch(toolbar(),/space-batch-download/);
+ await h.click('recycle');assert.doesNotMatch(toolbar(),/space-upload|space-mkdir/);
+ await h.click('folder');
+ h.emit({accountId:'owner',boxId:'box',phase:'unsupported',tasks:[]});assert.doesNotMatch(toolbar(),/space-upload|space-mkdir/);
+ h.space.hostState({...connected('box'),canLaunchApplications:false});
+ assert.equal(h.space.headerActions(),'');
+ assert.match(h.space.view(),/data-action="show-boxes"/);
 });
 
 test('permanent deletion waits for confirmation, supports cancellation and retains failures for retry', async () => {
@@ -799,7 +806,7 @@ for (const key of ['F2', 'Delete']) test(`read-only space blocks ${key}, selecte
   h.event('dragover', event); assert.equal(event.dataTransfer.dropEffect, 'none');
   await h.event('drop', event); assert.equal(uploaded.length, 0);
   h.space.bind({ render() {}, compactActions: true });
-  assert.doesNotMatch(h.space.view(), /所选文件更多操作|data-action="space-batch-(move|trash)"/);
+  assert.doesNotMatch(h.space.view(), /所选文件更多操作|data-action="space-(upload|batch-(move|trash))"/);
 });
 
 test('rename rechecks write permission when the form is submitted', async () => {

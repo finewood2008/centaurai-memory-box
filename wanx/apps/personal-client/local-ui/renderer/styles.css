@@ -827,7 +827,7 @@ input:focus, select:focus { border-color: var(--fn-color-brand); }
 .space-tree-node:hover > .space-tree-more, .space-tree-node:focus-within > .space-tree-more, .space-favorite:hover > .space-tree-more, .space-favorite:focus-within > .space-tree-more { opacity: 1; }
 .space-tree .space-nav:focus-visible, .space-tree-more:focus-visible, .space-tree-toggle:focus-visible, .space-source-add:focus-visible { outline: 2px solid var(--fn-color-brand); outline-offset: -2px; }
 .space-favorite { padding-left: 18px; }
-.space-recycle-entry { padding: 6px 0; font-size: 11px; min-height: 30px; margin-bottom: 2px; }
+.space-recycle-entry, .space-workbench-entry { padding: 6px 0; font-size: 11px; min-height: 30px; margin-bottom: 2px; }
 .space-sidebar-bottom .space-storage-title { margin-bottom: 7px; }
 .space-sidebar-bottom .space-storage p { margin: 5px 0 0; font-size: 10px; }
 .space-sidebar-bottom .space-storage-location { margin-top: 10px; padding-top: 8px; font-size: 10px; }
