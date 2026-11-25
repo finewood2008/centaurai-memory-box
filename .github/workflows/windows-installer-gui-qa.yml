@@ -35,7 +35,11 @@ jobs:
           $old = '  ${uninstall ? "" : "!insertmacro customInstall"}'
           $addition = @'
           ${uninstall ? "" : `SetOutPath "$INSTDIR"
-          FileOpen $0 "$INSTDIR\fixture-marker.exe" w
+          FileOpen $0 "$INSTDIR\\WANX.exe" w
+          FileWrite $0 "installer-test-fixture"
+          FileClose $0
+          SetOutPath "$INSTDIR\\resources"
+          FileOpen $0 "$OUTDIR\\app.asar" w
           FileWrite $0 "installer-test-fixture"
           FileClose $0
           !insertmacro customInstall
