@@ -178,7 +178,7 @@ jobs:
         run: |
           $artifacts = Join-Path $env:MEMOBOX_PREVIEW_OUT 'artifacts'
           $installer = Join-Path $artifacts "CentaurAI-MemoBox-${env:MEMOBOX_RELEASE_VERSION}-windows-x64.exe"
-          .github/scripts/windows-installer-gui-qa.ps1 -Installer $installer -OutputPath "$env:RUNNER_TEMP/memobox-gui-qa" -ExpectedPayload (Join-Path $artifacts 'win-unpacked/resources/app.asar')
+          .github/scripts/windows-installer-gui-qa.ps1 -Installer $installer -OutputPath "$env:RUNNER_TEMP/memobox-gui-qa" -ExpectedPayload (Join-Path $artifacts 'win-unpacked/resources/app.asar') -OverviewBitmap 'wanx/apps/personal-client/resources/installer/illustrated/windows-overview.bmp'
       - name: Upload Windows graphical installation screenshots
         if: always()
         uses: actions/upload-artifact@v4

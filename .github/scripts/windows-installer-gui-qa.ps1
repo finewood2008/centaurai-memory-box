@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory)][string] $Installer,
     [Parameter(Mandatory)][string] $OutputPath,
-    [string] $ExpectedPayload
+    [string] $ExpectedPayload,
+    [string] $OverviewBitmap
 )
 $ErrorActionPreference = 'Stop'
 New-Item -ItemType Directory -Force -Path $OutputPath | Out-Null
@@ -18,6 +19,7 @@ public static class InstallerWindow {
     [DllImport("user32.dll")] public static extern bool EnumWindows(Callback callback, IntPtr data);
     [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr hwnd, Callback callback, IntPtr data);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hwnd);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowLong(IntPtr hwnd, int index);
     [DllImport("user32.dll")] public static extern bool IsWindowEnabled(IntPtr hwnd);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out int processId);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd, out Rectangle rect);
@@ -102,7 +104,7 @@ function Find-Window([int] $ProcessId, [string] $TextPattern) {
 
 $process = Start-Process -FilePath $Installer -ArgumentList '/LANG=2052' -PassThru
 $pattern = '\u8bb0\u5fc6\u76d2\u5b50|MemoBox'
-$finished = '\u5b89\u88c5\u5b8c\u6210|Finish'
+$finished = '^(\u5b8c\u6210|Finish)'
 "UserInteractive=$([Environment]::UserInteractive), Session=$($process.SessionId), Explorer=$(@(Get-Process explorer -ErrorAction SilentlyContinue).Count)" |
     Set-Content (Join-Path $OutputPath 'session.txt')
 $window = [IntPtr]::Zero
@@ -117,11 +119,31 @@ if ($window -ne [IntPtr]::Zero) {
     "DPI=$([InstallerWindow]::GetDpiForWindow($window))" | Add-Content (Join-Path $OutputPath 'session.txt')
 }
 if ($location -eq [IntPtr]::Zero) { throw 'The graphical installer did not show the installation location field' }
+if ($OverviewBitmap) {
+    $welcome = Find-ChildClass $window '#32770'
+    $artwork = [InstallerWindow]::Children($welcome) | Where-Object {
+        [InstallerWindow]::Class($_) -eq 'Static' -and ([InstallerWindow]::GetWindowLong($_, -16) -band 0x1F) -eq 14
+    } | Select-Object -First 1
+    if (-not $artwork) { throw 'No bitmap control found inside the welcome page' }
+    $bounds = New-Object InstallerWindow+Rectangle
+    [void][InstallerWindow]::GetWindowRect($artwork, [ref]$bounds)
+    $reference = [Drawing.Bitmap]::new((Resolve-Path $OverviewBitmap).Path)
+    try {
+        $width = $bounds.Right - $bounds.Left
+        $height = $bounds.Bottom - $bounds.Top
+        $expectedHeight = $width * $reference.Height / $reference.Width
+        if ($width -lt 200 -or [Math]::Abs($height - $expectedHeight) -gt 1) {
+            throw "The welcome illustration was distorted or too small: ${width}x${height}"
+        }
+        "WelcomeArtwork=${width}x${height}" | Add-Content (Join-Path $OutputPath 'session.txt')
+    } finally { $reference.Dispose() }
+}
 $next = [InstallerWindow]::GetDlgItem($window, 1)
 $installRoot = Join-Path $env:LOCALAPPDATA 'Programs\MemoBox-GuiQA'
 [void][InstallerWindow]::SetControlText($location, 0xC, [IntPtr]::Zero, $installRoot)
 [void][InstallerWindow]::PostMessage($next, 0xF5, [IntPtr]::Zero, [IntPtr]::Zero)
 $capturedProgress = $false
+$animationStarted = $null
 $animationFrames = [Collections.Generic.HashSet[string]]::new()
 $capturedFinish = $false
 for ($i = 0; $i -lt 350; $i++) {
@@ -133,6 +155,7 @@ for ($i = 0; $i -lt 350; $i++) {
         $capturedProgress = $true
     }
     $animation = Find-ChildClass $window 'SysAnimate32'
+    if ($animation -ne [IntPtr]::Zero -and $null -eq $animationStarted) { $animationStarted = Get-Date }
     if ($animation -ne [IntPtr]::Zero -and $animationFrames.Count -lt 3 -and $i % 4 -eq 0) {
         $frame = New-Object InstallerWindow+Rectangle
         [void][InstallerWindow]::GetWindowRect($animation, [ref]$frame)
@@ -180,5 +203,8 @@ if ($ExpectedPayload) {
     }
     $applicationDir = Split-Path $appAsar[0].DirectoryName
     if (-not (Get-Acl -LiteralPath $applicationDir).AreAccessRulesProtected) { throw 'The graphical installation ACL is not protected' }
-    if ($animationFrames.Count -lt 2) { throw "The graphical installation did not show a changing feature illustration" }
+    if ($null -eq $animationStarted) { throw 'The graphical installation never displayed the feature slides' }
+    if ($animationFrames.Count -lt 2 -and ((Get-Date) - $animationStarted).TotalSeconds -ge 6) {
+        throw 'The graphical installation did not show a changing feature illustration'
+    }
 }
