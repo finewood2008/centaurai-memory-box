@@ -1,3 +1,4 @@
+import {configurationLink} from '../shared/application-guide.mjs';
 /** Project-scoped help, retrieval and navigation. */
 import {ontologyQuery, renderOntologyQuery} from './starxiaotu-ontology.mjs';
 import {starxiaotuSearchFailure} from './starxiaotu-records.mjs';
@@ -67,33 +68,18 @@ export function classifyStarxiaotuRequest(value) {
   if (/^(?:请)?(?:帮我|替我|给我)?(?:直接|自动)?(?:定位|跳到|找到|打开)/.test(text)) return {kind:'locate',text};
   if (explainOnly || /^(?:介绍|解释|了解)(?:一下)?/.test(text) || /你能做什么|能问什么|怎么提问/.test(text)) {
     const key = /模型|脱敏|设置/.test(text) ? 'models' : /项目列表|切换项目|不同项目/.test(text) ? 'warehouses' : /知识页|数据列表/.test(text) ? 'knowledge' : /本体|规则/.test(text) ? 'ontology' : /资料库|原文|来源|证据/.test(text) ? 'library' : /数据列表|记录/.test(text) ? 'data' : /关系|连线/.test(text) ? 'relation' : /属性|实体|类型/.test(text) ? 'entity' : /概览/.test(text) ? 'overview' : /星图/.test(text) ? 'graph' : 'general';
-    return key==='general' && !/你能做什么|能问什么|怎么提问|介绍星小图|解释星小图/.test(text) ? {kind:'search',text} : {kind:'explain',text,key};
+    return key==='general' && !/你能做什么|能问什么|怎么提问|介绍\s*CentaurAI|解释\s*CentaurAI/.test(text) ? {kind:'search',text} : {kind:'explain',text,key};
   }
   return {kind:'search',text};
 }
 
-const configurationLinks = {
-  'create-project': ['开始新建星图', 'warehouses'],
-  material: ['选择要整理的资料', 'conversation'],
-  ontology: ['前往本体修改', 'ontology'],
-  models: ['打开抽取模型设置', 'models'],
-  'dialogue-models': ['打开星小图模型设置', 'models'],
-  sensitive: ['打开脱敏规则', 'sensitive'],
-  import: ['打开资料导入', 'conversation'],
-  projects: ['打开我的项目', 'warehouses'],
-};
-function configurationLink(action) {
-  if (!Object.hasOwn(configurationLinks, action)) return null;
-  const [label, view] = configurationLinks[action];
-  return {label, target:{view, configuration:action}};
-}
 const robot='<span class="sx-robot" aria-hidden="true"><span class="sx-robot-face"></span>'+starxiaotuIcon+'</span>';
 export function starxiaotuWorkflowHeader(label, detail = '', action = '') {
   return `<header class="sx-task-heading"><div class="sx-task-name"><strong>${escapeHTML(label)}</strong>${detail ? `<span class="sx-task-detail" title="${escapeHTML(detail)}">${escapeHTML(detail)}</span>` : ''}</div>${action}</header>`;
 }
 
 export function createStarxiaotu({root:host,rail:sidebar,scope,project,view,materialContext,identifyIntent,search,overview,navigate,queryOntology,canEditOntology,hasProject,ask}) {
-  if (!host || !sidebar) throw new TypeError('星小图需要主区和左栏容器。');
+  if (!host || !sidebar) throw new TypeError('CentaurAI 需要主区和左栏容器。');
   const store = createStarxiaotuStore();
   const document = host.ownerDocument;
   const root = document.createElement('div');
@@ -159,20 +145,20 @@ export function createStarxiaotu({root:host,rail:sidebar,scope,project,view,mate
     rail.hidden = !session;
     if (!session) {root.replaceChildren();mountedScope=null;displayedFlow='';return;}
     const visible=session.open;
-    const launcher = '<div class="sx-launch-card"><p class="sx-launch-note">点术语旁的<span class="sx-note-icon">'+starxiaotuIcon+'</span>提问。</p><button type="button" class="sx-launch" aria-controls="starxiaotu-panel" aria-expanded="'+visible+'" data-sx-toggle>'+robot+'<span class="sx-launch-label">星小图</span><span class="sx-switch" aria-hidden="true"></span></button></div>';
+    const launcher = '<div class="sx-launch-card"><p class="sx-launch-note">点术语旁的<span class="sx-note-icon">'+starxiaotuIcon+'</span>提问。</p><button type="button" class="sx-launch" aria-controls="starxiaotu-panel" aria-expanded="'+visible+'" data-sx-toggle>'+robot+'<span class="sx-launch-label">CentaurAI</span><span class="sx-switch" aria-hidden="true"></span></button></div>';
     if (!rail.querySelector('[data-sx-toggle]')) rail.innerHTML = launcher;
     else rail.querySelector('[data-sx-toggle]').setAttribute('aria-expanded',String(visible));
     if (!visible) {root.replaceChildren();mountedScope=null;displayedFlow='';return;}
     const flow=session.turns.length?session.turns.map(renderTurn).join(''):'<p class="sx-welcome-note">可以问我术语、资料和入口。</p>';
     if (mountedScope !== key || !root.querySelector('.starxiaotu-panel')) {
-      root.innerHTML = `<section class="starxiaotu-panel" id="starxiaotu-panel" aria-label="星小图对话">
-        <header class="sx-head">${robot}<div><strong>星小图</strong><small class="sx-current-context"></small></div>
+      root.innerHTML = `<section class="starxiaotu-panel" id="starxiaotu-panel" aria-label="CentaurAI 对话">
+        <header class="sx-head">${robot}<div><strong>CentaurAI</strong><small class="sx-current-context"></small></div>
           <button type="button" class="sx-collapse" data-sx-close>收起</button>
         </header>
         <div class="sx-messages" tabindex="0" role="log" aria-live="polite" aria-label="对话记录"></div>
         <form class="sx-compose">
-          <label class="sx-visually-hidden" for="starxiaotu-input">向星小图提问</label>
-          <input id="starxiaotu-input" class="sx-input" placeholder="问星小图…" autocomplete="off">
+          <label class="sx-visually-hidden" for="starxiaotu-input">向 CentaurAI 提问</label>
+          <input id="starxiaotu-input" class="sx-input" placeholder="问 CentaurAI…" autocomplete="off">
           <button type="submit" class="sx-send">发送</button>
         </form>
       </section>`;
@@ -222,7 +208,7 @@ export function createStarxiaotu({root:host,rail:sidebar,scope,project,view,mate
   async function askModel(question,key,session,decision,definition) {
     if(!question || !session || session.pending || !ask || currentScope()!==key)return;
     const turn={id:++nextTurn,time:Date.now(),ask:question,answer:definition || '',
-      ...(definition && {label:'术语解释'}),pending:true,status:definition?'正在结合当前项目…':'星小图正在回答…',
+      ...(definition && {label:'术语解释'}),pending:true,status:definition?'正在结合当前项目…':'CentaurAI 正在回答…',
       page:view?.()||'general',decision,materialKey:activeMaterial().key};
     const history=session.turns.filter(item=>item.model).slice(-4).map(item=>item.ask);
     session.turns.push(turn);session.pending=true;
@@ -264,7 +250,7 @@ export function createStarxiaotu({root:host,rail:sidebar,scope,project,view,mate
   async function submit(question, choice, preserveDraft = false) {
     const key=currentScope(), session=store.session(key), text=String(question||'').trim();
     if (!session || session.pending || !text) return;
-    const plainQuestion=/^(?:提问|问星小图)[：:]\s*/;
+    const plainQuestion=/^(?:提问|问\s*CentaurAI)[：:]\s*/;
     if(!choice && (plainQuestion.test(text)||hasProject?.()===false)){
       const question=text.replace(plainQuestion,'').trim();
       if(question && [...question].length<=2000){

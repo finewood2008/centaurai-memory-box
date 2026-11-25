@@ -30,15 +30,16 @@ body[data-wanx-surface]{background:var(--wanx-canvas);color:var(--wanx-ink)}
 [data-section=starlink]{--wanx-header-art:url('./assets/material-v1/starlink.png')}
 [data-section=space]{--wanx-header-art:url('./assets/material-v1/space.png')}
 [data-section=boxes]{--wanx-header-art:url('./assets/material-v1/boxes.png')}
+[data-section=accessories]{--wanx-header-art:url('./assets/material-v1/accessories.png')}
 .wanx-section-banner,.workshop-page .workshop-heading.wanx-section-banner,.team-data-page .data-page-bar.wanx-section-banner{
  background:linear-gradient(110deg,#f4ecdf,#fcf9f3 67%);min-height:110px;padding:20px 22px;border:1px solid #e1d2bd;border-radius:20px;
  box-shadow:inset 0 1px 0 #fff,0 2px 3px #66431f0b,0 8px 21px #66431f0b
 }
 .wanx-section-banner::before{background:repeating-linear-gradient(25deg,#96723b0a 0,#96723b0a .5px,transparent .5px,transparent 3px);opacity:.22;mask-image:none}
 .wanx-section-banner::after,.workshop-page .workshop-heading.wanx-section-banner::after{
- inset:0 0 0 auto;width:74%;height:100%;border:0;border-radius:0;transform:none;display:block;box-shadow:none;
- background-image:var(--wanx-header-art);background-size:cover;background-repeat:no-repeat;background-position:center 52%;opacity:1;
- mask-image:linear-gradient(90deg,transparent,#000 20%);pointer-events:none
+ inset:0 0 auto auto;width:auto;max-width:74%;height:100%;aspect-ratio:3 / 1;border:0;border-radius:0;transform:none;display:block;box-shadow:none;
+ background-image:var(--wanx-header-art);background-size:contain;background-repeat:no-repeat;background-position:right center;opacity:1;
+ mask-image:linear-gradient(90deg,transparent,#000 36%);pointer-events:none
 }
 .wanx-section-banner .personal-module-mark,.wanx-section-banner .data-page-mark,.wanx-section-banner .ai-page-mark{
  width:46px;height:46px;min-width:46px;background:linear-gradient(145deg,#fffef9,#f0e3d0);color:#966b41;
@@ -53,6 +54,7 @@ body[data-wanx-surface]{background:var(--wanx-canvas);color:var(--wanx-ink)}
 .wanx-section-banner[data-section=starlink]{--wanx-section-icon:url('./assets/section-icons-v2/starlink.png')}
 .wanx-section-banner[data-section=space]{--wanx-section-icon:url('./assets/section-icons-v2/space.png')}
 .wanx-section-banner[data-section=boxes]{--wanx-section-icon:url('./assets/section-icons-v2/boxes.png')}
+.wanx-section-banner[data-section=accessories]{--wanx-section-icon:url('./assets/section-icons-v2/accessories.png')}
 .wanx-section-banner[data-section] :is(.personal-module-mark,.data-page-mark,.ai-page-mark){
  width:72px;height:72px;min-width:72px;padding:0;border:0;border-radius:0;box-shadow:none;
  background:var(--wanx-section-icon) center/contain no-repeat
@@ -127,10 +129,10 @@ body[data-wanx-surface]{background:var(--wanx-canvas);color:var(--wanx-ink)}
 [data-wanx-surface=device-trust] :is(input,textarea,select){color:#302d29;background:#fffdf8;border-color:#d3bfa5}
 [data-wanx-surface=device-trust] .facts{border-color:#e3d5c0}
 /* Preserve semantic status colors, disabled state, scroll boundaries and focus. */
-@media(max-width:900px){.wanx-section-banner::after,.workshop-page .workshop-heading.wanx-section-banner::after{width:78%;opacity:.85;background-position:60% center}}
+@media(max-width:900px){.wanx-section-banner::after,.workshop-page .workshop-heading.wanx-section-banner::after{max-width:78%;opacity:.85}}
 @media(max-width:760px){
  .wanx-section-banner,.workshop-page .workshop-heading.wanx-section-banner,.team-data-page .data-page-bar.wanx-section-banner{min-height:104px;padding:16px;border-radius:16px}
- .wanx-section-banner::after,.workshop-page .workshop-heading.wanx-section-banner::after{width:80%;opacity:.65;mask-image:linear-gradient(90deg,transparent,#000 45%)}
+ .wanx-section-banner::after,.workshop-page .workshop-heading.wanx-section-banner::after{max-width:80%;opacity:.65;mask-image:linear-gradient(90deg,transparent,#000 45%)}
  .wanx-section-banner .personal-module-title,.wanx-section-banner .ai-page-title,.wanx-section-banner .data-page-title,.wanx-section-banner .workshop-brand{max-width:100%}
  .wanx-section-banner h2,.wanx-section-banner h3{font-size:21px}
  .wanx-section-banner[data-section] :is(.personal-module-mark,.data-page-mark,.ai-page-mark){width:60px;height:60px;min-width:60px}

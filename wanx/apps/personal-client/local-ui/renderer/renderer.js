@@ -28,12 +28,177 @@ const spaceRedactionSettings = window.createSpaceRedactionSettings?.({
 let redactionRuleComposition = null;
 const homePage = "my-ai";
 let page = homePage;
-const clientBrand = "半人马AI记忆盒子";
+const clientBrand = "半人马AI-记忆盒子";
 const clientBrandEnglish = "CentaurAI MemoBox";
 const clientBrandCopy = `<span class="brand-copy"><strong>${clientBrand}</strong><small>${clientBrandEnglish}</small></span>`;
 let memoryAgent = "";
 let memoryPage = "";
 let cloudAuthOpen = false;
+let guideScope='';
+const guideQuestions={
+  'my-ai':['这个智能体现在能用哪些资料？','如果只想让它看一个文件夹，该怎么选？'],
+  memory:['我现在看到的是哪个来源的记忆？','恢复备份快照前要确认什么？'],
+  data:['这个项目的本体能识别什么？','怎样通过来源证据核对原文？'],
+  space:['我现在选了哪些项目，可以怎样整理？','分享链接的权限在哪里管理？'],
+  boxes:['我现在连的是哪台盒子，状态怎么样？','连接中断或一直在重连怎么办？'],
+  accessories:['怎样开启配件的记忆采集？','录音总结保存后去哪里看？'],
+  settings:['默认模型会影响 CentaurAI 吗？','空间脱敏规则在哪里设置？'],
+  provisioning:['认领码在哪里输入？','盒子无法连接 Wi-Fi 怎么办？'],
+  profile:['云账号和盒子授权有什么区别？','在哪里核对当前账号？'],
+  notifications:['怎样查看未读通知？','在哪里看盒子的连接状态？'],
+  credits:['在哪里看积分余额？','在哪里查看积分和模型用量？'],
+  'client-update':['在哪里查看客户端版本？','怎样更新记忆盒子客户端？'],
+  'dialogue-models':['默认模型是什么意思？','CentaurAI 使用哪个模型？'],
+  help:['怎样找到设备连接的帮助？','在哪里提交反馈？'],
+};
+const starlinkQuestions={
+  ontology:['这个项目有哪些生效的类型和关系？','我该怎么判断是否要调整本体？'],
+  conversation:['导入资料后怎样进行知识抽取？','怎样从来源证据打开原文？'],
+  graph:['为什么当前画面的数量和项目总数可能不同？','帮我分析当前选中的实体或关系。'],
+  knowledge:['实体和实体类型有什么区别？','怎样查看一个实体的来源证据？'],
+  models:['知识抽取模型用在哪里？','更换模型后怎样重新处理资料？'],
+  warehouses:['新建星图时怎样选择本体？','创建项目后怎样导入第一份资料？'],
+  sensitive:['星图脱敏规则有什么用？','在哪里核对对外展示的字段？'],
+};
+function guideMarker(key,label) {
+  return '<button type="button" class="guide-term" data-guide-term="'+key+'" aria-controls="academy-drawer" aria-label="让 CentaurAI 解释'+label+'">✨</button>';
+}
+function guidePageSnapshot(question) {
+  const state=currentState;
+  if (!state || !guideScope) return {};
+  const device=state.devices?.find(d=>d.deviceId===state.activeDeviceId)?.name;
+  const account=state.account?.phase==='authenticated'?'已登录':'未登录';
+  switch (page) {
+    case 'data': return dataView.guideFacts(question) || {};
+    case 'my-ai': case 'memory': return window.wanxMemory?.guideFacts() || {};
+    case 'space': return window.wanxSpace?.guideFacts() || {};
+    case 'boxes': {
+      const volume=state.canLaunchApplications && window.wanxSpace?.overview()?.volume;
+      return {当前盒子:device, 关联设备数:state.devices?.length, 连接状态:state.recovery?.status || state.phase,
+        可用存储:volume?.free!=null ? resourceSize(volume.free):undefined, 总容量:volume?.total!=null ? resourceSize(volume.total):undefined};
+    }
+    case 'accessories': return accessoryPreview?.guideFacts() || {};
+    case 'profile': return {云账号:account};
+    case 'settings': return {云账号:account, 登录时启动:state.desktopStartup?.enabled, 当前盒子:device};
+    case 'notifications': return {未读数量:state.notifications?.unreadCount, 当前筛选:notificationFilter==='unread'?'未读':'全部'};
+    case 'credits': return {显示余额:creditsView.label()};
+    case 'provisioning': return {配置步骤:setupState.state};
+    case 'client-update': return {要求更新:clientUpdateRequired()};
+    default: return {};
+  }
+}
+window.memoGuideShell={
+  parentPage:()=>helpDrawer ? page : undefined,
+  locationParts(){
+    let parts=[];
+    if (page==='memory' || page==='my-ai') parts=window.wanxMemory?.guidePath?.() || [];
+    if (page==='data') parts=dataView.guideContext?.()?.path || [];
+    if (page==='space') {
+      parts=Array.from(app.querySelectorAll('.space-pathbar .space-breadcrumbs button,.space-pathbar .space-breadcrumbs strong'),el=>el.textContent.trim());
+      if (app.querySelector('.annotation-workbench')) parts=['标注工作台'];
+    }
+    if (page==='boxes') parts=['我的设备'];
+    if (page==='notifications') parts=[notificationFilter==='unread'?'未读':'全部'];
+    if (page==='credits') parts=[app.querySelector('.wallet-record-tabs [aria-selected="true"]')?.textContent];
+    if (page==='accessories' && app.querySelector('.accessories-tab-host')) parts=['配件目录'];
+    const overlay=Array.from(document.querySelectorAll('dialog[open],[aria-modal="true"]')).filter(el=>
+      el.getClientRects().length && !el.closest('#academy-drawer-root,.starlink-panel-overlay,.faq-drawer')).at(-1);
+    const title=overlay?.getAttribute('aria-label') || document.getElementById(overlay?.getAttribute('aria-labelledby') || '')?.textContent || overlay?.querySelector('h2,h3')?.textContent;
+    if (helpDrawer || page==='help') {
+      const help=helpDrawer || app;
+      parts=['常见问题',help.querySelector('.faq-category[aria-pressed="true"] span')?.textContent];
+    } else if(title) parts=[...parts,title.replace('✨','').trim()];
+    return parts;
+  },
+  async snapshot(question){
+    const from=page;
+    if(helpDrawer)return {帮助主题:helpDrawer.querySelector('#faq-title')?.innerText || '问题与反馈'};
+    const facts=await guidePageSnapshot(question);
+    if(from!==page || !guideScope)return {};
+    const modal=[...app.querySelectorAll('dialog[open],[aria-modal="true"]')].find(el=>el.getClientRects().length);
+    const sections=['data','space','my-ai','memory','accessories'].includes(page) ? [] :
+      [...app.querySelectorAll('main h2,.page-heading h2,.settings-panel h3,.settings-panel summary,.page-content section h3,#dialogue-model-settings-host h3')].filter(el=>el.getClientRects().length).slice(0,9).map(el=>el.innerText.trim());
+    return {...facts,可见栏目:sections.join('、'),当前弹窗:modal?.getAttribute('aria-label') || modal?.querySelector('h2,h3')?.innerText};
+  },
+  async records(query,area){
+    const lookupVisible=root=>window.memoGuide.screenTargets(root,query).map(hit=>({...hit,open:()=>
+      window.memoGuide.screenTargets(root,query).find(live=>live.key===hit.key)?.open() || false}));
+    if(!guideScope || typeof query!=='string' || !query.trim() || query.length>120)return [];
+    if(helpDrawer)return lookupVisible(helpDrawer);
+    if(page==='data'){
+      const hits=await dataView.guideRecords(query,area);
+      if(hits?.length || area!=='page')return hits || [];
+    }
+    if(page==='space'){
+      const files=window.wanxSpace?.guideFiles(query,area);
+      if(files?.length || area==='selection')return files || [];
+    }
+    if(page==='memory' || page==='my-ai'){
+      const rows=await window.wanxMemory?.guideFacts({query,area});
+      if(Array.isArray(rows) && (rows.length || area==='selection'))return rows.map(hit=>({...hit,open:async()=>
+        await window.wanxMemory.guideFacts({query,area,key:hit.key})===true}));
+    }
+    if(page==='accessories'){
+      const entries=await accessoryPreview?.guideRecords(query);
+      if(entries?.length)return entries;
+    }
+    return lookupVisible(app);
+  },
+  questions(view=dataView.guideContext?.()?.view){
+    if(helpDrawer)return guideQuestions.help;
+    return (page==='data' && starlinkQuestions[view]) || guideQuestions[page] || [];
+  },
+  updateStarlinkQuestions(view){
+    if(page==='data'){
+      window.memoGuide?.showQuestions(this.questions(view));
+      window.memoGuide?.refreshLocation();
+    }
+  },
+  boxReady:()=>currentState?.canLaunchApplications === true,
+  connectionNotice:()=>boxConnectionNotice("assistant",true),
+  sync:()=>window.memoGuide?.sync(guideScope, {
+    ready:currentState?.canLaunchApplications === true,
+    owner: guideScope && JSON.stringify(currentState?.dataIdentity?.profileId ?
+      [currentState.dataIdentity.profileId,currentState.dataIdentity.generation] :
+      [currentState?.account?.accountId,currentState?.account?.clientId]),
+    box: currentState?.activeDeviceId,
+  }), page:()=>helpDrawer ? "help" : page,
+  project:()=>dataView.guideContext?.(), navigateView:(...args)=>dataView.guideNavigate(...args),
+  dismissOnBackground() {
+    if (academyDrawer?.isOpen() && !sidebarIntent) void requestSidebar(false, {restoreFocus:false});
+  },
+  async open(trigger) {
+    const modal=trigger?.closest('dialog:modal') || document.querySelector('dialog:modal');
+    if(modal) attachGuideToDialog(modal,trigger);
+    await requestSidebar(true,{section:'assistant'});
+    return academyDrawer?.isDialogueVisible();
+  },
+  point(key) {
+    if (page==='memory' && ['memory-source','backup'].includes(key)) {
+      memoryPage=key==='backup'?'backup':'memories';
+      memoryAgent='';
+      render(currentState);
+      return;
+    }
+    const focus={ 'space-folder':'#space-search','box-binding':'.box-overview','maintenance':'[data-detail-id="settings-maintenance"] summary',
+      'claim':'#console-claim-code','annotation':'#space-annotation-tags','model-default':'[data-guide-model-info]','space-redaction':'#space-redaction-heading' };
+    const node=focus[key] && app.querySelector(focus[key]);
+    if(node){node.scrollIntoView({block:'center'});if(node.tabIndex<0)node.tabIndex=-1;node.focus({preventScroll:true});}
+  },
+  go(destination) {
+    if(helpDrawer)return destination==='help';
+    if(!guideScope || !['my-ai','memory','data','space','boxes','accessories','settings','dialogue-models','help','profile','credits','notifications'].includes(destination))return false;
+    if(['my-ai','memory'].includes(page) && page!==destination && window.wanxMemory?.canLeaveForGuide?.()===false)return false;
+    if(page==='space' && window.wanxSpace?.canLeaveForGuide?.()===false)return false;
+    if(document.querySelector('dialog:modal') && page!==destination)return false;
+    if(page===destination)return true;
+    if(page==='provisioning'||activeInteraction||app.querySelector('dialog[open],[aria-modal="true"]') ||
+        (page==='data' && dataView.canLeave?.()===false))return false;
+    profileMenuOpen=false;page=destination;
+    if(page==='boxes')void refreshTransfers();
+    render(currentState);return page===destination;
+  }
+};
 let helpReturnPage = "memory";
 let helpReturnScroll = 0;
 let helpReturnLabel = "返回";
@@ -50,6 +215,7 @@ function closeHelpDrawer(restoreFocus = true) {
     trigger?.focus({ preventScroll: true });
   }
   helpDrawerTrigger = null;
+  window.memoGuideShell.sync();
 }
 function renderHelpDrawer() {
   if (!helpDrawer) return;
@@ -79,6 +245,7 @@ async function openHelpDrawer(target) {
   document.body.classList.add("faq-drawer-open");
   helpView?.open({ scene: target.dataset.scene });
   helpView?.visible(true);
+  window.memoGuideShell.sync();
   helpDrawer.addEventListener("click", async event => {
     const button = event.target.closest("[data-action]");
     if (!button || button.disabled) return;
@@ -307,23 +474,10 @@ const storeCarousel = window.createStoreCarousel();
 let profileMenuOpen = false;
 let notificationFilter = "all";
 let expandedNotificationId = null;
-const aiDialogueView = window.createAIDialogueView?.({
-  title: "知君", drawer: true, memory: true,
-  introduction: {
-    heading: "你好，我是知君。",
-    text: "我是你的记忆智能体。想记住什么，就告诉我。想起一件事时，哪怕只有一点线索，我也会陪你找回来。",
-    placeholder: "跟我说说，你想记住或想起什么？",
-  },
-  request: (action, input) => window.wanxClient.action(action, input),
-  resolvePageHelp: resolveAcademyPageHelp,
-  onBoxes: () => { page = "boxes"; render(currentState); },
-});
-const academyApi = window.wanxAcademyCopilot;
+const sidebarRoot = document.querySelector("#academy-drawer-root");
 let academyDrawer;
-academyDrawer = window.createAcademyDrawer?.({
-  root: document.querySelector("#academy-drawer-root"),
-  request: academyApi && ((method, input) => academyApi.action(method, input)),
-  onSuggestion: text => aiDialogueView?.fillSuggestion(text),
+academyDrawer = sidebarRoot && window.createAcademyDrawer?.({
+  root: sidebarRoot,
   onOpenChange: syncAcademyContents,
   onTabChange: syncAcademyContents,
   onSectionRequest: section => void requestSidebar(true, { section }),
@@ -331,13 +485,36 @@ academyDrawer = window.createAcademyDrawer?.({
 });
 const noteSidebar = window.wanxClipboard;
 let academyAvailable = false;
-let academyContextKey = "";
-let academyDialogueMounted = false;
-let pendingDialogueOpen = false;
-let pendingDialogueHandoff = null;
 let sidebarIntent = null;
+let guideDialogHost;
 
-async function requestSidebar(show, { restoreFocus = true, section, handoff } = {}) {
+function restoreGuideHost(restoreFocus = false) {
+  if (!guideDialogHost) return;
+  const {observer, trigger} = guideDialogHost;
+  guideDialogHost = null;
+  observer.disconnect();
+  if (sidebarRoot.matches(':popover-open')) sidebarRoot.hidePopover();
+  sidebarRoot.removeAttribute('popover');
+  document.body.append(sidebarRoot);
+  if (restoreFocus && trigger?.isConnected) trigger.focus({preventScroll:true});
+}
+
+function attachGuideToDialog(dialog, trigger) {
+  if (guideDialogHost?.dialog === dialog) return;
+  restoreGuideHost();
+  // Keep the guide inside the native modal's focus scope, above its content.
+  sidebarRoot.popover = 'manual';
+  dialog.append(sidebarRoot);
+  sidebarRoot.showPopover();
+  const observer = new MutationObserver(() => {
+    if (!dialog.open || !dialog.isConnected || !sidebarRoot.isConnected) restoreGuideHost();
+  });
+  observer.observe(document.body, {childList:true, subtree:true, attributes:true, attributeFilter:['open']});
+  guideDialogHost = {dialog, trigger, observer};
+  academyDrawer.setBlocked(false);
+}
+
+async function requestSidebar(show, { restoreFocus = true, section } = {}) {
   if (show && (!academyAvailable || academyDrawer?.isAvailable?.() === false)) return;
 
   const intent = { show };
@@ -355,9 +532,9 @@ async function requestSidebar(show, { restoreFocus = true, section, handoff } = 
     if (show) {
       if (!academyAvailable) return;
       academyDrawer?.open(section ?? "assistant");
-      if (handoff) aiDialogueView?.event(handoff);
     } else {
       academyDrawer?.close?.({ restoreFocus });
+      restoreGuideHost(restoreFocus);
     }
   } finally {
     if (sidebarIntent === intent) sidebarIntent = null;
@@ -375,82 +552,24 @@ function requestNoteSidebar(show, options) {
 }
 
 function syncAcademyContents() {
+  if (!academyDrawer?.isDialogueVisible()) document.querySelector("#guide-suggestions:popover-open")?.hidePopover();
   if (academyDrawer?.isNoteVisible?.()) noteSidebar?.open?.({ focus: false });
-  const visible = academyDrawer?.isDialogueVisible() === true;
-  if (visible && !academyDialogueMounted) {
-    const host = academyDrawer.dialogueHost();
-    aiDialogueView?.mount(host);
-    if (academyApi) academyDrawer.mountPageHelp(host.querySelector("[data-chat-composer]"), host.querySelector(".ai-page-actions"));
-    academyDialogueMounted = true;
-  }
-  aiDialogueView?.visible(visible);
-  syncAccessoriesPreview();
-}
-
-function openAcademyDialogue(handoff) {
-  if (!currentState) {
-    pendingDialogueOpen = true;
-    pendingDialogueHandoff = handoff ?? pendingDialogueHandoff;
-    return;
-  }
-  void requestSidebar(true, { section: "dialogue", handoff });
-}
-
-function getAcademyContext() {
-  if (page === "applications") {
-    if (applicationsTab === "local") return { module: "my-apps" };
-    return { module: "app-market" };
-  }
-  if (page === "application-detail") return { module: "app-detail" };
-  if (page === "workshop") {
-    const { stage, errorCode } = workshop.copilotContext();
-    return { module: "workshop", stage, errorCode };
-  }
-  const knownPage = ["data", "space", "boxes", "settings", "profile", "notifications", "credits", "help", "client-update", "dialogue-models"].includes(page);
-  return { module: knownPage ? page : "general" };
-}
-
-function resolveAcademyPageHelp() {
-  if (!academyApi || !academyDrawer?.isPageHelpEnabled()) return "";
-  const context = getAcademyContext();
-  return Promise.resolve().then(() => academyApi.action("context", context)).then(result => {
-    const help = result?.ok && academyDrawer.formatPageHelp(result.value);
-    if (!help) throw new Error("PAGE_HELP_UNAVAILABLE");
-    return help;
-  });
 }
 
 function syncAcademyContext(available) {
   academyAvailable = available;
   noteSidebar?.setActive?.(available);
   academyDrawer?.setAvailable(available);
-  if (!available) {
-    academyContextKey = "";
-    return;
-  }
-  const context = getAcademyContext();
-  const key = JSON.stringify(context);
-  if (key !== academyContextKey && academyApi) {
-    academyContextKey = key;
-    void academyApi.action("context", context).then(result => {
-      if (academyContextKey !== key) return;
-      if (result?.ok) academyDrawer?.sync?.(result.value);
-      else academyContextKey = "";
-    }).catch(() => {
-      if (academyContextKey === key) academyContextKey = "";
-    });
-  }
 }
 
 function syncAcademyModal() {
-  const blocked = Boolean(app.querySelector?.('[aria-modal="true"], dialog[open]'));
+  const blocked = !guideDialogHost && Boolean(app.querySelector?.('dialog:modal'));
   academyDrawer?.setBlocked(blocked);
   syncAcademyContents();
 }
 
 const dialogueModelSettings = window.createDialogueModelSettingsView?.({
   request: (action, input) => window.wanxClient.action(action, input),
-  onSaved: () => aiDialogueView?.modelsChanged(),
 });
 let restoringWalletFocus = false;
 function restoreWalletFocus(element) {
@@ -784,7 +903,7 @@ function deviceCard(device) {
         : needsSetup ? `<button class="button small" data-action="provisioning" ${busy ? "disabled" : ""}>配置盒子</button>`
           : `<span class="muted">${escapeHTML(statusLabel(device))}</span>`;
   return `<article class="device-card ${selected ? "selected" : ""}">
-    <img class="device-icon" src="./assets/centaurai-mark.png" alt="" />
+    <span class="box-connect-icon">${boxConnectionIcon}</span>
     <div class="device-main"><h3>${escapeHTML(device.name || device.displayName || "盒子")}</h3><p class="device-meta"><span class="status-dot ${selected ? "ready" : ""}"></span>${device.local ? "本机服务 · " : ""}${escapeHTML(statusLabel(device))}</p>${device.accessState === "authorization_pending" ? `<p class="device-meta">${authorizationHint()}</p>` : ""}${networkHint ? `<p class="device-meta" role="status">${escapeHTML(networkHint)}</p>` : ""}${connectionFailure?.deviceId === device.deviceId ? `<p class="inline-error" role="alert">${escapeHTML(connectionFailure.message)} <button class="text-button" data-action="show-help" data-scene="box_connection">查看常见问题</button></p>` : ""}</div>
     <div class="device-action">${action}${!currentState.dataIdentity?.profileId && (device.deviceRole === "owner" || device.role === "owner") ? `${!device.local ? `<button class="text-button" data-action="configure-network" data-device-id="${escapeHTML(device.deviceId)}" ${busy ? "disabled" : ""}>配置网络</button>` : ""}<button class="text-button" data-action="support-open" data-device-id="${escapeHTML(device.deviceId)}" ${busy ? "disabled" : ""}>远程协助</button><button class="text-button" data-action="transfer-open" data-device-id="${escapeHTML(device.deviceId)}" ${busy ? "disabled" : ""}>转移所有权</button>` : ""}</div></article>`;
 }
@@ -814,6 +933,47 @@ function profileAvatar(large = false) {
   const avatar = typeof profile.avatarDataUrl === "string" && /^data:image\/png;base64,[A-Za-z0-9+/]+=*$/.test(profile.avatarDataUrl) && profile.avatarDataUrl.length <= 512000 ? profile.avatarDataUrl : null;
   return `<span class="user-avatar ${large ? "large" : ""}">${avatar ? `<img src="${avatar}" alt="用户头像" />` : `<span aria-hidden="true">${escapeHTML(Array.from(profile.displayName || "我")[0])}</span>`}</span>`;
 }
+const boxFeatureNames = {
+  memory: "记忆", data: "星图", space: "私有云文件", accessories: "配件功能",
+  assistant: "全局助手", maintenance: "盒子运维工具", notifications: "盒端任务通知",
+};
+const boxConnectionButton = 'type="button" data-box-connection';
+const boxConnectionIcon = '<span class="box-connect-glyph" aria-hidden="true"></span>';
+function boxConnectionLabel() {
+  if (currentState?.recovery?.status === "retrying" || currentState?.connectionPhase === "recovering") return "正在重连盒子";
+  if (["connecting", "resolving"].includes(currentState?.connectionPhase) || busyFor("devices.connect")) return "正在连接盒子";
+  if (connectionFailure || currentState?.recovery?.status === "failed") return "盒子连接失败";
+  return "盒子未连接";
+}
+function boxConnectionNotice(feature, compact = false) {
+  const label = boxConnectionLabel();
+  const description = feature === "space" ? "连接盒子后可访问私有云文件。" : "连接盒子后可使用" + boxFeatureNames[feature] + "。";
+  return `<section class="box-connect-notice${compact ? " compact" : ""}" aria-label="${boxFeatureNames[feature]}连接提示">
+    <span class="box-connect-icon">${boxConnectionIcon}</span>
+    <div class="box-connect-copy" role="status"><strong>${label}</strong><p>${description}</p></div>
+    <button class="box-connect-button" ${boxConnectionButton}>连接盒子</button>
+  </section>`;
+}
+function openBoxConnectionPage() {
+  if (!currentState || currentState.route === "auth") return;
+  if (page === "provisioning" || marketConfirmation || document.querySelector('dialog:modal') ||
+      (page === "space" && window.wanxSpace?.canLeaveForGuide?.() === false) ||
+      (page === "my-ai" && window.wanxMemory?.canLeaveForGuide?.() === false)) return;
+  if (academyDrawer?.isOpen()) void requestSidebar(false,{restoreFocus:false});
+  page = "boxes";
+  profileMenuOpen = false;
+  notice = null;
+  render(currentState);
+  void refreshTransfers();
+  const target = currentState.devices?.length ? app.querySelector("#box-device-list") : app.querySelector("#box-add-device");
+  target?.focus({preventScroll:true});
+  target?.scrollIntoView?.({block:currentState.devices?.length ? "start" : "nearest"});
+}
+document.addEventListener("click",event => {
+  const button = event.target.closest('[data-box-connection]');
+  if (button && !button.disabled) openBoxConnectionPage();
+});
+
 function shellHeader(title) {
   const activePage = page === "provisioning" ? "boxes" : page;
   const name = currentState.account?.profile?.displayName || "用户";
@@ -821,21 +981,22 @@ function shellHeader(title) {
     <button class="brand brand-button" data-action="desktop-about" aria-label="关于${clientBrand}"><img class="brand-mark" src="./assets/centaurai-mark.png" alt="" />${clientBrandCopy}</button>
     <h1 class="sr-only">${title}</h1>
     <nav class="main-nav" aria-label="管理导航">${[["my-ai", "我的 AI"], ["memory", "记忆"], ["data", "星图"], ["space", "空间"], ["boxes", "盒子"], ["accessories", "配件"]].map(([destination, label]) => `<button class="nav-item ${activePage === destination ? "active" : ""}" data-action="show-${destination}" ${activePage === destination ? 'aria-current="page"' : ""} ${page === "provisioning" ? "disabled" : ""}>${label}</button>`).join("")}</nav>
-    <div class="header-personal"><button class="notification-trigger ${page === "notifications" ? "active" : ""}" data-action="show-notifications" aria-label="通知中心，${currentState.notifications?.unreadCount || 0} 条未读" title="通知中心" ${page === "provisioning" ? "disabled" : ""}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 9v6h4l8 4V5L7 9H3Z" stroke-linejoin="round"/><path d="m7 15 1 5h3l-1-4M18 8c2 2 2 6 0 8" stroke-linecap="round" stroke-linejoin="round"/></svg>${currentState.notifications?.unreadCount > 0 ? `<span class="notification-badge" aria-hidden="true">${currentState.notifications.unreadCount > 99 ? "99+" : currentState.notifications.unreadCount}</span>` : ""}</button><div class="account-menu"><button class="avatar-trigger" data-action="profile-menu" aria-label="个人资料与设置" aria-expanded="${profileMenuOpen}" aria-controls="profile-menu" ${page === "provisioning" ? "disabled" : ""}>${profileAvatar()}<span aria-hidden="true">⌄</span></button>
+    <div class="header-personal">${!currentState.canLaunchApplications && page !== "provisioning" ?
+      `<button class="box-connect-status" ${boxConnectionButton} title="${boxConnectionLabel()} · 前往盒子">${boxConnectionIcon}<span class="box-connect-label">${boxConnectionLabel()}</span></button>` : ""}<button class="notification-trigger ${page === "notifications" ? "active" : ""}" data-action="show-notifications" aria-label="通知中心，${currentState.notifications?.unreadCount || 0} 条未读" title="通知中心" ${page === "provisioning" ? "disabled" : ""}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 9v6h4l8 4V5L7 9H3Z" stroke-linejoin="round"/><path d="m7 15 1 5h3l-1-4M18 8c2 2 2 6 0 8" stroke-linecap="round" stroke-linejoin="round"/></svg>${currentState.notifications?.unreadCount > 0 ? `<span class="notification-badge" aria-hidden="true">${currentState.notifications.unreadCount > 99 ? "99+" : currentState.notifications.unreadCount}</span>` : ""}</button><div class="account-menu"><button class="avatar-trigger" data-action="profile-menu" aria-label="个人资料与设置" aria-expanded="${profileMenuOpen}" aria-controls="profile-menu" ${page === "provisioning" ? "disabled" : ""}>${profileAvatar()}<span aria-hidden="true">⌄</span></button>
     ${profileMenuOpen ? `<div class="profile-menu" id="profile-menu"><div class="profile-menu-identity"><strong>${escapeHTML(name)}</strong><small>${escapeHTML(currentState.account?.maskedPhone || "云账号")}</small></div>${currentState.account?.phase === "authenticated" ? `<button data-action="show-profile">个人资料<span>›</span></button>` : `<button data-action="cloud-login">登录云账号<span>›</span></button>`}<button data-action="show-credits">积分<span class="profile-credit-balance">${escapeHTML(creditsView.label())} ›</span></button><button data-action="show-settings">设置<span>›</span></button><button data-action="show-help">问题与反馈<span>›</span></button><div class="profile-menu-divider"></div><button data-action="logout" class="${busyFor("auth.logout") ? "activity-button" : ""}" aria-busy="${busyFor("auth.logout")}" ${busy ? "disabled" : ""}>${busyFor("auth.logout") ? activityLabel("正在退出…") : currentState.account?.phase === "authenticated" ? "退出云账号" : "未登录云账号"}</button></div>` : ""}</div></div></header>${clientUpdateRequired() && page !== "client-update" ? clientUpdateRequirementNotice() : ""}`;
 }
 function accessoriesView() {
   return `<div class="app-layout accessories-layout">${shellHeader("配件")}
+    <header class="wanx-section-banner" data-section="accessories">
+      ${personalModuleHeading("accessories", "配件", "查看录音和存储配件，打开对应工具。")}
+    </header>
+    ${!currentState.canLaunchApplications ? `<div class="page-content">${boxConnectionNotice("accessories")}</div>` : `
     <section class="accessories-tab-host" aria-label="配件工作台">
       <div class="accessories-tab-feedback" data-accessories-feedback>
         <p role="status">正在打开配件工作台…</p>
         <button type="button" class="button small" data-action="accessories-preview-retry" hidden>重试</button>
       </div>
-    </section></div>`;
-}
-function syncAccessoriesPreview() {
-  const visible = accessoryPageVisible && !profileMenuOpen && !marketConfirmation && !helpDrawer && !academyDrawer?.isOpen?.();
-  accessoryPreview?.mount(visible ? app.querySelector(".accessories-tab-host") : null);
+    </section>`}</div>`;
 }
 function profileView() {
   const account = currentState.account || {}, profile = account.profile || {};
@@ -846,7 +1007,7 @@ function profileView() {
     <section class="profile-card"><div class="profile-avatar-row"><button class="profile-avatar-button" data-action="profile-avatar" aria-label="上传头像" ${busy ? "disabled" : ""}>${profileAvatar(true)}<span>更换头像</span></button><div><h3>你的头像</h3><p class="muted">支持 JPG、PNG，最大 5 MB。图片将居中裁为方形。</p><div class="settings-actions"><button class="button small ${busyFor("profile.avatar") ? "activity-button" : ""}" data-action="profile-avatar" aria-busy="${busyFor("profile.avatar")}" ${busy ? "disabled" : ""}>${busyFor("profile.avatar") ? activityLabel("正在更新…") : "上传头像"}</button>${profile.avatarDataUrl ? `<button class="text-button ${busyFor("profile.avatar-remove") ? "activity-button" : ""}" data-action="profile-avatar-remove" aria-busy="${busyFor("profile.avatar-remove")}" ${busy ? "disabled" : ""}>${busyFor("profile.avatar-remove") ? activityLabel("正在恢复…") : "恢复默认"}</button>` : ""}</div></div></div>${avatarPending ? `<p class="muted activity-status" role="status">${activityLabel("正在更新头像…")}</p>` : ""}
     <form data-form="profile"><label for="profile-name">昵称</label><input id="profile-name" name="displayName" value="${escapeHTML(profile.displayName || "用户")}" maxlength="80" required autocomplete="nickname" /><p class="muted">最多 40 个字符，昵称不会改变登录账号。</p><button class="button primary ${busyFor("profile.save") ? "activity-button" : ""}" type="submit" aria-busy="${busyFor("profile.save")}" ${busy ? "disabled" : ""}>${busyFor("profile.save") ? activityLabel("正在保存…") : "保存资料"}</button></form></section>
     <section class="profile-card profile-credits"><div><h3>积分</h3><p class="profile-credit-balance">${escapeHTML(creditsView.label())}</p></div><button class="button small" data-action="show-credits">查看积分明细<span aria-hidden="true"> ›</span></button></section>
-    <section class="profile-card profile-account"><h3>云账号</h3><dl><dt>绑定手机号</dt><dd>${escapeHTML(account.maskedPhone || "暂未提供")}</dd><dt>资料保存</dt><dd>当前电脑</dd></dl><p class="muted">头像和昵称仅保存在这台电脑，按云账号分别保存。</p></section>
+    <section class="profile-card profile-account"><h3>云账号 ${guideMarker("cloud-account","云账号")}</h3><dl><dt>绑定手机号</dt><dd>${escapeHTML(account.maskedPhone || "暂未提供")}</dd><dt>资料保存</dt><dd>当前电脑</dd></dl><p class="muted">头像和昵称仅保存在这台电脑，按云账号分别保存。</p></section>
     </div></div>`;
 }
 
@@ -858,13 +1019,13 @@ function notificationView() {
     <div class="page-heading"><div><h2>通知中心</h2><p class="muted">应用动态与任务进展，都在这里。</p></div><button class="button" data-action="notifications-refresh" ${busy ? "disabled" : ""}>刷新</button></div>
     ${notice ? `<div class="notice error" role="status">${escapeHTML(notice)}</div>` : ""}
     <div class="notification-toolbar"><div class="notification-filters" role="group" aria-label="筛选通知"><button data-action="notifications-filter" data-filter="all" aria-pressed="${notificationFilter === "all"}">全部</button><button data-action="notifications-filter" data-filter="unread" aria-pressed="${notificationFilter === "unread"}">未读${center.unreadCount ? ` ${center.unreadCount}` : ""}</button></div><button class="text-button" data-action="notifications-read-all" ${!center.unreadCount || busy ? "disabled" : ""}>全部已读</button></div>
-    ${status ? `<p class="muted notification-sync" role="status">${status}</p>` : ""}
+    ${!currentState.canLaunchApplications ? boxConnectionNotice("notifications",true) : status ? `<p class="muted notification-sync" role="status">${status}</p>` : ""}
     ${center.storageError ? `<p class="notice error" role="status">通知暂时无法保存在本机，请检查系统安全存储后重启记忆盒子。</p>` : ""}
     <section class="notification-list" aria-label="消息列表">${items.length ? items.map(item => {
       const expanded = expandedNotificationId === item.id;
       const date = new Date(item.createdAt);
       const time = Number.isFinite(date.getTime()) ? new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(date) : "";
-      return `<article class="notification-card ${item.readAt ? "" : "unread"}"><span class="notification-kind" aria-hidden="true">${item.category === "task" ? "↗" : item.category === "system" ? "◈" : "▦"}</span><div class="notification-main"><button class="notification-summary" data-action="notifications-select" data-id="${escapeHTML(item.id)}" aria-expanded="${expanded}"><span class="notification-title">${escapeHTML(item.title)}${!item.readAt ? '<i class="notification-unread-dot" aria-label="未读"></i>' : ""}</span><span class="notification-meta">${item.category === "task" ? "任务消息" : item.category === "system" ? "系统通知" : "应用动态"}${item.deviceName ? ` · ${escapeHTML(item.deviceName)}` : ""}<time>${escapeHTML(time)}</time></span><span class="notification-body ${expanded ? "expanded" : ""}">${escapeHTML(item.body)}</span></button></div></article>`;
+      return `<article class="notification-card ${item.readAt ? "" : "unread"}"><span class="notification-kind" aria-hidden="true">${item.category === "task" ? "↗" : item.category === "system" ? "◈" : "▦"}</span><div class="notification-main"><button class="notification-summary" data-guide-record="${escapeHTML(item.id)}" data-guide-title="${escapeHTML(item.title)}" data-action="notifications-select" data-id="${escapeHTML(item.id)}" aria-expanded="${expanded}"><span class="notification-title">${escapeHTML(item.title)}${!item.readAt ? '<i class="notification-unread-dot" aria-label="未读"></i>' : ""}</span><span class="notification-meta">${item.category === "task" ? "任务消息" : item.category === "system" ? "系统通知" : "应用动态"}${item.deviceName ? ` · ${escapeHTML(item.deviceName)}` : ""}<time>${escapeHTML(time)}</time></span><span class="notification-body ${expanded ? "expanded" : ""}">${escapeHTML(item.body)}</span></button></div></article>`;
     }).join("") : `<div class="notification-empty"><span aria-hidden="true">✧</span><h3>${notificationFilter === "unread" ? "未读消息都看完了" : "暂时没有通知"}</h3><p class="muted">有新的应用动态或任务进展时，会在这里提醒你。</p></div>`}</section>
     <p class="muted notification-footnote">通知按当前账号保存在这台电脑。</p>
   </div></div>`;
@@ -1249,19 +1410,21 @@ function activeMemorySection() {
 function memoryView(section) {
   const title = section === "my-ai" ? "我的 AI" : "智能体记忆";
   const banner = section === "my-ai" ? `<header class="wanx-section-banner my-ai-banner" data-section="my-ai">
-    ${personalModuleHeading("my-ai", "我的 AI", "管理智能体、采集会话记忆，把盒子里的资料带给 AI。")}
+    ${personalModuleHeading("my-ai", "我的 AI", '为智能体选择本次任务的资料范围'+guideMarker('task-access','任务资料范围')+'，管理会话记忆采集。')}
   </header>` : `<header class="wanx-section-banner memory-banner" data-section="memory">
-    ${personalModuleHeading("memory", title, "查看 AI 从会话中整理的记忆，管理本机记忆库的备份和恢复。")}
+    ${personalModuleHeading("memory", title, '按记忆来源'+guideMarker('memory-source','记忆来源')+'查看记录，管理本机记忆库的备份和恢复。')}
   </header>`;
   return `<div class="app-layout memory-layout">${shellHeader(title)}${banner}
-    <div class="memory-host" data-memory-section="${section}" data-memory-agent="${page === "memory" ? escapeHTML(memoryAgent) : ""}" data-memory-page="${page === "memory" ? memoryPage : ""}"></div></div>`;
+    ${section !== "my-ai" && !currentState.canLaunchApplications ?
+      `<div class="page-content">${boxConnectionNotice("memory")}</div>` :
+      `<div class="memory-host" data-memory-section="${section}" data-memory-agent="${page === "memory" ? escapeHTML(memoryAgent) : ""}" data-memory-page="${page === "memory" ? memoryPage : ""}"></div>`}</div>`;
 }
 
 window.addEventListener?.("wanx:accessory-project", event => {
-  if (!currentState || page !== "memory") return;
-  accessoryPreview?.openProject(event.detail);
-  page = "accessories";
-  render(currentState);
+  if (!currentState?.canLaunchApplications || page !== "memory") return;
+  void window.wanxClient.action("accessories-preview", {project:event.detail}).then(result => {
+    if (!result.ok) window.alert("无法打开来源录音，请检查当前账号和客户端连接。");
+  });
 });
 window.addEventListener?.("wanx:view-agent-memory", event => {
   if (!currentState || page !== "my-ai") return;
@@ -1278,8 +1441,8 @@ window.addEventListener?.("wanx:my-ai-destination", event => {
     memoryPage = "backup";
     page = "memory";
   } else if (event.detail === "boxes") {
-    page = "boxes";
-    void refreshTransfers();
+    openBoxConnectionPage();
+    return;
   } else return;
   profileMenuOpen = false;
   notice = null;
@@ -1289,7 +1452,7 @@ window.addEventListener?.("wanx:my-ai-destination", event => {
 function spaceView() {
   return `<div class="app-layout space-app-layout">${shellHeader("空间")}
     <div class="page-content space-page-content space-files-page">
-      <header class="wanx-section-banner" data-section="space">${personalModuleHeading("space", "私有云空间", "在自己的盒子上存储和管理文件，按权限访问与共享。")}${window.wanxSpace?.headerActions?.() || ""}</header>
+      <header class="wanx-section-banner" data-section="space">${personalModuleHeading("space", "私有云空间", "在个人空间"+guideMarker("space-folder","个人空间")+"存储和管理文件，按权限访问与共享。")}${window.wanxSpace?.headerActions?.() || ""}</header>
       <div class="personal-space-browser">${window.wanxSpace?.view() || ""}</div>
     </div>
   </div>`;
@@ -1301,13 +1464,13 @@ function settingsView() {
     <div class="page-heading"><h2>设置</h2><p class="muted">管理账号、模型、设备与客户端偏好。</p></div>
     ${notice && !passwordEditing ? `<div class="notice ${codeSent ? "success" : "error"}" role="status">${escapeHTML(notice)}</div>` : ""}
     ${versionUpdatesView()}
-    <section class="settings-panel" aria-label="空间 MCP"><div><h3>空间 MCP</h3><p class="muted">通用 MCP 的资料授权、记忆归档与接入管理统一在空间中完成。</p></div><button class="button small" data-action="show-space" data-agent-hub-open>管理连接 →</button></section>
     <div id="space-redaction-settings-host"></div>
-    <section class="settings-panel"><div><h3>云账号</h3><p class="muted">${currentState.dataIdentity?.profileId ? "云账号用于市场与计费。本地数据访问由可信设备授权管理。" : "已登录云账号。退出后将断开盒子连接，客户端继续在后台运行。"}</p></div><div class="settings-actions">${currentState.account?.phase === "authenticated" ? `<button class="button small" data-action="password-open" ${busy ? "disabled" : ""}>修改密码</button><button class="button small ${busyFor("auth.logout") ? "activity-button" : ""}" data-action="logout" aria-busy="${busyFor("auth.logout")}" ${busy ? "disabled" : ""}>${busyFor("auth.logout") ? activityLabel("正在退出…") : currentState.dataIdentity?.profileId ? "退出云账号" : "退出当前账号"}</button>` : `<button class="button small" data-action="cloud-login">登录云账号</button>`}</div></section>
+    <section class="settings-panel"><div><h3>云账号 ${guideMarker("cloud-account","云账号")}</h3><p class="muted">${currentState.dataIdentity?.profileId ? "云账号用于市场与计费。本地数据访问由可信设备授权管理。" : "已登录云账号。退出后将断开盒子连接，客户端继续在后台运行。"}</p></div><div class="settings-actions">${currentState.account?.phase === "authenticated" ? `<button class="button small" data-action="password-open" ${busy ? "disabled" : ""}>修改密码</button><button class="button small ${busyFor("auth.logout") ? "activity-button" : ""}" data-action="logout" aria-busy="${busyFor("auth.logout")}" ${busy ? "disabled" : ""}>${busyFor("auth.logout") ? activityLabel("正在退出…") : currentState.dataIdentity?.profileId ? "退出云账号" : "退出当前账号"}</button>` : `<button class="button small" data-action="cloud-login">登录云账号</button>`}</div></section>
     ${passwordEditing ? `<section class="password-panel"><h3>修改密码</h3><p class="muted">验证码将发送至当前账号${currentState.account?.maskedPhone ? `（${escapeHTML(currentState.account.maskedPhone)}）` : "绑定的手机号"}。修改后所有设备上的旧登录将失效，请重新登录。</p><form data-form="password-change" novalidate><label for="change-password">新密码</label><input id="change-password" name="password" type="password" required autocomplete="new-password" placeholder="设置 8–72 字节的新密码" />${passwordFields("change", "send-change-code", changeResendAt)}<div data-password-notice class="notice ${codeSent ? "success" : "error"}" role="status" ${notice ? "" : "hidden"}>${escapeHTML(notice)}</div><div class="settings-actions"><button type="button" class="button" data-action="password-cancel" ${busy ? "disabled" : ""}>取消</button><button type="submit" class="button primary" ${busy ? "disabled" : ""}>${busy ? busyRequest?.action === "auth.change-password" ? "正在修改…" : "处理中…" : "确认修改"}</button></div></form></section>` : ""}
     <section class="settings-panel"><div><h3>登录电脑时启动</h3><p class="muted ${busyFor("desktop.startup.set") ? "activity-status" : ""}" role="status">${busyFor("desktop.startup.set") ? activityLabel("正在保存设置…") : escapeHTML(startup.reason || (startup.supported ? startup.status === "requires-approval" ? "请在系统设置中允许登录项。" : "在菜单栏静默启动，随时打开应用。" : "安装正式应用后可设置开机启动。"))}</p></div><button class="switch" role="switch" aria-checked="${Boolean(startup.enabled)}" aria-label="登录电脑时启动" aria-busy="${busyFor("desktop.startup.set")}" data-action="startup-toggle" ${busy || !startup.supported ? "disabled" : ""}><span></span></button></section>
 
-    ${maintenanceToolsView()}
+    <section class="settings-panel"><div data-guide-model-info><h3>CentaurAI 模型 ${guideMarker("model-default","默认模型")}</h3><p>跟随当前盒子的默认文本模型</p></div></section>
+    ${!currentState.canLaunchApplications && !currentState.dataIdentity?.profileId ? boxConnectionNotice("maintenance",true) : maintenanceToolsView()}
     <section class="settings-panel" aria-label="常见问题"><div><h3>常见问题</h3><p class="muted">查看登录、盒子连接和日常使用的帮助。</p></div><button class="button small" data-action="show-help">查看帮助 →</button></section>
     <section class="settings-panel"><div><h3>关于${clientBrand}</h3><p class="muted">${clientBrandEnglish}</p></div><button class="button small" data-action="desktop-about">关于</button></section>
     <div class="settings-foot"><p class="muted">关闭窗口后，记忆盒子继续在后台运行。完全退出请在应用菜单中选择“退出记忆盒子”。</p></div>
@@ -1321,8 +1484,8 @@ function resourceSize(value) {
   return `${amount.toFixed(unit ? 1 : 0)} ${["B", "KB", "MB", "GB", "TB"][unit]}`;
 }
 function personalModuleHeading(kind, title, subtitle) {
-  const english = {applications:"Apps",space:"Private Cloud",boxes:"Devices",starlink:"Starlink",memory:"agent memory","my-ai":"My AI"};
-  const paths = {starlink:'M7 7 17 6m-9 3 5 8m3-9-2 8M7 7a2 2 0 1 0-4 0 2 2 0 0 0 4 0zm14-1a2 2 0 1 0-4 0 2 2 0 0 0 4 0zm-5 13a2 2 0 1 0-4 0 2 2 0 0 0 4 0z',applications:'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z',space:'M3 7h7l2 2h9v11H3zM3 7V4h7l2 3',boxes:'M4 4h16v16H4zM4 14h16M8 17h.01M11 17h.01',memory:'M7 7V5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-2M5 7h11a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2zm2 5h7m-7 4h4',"my-ai":'M10 13a4 4 0 0 0 6 .5l4-4a4 4 0 0 0-6-5l-2 2m2 4a4 4 0 0 0-6-.5l-4 4a4 4 0 0 0 6 5l2-2'};
+  const english = {applications:"Apps",space:"Private Cloud",boxes:"Devices",accessories:"Accessories",starlink:"Starlink",memory:"agent memory","my-ai":"My AI"};
+  const paths = {starlink:'M7 7 17 6m-9 3 5 8m3-9-2 8M7 7a2 2 0 1 0-4 0 2 2 0 0 0 4 0zm14-1a2 2 0 1 0-4 0 2 2 0 0 0 4 0zm-5 13a2 2 0 1 0-4 0 2 2 0 0 0 4 0z',applications:'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z',space:'M3 7h7l2 2h9v11H3zM3 7V4h7l2 3',boxes:'M4 4h16v16H4zM4 14h16M8 17h.01M11 17h.01',accessories:'M9 3v5m6-5v5M7 8h10v3a5 5 0 0 1-10 0zm5 8v5',memory:'M7 7V5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-2M5 7h11a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2zm2 5h7m-7 4h4',"my-ai":'M10 13a4 4 0 0 0 6 .5l4-4a4 4 0 0 0-6-5l-2 2m2 4a4 4 0 0 0-6-.5l-4 4a4 4 0 0 0 6 5l2-2'};
   return `<div class="personal-module-title"><span class="personal-module-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="${paths[kind]}"/></svg></span><div><h2>${title} <span class="wanx-section-english">${english[kind]}</span></h2><p>${subtitle}</p></div></div>`;
 }
 
@@ -1337,11 +1500,19 @@ function boxesView() {
   const network = networkStatus();
   const status = currentState.recovery?.status === "failed" ? "连接已中断，请点击“刷新设备”重连" : currentState.recovery?.status === "retrying" ? `正在重连 · 第 ${currentState.recovery.attempt} 次尝试` : ready ? "连接正常" : currentState.connectionPhase === "recovering" ? "正在恢复连接" : currentState.connectionPhase === "connecting" ? "正在连接" : "尚未连接";
   return `<div class="app-layout" ${marketConfirmation ? "inert" : ""}>${shellHeader("盒子")}<div class="page-content space-page-content box-page-content">
-    <div class="page-heading wanx-section-banner" data-section="boxes">${personalModuleHeading("boxes", "我的设备", "连接设备，查看状态，维护盒子上的服务。")}<div class="settings-actions"><button class="button small ${refreshing ? "activity-button" : ""}" data-action="refresh" aria-busy="${refreshing}" ${busy ? "disabled" : ""}>${refreshing ? '<span class="activity-spinner" aria-hidden="true"></span>正在刷新…' : "刷新设备"}</button><button class="button primary small" data-action="provisioning" ${busy ? "disabled" : ""}>＋ 添加盒子</button><button class="text-button box-faq-entry" data-action="show-help" data-scene="box_connection">常见问题 ›</button></div></div>
+    <div class="page-heading wanx-section-banner" data-section="boxes">${personalModuleHeading("boxes", "我的设备", "连接设备，查看状态，维护盒子上的服务。")}</div>
     ${pendingOpenView()}${notice ? `<div class="notice error" role="status">${escapeHTML(notice)}</div>` : ""}
-    <section class="box-overview" aria-label="当前盒子"><div class="box-overview-heading"><div class="box-identity"><img src="./assets/centaurai-mark.png" alt=""/><div><span class="box-eyebrow">当前使用的盒子</span><h3 class="current-device">${currentState.activeDeviceId ? escapeHTML(activeDeviceName()) : "尚未连接盒子"}</h3><p>${ready ? currentState.connection?.mode === "local" ? "这台电脑 · 文件与服务在本机运行" : "盒子连接 · 已建立盒子连接" : network.detail}</p><div class="box-addresses" aria-label="盒子 IP" title="当前盒子的局域网地址"><span>盒子 IP</span>${lanIPs.length ? lanIPs.map(address => `<code>${escapeHTML(address)}</code>`).join("") : `<span>${ready ? "暂未获取盒子内网 IP" : "连接后显示"}</span>`}</div></div></div><span class="box-status ${ready ? "ready" : ""}"><i class="status-dot ${ready ? "ready" : ""}"></i>${status}</span></div>
+    <section class="box-overview" aria-label="当前盒子"><div class="box-overview-heading"><div class="box-identity"><span class="box-connect-icon">${boxConnectionIcon}</span><div><span class="box-eyebrow">当前使用的盒子 ${guideMarker("box-binding","盒子授权")}</span><h3 class="current-device">${currentState.activeDeviceId ? escapeHTML(activeDeviceName()) : "尚未连接盒子"}</h3><p>${ready ? currentState.connection?.mode === "local" ? "这台电脑 · 文件与服务在本机运行" : "盒子连接 · 已建立盒子连接" : network.detail}</p><div class="box-addresses" aria-label="盒子 IP" title="当前盒子的局域网地址"><span>盒子 IP</span>${lanIPs.length ? lanIPs.map(address => `<code>${escapeHTML(address)}</code>`).join("") : `<span>${ready ? "暂未获取盒子内网 IP" : "连接后显示"}</span>`}</div></div></div><span class="box-status ${ready ? "ready" : ""}"><i class="status-dot ${ready ? "ready" : ""}"></i>${status}</span></div>
     <div class="box-resource-grid"><div><span>可用存储</span><strong>${resourceSize(volume?.free)}</strong><small>${volume ? `总容量 ${resourceSize(volume.total)}` : ready ? "暂未获取存储指标" : "连接后显示实际状态"}</small></div><div><span>应用与服务占用</span><strong>${storage && !storage.complete ? "≥ " : ""}${resourceSize(storage?.bytes)}</strong><small title="记忆盒子数据、应用与运行组件，含日志、缓存、历史版本和回收站；重叠文件仅计一次。按文件大小汇总，每 30 秒更新。">${storage ? storage.complete ? "数据、应用与运行组件" : "部分目录暂时无法读取" : ready ? "等待盒子返回完整统计" : "连接后显示实际状态"}</small></div><div><span>CPU 使用率</span><strong>${cpu ? `${cpu.percent.toFixed(1)}%` : "—"}</strong><small>${cpu ? "盒子当前负载" : ready ? "暂未获取 CPU 指标" : "连接后显示实际状态"}</small></div><div><span>内存使用</span><strong>${memory ? `${memory.percent.toFixed(1)}%` : "—"}</strong><small>${memory ? `${resourceSize(memory.used)} / ${resourceSize(memory.total)}` : ready ? "暂未获取内存指标" : "连接后显示实际状态"}</small></div></div></section>
-    <section class="content-section" aria-label="设备管理"><div class="box-section-heading"><div><h3>已关联的盒子 <span class="count">${devices.length}</span></h3><p class="muted ${refreshing ? "activity-status" : ""}" role="status">${refreshing ? '<span class="activity-spinner" aria-hidden="true"></span>正在读取最新设备状态…' : "连接或切换盒子后，文件空间和应用将使用所选盒子。"}</p></div></div>${devices.length ? `<div class="box-device-grid">${devices.map(deviceCard).join("")}</div>` : `<div class="empty-state"><h3>还没有盒子</h3><p>发现附近的盒子，完成配网和账号绑定。</p><button class="button small" data-action="provisioning">添加盒子</button></div>`}</section>
+    <section id="box-device-list" class="content-section" aria-label="设备管理" tabindex="-1"><div class="box-section-heading"><div><h3>已关联的盒子 <span class="count">${devices.length}</span></h3><p class="muted ${refreshing ? "activity-status" : ""}" role="status">${refreshing ? '<span class="activity-spinner" aria-hidden="true"></span>正在读取最新设备状态…' : "连接或切换盒子后，文件空间和应用将使用所选盒子。"}</p></div><button class="button small ${refreshing ? "activity-button" : ""}" data-action="refresh" aria-busy="${refreshing}" ${busy ? "disabled" : ""}>${refreshing ? '<span class="activity-spinner" aria-hidden="true"></span>正在刷新…' : "刷新设备"}</button></div>
+      <div class="box-device-grid">
+        ${devices.map(deviceCard).join("")}
+        <button id="box-add-device" type="button" class="box-add-card" data-action="provisioning" ${busy ? "disabled" : ""}>
+          <span class="box-add-icon" aria-hidden="true">+</span>
+          <span>添加盒子</span>
+        </button>
+      </div>
+    </section>
     ${ownershipView()}
     ${currentState.dataIdentity?.profileId ? "" : supportView.render()}
   </div></div>${confirmationView()}`;
@@ -1880,7 +2051,7 @@ function consoleClaimView() {
   const ready = receipt?.authorizationState === "ready";
   const blocked = receipt?.authorizationState === "blocked";
   return `<div class="app-layout">${shellHeader("添加盒子")}<div class="page-content">
-    <div class="page-heading"><div><h2>使用认领码添加盒子</h2><p class="muted">${receipt ? "账号绑定已确认，盒子接收授权后即可连接。" : "已有认领码的盒子也可以先配网，再确认绑定。"}</p></div><button class="text-button" data-action="show-help" data-scene="box_setup">常见问题 ›</button></div>
+    <div class="page-heading"><div><h2>使用认领码添加盒子 ${guideMarker("claim","认领码")}</h2><p class="muted">${receipt ? "账号绑定已确认，盒子接收授权后即可连接。" : "已有认领码的盒子也可以先配网，再确认绑定。"}</p></div><button class="text-button" data-action="show-help" data-scene="box_setup">常见问题 ›</button></div>
     <section class="wizard-card">
     ${receipt ? `<div role="status"><h3>${ready ? "盒子已就绪" : blocked ? "绑定已确认，授权暂不可用" : "绑定已确认，等待盒子授权"}</h3><p>设备 ID：${escapeHTML(receipt.deviceId)}</p><p>${ready ? "盒子已确认授权，可以返回盒子列表连接。" : blocked ? "请检查当前账号的设备权限，刷新状态后重试。" : "请保持盒子联网，等待盒子接收并确认授权后刷新状态。"}</p></div>
       <div class="wizard-actions"><button class="button" data-action="back-devices">返回盒子</button>${!ready ? `<button class="button primary" data-action="console-claim-refresh" ${busy ? "disabled" : ""}>${busyFor("devices.claim-status") ? "正在刷新…" : "刷新授权状态"}</button>` : '<button class="button primary" data-action="refresh">完成</button>'}</div>` : `
@@ -2100,7 +2271,7 @@ function render(state) {
   if (updateRequired && marketConfirmation && !marketConfirmation.updateReleaseId) marketConfirmation = null;
   if (state.account?.phase === "authenticated") cloudAuthOpen = false;
   const auth = cloudAuthOpen || state.route === "auth" || state.phase === "signed_out" || state.phase === "authenticating";
-  accessoryPageVisible = !auth && page === "accessories";
+  accessoryPageVisible = !auth && page === "accessories" && state.canLaunchApplications;
   if (!accessoryPageVisible) accessoryPreview?.mount(null);
   helpView?.visible(page === "help" || Boolean(helpDrawer));
   const previousAuth = app.querySelector?.('[data-form="auth"]');
@@ -2115,16 +2286,12 @@ function render(state) {
   const expertScope = !auth ? JSON.stringify([state.dataOwnerId, state.dataContextId, state.account?.accountId,
     state.account?.clientId, state.selectedDeviceId, state.connection?.deviceId, state.dataIdentity?.selected?.principalId]) : "";
   if (expertApps.scope !== expertScope) expertApps = expertCatalog(expertScope);
+  guideScope=auth ? '' : JSON.stringify([expertScope,state.dataIdentity?.profileId,state.dataIdentity?.generation,state.dataIdentity?.phase,state.canLaunchApplications]);
   dataView.sync(state,true,!auth&&page==='data');
+  window.memoGuideShell.sync();
+  queueMicrotask(()=>window.memoGuide?.refreshLocation());
   if(!auth&&page==="data"&&dataView.needsLoad())queueMicrotask(()=>void dataView.refresh());
-  aiDialogueView?.hostState(state);
-  syncAcademyContext(!auth && page !== "provisioning");
-  if (pendingDialogueOpen) {
-    const handoff = pendingDialogueHandoff;
-    pendingDialogueOpen = false;
-    pendingDialogueHandoff = null;
-    openAcademyDialogue(handoff);
-  }
+  syncAcademyContext(!auth);
   dialogueModelSettings?.hostState(state);
   dialogueModelSettings?.visible(!auth && page === "dialogue-models");
   const viewingRedactionSettings = !auth && page === "settings";
@@ -2140,7 +2307,7 @@ function render(state) {
   // Moving even the same input node interrupts the native IME candidate session.
   if (viewingRedactionSettings && redactionRuleComposition?.isConnected) return;
   if (!auth && page === "data" && dataView.isComposing?.()) return;
-  if (!auth && page === "space" && window.wanxSpace?.retainEditor?.()) return;
+  if (!auth && page === "space" && state.canLaunchApplications && window.wanxSpace?.retainEditor?.()) return;
   if (auth || page !== "memory") {
     memoryAgent = "";
     memoryPage = "";
@@ -2149,18 +2316,21 @@ function render(state) {
   const markup = page === "help" ? `<div class="app-layout">${auth ? `<header class="topbar faq-public-header"><div class="brand"><img class="brand-mark" src="./assets/centaurai-mark.png" alt="" />${clientBrandCopy}</div></header>` : shellHeader("常见问题")}${helpView?.render({ backLabel: helpReturnLabel }) || ""}</div>` : auth ? authView() : page === "client-update" ? requiredClientUpdateView() : page === "provisioning" ? provisioningView()
     : desiredMemorySection !== null ? memoryView(desiredMemorySection)
     : page === "dialogue-models" ? `<div class="app-layout">${shellHeader("助理模型")}<div class="page-content dialogue-model-settings-page"><div id="dialogue-model-settings-host"></div></div></div>`
-    : page === "data" ? `<div class="app-layout starlink-layout">${shellHeader("星图")}<header class="wanx-section-banner starlink-banner" data-section="starlink">${personalModuleHeading("starlink", "本体星图", "在图谱中探索个人本体的实体与关系，沿着关联追溯原文。")}</header><div class="page-content data-page-content">${dataView.render()}</div></div>`
+    : page === "data" ? `<div class="app-layout starlink-layout">${shellHeader("星图")}<header class="wanx-section-banner starlink-banner" data-section="starlink">${personalModuleHeading("starlink", "知识星图", "用本体"+guideMarker("ontology","本体")+"定义实体与关系，通过来源证据"+guideMarker("evidence","来源证据")+"核对原文。")}</header><div class="page-content data-page-content">${state.canLaunchApplications ? dataView.render() : boxConnectionNotice("data")}</div></div>`
     : page === "space" ? spaceView()
     : page === "accessories" ? accessoriesView()
     : page === "notifications" ? notificationView() : page === "profile" ? profileView() : page === "credits" ? `<div class="app-layout"><div ${creditsView.isOpen() ? "inert" : ""}>${shellHeader("积分")}</div>${creditsView.render()}</div>` : page === "boxes" ? boxesView() : page === "settings" ? settingsView() : memoryView("my-ai");
   if (markup === renderedMarkup) {
     if (!auth && page === 'data') dataView.mount();
     if (page === "dialogue-models") dialogueModelSettings?.mount(app.querySelector?.("#dialogue-model-settings-host"));
+    accessoryPreview?.mount(accessoryPageVisible ? app.querySelector?.(".accessories-tab-host") : null, guideScope);
     window.wanxMemory?.mount(app.querySelector?.(".memory-host"));
     syncFormState();
     syncAcademyModal();
     return;
   }
+  const boxConnectionFocus = page === "boxes" && ["box-device-list", "box-add-device"].includes(document.activeElement?.id)
+    ? document.activeElement.id : null;
   const restoreDataInput = !auth && page === "data" ? dataView.retainInput?.(app) : null;
   renderedMarkup = markup;
   // Reuse the actual Wi-Fi form when setup updates. This preserves typed secrets,
@@ -2199,7 +2369,7 @@ function render(state) {
   const redactionSettingsHost = viewingRedactionSettings ? app.querySelector?.("#space-redaction-settings-host") : null;
   const redactionSettingsFocus = redactionSettingsHost?.contains(document.activeElement) ? document.activeElement : null;
   const memoryHost = app.querySelector?.(".memory-host");
-  const accessoriesHost = !auth && page === "accessories" && app.querySelector?.(".accessories-tab-host");
+  const accessoriesHost = accessoryPageVisible && app.querySelector?.(".accessories-tab-host");
   if (memoryHost && desiredMemorySection !== null && memoryHost.dataset.memorySection === desiredMemorySection &&
     (memoryHost.dataset.memoryAgent ?? "") === (page === "memory" ? memoryAgent : "") &&
     (memoryHost.dataset.memoryPage ?? "") === (page === "memory" ? memoryPage : "")) {
@@ -2223,7 +2393,9 @@ function render(state) {
     if(focused){const input=app.querySelector(`[data-workshop-field="${focused}"]`);input?.focus({preventScroll:true});if(caret!=null)input?.setSelectionRange(caret,caret);}
     if (focusedTab) app.querySelector?.(`#applications-tab-${focusedTab}`)?.focus({ preventScroll: true });
   }
+  accessoryPreview?.mount(accessoryPageVisible ? app.querySelector?.(".accessories-tab-host") : null, guideScope);
   window.wanxMemory?.mount(app.querySelector?.(".memory-host"));
+  if (boxConnectionFocus) app.querySelector("#" + boxConnectionFocus)?.focus({preventScroll:true});
   restoreDataInput?.();
   if (!auth && page === "workshop") workshop.mounted(app);
   syncAcademyModal();
@@ -2787,7 +2959,7 @@ app.addEventListener("click", async (event) => {
   if (action === "cloud-login") { cloudAuthOpen = true; profileMenuOpen = false; render(currentState); return; }
   if (action === "local-return") { cloudAuthOpen = false; render(currentState); return; }
   if (action === "logout") { await run("auth.logout"); return; }
-  if (action === "show-ai-dialogue") { openAcademyDialogue(); return; }
+  if (action === "show-ai-dialogue") { void window.memoGuide?.open(); return; }
   if (action === "accessories-preview-retry") { accessoryPreview?.retry(); return; }
   if (["show-data", "show-memory", "show-my-ai", "show-space", "show-boxes", "show-accessories", "show-maintenance", "show-settings", "show-credits", "show-profile", "show-notifications", "show-dialogue-models"].includes(action)) {
     if (page === "provisioning") return;
@@ -3228,7 +3400,7 @@ app.addEventListener("submit", async (event) => {
 
 function acceptRemoteState(state) {
   const noteWasOpen = noteSidebar?.isOpen?.();
-  noteSidebar?.hostState?.(state);
+  if (academyDrawer) noteSidebar?.hostState?.(state);
   if (noteWasOpen && !noteSidebar.isOpen()) academyDrawer?.close?.({ restoreFocus: false });
   window.wanxSpace?.hostState(state);
   const cloudAuthenticated = state.dataIdentity?.profileId ? state.account?.phase === "authenticated" : state.route !== "auth";
@@ -3322,12 +3494,15 @@ window.wanxBluetooth?.subscribe(state => {
   if (page === "provisioning" && currentState) render(currentState);
 });
 window.wanxClient.onLocalState(acceptRemoteState);
-window.wanxClient.onAIDialogue?.(value => {
-  if (value?.type === "handoff") openAcademyDialogue(value);
-  else aiDialogueView?.event(value);
-});
 window.wanxClient.onNavigate?.((destination) => {
-  if (destination === "ai-dialogue") { openAcademyDialogue(); return; }
+  if (destination === "box-connection") { openBoxConnectionPage(); return; }
+  if (destination?.destination==='guide-capture') {
+    window.memoGuide?.open('capture',undefined,undefined,{page:'accessories', facts:{工作台:destination.label,
+      采集设置:({on:'已开启',off:'未开启'})[destination.capture] || '暂未读取'}});
+    return;
+  }
+  if (destination==='global-guide' || destination==='guide-capture'){window.memoGuide?.open(destination==='guide-capture'?'capture':undefined);return;}
+  if (destination === "ai-dialogue") { void window.memoGuide?.open(); return; }
   if (!currentState || currentState.route === "auth" || page === "provisioning") return;
   if (![homePage, "memory", "data", "space", "boxes", "accessories", "settings", "credits", "profile", "notifications"].includes(destination)) return;
   profileMenuOpen = false;
@@ -3361,8 +3536,8 @@ window.wanxSetup?.onReady?.(() => {
     if (page === "provisioning") render(currentState);
   }).catch(() => {});
 });
-window.wanxSpace?.bind({ compactActions: true, notesInAssistant: true, render: () => { if (currentState && ["space", "boxes"].includes(page)) render(currentState); } });
-noteSidebar?.bindSidebar?.(requestNoteSidebar, academyDrawer?.noteHost?.());
+window.wanxSpace?.bind({ connectionNotice:() => boxConnectionNotice("space"), compactActions: true, notesInAssistant: Boolean(academyDrawer), render: () => { if (currentState && ["space", "boxes"].includes(page)) render(currentState); } });
+if (academyDrawer) noteSidebar?.bindSidebar?.(requestNoteSidebar, academyDrawer.noteHost?.());
 window.wanxClient.getLocalState().then(acceptRemoteState);
 
 app.addEventListener("error", event => {

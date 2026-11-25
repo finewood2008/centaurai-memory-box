@@ -30,8 +30,8 @@ test("macOS development bundle presents MemoBox while preserving Electron and ac
   const bundle = path.join(root, "release/dev", `${config.build.productName}.app`);
   assert.equal(executable, path.join(bundle, "Contents/MacOS/Electron"));
   const plist = JSON.parse(execFileSync("/usr/bin/plutil", ["-convert", "json", "-o", "-", path.join(bundle, "Contents/Info.plist")], { encoding: "utf8" }));
-  assert.equal(plist.CFBundleDisplayName, "半人马AI记忆盒子");
-  assert.equal(plist.CFBundleName, "半人马AI记忆盒子");
+  assert.equal(plist.CFBundleDisplayName, "半人马AI-记忆盒子");
+  assert.equal(plist.CFBundleName, "半人马AI-记忆盒子");
   assert.equal(plist.CFBundleIdentifier, config.build.appId);
   assert.equal(plist.NSBluetoothAlwaysUsageDescription, config.build.mac.extendInfo.NSBluetoothAlwaysUsageDescription);
   assert.deepEqual(await readFile(path.join(bundle, "Contents/Resources", plist.CFBundleIconFile)), icon);

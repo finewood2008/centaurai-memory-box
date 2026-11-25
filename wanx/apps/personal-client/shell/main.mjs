@@ -99,7 +99,8 @@ import { createCodexContext } from "./codex-context.mjs";
 import { createCodexContextConfig, findCodexCli } from "./codex-context-config.mjs";
 import { detectWindowsCodex, openWindowsCodex } from "./windows-codex.mjs";
 import { createCodexContextSources } from "./codex-context-sources.mjs";
-import { createAccessoriesPreview } from "./accessories-preview.mjs";
+import { spaceVolumeRequest } from "./accessory-nas.mjs";
+import { ACCESSORY_SCHEME, createAccessoriesPreview } from "./accessories-preview.mjs";
 import { createSemanticaMcpClient } from "./semantica-mcp-client.mjs";
 import { createMyAiAccess, createMyAiMemoryAccess } from "./my-ai-access.mjs";
 import { configurableAgents, createMyAiMcpConfig } from "./my-ai-mcp-config.mjs";
@@ -111,9 +112,9 @@ import { createTestUpdateRuntime } from "../updates/test-runtime.mjs";
 const testBuild = app.isPackaged ? testPackageIdentity(JSON.parse(readFileSync(path.join(app.getAppPath(), "package.json"), "utf8"))) : null;
 const windowName = testBuild ? TEST_PRODUCT_NAME : DESKTOP_NAME;
 const controlURL = new URL("../local-ui/renderer/index.html", import.meta.url).href;
-protocol.registerSchemesAsPrivileged([{ scheme: MEMORY_SCHEME, privileges: {
+protocol.registerSchemesAsPrivileged([MEMORY_SCHEME, ACCESSORY_SCHEME].map(scheme => ({ scheme, privileges: {
   standard: true, secure: true, supportFetchAPI: true, corsEnabled: true,
-} }]);
+} })));
 if (!testBuild && process.env.WANX_SMOKE_USER_DATA) {
   const isolated = path.resolve(process.env.WANX_SMOKE_USER_DATA);
   mkdirSync(isolated, { recursive: true });
@@ -484,7 +485,9 @@ if (process.argv.includes("--wanx-managed-app")) {
       control.webContents.on("will-navigate", event => event.preventDefault());
       control.webContents.on("will-attach-webview", event => event.preventDefault());
       const accessoriesPreview = createAccessoriesPreview({
-        app, window: control, WebContentsView, client, account, dialog, safeStorage: osSafeStorage, memoryFile: () => memoryRuntimeFile,
+        app, window: control, BrowserWindow, client, account, dialog, safeStorage: osSafeStorage,
+        navigate: page => sendToLiveFrame(control, "wanx-client:navigate", page),
+        memoryFile: () => memoryRuntimeFile, ensureMemory: () => memoryRuntime.ensure(),
         resourceDirectory: app.isPackaged ? path.join(process.resourcesPath, "accessory-preview")
           : path.join(app.getAppPath(), "resources", "accessory-preview"),
         dataDirectory: path.join(userData, "accessories-unconnected"),
@@ -767,9 +770,11 @@ if (process.argv.includes("--wanx-managed-app")) {
       });
       if (memorySource) void memoryRuntime.ensure().catch(reportError);
       memoryWorkspace.sync();
+      control.webContents.session.protocol.handle(ACCESSORY_SCHEME, accessoriesPreview.handleCatalog);
       control.webContents.session.protocol.handle(MEMORY_SCHEME, memoryWorkspace.handle);
       registerControlActions({
         accessoriesPreview: accessoriesPreview.show,
+        spaceVolumes: input => spaceVolumeRequest({app,client}, input),
         personalDataService, personalWorkshop, starlinkPanel,
         openMemoryWorkspace: memoryWorkspace.open,
         localMemoryStorage: memoryWorkspace.storage,
@@ -837,6 +842,7 @@ if (process.argv.includes("--wanx-managed-app")) {
         },
       });
       unsubscribe = client.subscribe(() => {
+        accessoriesPreview.syncConnection();
         memoryWorkspace.sync();
         agentAccess.sync();
         if (!testRuntime) void agentAccess.restore(reportError).catch(reportError);

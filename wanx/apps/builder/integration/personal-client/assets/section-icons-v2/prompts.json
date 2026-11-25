@@ -8,7 +8,10 @@
       "key": "my-ai",
       "prompt": "Design the My AI section logo: one friendly, simple front-facing robot head with a broad rounded ivory rectangular face, an inset dark warm-bronze visor, two oval ivory eyes, a short upright antenna, and two small rounded brass side caps. Use the reference for its square porcelain tile, slim champagne-gold bevel, centered scale, rounded corners and soft studio light. Use a transparent outer background. Keep the face readable at 60 pixels and use only ivory, warm bronze and champagne brass. The icon has no stars, sparks, connecting lines, orbit, nodes, text, letters, or watermark.",
       "file": "my-ai.png",
-      "labels": ["我的 AI", "My AI"]
+      "labels": [
+        "我的 AI",
+        "My AI"
+      ]
     },
     {
       "key": "chat",
@@ -71,6 +74,15 @@
       "labels": [
         "记忆体",
         "Memory Agent"
+      ]
+    },
+    {
+      "key": "accessories",
+      "prompt": "Edit the Devices emblem for a matching Accessories banner. Replace only the central appliance with a front-facing ivory ceramic two-prong plug in shallow relief, champagne-brass pins pointing upward, a rounded plug body and a short downward stem. Preserve the reference porcelain tile, thin brass bezel, framing, orthographic composition, upper-left light and soft contact shadows. Use a genuinely transparent outer background. No text, labels, watermark or other elements.",
+      "file": "accessories.png",
+      "labels": [
+        "配件",
+        "Accessories"
       ]
     }
   ]

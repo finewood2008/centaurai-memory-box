@@ -11,7 +11,7 @@ import { saveSpaceFiles, submitAccessoryMemory } from './destinations.mjs';
 import { audioType, probeAudio, prepareParts } from './audio-input.mjs';
 import { captions, finishCaptions, sendLiveFrame } from './live-captions.mjs';
 import { generateMinutes, sanitizeItems, openPendingCount, renderMinutesMd, renderTranscriptTxt, legacySummarySections } from './minutes.mjs';
-import { writeMeetingMemory, saveDemoAccessoryMemory, initLibrary, resolveMinutesTemplate } from './library.mjs';
+import { writeMeetingMemory, saveDemoAccessoryMemory, initLibrary, getSettings, resolveMinutesTemplate } from './library.mjs';
 import { DEFAULT_TEMPLATE_ID, templateSnapshot, validateInstruction } from './minutes-templates.mjs';
 
 export const P = {};
@@ -51,6 +51,10 @@ export async function initStore(dataDir) {
       if (m.state === 'finished') {
         const pending = ['pending', 'running'];
         if (['pending', 'composing'].includes(m.audio?.status)) restart.push([m.id, 'audio']);
+        else if (m.audioOnly && m.audio?.status === 'saved') {
+          m.transcript = { ...m.transcript, status: 'offline', error: '请连接盒子后重试转写。' };
+          m.minutes = { ...m.minutes, status: 'waiting', error: '' };
+        }
         else if (pending.includes(m.transcript?.status)) restart.push([m.id, 'transcript']);
         else if (pending.includes(m.minutes?.status)) restart.push([m.id, 'minutes']);
         recoverInterrupted(m);
@@ -287,6 +291,7 @@ export async function finishMeeting(id, body = {}) {
     }
     m.state = 'finished';
     m.finishedAt = new Date().toISOString();
+    if (body.audioOnly === true) m.audioOnly = true;
     m.audio = { ...m.audio, status: 'pending', error: '' };
     m.transcript = { ...m.transcript, status: 'pending', error: '' };
     m.minutes = { ...m.minutes, status: 'pending', error: '' };
@@ -320,7 +325,16 @@ function runPipeline(id, from, template, retryFailed = false) {
   pipelines.add(id);
   (async () => {
     const i = STAGES.indexOf(from);
-    if (i <= 0 && !(await composeAudio(id))) return;
+    if (i <= 0) {
+      if (!(await composeAudio(id))) return;
+      if (must(id).audioOnly) {
+        await update(id, row => {
+          row.transcript = { ...row.transcript, status: 'offline', error: '请连接盒子后重试转写。' };
+          row.minutes = { ...row.minutes, status: 'waiting', error: '' };
+        });
+        return;
+      }
+    }
     if (i <= 1 && !(await finalTranscript(id, retryFailed))) return;
     await makeMinutes(id, template, retryFailed);
   })().catch((e) => console.error(`会后流程异常 ${id}: ${e.stack || e.message}`))
@@ -378,6 +392,7 @@ async function composeAudio(id) {
 
 async function finalTranscript(id, retryFailed) {
   const m = await update(id, (row) => {
+    delete row.audioOnly;
     row.transcript = { ...row.transcript, status: 'running', error: '' };
     row.minutes = { ...row.minutes, status: 'pending', error: '' };
   });
@@ -509,12 +524,24 @@ export async function confirmMinutes(id, { documentReview = false, rev } = {}) {
       const n = await writeMeetingMemory(m, version);
       m.memory = { status: 'saved', count: n, version };
     } else {
-      m.memory = { status: 'disabled', count: 0, version };
+      const grant = process.env.RECORDING_MODULE_PROFILE === 'accessories'
+        && (await getSettings()).recordingCaptureGrants?.[m.source];
+      m.memory = { status: grant ? 'pending' : 'disabled', count: 0, version, ...(grant && { grant }) };
     }
     memoryResult = { status: m.memory.status, count: m.memory.count };
     await writeMeta(m);
   });
-  return { meeting: view(id), memory: memoryResult };
+  const confirmed = view(id);
+  if (confirmed.memory.status === 'pending') {
+    try {
+      const result = await saveDestination(id, {destination:'memory', version:confirmed.review.version, automatic:true});
+      return {meeting:result, memory:result.memory};
+    } catch {
+      // The confirmation is already durable. The same version can be submitted again.
+      return {meeting:view(id), memory:{status:'pending', count:0}};
+    }
+  }
+  return { meeting: confirmed, memory: memoryResult };
 }
 
 // —— 文件读取（仅限固定文件名）——
@@ -559,14 +586,15 @@ export const getMeetingRaw = (id) => must(id);
 export async function recordImport(id, rec) { await update(id, (m) => { m.imports.push(rec); }); }
 export { createReadStream };
 
-export async function saveDestination(id, { destination, version }) {
+export async function saveDestination(id, { destination, version, automatic = false }) {
   if (!['space','memory'].includes(destination)) throw new HttpError(400, '请选择空间或记忆。');
   await update(id, async m => {
     if (m.review.status !== 'confirmed' || m.review.version !== version) throw new HttpError(409, '请先确认当前版本的总结。');
     if (m.savedTo?.[version]?.[destination]) return;
     const service = media;
     const demo = service.mode === 'demo';
-    if (!demo && (!m.mediaScope || m.mediaScope !== await service.scope())) throw new HttpError(409, '请连接此项目所属的盒子。');
+    const localOnly = destination === 'memory' && !m.mediaScope && !legacyProjects.has(id);
+    if (!demo && !localOnly && (!m.mediaScope || m.mediaScope !== await service.scope())) throw new HttpError(409, '请连接此项目所属的盒子。');
     const confirmed = m.review.versions.find(row => row.version === version);
     const summaryFile = path.join(spaceDir(m), confirmed.file);
     const md = await fs.readFile(summaryFile);
@@ -587,15 +615,34 @@ export async function saveDestination(id, { destination, version }) {
       const body = m.minutes.document?.text ?? (m.minutes.document?.sections || legacySummarySections(m.minutes))
         .map(section => [section.heading, ...section.blocks.map(block => block.text)].join('\n')).join('\n\n');
       if (!body.trim()) throw new HttpError(409, '请先填写总结。');
-      const agent = m.source === 'disk' ? '录音圆盘智能体' : '领夹麦克风智能体';
-      const payload = {title:m.title, createdAt:m.createdAt, kind:m.source, project:id, version,
-        requestId:sha256(Buffer.from([m.mediaScope || 'demo', id, confirmed.sha256, version].join('/'))),
-        content:body + '\n\n来源：配件 › ' + agent + ' › ' + m.title + ' · v' + version + '\n项目编号：' + id};
-      receipt = demo ? await saveDemoAccessoryMemory(payload) : await submitAccessoryMemory(payload);
+      const agent = m.source === 'disk' ? '会议录音智能体' : '随身录音智能体';
+      const payload = {title:m.title, createdAt:m.createdAt, kind:m.source, project:id, version, localOnly,
+        requestId:sha256(Buffer.from([m.mediaScope || (localOnly ? 'local' : 'demo'), id, confirmed.sha256, version].join('/'))),
+        content:md.toString('utf8').replace(/^---\n[\s\S]*?\n---\n/, '').trim() + '\n\n来源：配件 › ' + agent + ' › ' + m.title + ' · v' + version + '\n项目编号：' + id};
+      const submit = () => demo ? saveDemoAccessoryMemory(payload) : submitAccessoryMemory(payload);
+      if (automatic) {
+        receipt = await withLock('settings', async () => {
+          const grant = (await getSettings()).recordingCaptureGrants?.[m.source];
+          if (grant && m.memory.status === 'pending' && m.memory.grant === grant) return submit();
+        });
+        if (!receipt) return;
+      } else receipt = await submit();
     }
+    if (destination === 'memory') m.memory = {status:'saved', count:1, version};
     m.savedTo ||= {};
     m.savedTo[version] ||= {};
     m.savedTo[version][destination] = { ...receipt, demo, savedAt:new Date().toISOString() };
   });
   return view(id);
+}
+
+// Retry only confirmed versions that previously opted into automatic collection.
+export async function retryPendingCapture() {
+  const settings = await getSettings();
+  for (const m of cache.values()) {
+    if (isVisible(m) && m.review.status === 'confirmed' && m.memory.status === 'pending'
+        && m.memory.grant && settings.recordingCaptureGrants?.[m.source] === m.memory.grant) {
+      await saveDestination(m.id, {destination:'memory', version:m.review.version, automatic:true}).catch(() => {});
+    }
+  }
 }

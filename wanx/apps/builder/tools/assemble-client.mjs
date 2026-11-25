@@ -49,6 +49,7 @@ if (edition === 'team') for (const file of ['shell/personal-space.mjs','shell/sp
 }
 // Mini reuses only the iterative workspace; new-product creation stays in Studio.
 if (edition === 'personal') {
+  await cp(path.join(sourceClient,'resources/accessory-preview/public/box-connection.css'),path.join(client,'local-ui/renderer/box-connection.css'));
   for (const script of ['build', 'package']) execFileSync(...npmCommand(['run', script]), {
     cwd: root, stdio: 'inherit', env: { ...process.env, WANX_CLIENT_PRODUCT: 'memobox' },
   });

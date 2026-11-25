@@ -32,6 +32,8 @@
     SPACE_REDACTION_FORMAT_INVALID: "无法生成有效的脱敏文件，请检查原文件和脱敏规则后重试。",
     SPACE_REDACTION_WRITE_FAILED: "未能保存脱敏副本，请检查盒子连接和存储空间后重试。",
     SPACE_TEXT_EDIT_UNAVAILABLE: "该盒子需要升级后才能在线编辑文本。",
+    SPACE_TEXT_READ_ONLY: "当前文件不可写。",
+    SPACE_VOLUME_OFFLINE: "外接硬盘已断开。草稿仍在，接回原盘后可重试。",
     SPACE_TEXT_UNSUPPORTED: "此格式暂不支持在线编辑。",
     SPACE_TEXT_TOO_LARGE: "在线编辑支持最大 16 MB 的文本文件。",
     SPACE_TEXT_INVALID: "请使用 UTF-8 编码的纯文本文件。",
@@ -117,7 +119,7 @@
   let error = null, loading = false, active = false, fileView = false, dialog = null, previewURL = null, render = () => {};
   const agentHub = window.createSpaceAgentHub?.({request:(action,input)=>call("links-"+action,input),changed:()=>render()});
   if(agentHub)window.wanxAgentHub=agentHub;
-  const shares = window.createSpaceSharesUI?.({request:(action,input)=>call("links-"+action,input)});
+  const shares = window.createSpaceSharesUI?.({fileAddresses: Boolean(window.createSpaceVolumes), request:(action,input)=>call("links-"+action,input)});
   if(shares)window.wanxSpaceShares=shares;
   let workbenchReturnScroll = null;
   const annotationWorkbench = window.createSpaceAnnotationWorkbench?.({ call: input => call("annotation-workbench", input), changed: () => render(), onClose: () => { void load({ metrics: false }); } });
@@ -243,6 +245,7 @@
     const rows = ordered.slice(0, transferLimit).map(t => `<div class="space-transfer ${t.phase === "complete" && !t.annotationPending ? "is-complete" : ""}"><span class="space-transfer-icon">${icon(t.kind === "folder" ? "folder" : t.direction)}</span><div class="space-transfer-main"><div class="space-transfer-title"><strong title="${esc(t.relativePath || t.name)}">${esc(t.relativePath || t.name)}</strong><span>${t.kind === "folder" ? "目录" : `${percent(t)}%`}</span></div>${t.kind === "scan-error" ? "" : `<progress class="space-progress" max="100" ${t.phase === "checking" ? "" : `value="${percent(t)}"`} aria-label="${esc(t.name)}传输进度"></progress>`}<small>${t.kind === "folder" ? "创建文件夹" : t.direction === "upload" ? "上传" : "下载"} · ${t.phase === "complete" && t.annotationPending ? "文件已上传，标注待完成" : t.phase === "running" && t.kind !== "folder" && t.offset === t.size ? "正在保存" : waitingForNetwork(t) ? networkWait : labels[t.phase] || t.phase}${t.kind === "folder" || t.kind === "scan-error" ? "" : ` · ${size(t.offset)} / ${size(t.size)}`}</small>${t.phase === "complete" && t.annotationPending ? `<small class="inline-error">${esc(t.annotationError ? message(t.annotationError) : "正在等待自动标注")}${t.annotationRetryAt ? ` · ${Math.max(1, Math.ceil((t.annotationRetryAt - Date.now()) / 1000))} 秒后自动重试` : ""}</small>` : ""}${t.error && t.phase === "paused" ? `<small class="inline-error">${esc(message(t.error))}${t.retryAt ? ` · ${Math.max(1, Math.ceil((t.retryAt - Date.now()) / 1000))} 秒后重试` : ""}</small>` : ""}</div><div class="space-row-actions">${t.phase === "complete" && t.annotationPending ? `<button class="text-button" data-action="space-transfer" data-id="${t.id}" data-command="retry-annotations">重试标注</button>` : ""}${t.phase === "paused" ? `<button class="text-button" data-action="space-transfer" data-id="${t.id}" data-command="resume">重试</button>` : ["running", "checking", "queued", "waiting", "retrying"].includes(t.phase) ? `<button class="text-button" data-action="space-transfer" data-id="${t.id}" data-command="pause">暂停</button>` : ""}${!["complete", "canceled"].includes(t.phase) ? `<button class="text-button" data-action="space-transfer" data-id="${t.id}" data-command="cancel">取消</button>` : ""}</div></div>`).join("");
     return `<section class="space-transfers" aria-label="文件传输"><button class="space-transfers-heading" data-action="space-transfers-toggle" aria-expanded="${transfersOpen}"><strong>传输列表 <span class="count">${pending ? `${pending} 项待完成` : `${tasks.length} 项记录`}</span></strong><span>${transfersOpen ? "收起" : "展开"}</span></button>${transfersOpen ? `<div class="space-row-actions"><button class="text-button" data-action="space-transfer" data-command="pause-all">全部暂停</button><button class="text-button" data-action="space-transfer" data-command="resume-all">全部继续</button><button class="text-button" data-action="space-transfer" data-command="retry-failed">重试失败项</button><button class="text-button" data-action="space-transfer" data-command="clear-completed">清理完成记录</button></div><div class="space-transfer-list">${summaries}${rows}${ordered.length > transferLimit ? `<button class="text-button" data-action="space-transfers-more">再显示 100 项（共 ${ordered.length} 项）</button>` : ""}</div>` : ""}</section>`;
   }
+  const volumes = window.createSpaceVolumes?.({render: () => render(), esc, icon, fileIcon, size});
   const action = (label, kind, item, danger = false) => `<button role="menuitem" class="${danger ? "danger-text" : ""}" data-action="space-${kind}" data-id="${item?.id || ""}">${label}</button>`;
   const fileType = item => item.kind === "folder" ? "文件夹" : item.name.includes(".") ? item.name.split(".").pop().toUpperCase() + " 文件" : "文件";
   function fileIcon(item) {
@@ -270,7 +273,7 @@
     const count = selectedItems().length;
     const redaction = contextMenu.includeRedaction && canRedact(item, count) ? action("脱敏", "redact", item) : "";
     if(workspaces?.current().writable===false)return `<div class="space-context-menu" role="menu" style="left:${contextMenu.x}px;top:${contextMenu.y}px">${item?action(item.kind==='folder'?'打开文件夹':'预览','open',item)+action('下载到电脑…','download',item)+(!trash&&annotationsAvailable()?action('标签与说明','annotation',item):''):action('刷新','refresh')}</div>`;
-    const choices = item && count > 1 ? (trash ? action(`恢复所选 ${count} 项`, "batch-restore") : (workbenchAvailable() ? action("批量标注", "workbench-selected") : "") + action(`下载所选 ${count} 项…`, "batch-download") + action(`移动所选 ${count} 项…`, "batch-move") + (workspaces&&workspaces.current().kind!=="agent-drive" ? action(`复制所选 ${count} 项…`, "batch-copy") : "") + '<hr role="separator">' + action(`移入回收站（${count} 项）…`, "batch-trash", null, true)) : item ? trash ? action("恢复", "restore", item) + action("彻底删除…", "purge", item, true) : action(item.kind === "folder" ? "打开文件夹" : "预览", "open", item) + action("下载到电脑…", "download", item) + redaction + (annotationsAvailable() ? action("标签与说明", "annotation", item) + (workbenchAvailable() && item.kind === "folder" ? action("在标注工作台中打开", "workbench-folder", item) : "") : "") + action("提供给 Agent…", "agent-provide", item) + (workspaces ? (item.kind === "folder" ? action("固定到常用位置", "pin", item) : "") : "") + (item.kind === "file" && item.previous_digest ? action("恢复上一版本…", "previous", item) : "") + '<hr role="separator">' + action("重命名…", "rename", item) + action("移动到…", "move", item) + (workspaces&&workspaces.current().kind!=="agent-drive" ? action("复制到…", "copy", item) : "") + '<hr role="separator">' + action("移入回收站…", "trash", item, true) : (trash ? "" : action("上传文件…", "upload") + action("上传文件夹…", "upload-folder") + action("新建文件夹…", "mkdir") + '<hr role="separator">') + action("刷新", "refresh");
+    const choices = item && count > 1 ? (trash ? action(`恢复所选 ${count} 项`, "batch-restore") : (workbenchAvailable() ? action("批量标注", "workbench-selected") : "") + action(`下载所选 ${count} 项…`, "batch-download") + action(`移动所选 ${count} 项…`, "batch-move") + (workspaces&&workspaces.current().kind!=="agent-drive" ? action(`复制所选 ${count} 项…`, "batch-copy") : "") + '<hr role="separator">' + action(`移入回收站（${count} 项）…`, "batch-trash", null, true)) : item ? trash ? action("恢复", "restore", item) + action("彻底删除…", "purge", item, true) : action(item.kind === "folder" ? "打开文件夹" : "预览", "open", item) + (canEditFile(item) ? action("在线编辑…", "text-edit-open", item) : "") + action("下载到电脑…", "download", item) + redaction + (annotationsAvailable() ? action("标签与说明", "annotation", item) + (workbenchAvailable() && item.kind === "folder" ? action("在标注工作台中打开", "workbench-folder", item) : "") : "") + action(volumes ? "调用链接" : "提供给 Agent…", "agent-provide", item) + (workspaces && !volumes ? (item.kind === "folder" ? action("固定到常用位置", "pin", item) : "") : "") + (item.kind === "file" && item.previous_digest ? action("恢复上一版本…", "previous", item) : "") + '<hr role="separator">' + action("重命名…", "rename", item) + action("移动到…", "move", item) + (workspaces&&workspaces.current().kind!=="agent-drive" ? action("复制到…", "copy", item) : "") + '<hr role="separator">' + action("移入回收站…", "trash", item, true) : (trash ? "" : action("上传文件…", "upload") + action("上传文件夹…", "upload-folder") + action("新建文件夹…", "mkdir") + '<hr role="separator">') + action("刷新", "refresh");
     return `<div class="space-context-menu" role="menu" aria-label="${item ? "文件操作" : "文件夹操作"}" style="left:${contextMenu.x}px;top:${contextMenu.y}px">${choices}</div>`;
   }
   function showMenu(item, x, y, { includeRedaction = false } = {}) {
@@ -282,6 +285,7 @@
     render();
   }
   async function navigate(target, recycle = false, nextSpace = workspace, record = true) {
+    volumes?.leave();
     clearDrag();
     revision++; loading = false; workspace = nextSpace; recordNavigation = record; parent = target; trash = recycle;
     stopMarquee(); clearSelection(); contextMenu = null; query = ""; closeDialog();
@@ -307,25 +311,32 @@
     }
   }
 
-  function canEditPreview(current) {
-    return current?.kind === "preview" && current.type === "text/plain" &&
-      /\.(?:txt|md|json|log|csv)$/i.test(current.item?.name || "") && status.textEditingAvailable === true &&
+  function canEditFile(item) {
+    return item?.kind === "file" && /\.(?:txt|md|json|log|csv)$/i.test(item.name) &&
+      item.size <= 16 * 1024 * 1024 && status.textEditingAvailable === true &&
       status.scope && !trash && workspaces?.current().writable !== false;
   }
-
-  async function openTextEdit() {
-    if (!canEditPreview(dialog)) return;
-    const { item, title } = dialog;
+  function canEditPreview(current) {
+    return ["preview", "preview-unavailable"].includes(current?.kind) && !current.external && canEditFile(current.item);
+  }
+  async function readEditor(current) {
+    if (!current.external) return call("open-text-edit", current.input);
+    const value = await volumes.request("text-open", current.external);
+    return {...value, file: {name:current.title, version:value.version}, editId:crypto.randomUUID()};
+  }
+  async function openTextEdit(item, external = null) {
+    if (!external && !canEditFile(item)) return;
+    contextMenu = null;
     if (previewURL) URL.revokeObjectURL(previewURL);
     previewURL = null;
-    const input = { id: item.id, space_id: workspace, scope: status.scope, dataContextId: status.dataContextId ?? host?.dataContextId };
-    const current = { kind: "text-edit-loading", title, item, input };
+    const input = external || { id: item.id, space_id: workspace, scope: status.scope, dataContextId: status.dataContextId ?? host?.dataContextId };
+    const current = { kind: "text-edit-loading", title:item.name, item, input, external };
     dialog = current;
     render();
     try {
-      const opened = await call("open-text-edit", input);
+      const opened = await readEditor(current);
       if (dialog === current) Object.assign(current, { kind: "text-edit", item: opened.file, before: opened.text,
-        text: opened.text, eol: opened.eol, bom: opened.bom, editId: opened.editId });
+        text: opened.text, transferScope:opened.transferScope, eol: opened.eol, bom: opened.bom, editId: opened.editId });
     } catch (cause) {
       if (dialog === current) Object.assign(current, { kind: "text-edit-unavailable", error: message(cause) });
     }
@@ -336,26 +347,67 @@
     return dialog?.kind === "text-edit" && dialog.text !== dialog.before;
   }
 
+  async function compareLatest() {
+    const current = dialog;
+    if (!current?.conflict || current.saving) return;
+    current.saving = true; render();
+    try {
+      const latest = await readEditor(current);
+      if (dialog === current) current.latest = latest;
+    } catch (cause) { if (dialog === current) current.error = message(cause); }
+    finally { current.saving = false; render(); }
+  }
+  function acceptLatest() {
+    if (!dialog?.latest) return;
+    const latest = dialog.latest;
+    Object.assign(dialog, {item:latest.file, before:latest.text, eol:latest.eol, bom:latest.bom,
+      transferScope:latest.transferScope, conflict:false, latest:null, error:""});
+    render();
+  }
+  function requestCloseEditor() {
+    if (dialog?.saving) return;
+    if (textEditorDirty()) dialog.confirmDiscard = true;
+    else closeDialog();
+    render();
+  }
   function syncTextEditor() {
     const editor = document.querySelector("#space-text-editor");
     if (!editor || editor.dataset?.editorKey !== dialog.editId) return false;
     editor.readOnly = !!dialog.saving;
     const save = document.querySelector('[data-action="space-text-edit-save"]');
-    if (save) { save.disabled = !textEditorDirty() || !!dialog.saving || composing; save.textContent = dialog.saving ? "正在保存…" : "保存"; }
+    if (save) { save.disabled = !textEditorDirty() || !!dialog.saving || !!dialog.conflict || composing; save.textContent = dialog.saving ? "正在保存…" : "保存"; }
     const close = document.querySelector('[data-action="space-dialog-close"]');
     if (close) { close.disabled = !!dialog.saving; close.textContent = textEditorDirty() ? "放弃修改" : "关闭"; }
     const notice = document.querySelector("[data-space-dialog-error]");
     if (notice) { notice.textContent = dialog.error || ""; notice.hidden = !dialog.error; }
+    const toggle = (name, visible) => {
+      const node = document.querySelector("[data-edit-" + name + "]");
+      if (node) node.hidden = !visible;
+    };
+    toggle("compare", dialog.conflict && !dialog.latest);
+    toggle("latest", Boolean(dialog.latest));
+    toggle("discard", dialog.confirmDiscard);
+    const remote = document.querySelector("[data-edit-latest-text]");
+    if (remote && dialog.latest && remote.textContent !== dialog.latest.text) remote.textContent = dialog.latest.text;
     return true;
   }
 
   async function saveTextEdit() {
-    if (!textEditorDirty() || dialog.saving || composing) return;
+    if (!textEditorDirty() || dialog.saving || dialog.conflict || composing) return;
     const current = dialog;
     current.error = "";
     current.saving = true;
     render();
     try {
+      if (current.external) {
+        await volumes.request("text-save", {...current.external, expected:current.item.version,
+          transferScope:current.transferScope, text:current.text});
+        if (dialog === current) {
+          dialog = {kind:"external-saved", title:current.title, text:current.text};
+          volumes.saved(current.external, current.text);
+        }
+        return;
+      }
       const saved = await call("save-text-edit", { ...current.input,
         dataContextId: status.dataContextId ?? host?.dataContextId, expected: current.item.version,
         editId: current.editId, text: current.text, eol: current.eol, bom: current.bom });
@@ -364,8 +416,10 @@
       dialog = { kind: "preview", title: saved.name, item: saved, type: "text/plain", text: current.text, saved: true };
       listing = { ...listing, items: listing.items.map(item => item.id === saved.id ? saved : item) };
     } catch (cause) {
-      if (dialog === current) current.error = cause.message === "SPACE_VERSION_CONFLICT"
-        ? "盒子里的文件已被修改。当前草稿仍在，请复制需要保留的内容，再重新打开最新版本。" : message(cause);
+      if (dialog === current) {
+        current.conflict = String(cause.message).includes("SPACE_VERSION_CONFLICT");
+        current.error = current.conflict ? "文件已在别处修改。当前草稿仍在，请对照最新版本后继续。" : message(cause);
+      }
     } finally {
       current.saving = false;
       render();
@@ -499,21 +553,27 @@
     } else if (dialog.kind === "preview") {
       body = dialog.type === "text/plain" ? `<pre class="space-text-preview">${esc(dialog.text)}</pre>` : dialog.type === "application/pdf" ? `${dialog.converted ? '<p class="space-document-note">静态预览 · 原文件保持不变；动画、视频及部分字体可能与原软件不同。</p>' : ""}<embed class="space-preview" type="application/pdf" src="${previewURL}#toolbar=1&navpanes=1" title="${esc(dialog.title)} 预览">` : `<img class="space-preview" src="${previewURL}" alt="${esc(dialog.title)}">`;
       if (dialog.saved) body += '<p class="space-document-note" role="status">已保存到盒子。</p>';
+    } else if (dialog.kind === "external-saved") {
+      body = `<pre class="space-text-preview">${esc(dialog.text)}</pre><p role="status">已保存到外接硬盘。</p>`;
     } else if (dialog.kind === "text-edit-loading") {
       body = '<p role="status">正在读取原文…</p>';
     } else if (dialog.kind === "text-edit") {
-      body = `<textarea id="space-text-editor" class="space-text-editor" aria-label="文件正文" data-editor-key="${esc(dialog.editId)}" spellcheck="false" ${dialog.saving ? "readonly" : ""}>\n${esc(dialog.text)}</textarea>`;
+      body = `<textarea id="space-text-editor" class="space-text-editor" aria-label="文件正文" data-editor-key="${esc(dialog.editId)}" spellcheck="false" ${dialog.saving ? "readonly" : ""}>\n${esc(dialog.text)}</textarea>
+        <button class="button small" data-edit-compare data-action="space-text-edit-compare" ${dialog.conflict && !dialog.latest ? "" : "hidden"}>查看最新版本</button>
+        <section data-edit-latest ${dialog.latest ? "" : "hidden"}><strong>文件当前版本</strong><pre class="space-text-preview" data-edit-latest-text>${esc(dialog.latest?.text)}</pre><button class="button" data-action="space-text-edit-accept">保留草稿，基于此版本继续</button></section>
+        <section data-edit-discard ${dialog.confirmDiscard ? "" : "hidden"}><p>放弃这次未保存的修改？</p><button class="button" data-action="space-text-edit-keep">继续编辑</button><button class="button danger-text" data-action="space-text-edit-discard">确认放弃</button></section>`;
     } else if (dialog.kind === "text-edit-unavailable") {
       body = "";
     } else if (dialog.kind === "move") {
       body = `<p class="muted">从 ${esc(dialog.sourceName || workspaces?.current().name || "我的空间")} ${dialog.copy ? "复制" : "移动"} ${dialog.items.length} 项到 ${esc(workspaces?.spaces().find(s=>s.id===dialog.space)?.name || "我的空间")}。${dialog.space && dialog.space !== workspace && !dialog.copy ? "跨空间移动将撤销相关资源的旧授权。" : ""}</p>${workspaces ? `<div class="space-destination-spaces">${workspaces.spaces().filter(s=>!s.trashed&&s.writable!==false&&(workspaces.current().kind==="agent-drive"?s.id===workspace:s.kind!=="agent-drive")).map(s=>`<button class="button small ${dialog.space===s.id?"primary":""}" data-action="space-move-space" data-id="${s.id}">${esc(s.name)}</button>`).join("")}</div>` : ""}<div class="space-breadcrumbs"><button class="text-button" data-action="space-move-folder" data-id="${workspaces?.spaces().find(s=>s.id===dialog.space)?.root || ""}">空间根目录</button>${dialog.crumbs.map(c => `<button class="text-button" data-action="space-move-folder" data-id="${c.id}">／ ${esc(c.name)}</button>`).join("")}</div><div class="space-folder-picker">${dialog.loading ? '<p role="status">正在读取目标文件夹…</p>' : dialog.folders.map(f => `<button class="space-folder-choice" data-action="space-move-folder" data-id="${f.id}">▱ ${esc(f.name)}</button>`).join("") || '<p class="muted">此处没有子文件夹</p>'}</div>`;
     } else if (["mkdir", "rename"].includes(dialog.kind)) body = `<form id="space-form" data-form="space"><label for="space-name">名称</label><input id="space-name" name="name" value="${esc(dialog.name)}" data-editor-key="${dialog.kind}:${dialog.item?.id || "new"}" required maxlength="240" autocomplete="off"/><button type="submit" class="button primary">保存</button></form>`;
     else body = `<p>${dialog.kind === "purge" ? `所选 ${dialog.items.length} 个项目将被彻底删除，无法恢复。` : `所选 ${dialog.items.length} 个项目将移入回收站，之后可以恢复。`}</p><ul class="space-selection-summary">${dialog.items.slice(0, 6).map(item => `<li>${esc(item.name)}</li>`).join("")}${dialog.items.length > 6 ? `<li>以及其他 ${dialog.items.length - 6} 项</li>` : ""}</ul>`;
-    return `<section class="market-confirmation" role="dialog" aria-modal="true" aria-labelledby="space-dialog-title"><div class="market-confirm-card space-dialog ${dialog.kind.startsWith("preview") ? "space-document-dialog" : dialog.kind.startsWith("text-edit") ? "space-text-edit-dialog" : ""}" data-preview-key="${esc(previewURL || "")}"><h2 id="space-dialog-title">${esc(dialog.title)}</h2>${body}<p data-space-dialog-error class="inline-error" role="alert" ${dialog.error ? "" : "hidden"}>${esc(dialog.error || "")}</p><div class="market-actions">${["annotation", "annotation-loading"].includes(dialog.kind) ? `<button class="button" data-action="space-annotation-reload" ${dialog.saving ? "disabled" : ""}>重新加载标注</button>${dialog.kind === "annotation" && !dialog.readOnly ? `<button class="button" data-action="space-annotation-auto" ${dialog.saving ? "disabled" : ""}>重新自动标注</button><button class="button" data-action="space-annotation-reset" ${dialog.saving ? "disabled" : ""}>恢复自动标注</button>` : ""}` : ""}${dialog.kind.startsWith("preview") ? '<button class="button" data-action="space-preview-download">下载原文件</button>' : ""}${dialog.kind === "preview" ? '<button class="button" data-action="space-preview-fullscreen">全屏</button>' : ""}${canEditPreview(dialog) ? '<button class="button primary" data-action="space-preview-edit">编辑</button>' : ""}${dialog.kind === "text-edit" ? `<button class="button primary" data-action="space-text-edit-save" ${dialog.saving || !textEditorDirty() ? "disabled" : ""}>${dialog.saving ? "正在保存…" : "保存"}</button>` : ""}${dialog.kind === "preview-unavailable" && !dialog.downloadOnly ? '<button class="button primary" data-action="space-preview-retry">重试</button>' : ""}<button class="button" data-action="space-dialog-close" ${dialog.saving ? "disabled" : ""}>${textEditorDirty() ? "放弃修改" : dialog.kind.startsWith("preview") || dialog.kind.startsWith("text-edit") || dialog.kind === "redact" ? "关闭" : "取消"}</button>${["move", "trash", "purge", "previous"].includes(dialog.kind) ? `<button class="button primary" data-action="space-dialog-confirm" ${dialog.saving || (dialog.kind === "move" && !dialog.destinationReady) ? "disabled" : ""}>${dialog.saving ? "正在处理…" : dialog.kind === "move" ? dialog.copy ? "复制到这里" : "移到这里" : dialog.kind === "previous" ? "恢复上一版" : dialog.kind === "purge" ? "彻底删除" : "移入回收站"}</button>` : ""}</div></div></section>`;
+    return `<section class="market-confirmation" role="dialog" aria-modal="true" aria-labelledby="space-dialog-title"><div class="market-confirm-card space-dialog ${dialog.kind.startsWith("preview") ? "space-document-dialog" : dialog.kind.startsWith("text-edit") ? "space-text-edit-dialog" : ""}" data-preview-key="${esc(previewURL || "")}"><h2 id="space-dialog-title">${esc(dialog.title)}${window.memoGuideShell && dialog.kind === "annotation" ? '<button type="button" class="guide-term" data-guide-term="annotation" aria-label="让 CentaurAI 解释文件标注">✨</button>' : ""}</h2>${body}<p data-space-dialog-error class="inline-error" role="alert" ${dialog.error ? "" : "hidden"}>${esc(dialog.error || "")}</p><div class="market-actions">${["annotation", "annotation-loading"].includes(dialog.kind) ? `<button class="button" data-action="space-annotation-reload" ${dialog.saving ? "disabled" : ""}>重新加载标注</button>${dialog.kind === "annotation" && !dialog.readOnly ? `<button class="button" data-action="space-annotation-auto" ${dialog.saving ? "disabled" : ""}>重新自动标注</button><button class="button" data-action="space-annotation-reset" ${dialog.saving ? "disabled" : ""}>恢复自动标注</button>` : ""}` : ""}${dialog.kind.startsWith("preview") ? '<button class="button" data-action="space-preview-download">下载原文件</button>' : ""}${dialog.kind === "preview" ? '<button class="button" data-action="space-preview-fullscreen">全屏</button>' : ""}${canEditPreview(dialog) ? '<button class="button primary" data-action="space-preview-edit">编辑</button>' : ""}${dialog.kind === "text-edit" ? `<button class="button primary" data-action="space-text-edit-save" ${dialog.saving || dialog.conflict || !textEditorDirty() ? "disabled" : ""}>${dialog.saving ? "正在保存…" : "保存"}</button>` : ""}${dialog.kind === "preview-unavailable" && !dialog.downloadOnly ? '<button class="button primary" data-action="space-preview-retry">重试</button>' : ""}<button class="button" data-action="space-dialog-close" ${dialog.saving ? "disabled" : ""}>${textEditorDirty() ? "放弃修改" : dialog.kind.startsWith("preview") || dialog.kind.startsWith("text-edit") || dialog.kind === "redact" ? "关闭" : "取消"}</button>${["move", "trash", "purge", "previous"].includes(dialog.kind) ? `<button class="button primary" data-action="space-dialog-confirm" ${dialog.saving || (dialog.kind === "move" && !dialog.destinationReady) ? "disabled" : ""}>${dialog.saving ? "正在处理…" : dialog.kind === "move" ? dialog.copy ? "复制到这里" : "移到这里" : dialog.kind === "previous" ? "恢复上一版" : dialog.kind === "purge" ? "彻底删除" : "移入回收站"}</button>` : ""}</div></div></section>`;
   }
   // Keep the editing subtree attached: refocusing a replaced node breaks IME.
   const mountedEditors = new WeakSet();
   function mounted() {
+    if (volumes?.active() && !dialog) return;
     if (annotationWorkbench?.active()) { annotationWorkbench.mounted(document); return; }
     if (workbenchReturnScroll !== null) { const list = document.querySelector(".space-file-list"); if (list) { list.scrollTop = workbenchReturnScroll; workbenchReturnScroll = null; } }
     previews?.mount(listing.items, scope, previewMode && active && fileView && !trash && host?.canLaunchApplications && !(status.tasks || []).some(t => ["queued", "checking", "running", "waiting", "retrying"].includes(t.phase)));
@@ -540,13 +600,16 @@
     if(path.length <= 4) return path.map(c=>`<span aria-hidden="true">›</span>${crumb(c)}`).join("");
     return `<span>›</span>${crumb(path[0])}<span>›</span><details><summary aria-label="展开中间路径">…</summary><div>${path.slice(1,-2).map(crumb).join("")}</div></details>${path.slice(-2).map(c=>`<span>›</span>${crumb(c)}`).join("")}`;
   }
+  let connectionNotice;
   function headerActions() {
-    if (annotationWorkbench?.active()) return `<div class="wanx-section-actions"><span class="muted">标注工作台 · 草稿与任务进度保留</span></div>`;
+    if (volumes?.active()) return "";
+    if (host?.canLaunchApplications && annotationWorkbench?.active()) return `<div class="wanx-section-actions"><span class="muted">标注工作台 · 草稿与任务进度保留</span></div>`;
     const canOpenWorkbench = host?.canLaunchApplications && !trash && workbenchAvailable();
     const noteOpen = window.wanxClipboard?.isOpen?.() === true;
     const headerControl = notesInAssistant
       ? `<button class="button" type="button" data-action="space-workbench" ${canOpenWorkbench ? "" : "disabled"}>标注工作台</button>`
       : `<button class="button${noteOpen ? ' clipboard-trigger-active' : ''}" type="button" data-action="clipboard-toggle" aria-expanded="${noteOpen}" aria-controls="super-clipboard">便签</button>`;
+    if (!host?.canLaunchApplications && connectionNotice) return notesInAssistant ? "" : `<div class="wanx-section-actions">${headerControl}</div>`;
     if (!host?.canLaunchApplications) return `<div class="wanx-section-actions">${headerControl}<button class="button primary" data-action="show-boxes">连接盒子</button></div>`;
     const writable = !trash && workspaces?.current().writable !== false && status.phase !== "unsupported";
     const disabled = batchBusy ? "disabled" : "";
@@ -556,18 +619,22 @@
     </div>`;
   }
   function view() {
+    if (!host?.canLaunchApplications && connectionNotice) return connectionNotice() + transfers();
     if (annotationWorkbench?.active()) return annotationWorkbench.render();
     if (!host?.canLaunchApplications) return `<section class="empty-state space-connect"><h3>连接盒子，访问自己的文件</h3><p>${host?.connectionPhase === "recovering" ? "正在恢复与盒子的连接。" : "连接盒子后，即可像使用硬盘一样管理文件。"}</p>${lastSeen ? `<p class="muted">${esc(lastSeen.name)} · 上次更新 ${new Date(lastSeen.at * 1000).toLocaleString()}，当前状态待重新确认。</p>` : ""}<button class="button" data-action="show-boxes">前往盒子管理</button></section>${transfers()}`;
+    if (volumes?.active()) {
+      return `<div class="space-workspace" ${dialog ? "inert" : ""}><div class="space-browser"><aside class="space-sidebar" aria-label="文件空间导航"><div class="space-sidebar-scroll"><button class="space-nav" data-action="space-folder" data-id="" data-space="personal">${icon("drive")}我的空间</button>${volumes.sidebar()}</div><div class="space-sidebar-bottom"><button class="space-nav" data-action="space-recycle">${icon("trash")}回收站</button><div class="space-disk-identity">${esc(boxName())}</div></div></aside><main class="space-main">${volumes.view()}</main></div></div>${dialogView()}`;
+    }
     const items = visibleItems(), selected = selectedItems();
     const writable = workspaces?.current().writable !== false;
     const visibleError = error || transferIssue?.text;
     const upper = listing.breadcrumbs.length > 1 ? listing.breadcrumbs.at(-2).id : rootFolder();
     const sortOptions = Object.entries({ name: "名称", size: "大小", type: "种类", modified: "修改时间" }).map(([key, label]) => `<option value="${key}" ${sortBy === key ? "selected" : ""}>${label}</option>`).join("");
-    return `<div class="space-workspace" ${dialog || workspaces?.modalOpen?.() ? "inert" : ""}><div class="space-browser"><aside class="space-sidebar" aria-label="文件空间导航"><div class="space-sidebar-scroll">${workspaces ? workspaces.sidebar() : `<div class="space-sidebar-caption">位置</div><button class="space-nav ${!trash ? "active" : ""}" data-action="space-folder" data-id="">${icon("folder")}全部文件</button>`}</div><div class="space-sidebar-bottom">${workspaces?.footerNavigation() || `<button class="space-nav" data-action="space-recycle">${icon('trash')}回收站</button>`}<div class="space-disk-identity" title="当前盒子：${esc(boxName())}">${icon("drive")}<span><strong>${esc(boxName())}</strong></span><i class="status-dot ready" title="已连接" aria-label="已连接"></i></div>${storage()}</div></aside><main class="space-main">
-      <div class="space-toolbar" aria-busy="${batchBusy}" ${batchBusy ? "inert" : ""}><div class="space-row-actions">${workspaces?.navigation() || ""}<button class="space-icon-button" data-action="space-folder" data-id="${upper}" aria-label="返回上级文件夹" title="返回上级文件夹" ${parent === rootFolder() || trash ? "disabled" : ""}>${icon("up")}</button><button class="space-icon-button ${loading ? "space-refreshing" : ""}" data-action="space-refresh" aria-label="${loading ? "正在刷新文件" : "刷新文件"}" aria-busy="${loading}" title="${loading ? "正在刷新文件" : "刷新"}" ${loading ? "disabled" : ""}>${icon("refresh")}</button>${!trash && workbenchAvailable() ? `${!notesInAssistant ? '<button class="text-button" data-action="space-workbench">标注工作台</button>' : ""}${selected.length ? `<button class="button small" data-action="space-workbench-selected">批量标注</button>` : ""}` : ""}<span class="space-toolbar-title">${trash ? "回收站" : parent !== rootFolder() ? esc(listing.breadcrumbs.at(-1)?.name || "文件夹") : esc(workspaces?.current().name || "全部文件")}</span></div>${compactActions ? `<div class="space-row-actions space-context-actions"><button class="text-button space-mcp-entry" data-agent-hub-open>空间 MCP</button>${!trash && workspaces?.current().writable !== false && status.phase !== "unsupported" ? '<button class="text-button" data-action="space-mkdir">新建文件夹</button>' : ""}<button class="text-button" data-action="space-share-list">分享链接</button>${selected.length ? `<span class="space-selected-count">已选 ${selected.length} 项</span>${trash ? (writable ? '<button class="text-button" data-action="space-batch-restore">恢复</button>' : '') : `<button class="text-button" data-action="space-batch-download">下载</button>${writable ? '<details class="wanx-action-menu" data-wanx-actions><summary class="space-icon-button" aria-label="所选文件更多操作">⋯</summary><div class="wanx-menu-panel" role="group" aria-label="所选文件操作"><button data-action="space-batch-move">移动到…</button><button class="danger-text" data-action="space-batch-trash">移入回收站…</button></div></details>' : ''}`}<button class="space-icon-button" data-action="space-selection-clear" aria-label="取消选择">×</button>` : ""}</div>` : `<div class="space-row-actions"><button class="button small" data-action="space-share-list">分享链接</button><button class="button small" data-agent-hub-open>空间 MCP</button>${selected.length ? `<span class="space-selected-count">已选 ${selected.length} 项</span>${trash ? (writable ? '<button class="button small" data-action="space-batch-restore">恢复</button>' : '') : `<button class="button small" data-action="space-batch-download">下载</button>${writable ? '<button class="button small" data-action="space-batch-move">移动</button><button class="button small danger-text" data-action="space-batch-trash">删除</button>' : ''}`}<button class="text-button space-clear-selection" data-action="space-selection-clear">取消选择</button>` : !trash && workspaces?.current().writable!==false && status.phase !== "unsupported" ? '<button class="button small" data-action="space-mkdir">新建文件夹</button><button class="button small primary space-upload-button" data-action="space-upload" title="支持文件和文件夹；自动分批上传，单文件最大 200 MB">' + icon("upload") + '上传文件</button><button class="button small" data-action="space-upload-folder">上传文件夹</button>' : ""}</div>`}</div>
+    return `<div class="space-workspace" ${dialog || workspaces?.modalOpen?.() ? "inert" : ""}><div class="space-browser"><aside class="space-sidebar" aria-label="文件空间导航"><div class="space-sidebar-scroll">${workspaces ? workspaces.sidebar() : `<div class="space-sidebar-caption">位置</div><button class="space-nav ${!trash ? "active" : ""}" data-action="space-folder" data-id="">${icon("folder")}全部文件</button>`}${volumes?.sidebar() || ""}</div><div class="space-sidebar-bottom">${workspaces?.footerNavigation() || `<button class="space-nav" data-action="space-recycle">${icon('trash')}回收站</button>`}<div class="space-disk-identity" title="当前盒子：${esc(boxName())}">${icon("drive")}<span><strong>${esc(boxName())}</strong></span><i class="status-dot ready" title="已连接" aria-label="已连接"></i></div>${storage()}</div></aside><main class="space-main">
+      <div class="space-toolbar" aria-busy="${batchBusy}" ${batchBusy ? "inert" : ""}><div class="space-row-actions">${workspaces?.navigation() || ""}<button class="space-icon-button" data-action="space-folder" data-id="${upper}" aria-label="返回上级文件夹" title="返回上级文件夹" ${parent === rootFolder() || trash ? "disabled" : ""}>${icon("up")}</button><button class="space-icon-button ${loading ? "space-refreshing" : ""}" data-action="space-refresh" aria-label="${loading ? "正在刷新文件" : "刷新文件"}" aria-busy="${loading}" title="${loading ? "正在刷新文件" : "刷新"}" ${loading ? "disabled" : ""}>${icon("refresh")}</button>${!trash && workbenchAvailable() ? `${!notesInAssistant ? '<button class="text-button" data-action="space-workbench">标注工作台</button>' : ""}${selected.length ? `<button class="button small" data-action="space-workbench-selected">批量标注</button>` : ""}` : ""}<span class="space-toolbar-title">${trash ? "回收站" : parent !== rootFolder() ? esc(listing.breadcrumbs.at(-1)?.name || "文件夹") : esc(workspaces?.current().name || "全部文件")}</span></div>${compactActions ? `<div class="space-row-actions space-context-actions">${volumes ? '' : '<button class="text-button space-mcp-entry" data-agent-hub-open>空间 MCP</button>'}${!trash && workspaces?.current().writable !== false && status.phase !== "unsupported" ? '<button class="text-button" data-action="space-mkdir">新建文件夹</button>' : ""}<button class="text-button" data-action="space-share-list">分享链接</button>${selected.length ? `<span class="space-selected-count">已选 ${selected.length} 项</span>${trash ? (writable ? '<button class="text-button" data-action="space-batch-restore">恢复</button>' : '') : `<button class="text-button" data-action="space-batch-download">下载</button>${writable ? '<details class="wanx-action-menu" data-wanx-actions><summary class="space-icon-button" aria-label="所选文件更多操作">⋯</summary><div class="wanx-menu-panel" role="group" aria-label="所选文件操作"><button data-action="space-batch-move">移动到…</button><button class="danger-text" data-action="space-batch-trash">移入回收站…</button></div></details>' : ''}`}<button class="space-icon-button" data-action="space-selection-clear" aria-label="取消选择">×</button>` : ""}</div>` : `<div class="space-row-actions"><button class="button small" data-action="space-share-list">分享链接</button>${volumes ? '' : '<button class="button small" data-agent-hub-open>空间 MCP</button>'}${selected.length ? `<span class="space-selected-count">已选 ${selected.length} 项</span>${trash ? (writable ? '<button class="button small" data-action="space-batch-restore">恢复</button>' : '') : `<button class="button small" data-action="space-batch-download">下载</button>${writable ? '<button class="button small" data-action="space-batch-move">移动</button><button class="button small danger-text" data-action="space-batch-trash">删除</button>' : ''}`}<button class="text-button space-clear-selection" data-action="space-selection-clear">取消选择</button>` : !trash && workspaces?.current().writable!==false && status.phase !== "unsupported" ? '<button class="button small" data-action="space-mkdir">新建文件夹</button><button class="button small primary space-upload-button" data-action="space-upload" title="支持文件和文件夹；自动分批上传，单文件最大 200 MB">' + icon("upload") + '上传文件</button><button class="button small" data-action="space-upload-folder">上传文件夹</button>' : ""}</div>`}</div>
       <div class="space-pathbar"><div class="space-breadcrumbs" aria-label="当前位置"><button class="text-button" data-action="space-folder" data-id="${rootFolder()}" data-space="${workspace}">${icon("drive")}${esc(workspaces?.current().name || "全部文件")}</button>${!trash ? breadcrumbsView() : '<span>›</span><strong>回收站</strong>'}</div><div class="space-view-tools">${compactActions ? `<details class="wanx-action-menu space-view-menu" data-wanx-actions><summary class="space-icon-button" aria-label="显示与排序">${icon("more")}</summary><div class="wanx-menu-panel" role="group" aria-label="显示与排序"><button data-action="space-preview-mode" aria-pressed="${previewMode}">${previewMode ? "✓ " : ""}图片缩略图</button><label class="space-sort"><span>排列方式</span><select id="space-sort" aria-label="排列方式">${sortOptions}</select></label><button data-action="space-sort" data-sort="${sortBy}">${sortDirection === 1 ? "↑ 升序排列" : "↓ 降序排列"}</button></div></details>` : `<button class="text-button space-preview-mode" data-action="space-preview-mode" aria-pressed="${previewMode}" title="按需显示图片缩略图；双击预览图片、PDF 或文本">${previewMode ? "✓ 预览模式" : "预览模式"}</button><label class="space-sort"><span>排列</span><select id="space-sort" aria-label="排列方式">${sortOptions}</select></label><button class="space-icon-button space-sort-direction ${sortDirection === -1 ? "is-descending" : ""}" data-action="space-sort" data-sort="${sortBy}" aria-label="${sortDirection === 1 ? "改为降序排列" : "改为升序排列"}" title="${sortDirection === 1 ? "升序排列" : "降序排列"}">${icon("up")}</button>`}<label class="space-search">${icon("search")}<input type="search" id="space-search" value="${esc(query)}" placeholder="筛选当前列表" aria-label="筛选当前列表" title="筛选当前列表的名称、标签与说明"></label>${!trash && annotationsAvailable() ? `<button class="text-button" data-action="space-annotation-search" ${!query.trim() ? "disabled" : ""}>搜索子文件夹</button>` : ""}</div></div>
       ${visibleError ? `<div class="notice error" role="status">${esc(visibleError)} <button class="text-button" data-action="space-refresh">重试</button></div>` : ""}
-      ${status.phase === "unsupported" ? '<section class="empty-state space-connect"><h3>文件空间需要新版盒端服务</h3><p>升级后这里会显示你的个人文件。</p></section>' : `<section class="space-files" aria-label="${trash ? "回收站" : "文件图标"}">${trash ? '<p class="space-trash-hint">文件可恢复；彻底删除后无法找回。恢复空间不会恢复接入授权。</p>' + (workspaces?.recycled() || "") : ""}
+      ${status.phase === "unsupported" ? '<section class="empty-state space-connect"><h3>文件空间需要新版盒端服务</h3><p>升级后这里会显示你的个人文件。</p></section>' : `<section class="space-files" aria-label="${trash ? "回收站" : "文件图标"}">${trash ? '<p class="space-trash-hint">文件可恢复；彻底删除后无法找回。' + (volumes ? "" : "恢复空间不会恢复接入授权。") + '</p>' + (workspaces?.recycled() || "") : ""}
       <div class="space-file-list" role="listbox" aria-multiselectable="true" aria-label="${trash ? "回收站文件图标" : "当前文件夹图标"}" tabindex="0" data-location="${parent}:${trash}" aria-busy="${loading}">${items.map(item => `<article class="space-file-row ${selectedIds.has(item.id) ? "is-selected" : ""}" role="option" aria-selected="${selectedIds.has(item.id)}" tabindex="${selectedId === item.id ? "0" : "-1"}" draggable="false" data-entry-id="${item.id}" data-action="space-select" data-id="${item.id}" aria-label="${esc(item.name)}，${esc(fileType(item))}" title="${esc(item.name)}&#10;${esc(fileType(item))}${item.kind === "folder" ? "" : ` · ${size(item.size)}`}&#10;修改于 ${new Date(item.modified * 1000).toLocaleString()}"><span class="space-file-name">${fileIcon(item)}<strong>${esc(item.name)}</strong></span><span class="space-file-detail" style="max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0" title="${esc(item.annotation?.description || (item.annotation?.tags || []).join(" · "))}">${item.kind === "folder" ? "文件夹" : size(item.size)}${annotationSummary(item)}</span><button class="space-icon-button space-file-more" data-action="space-more" data-id="${item.id}" aria-label="${esc(item.name)}的更多操作" title="更多操作">${icon("more")}</button></article>`).join("") || `<div class="space-empty">${icon(trash ? "trash" : "folder")}<strong>${loading ? "正在读取文件…" : query ? "没有找到匹配文件" : trash ? "回收站为空" : "此文件夹为空"}</strong><p>${loading ? "请稍候" : query ? "试试其他名称" : trash ? "这里没有已删除的文件" : "拖入本地文件，或右键新建文件夹"}</p></div>`}</div></section>`}
       <footer class="space-statusbar"><span class="space-status-count" role="status">${query ? `${items.length} / ` : ""}${listing.items.length} 个项目${selected.length ? ` · 已选 ${selected.length} 项${selected.length === 1 ? `：${esc(selected[0].name)}` : ""}` : ""}${loading ? " · 正在刷新文件…" : batchBusy ? " · 正在处理…" : ""}</span><span class="space-status-hint">${trash ? "右键恢复或彻底删除" : "拖动框选 · ⌘ / Ctrl 多选 · 右键管理"}</span><button class="text-button" data-action="space-transfers-toggle">传输${(status.tasks || []).some(t => t.annotationPending) ? " · 标注待完成" : (status.tasks || []).some(waitingForNetwork) ? ` · ${networkWait}` : (status.tasks || []).some(t => ["queued", "running", "checking"].includes(t.phase)) ? " · 进行中" : (status.tasks || []).some(t => t.phase === "paused") ? " · 已暂停" : ""}</button></footer>${transfersOpen ? transfers() : ""}
       <div class="space-drop-overlay" aria-hidden="true">${icon("cloud")}<strong>松开上传到当前文件夹</strong><span>${esc(parent ? listing.breadcrumbs.at(-1)?.name || "当前文件夹" : "全部文件")} · 文件夹自动分批上传 · 单文件最大 200 MB</span></div></main></div></div>${menuView()}${workspaces?.menuView() || ""}${dialogView()}${workspaces?.dialogView() || ""}`;
@@ -674,11 +741,19 @@
       return;
     }
     const kind = button.dataset.action.slice(6), item = listing.items.find(i => i.id === button.dataset.id);
+    if (volumes && kind.startsWith("volume-") && !dialog) {
+      clearSelection(); contextMenu = null;
+      if (kind === "volume-edit") {
+        const file = volumes.editTarget();
+        if (file) await openTextEdit({name:file.name}, file);
+      } else await volumes.action(kind.slice(7), button.dataset.value);
+      return;
+    }
     if (kind.startsWith("wb-") && annotationWorkbench?.active()) { await annotationWorkbench.action(kind.slice(3), button.dataset, event); return; }
     if (["workbench", "workbench-selected", "workbench-folder"].includes(kind)) { await openWorkbench(kind === "workbench-folder" ? item : null, kind === "workbench-selected"); return; }
     const transferAttempt = ["upload", "upload-folder", "transfer"].includes(kind) ? beginTransfer(kind === "transfer" ? button.dataset.id : null) : null;
     if (transferAttempt) transferIssue = null;
-    if (dialog && !["dialog-close", "dialog-confirm", "preview-download", "preview-fullscreen", "preview-retry", "preview-edit", "text-edit-save", "move-folder", "move-space", "annotation-reload", "annotation-auto", "annotation-reset", "annotation-result"].includes(kind)) return;
+    if (dialog && !["dialog-close", "dialog-confirm", "preview-download", "preview-fullscreen", "preview-retry", "preview-edit", "text-edit-save", "text-edit-discard", "text-edit-keep", "text-edit-compare", "text-edit-accept", "move-folder", "move-space", "annotation-reload", "annotation-auto", "annotation-reset", "annotation-result"].includes(kind)) return;
     try {
       if (["annotation-reload", "annotation-auto", "annotation-reset"].includes(kind)) { await annotationOperation(kind); return; }
       if (kind === "annotation" && item) { await openAnnotation(item); return; }
@@ -689,7 +764,12 @@
         return;
       }
       if (kind === "preview-retry" && dialog?.item) { await openItem(dialog.item); return; }
-      if (kind === "preview-edit") { await openTextEdit(); return; }
+      if (kind === "preview-edit" && canEditPreview(dialog)) { await openTextEdit(dialog.item); return; }
+      if (kind === "text-edit-open") { await openTextEdit(item); return; }
+      if (kind === "text-edit-compare") { await compareLatest(); return; }
+      if (kind === "text-edit-accept") { acceptLatest(); return; }
+      if (kind === "text-edit-keep" && dialog?.confirmDiscard) { dialog.confirmDiscard = false; render(); return; }
+      if (kind === "text-edit-discard" && dialog?.confirmDiscard && !dialog.saving) { closeDialog(); render(); return; }
       if (kind === "text-edit-save") { await saveTextEdit(); return; }
       if (kind === "preview-fullscreen") { const card = document.querySelector(".space-document-dialog"); if (card) { if (document.fullscreenElement) await document.exitFullscreen(); else await card.requestFullscreen(); } return; }
       if(workspaces?.current().writable===false&&['upload','upload-folder','mkdir','move','copy','rename','trash','restore','purge','previous','batch-move','batch-copy','batch-trash','batch-restore'].includes(kind))throw Error('MCP_DRIVE_READ_ONLY');
@@ -723,7 +803,7 @@
       if (kind === "preview-mode") { previewMode = !previewMode; render(); return; }
       if (kind === "preview-download" && dialog?.item) { await downloadItems([dialog.item]); return; }
       if (kind === "open") { await openItem(item); render(); return; }
-      if (kind === "dialog-close") { if (!dialog?.saving) closeDialog(); render(); return; }
+      if (kind === "dialog-close") { requestCloseEditor(); return; }
       if (kind === "dialog-confirm") { await submit(); return; }
       if (kind === "transfers-toggle") { transfersOpen = !transfersOpen; render(); return; }
       if (kind === "move-space") { if(dialog?.kind!=="move"||dialog.saving)return; const space=workspaces.spaces().find(s=>s.id===button.dataset.id&&!s.trashed&&s.writable!==false); if(!space)return; dialog.space = space.id; await moveFolder(space.root || ""); return; }
@@ -756,7 +836,7 @@
     document.querySelector("#space-sort")?.focus?.();
   });
   root.addEventListener("contextmenu", event => {
-    if (!active || !fileView || dialog || workspaces?.blocked() || batchBusy || !host?.canLaunchApplications || status.phase === "unsupported") return;
+    if (volumes?.active() || !active || !fileView || dialog || workspaces?.blocked() || batchBusy || !host?.canLaunchApplications || status.phase === "unsupported") return;
     if (!event.target.closest?.(".space-file-list")) return;
     event.preventDefault();
     const row = event.target.closest("[data-entry-id]");
@@ -822,7 +902,7 @@
         return;
       }
     }
-    if (active && fileView && !dialog && !workspaces?.blocked() && !batchBusy && host?.canLaunchApplications && list && !event.target.closest?.("[data-entry-id], button, input, select")) {
+    if (!volumes?.active() && active && fileView && !dialog && !workspaces?.blocked() && !batchBusy && host?.canLaunchApplications && list && !event.target.closest?.("[data-entry-id], button, input, select")) {
       event.preventDefault(); contextMenu = null;
       const bounds = list.getBoundingClientRect(), overlay = document.createElement("div");
       overlay.className = "space-selection-marquee"; overlay.setAttribute("aria-hidden", "true");
@@ -858,7 +938,7 @@
   window.addEventListener?.("blur", () => { if (contextMenu || marquee || movePointer) { stopMarquee(true); clearDrag(); contextMenu = null; render(); } });
   const hasFiles = event => Array.from(event.dataTransfer?.types || []).includes("Files");
   const writableSpace = id => !workspaces || (!id || id === workspace ? workspaces.current().writable !== false : workspaces.spaces().some(space => space.id === id && !space.trashed && space.writable !== false));
-  const canDrop = event => active && fileView && host?.canLaunchApplications && !trash && !dialog && !workspaces?.blocked() && workspaces?.current().writable !== false && !batchBusy && status.phase !== "unsupported" && writableSpace(event?.target?.closest?.('[data-action="space-folder"]')?.dataset.space);
+  const canDrop = event => !volumes?.active() && active && fileView && host?.canLaunchApplications && !trash && !dialog && !workspaces?.blocked() && workspaces?.current().writable !== false && !batchBusy && status.phase !== "unsupported" && writableSpace(event?.target?.closest?.('[data-action="space-folder"]')?.dataset.space);
   const pointerTarget = event => ({ target: document.elementFromPoint?.(event.clientX, event.clientY) || event.target, clientY: event.clientY });
   function clearMoveTarget() {
     moving?.target?.element.classList?.remove("is-move-target");
@@ -1015,8 +1095,9 @@
   root.addEventListener("scroll", event => { if (annotationWorkbench?.active() && event.target.hasAttribute?.("data-wb-scroll")) annotationWorkbench.onScroll(event.target.scrollTop); }, true);
   document.addEventListener("keydown", async event => {
     if (active && fileView && annotationWorkbench?.active()) { await annotationWorkbench.keydown(event); return; }
-    if (!active || !fileView || workspaces?.blocked() || composing || event.isComposing) return;
+    if ((volumes?.active() && !dialog) || !active || !fileView || workspaces?.blocked() || composing || event.isComposing) return;
     if (dialog?.kind === "text-edit" && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") { event.preventDefault(); await saveTextEdit(); return; }
+    if (event.key === "Escape" && textEditorDirty()) { event.preventDefault(); requestCloseEditor(); return; }
     if (event.key === "Escape") { if (batchBusy || dialog?.saving || textEditorDirty()) return; if (movePointer || moving) clearDrag(); else if (dialog) closeDialog(); else if (marquee) stopMarquee(true); else if (!contextMenu) clearSelection(); contextMenu = null; render(); return; }
     if (dialog || batchBusy || marquee || moving || event.target?.closest?.("input, textarea, select")) return;
     if (contextMenu) {
@@ -1066,6 +1147,39 @@
     }
   });
   setInterval(() => { if(document.querySelector?.("details[data-wanx-actions][open]")) return; if(active&&!document.hidden)void workspaces?.updateSync?.(); if (active && !document.hidden && host?.canLaunchApplications && !loading && !dialog && !workspaces?.blocked() && !moving && !movePointer && !marquee) void load(); }, 15000);
-  workspaces?.bind({call,icon,fileAction:sidebarFileAction,dismissFileMenu:()=>{contextMenu=null;}, render:()=>render(), message, error:value=>{error=value;render();}, reload:()=>load(), navigate});
-  window.wanxSpace = { reload: () => load(), view, headerActions, hostState, retainEditor, mounted, overview: () => status.overview, bind(options) { render = options.render; compactActions = Boolean(options.compactActions); notesInAssistant = Boolean(options.notesInAssistant); }, isSelecting: () => Boolean(marquee), isDragging: () => Boolean(movePointer || moving), activate(value, visible = value) { if (!notesInAssistant) window.wanxClipboard?.setActive(value && visible); if (fileView !== visible) { stopMarquee(); clearDrag(); contextMenu = null; } fileView = visible; if (active === value) return; active = value; if (active) void load(); else { closeDialog(); clearDrag(); previews?.mount([], scope, false); } } };
+  workspaces?.bind({personalOnly: Boolean(volumes),call,icon,fileAction:sidebarFileAction,dismissFileMenu:()=>{contextMenu=null;}, render:()=>render(), message, error:value=>{error=value;render();}, reload:()=>load(), navigate});
+  function canLeaveForGuide() {
+    if (textEditorDirty()) {requestCloseEditor();return false;}
+    return !batchBusy && !dialog?.saving && (!dialog || dialog.kind.startsWith('preview')) && !workspaces?.modalOpen?.();
+  }
+  function guideFacts() {
+    if (!active || !fileView || !host?.canLaunchApplications || volumes?.active()) return {};
+    if (loading || !status.scope || error || status.phase === 'unsupported') return {列表状态:loading?'加载中':'暂不可读'};
+    const selected = selectedItems();
+    return {列表状态:'已加载', 位置:trash?'回收站':listing.breadcrumbs.at(-1)?.name || '根目录',
+      目录项目数:listing.items.length, 筛选后项目数:visibleItems().length, 已选数量:selected.length,
+      已选项目:selected.slice(0,3).map(item=>item.name).join('、'), 当前可写:!trash && workspaces?.current().writable !== false};
+  }
+  function guideFiles(query,area) {
+    if(area==='selection'){
+      const preview=dialog, el=document.querySelector('.space-text-preview');
+      if(!active || !fileView || !host?.canLaunchApplications || preview?.kind!=='preview' || preview.type!=='text/plain' || !el?.getClientRects().length)return [];
+      const text=el.textContent || '', at=text.toLowerCase().indexOf(query.toLowerCase());
+      return [{key:preview.item.id,title:preview.title,source:'当前打开的文本预览',excerpt:text.slice(Math.max(0,at-100),Math.max(0,at-100)+600),
+        open:()=>{if(dialog!==preview || !el.isConnected)return false;el.scrollIntoView({block:'center'});return true;}}];
+    }
+    if (!active || !fileView || !scope || loading || error || trash || dialog || workspaces?.blocked() || !host?.canLaunchApplications) return [];
+    const at=revision, folder=parent, storage=workspace;
+    return visibleItems().filter(item=>item.name.toLowerCase().includes(query.toLowerCase())).slice(0,12).map(item=>({
+      key:item.id,title:item.name,source:item.kind==='folder'?'当前目录 · 文件夹':'当前目录 · 文件',
+      open:async()=>{
+        if(at!==revision || folder!==parent || storage!==workspace || !active || !fileView || dialog)return false;
+        const live=visibleItems().find(i=>i.id===item.id && i.name===item.name);
+        if(!live)return false;
+        await openItem(live);
+        return live.kind==='folder' ? parent===live.id : dialog?.item?.id===live.id;
+      },
+    }));
+  }
+  window.wanxSpace = { guideFiles, guideFacts, canLeaveForGuide, reload: () => load(), view, headerActions, hostState, retainEditor, mounted, overview: () => status.overview, bind(options) { render = options.render; connectionNotice = options.connectionNotice; compactActions = Boolean(options.compactActions); notesInAssistant = Boolean(options.notesInAssistant); }, isSelecting: () => Boolean(marquee), isDragging: () => Boolean(movePointer || moving), activate(value, visible = value) { volumes?.watch(value && visible && host?.canLaunchApplications ? scope : null); if (!notesInAssistant) window.wanxClipboard?.setActive(value && visible); if (fileView !== visible) { stopMarquee(); clearDrag(); contextMenu = null; } fileView = visible; if (active === value) return; active = value; if (active) void load(); else { if (!textEditorDirty() && !dialog?.saving) closeDialog(); clearDrag(); previews?.mount([], scope, false); } } };
 })();

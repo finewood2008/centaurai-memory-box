@@ -62,5 +62,13 @@
     "png_color_type": 6,
     "bytes": 65780,
     "sha256": "ec05c0c1b2bffd96b5b35d73b04581022deb6c87eab29aa0749c1e8550e5b4e0"
+  },
+  {
+    "file": "accessories.png",
+    "width": 384,
+    "height": 384,
+    "png_color_type": 6,
+    "bytes": 146697,
+    "sha256": "ba72df30d4a95dec0d5afe7e1441d5b7b5b4427d3531a30f06981db8ceae1c62"
   }
 ]

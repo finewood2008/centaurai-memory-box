@@ -5876,6 +5876,27 @@ code {
   background: transparent;
 }
 
+.memory-source-control {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+}
+
+.memory-source-control > button {
+  align-self: center;
+  margin-inline-start: 4px;
+}
+
+.memory-source-search-control .memory-source-control .memory-source-filter {
+  position: static;
+  max-width: min(176px, 32vw);
+}
+
+.memory-source-search-control .memory-source-control .memory-source-filter__menu {
+  right: 0;
+  width: min(224px, 100%);
+}
+
 .memory-source-filter {
   min-width: 0;
   width: max-content;

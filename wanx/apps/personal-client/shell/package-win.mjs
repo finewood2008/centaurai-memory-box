@@ -168,7 +168,7 @@ async function main() {
     config: {
       extends: path.join(root, "shell", "electron-builder-win-x64.json"),
       appId: "ai.centuarai.wanx.client",
-      productName: "半人马AI记忆盒子",
+      productName: "半人马AI-记忆盒子",
       extraMetadata: { wanxBuild: { schemaVersion: 1, buildId: `${stamp}-${input.sourceCommit.slice(0, 12)}`,
         sourceCommit: input.sourceCommit, channel: "internal", securityEpoch: 0, distributionClass: "unsigned-internal-only" } },
       electronVersion: input.electron,

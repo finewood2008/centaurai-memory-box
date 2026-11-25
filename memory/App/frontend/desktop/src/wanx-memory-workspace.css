@@ -157,8 +157,9 @@
   height: 34px;
   min-height: 34px;
 }
-.memory-workspace--embedded .memory-source-search-control .memory-source-filter__button {
-  border-left: 1px solid var(--border-content-panel);
+.memory-workspace--embedded .memory-source-search-control > .memory-source-control,
+.memory-workspace--embedded .memory-source-search-control > .memory-source-filter .memory-source-filter__button {
+  border-inline-start: 1px solid var(--border-content-panel);
 }
 .memory-workspace--embedded .memory-list {
   gap: 6px;

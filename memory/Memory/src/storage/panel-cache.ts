@@ -206,6 +206,11 @@ export function visibleFactSql(fact: string): string {
     SELECT 1 FROM raw_turns r WHERE r.id=${fact}.raw_id AND r.deleted_at IS NULL AND r.redacted_at IS NULL
       AND (${fact}.session_id IS NULL OR ${fact}.session_id=r.session_id)))`;
 }
+export function panelL1Sources(db: Database.Database): string[] {
+  return db.prepare(`SELECT DISTINCT lower(replace(replace(trim(f.source), '-', '_'), ' ', '_')) AS source_id
+    FROM panel_memory_facts f WHERE f.memory_layer='L1' AND ${visibleFactSql("f")} ORDER BY source_id`)
+    .pluck().all() as string[];
+}
 export function panelVisibleMemorySql(memory = "memories"): string {
   return `EXISTS(SELECT 1 FROM panel_memory_facts panel_fact WHERE panel_fact.id=${memory}.id AND ${visibleFactSql("panel_fact")})`;
 }

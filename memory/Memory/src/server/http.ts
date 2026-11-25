@@ -1124,6 +1124,7 @@ async function routeRequest(
       layer: parseRecallLayer(url.searchParams.get("layer")),
       status: parseStatus(url.searchParams.get("status")),
       q: url.searchParams.get("q") ?? undefined,
+      sourceMatch: url.searchParams.get("sourceMatch") === "exact" ? "exact" : undefined,
       sourceAgent: url.searchParams.get("sourceAgent") ?? undefined,
       excludedSourceAgents: url.searchParams.getAll("excludedSourceAgents"),
       page: parseNumber(url.searchParams.get("page"))
@@ -1419,6 +1420,7 @@ function publicSearchInjectedContextMarkdown(value: unknown): string {
 function publicPanelItemsResponse(result: unknown): Record<string, unknown> {
   const record = responseRecord(result);
   return {
+    ...(Array.isArray(record.sourceAgents) && { sourceAgents: record.sourceAgents }),
     items: record.items,
     page: record.page,
     pageSize: record.pageSize,

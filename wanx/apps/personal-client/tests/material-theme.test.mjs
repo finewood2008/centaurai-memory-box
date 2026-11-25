@@ -13,7 +13,7 @@ test('personal windows load the local material theme without adding scripts or p
 });
 test('all local artwork files match canonical sources and decode as wide PNGs',async()=>{
  const manifest=JSON.parse(await readFile(new URL('../../builder/integration/personal-client/assets/material-v1/manifest.json',import.meta.url),'utf8'));
- assert.equal(manifest.assets.length,7);
+ assert.equal(manifest.assets.length,8);
  for(const item of manifest.assets){
   const bytes=await readFile(new URL('renderer/assets/material-v1/'+item.file,root));
   assert.equal(bytes.subarray(1,4).toString(),'PNG');

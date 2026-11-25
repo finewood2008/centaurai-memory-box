@@ -48,7 +48,7 @@ async function isMovedMacBridge(current, expected) {
   if (typeof current?.command !== "string" || !path.isAbsolute(current.command)) return false;
   const bundle = path.resolve(path.dirname(current.command), "../..");
   if (path.extname(bundle) !== ".app" ||
-      current.command !== path.join(bundle, "Contents", "MacOS", "半人马AI记忆盒子")) return false;
+      !["半人马AI-记忆盒子", "半人马AI记忆盒子", "记忆盒子"].some(name => current.command === path.join(bundle, "Contents", "MacOS", name))) return false;
   const previous = {
     ...expected,
     command: current.command,

@@ -2,249 +2,47 @@
 !include nsDialogs.nsh
 SetFont "Microsoft YaHei UI" 9
 
-!ifndef WANX_BUILD_LABEL
-  !define WANX_BUILD_LABEL "${VERSION}"
-!endif
-
 !define MUI_BGCOLOR "FCF9F5"
 !define MUI_TEXTCOLOR "302C28"
 !define MUI_HEADER_TRANSPARENT_TEXT
+!define MUI_DIRECTORYPAGE_TEXT_TOP "请选择半人马AI-记忆盒子的安装位置。应用将为当前 Windows 用户安装。"
+!define MUI_DIRECTORYPAGE_TEXT_DESTINATION "安装位置"
 !define MUI_INSTFILESPAGE_PROGRESSBAR "colored"
 !define MUI_INSTFILESPAGE_COLORS "A35D40 FCF9F5"
-!define MUI_FINISHPAGE_TITLE "记忆盒子已准备就绪"
-!define MUI_FINISHPAGE_TEXT "记忆 · 空间 · 我的 AI$\r$\n$\r$\n连接你的 AI，整理记忆与资料。$\r$\n$\r$\n升级安装会保留现有账号与应用数据。"
-!define MUI_FINISHPAGE_RUN_TEXT "打开记忆盒子"
-!define MUI_CUSTOMFUNCTION_GUIINIT WanxInstallerGuiInit
+!define MUI_FINISHPAGE_TITLE "安装完成"
+!define MUI_FINISHPAGE_TEXT "半人马AI-记忆盒子已安装。首次打开后，可前往「盒子」连接设备。"
+!define MUI_FINISHPAGE_RUN_TEXT "打开半人马AI-记忆盒子"
+!define MUI_FINISHPAGE_RUN_NOTCHECKED
 
-Var wxWelcomeDialog
-Var wxArtwork
-Var wxBitmap
-Var wxSlide
-Var wxSlideTitle
-Var wxSlideText
-Var wxSlideIndex
-Var wxPauseButton
-Var wxPaused
-Var wxTitleFont
-Var wxBodyFont
-Var wxProgressArtwork
-Var wxProgressBitmap
-Var wxProgressAnimation
-
-!macro customWelcomePage
-  Page custom WanxWelcomePage WanxWelcomeLeave
-!macroend
-
-; electron-builder inserts this after MUI pages declare their control variables.
 !macro customHeader
-; The NSIS branding control sits underneath the custom page and gets clipped.
-; Show the application version inside the page instead.
-BrandingText " "
-Function WanxInstallerGuiInit
-  CreateFont $wxTitleFont "Microsoft YaHei UI" 16 600
-  CreateFont $wxBodyFont "Microsoft YaHei UI" 9 400
-  SendMessage $HWNDPARENT ${WM_SETFONT} $wxBodyFont 1
-FunctionEnd
+BrandingText "半人马AI-记忆盒子 ${VERSION}"
 
-Function WanxExtractArtwork
-  InitPluginsDir
-  SetOutPath "$PLUGINSDIR"
-  File /oname=wanx-feature-1.bmp "${PROJECT_DIR}\resources\installer\feature-1.bmp"
-  File /oname=wanx-feature-2.bmp "${PROJECT_DIR}\resources\installer\feature-2.bmp"
-  File /oname=wanx-feature-3.bmp "${PROJECT_DIR}\resources\installer\feature-3.bmp"
-  File /oname=wanx-overview.bmp "${PROJECT_DIR}\resources\installer\overview.bmp"
-  File /oname=wanx-posters-1x.avi "${PROJECT_DIR}\resources\installer\poster-loop-1x.avi"
-  File /oname=wanx-posters-2x.avi "${PROJECT_DIR}\resources\installer\poster-loop-2x.avi"
-  File /oname=wanx-posters-3x.avi "${PROJECT_DIR}\resources\installer\poster-loop-3x.avi"
-FunctionEnd
-
-Function WanxWelcomePage
-  ${If} ${isUpdated}
-    Abort
-  ${EndIf}
-  !insertmacro MUI_HEADER_TEXT "欢迎使用半人马AI记忆盒子" "记忆 · 空间 · 我的 AI"
-  Call WanxExtractArtwork
-  ; Relative coordinates keep the artwork and controls inside the page when
-  ; Windows text scaling changes the dialog-unit size.
+Function WanxShowPathError
+  !insertmacro MUI_HEADER_TEXT "请重新选择安装位置" "返回上一步，修改目录后继续安装。"
   nsDialogs::Create 1044
-  Pop $wxWelcomeDialog
-  ${If} $wxWelcomeDialog == error
-    Abort
+  Pop $2
+  ${If} $2 == error
+    MessageBox MB_ICONSTOP|MB_OK "$1"
+    SetErrorLevel 1603
+    Quit
   ${EndIf}
-  SetCtlColors $wxWelcomeDialog 302C28 FCF9F5
-  ${NSD_CreateBitmap} 5% 0 90% 68% ""
-  Pop $wxArtwork
-  ; Keep STM_SETIMAGE from resizing the bitmap control on each slide change.
-  ${NSD_AddStyle} $wxArtwork ${SS_REALSIZECONTROL}
-  ${NSD_CreateLabel} 5% 71% 90% 8% ""
-  Pop $wxSlideTitle
-  SendMessage $wxSlideTitle ${WM_SETFONT} $wxTitleFont 1
-  SetCtlColors $wxSlideTitle 302C28 FCF9F5
-  ${NSD_CreateLabel} 5% 81% 90% 6% ""
-  Pop $wxSlideText
-  SetCtlColors $wxSlideText 756B61 FCF9F5
-  ${NSD_CreateLabel} 5% 91% 38% 6% ""
-  Pop $wxSlideIndex
-  SetCtlColors $wxSlideIndex A35D40 FCF9F5
-  ${NSD_CreateLink} 56% 89% 13% 8% "上一页"
-  Pop $0
-  SetCtlColors $0 A35D40 FCF9F5
-  ${NSD_OnClick} $0 WanxPreviousSlide
-  ${NSD_CreateLink} 70% 89% 13% 8% "暂停"
-  Pop $wxPauseButton
-  SetCtlColors $wxPauseButton A35D40 FCF9F5
-  ${NSD_OnClick} $wxPauseButton WanxToggleSlides
-  ${NSD_CreateLink} 84% 89% 13% 8% "下一页"
-  Pop $0
-  SetCtlColors $0 A35D40 FCF9F5
-  ${NSD_OnClick} $0 WanxNextSlide
-  StrCpy $wxSlide 1
-  StrCpy $wxPaused 0
-  StrCpy $wxBitmap 0
-  Call WanxRenderSlide
-  ${NSD_CreateTimer} WanxSlideTimer 5500
+  SetCtlColors $2 302C28 FCF9F5
+  ${NSD_CreateLabel} 5% 11% 90% 29% "$1"
+  Pop $2
+  ${NSD_CreateLabel} 5% 48% 90% 33% "当前安装位置：$INSTDIR"
+  Pop $2
+  GetDlgItem $2 $HWNDPARENT 1
+  EnableWindow $2 0
+  ${NSD_OnBack} WanxPathErrorBack
   nsDialogs::Show
-  ; Show also returns on Cancel; always release the timer/GDI bitmap.
-  Call WanxWelcomeCleanup
 FunctionEnd
 
-Function WanxRenderSlide
-  ${If} $wxBitmap != 0
-    ${NSD_ClearImage} $wxArtwork
-    ${NSD_FreeImage} $wxBitmap
-  ${EndIf}
-  ${NSD_SetStretchedImage} $wxArtwork "$PLUGINSDIR\wanx-feature-$wxSlide.bmp" $wxBitmap
-  ${Switch} $wxSlide
-    ${Case} 1
-      ${NSD_SetText} $wxSlideIndex "记忆盒子 ${WANX_BUILD_LABEL} · 1 / 3"
-      ${NSD_SetText} $wxSlideTitle "记忆，留下值得记住的协作"
-      ${NSD_SetText} $wxSlideText "整理支持来源中的记忆，让下一次任务有据可循。"
-      ${Break}
-    ${Case} 2
-      ${NSD_SetText} $wxSlideIndex "记忆盒子 ${WANX_BUILD_LABEL} · 2 / 3"
-      ${NSD_SetText} $wxSlideTitle "空间，资料有条理，查找更方便"
-      ${NSD_SetText} $wxSlideText "管理空间文件，批量填写标签与说明。"
-      ${Break}
-    ${Case} 3
-      ${NSD_SetText} $wxSlideIndex "记忆盒子 ${WANX_BUILD_LABEL} · 3 / 3"
-      ${NSD_SetText} $wxSlideTitle "我的 AI，带着资料开始协作"
-      ${NSD_SetText} $wxSlideText "选择智能体与资料范围，按授权连接记忆和文件。"
-      ${Break}
-  ${EndSwitch}
-FunctionEnd
-
-Function WanxSlideTimer
-  ${If} $wxPaused == 0
-    Call WanxAdvanceSlide
-  ${EndIf}
-FunctionEnd
-
-Function WanxAdvanceSlide
-  IntOp $wxSlide $wxSlide + 1
-  ${If} $wxSlide > 3
-    StrCpy $wxSlide 1
-  ${EndIf}
-  Call WanxRenderSlide
-FunctionEnd
-
-Function WanxNextSlide
-  Pop $0
-  Call WanxAdvanceSlide
-FunctionEnd
-
-Function WanxPreviousSlide
-  Pop $0
-  IntOp $wxSlide $wxSlide - 1
-  ${If} $wxSlide < 1
-    StrCpy $wxSlide 3
-  ${EndIf}
-  Call WanxRenderSlide
-FunctionEnd
-
-Function WanxToggleSlides
-  Pop $0
-  IntOp $wxPaused $wxPaused ^ 1
-  ${If} $wxPaused == 1
-    ${NSD_SetText} $wxPauseButton "播放"
-  ${Else}
-    ${NSD_SetText} $wxPauseButton "暂停"
-  ${EndIf}
-FunctionEnd
-
-Function WanxWelcomeLeave
-  Call WanxWelcomeCleanup
-FunctionEnd
-
-Function WanxWelcomeCleanup
-  ${NSD_KillTimer} WanxSlideTimer
-  ${If} $wxBitmap != 0
-    ${NSD_ClearImage} $wxArtwork
-    ${NSD_FreeImage} $wxBitmap
-    StrCpy $wxBitmap 0
-  ${EndIf}
+Function WanxPathErrorBack
+  GetDlgItem $2 $HWNDPARENT 1
+  EnableWindow $2 1
 FunctionEnd
 
 Function WanxInstallShow
-  StrCpy $wxProgressAnimation 0
-  Call WanxExtractArtwork
-  !insertmacro MUI_HEADER_TEXT "正在安装记忆盒子" "正在复制应用与配套组件，请稍候。"
-  ; NSIS alone drives the real progress bar. The independent native animation
-  ; control rotates posters while files are copied on the installer thread.
-  System::Call '*(i 0, i 0, i 0, i 0) p.r0'
-  System::Call 'user32::GetClientRect(p $mui.InstFilesPage, p r0)'
-  System::Call '*$0(i, i, i.r3, i.r4)'
-  System::Free $0
-  IntOp $5 $4 * 25
-  IntOp $5 $5 / 100
-  IntOp $6 $4 * 75
-  IntOp $6 $6 / 100
-  System::Call 'user32::CreateWindowExW(i 0, w "STATIC", w "", i 0x5000000E, i 0, i r5, i r3, i r6, p $mui.InstFilesPage, p 0, p 0, p 0) p.s'
-  Pop $wxProgressArtwork
-  ${NSD_SetStretchedImage} $wxProgressArtwork "$PLUGINSDIR\wanx-overview.bmp" $wxProgressBitmap
-  ${If} $3 < 280
-  ${OrIf} $6 < 156
-    Return
-  ${EndIf}
-  ; A still image remains visible if Windows cannot open the animation.
-  StrCpy $7 "$PLUGINSDIR\wanx-posters-1x.avi"
-  ${If} $3 >= 420
-  ${AndIf} $6 >= 234
-    StrCpy $7 "$PLUGINSDIR\wanx-posters-2x.avi"
-  ${EndIf}
-  ${If} $3 >= 560
-  ${AndIf} $6 >= 312
-    StrCpy $7 "$PLUGINSDIR\wanx-posters-3x.avi"
-  ${EndIf}
-  System::Call '*(i 8, i 128) p.r0'
-  System::Call 'comctl32::InitCommonControlsEx(p r0)'
-  System::Free $0
-  ; ACS_CENTER keeps the pre-rendered frame centered without distortion.
-  System::Call 'user32::CreateWindowExW(i 0, w "SysAnimate32", w "", i 0x50000001, i 0, i r5, i r3, i r6, p $mui.InstFilesPage, p 0, p 0, p 0) p.s'
-  Pop $wxProgressAnimation
-  SendMessage $wxProgressAnimation ${ACM_OPEN} 0 "STR:$7" $0
-  ${If} $0 != 0
-    SendMessage $wxProgressAnimation ${ACM_PLAY} -1 0xFFFF0000 $0
-  ${EndIf}
-  ${If} $0 != 0
-    ShowWindow $wxProgressArtwork ${SW_HIDE}
-  ${Else}
-    SendMessage $wxProgressAnimation ${ACM_OPEN} 0 0
-    System::Call 'user32::DestroyWindow(p $wxProgressAnimation)'
-    StrCpy $wxProgressAnimation 0
-  ${EndIf}
-FunctionEnd
-
-Function WanxInstallLeave
-  ${If} $wxProgressAnimation != 0
-    SendMessage $wxProgressAnimation ${ACM_STOP} 0 0
-    SendMessage $wxProgressAnimation ${ACM_OPEN} 0 0
-    System::Call 'user32::DestroyWindow(p $wxProgressAnimation)'
-    StrCpy $wxProgressAnimation 0
-  ${EndIf}
-  ${If} $wxProgressBitmap != 0
-    ${NSD_ClearImage} $wxProgressArtwork
-    ${NSD_FreeImage} $wxProgressBitmap
-    StrCpy $wxProgressBitmap 0
-  ${EndIf}
+  !insertmacro MUI_HEADER_TEXT "正在安装半人马AI-记忆盒子" "正在复制应用和配套组件，请稍候。"
 FunctionEnd
 !macroend

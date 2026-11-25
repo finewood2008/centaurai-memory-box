@@ -53,6 +53,12 @@ test('Starxiaotu follows the platform default and uses one saved model for both 
       completions.push(input);
       const model = (input.model_ref || defaultRef).split('/').at(-1);
       const message = JSON.parse(input.messages[1].content);
+      if (message.version !== 2) {
+        const prompt = input.messages[0].content;
+        assert.match(prompt, /CentaurAI/);
+        assert.match(prompt, /称呼用户为「主人」/);
+        assert.match(prompt, /不做自我介绍/);
+      }
       const text = message.version === 2 ? decision : {answer:'合成答案',citations:[]};
       return {status:200,body:Buffer.from(JSON.stringify({model,text:JSON.stringify(text)}))};
     },
@@ -76,6 +82,25 @@ test('Starxiaotu follows the platform default and uses one saved model for both 
     assert.equal((await ask()).value.model, 'alternate');
     assert.deepEqual((await intent()).value, decision);
     assert.deepEqual(completions.slice(-2).map(request=>request.model_ref), ['host/alternate', 'host/alternate']);
+    const guide = await f.service.action('starxiaotu-answer',{applicationGuide:true,question:'资料能用在哪？',
+      page:'my-ai',concept:'task-access',pageFacts:{当前智能体:'示例智能体',参考星图:'合同演示',已选资料:'不属于当前页面',token:'内部凭证'},warehouseId:'old-project',history:['用户：上一问'],retrieval:{
+        notes:'仅查记忆',items:[{source:'记忆',title:'验收笔记',snippet:'本轮检索到的片段'}]}});
+    assert.equal(guide.value.model,'platform-b');
+    assert.match(completions.at(-1).messages[0].content,/Markdown/);
+    const definition = await f.service.action('starxiaotu-answer',{applicationGuide:true,explainTerm:true,
+      page:'data',concept:'evidence',question:'什么是来源证据？',history:[]});
+    assert.equal(definition.value.answer,'合成答案');
+    assert.match(completions.at(-1).messages[0].content,/另起一小段/);
+    assert.match(completions.at(-1).messages[0].content,/不复述无关统计/);
+    assert.match(completions.at(-1).messages[0].content,/不推荐下一步/);
+    const generalCompletion = completions.at(-2);
+    assert.equal(Object.hasOwn(generalCompletion,'model_ref'),false);
+    const context = JSON.parse(generalCompletion.messages[1].content);
+    assert.equal(context.page,'我的 AI');
+    assert.match(context.productReference.join(''),/任务/);
+    assert.deepEqual(context.pageFacts,{当前智能体:'示例智能体',参考星图:'合同演示'});
+    assert.doesNotMatch(JSON.stringify(completions.at(-1).messages),/验收笔记|本轮检索到的片段|old-project|内部凭证|不属于当前页面/);
+    assert.ok(!f.requests.some(req=>req.path.includes('old-project')));
     f.switchAccount('other');
     assert.equal((await f.service.action('starxiaotu-models')).value.selectedRef, null);
     f.switchAccount('account');
@@ -322,7 +347,7 @@ test('reset releases resources and starts a fresh session on the next visit', as
   f.service.close();
 });
 
-test('星小图 uses the box text model and hands off only confirmed citation targets and known actions', async () => {
+test('CentaurAI uses the box text model and hands off only confirmed citation targets and known actions', async () => {
   const { answerStarxiaotu } = await import('../integration/starxiaotu-agent.mjs');
   const context = () => ({boxId:'box',user:{id:1}});
   const inputs = [], reads = [];

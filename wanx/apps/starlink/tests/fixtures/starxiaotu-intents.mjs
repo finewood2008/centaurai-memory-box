@@ -41,7 +41,7 @@ function classifyStarxiaotuRequest(value, context = 'general', {ontologyConversa
   if (explainOnly || /^(?:介绍|解释|了解)(?:一下)?/.test(text) || /你能做什么|能问什么|怎么提问/.test(text)) {
     const key = /处理任务/.test(text) ? 'tasks' : /脱敏规则/.test(text) ? 'sensitive' : /星图设置/.test(text) ? 'onboarding' : /模型|脱敏|设置/.test(text) ? 'models' : /项目列表|切换项目|不同项目/.test(text) ? 'warehouses' : /知识页/.test(text) ? 'knowledge' : /本体|规则/.test(text) ? 'ontology' : /资料库|原文|来源|证据/.test(text) ? 'library' : /数据列表|记录/.test(text) ? 'data' : /关系|连线/.test(text) ? 'relation' : /属性|字段|实体|类型|必填|选填/.test(text) ? 'entity' : /概览/.test(text) ? 'overview' : /星图/.test(text) ? 'graph' : 'general';
     if (key==='general' && pageQuestion && guideKey(context)!=='general') return {kind:'explain',text,key:guideKey(context)};
-    return key==='general' && !/你能做什么|能问什么|怎么提问|介绍星小图|解释星小图/.test(text) ? {kind:'search',text} : {kind:'explain',text,key};
+    return key==='general' && !/你能做什么|能问什么|怎么提问|介绍\s*CentaurAI|解释\s*CentaurAI/.test(text) ? {kind:'search',text} : {kind:'explain',text,key};
   }
   if (/本体|实体类型|关系类型|类型定义|类型结构|属性|字段/.test(text) && !writing && /查看|看看|列出|展示|查询|有哪些|有什么|哪些|多少/.test(text)) return {kind:'ontology-query',text};
   if (ontologyConversation && /^(?:确认应用到草稿|确认应用|按这个建议修改|按建议修改|采用建议|确认|下一步|继续|进入下一步)[。！!\s]*$/.test(text) || /^(?:发布|确认发布|确认发布规则|核对并发布|查看发布预览|我已核对[，,\s]*确认发布)[。！!\s]*$/.test(text)) return {kind:'ontology-control',text};

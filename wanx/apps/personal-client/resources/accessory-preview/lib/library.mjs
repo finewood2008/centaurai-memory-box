@@ -1,6 +1,7 @@
 // 试用星图（独立知识仓）、试用记忆、本机设置。全部位于 MEETING_DATA_DIR 内，与正式数据隔离。
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import {
   readJson, writeJson, writeFileAtomic, withLock, cleanText, RE, HttpError, newVaultId,
   newMaterialId, newMemoryId, sha256, fmtMs, insideDir, hex,
@@ -38,6 +39,22 @@ export async function putSettings(body) {
     }
     await writeJson(L.settings, s);
     return s;
+  });
+}
+
+// Earlier checkboxes could be enabled outside the agent. Only an explicit in-agent
+// enrollment issues a grant; a new enrollment cannot replay an older grant's queue.
+export async function recordingCapture(kind, action) {
+  if (!['disk', 'clip'].includes(kind)) throw new HttpError(403, '请从录音智能体操作');
+  return withLock('settings', async () => {
+    const settings = await getSettings();
+    if (action === 'status') return { enabled: Boolean(settings.recordingCaptureGrants?.[kind]) };
+    if (action !== 'add' && action !== 'remove') throw new HttpError(400, '自动采集操作无效');
+    settings.recordingCaptureGrants ||= {};
+    if (action === 'add') settings.recordingCaptureGrants[kind] ||= randomUUID();
+    else delete settings.recordingCaptureGrants[kind];
+    await writeJson(L.settings, settings);
+    return { enabled: action === 'add' };
   });
 }
 

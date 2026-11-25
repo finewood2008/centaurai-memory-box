@@ -38,7 +38,8 @@ async function sourceFingerprint(source, clientRoot, managed) {
     if (!await exists(path.join(source, name))) continue;
     hash.update(name); hash.update('\0'); hash.update(await readFile(path.join(source, name))); hash.update('\0');
   }
-  for (const file of [fileURLToPath(import.meta.url), fileURLToPath(new URL('./prepare-memory-runtime.mjs', import.meta.url)),
+  for (const file of [fileURLToPath(import.meta.url), fileURLToPath(new URL('../../starlink/shared/application-guide.mjs',import.meta.url)), fileURLToPath(new URL('../../starlink/shared/starlink-glossary.mjs',import.meta.url)), fileURLToPath(new URL('./prepare-memory-runtime.mjs', import.meta.url)),
+    fileURLToPath(new URL('../resources/accessory-preview/public/box-connection.css', import.meta.url)),
     fileURLToPath(new URL('../../../tools/stage-local-memory.mjs', import.meta.url)),
     fileURLToPath(new URL('../../../tools/repair-locked-sqlite.mjs', import.meta.url))]) hash.update(await readFile(file));
   return hash.digest('hex');

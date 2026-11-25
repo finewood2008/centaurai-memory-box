@@ -74,3 +74,33 @@ it("retains page 2/3 across NULL-owner first binding while still rejecting an ex
     expect((await call("panel/browse",{op:"page",viewId:view.viewId,page:2})).status).toBe(409);
   }finally{await closeMemoryHttpServer(server);}
 });
+
+it("lists only producers of visible L1 memories across both panel routes", async () => {
+  const { service } = fixture.createTestService();
+  const { server, call } = await openPanel(service);
+  async function expectSources(sourceAgents: string[]) {
+    const direct = await call("panel/items?layer=L1&q=no-matches-for-this-query");
+    const browse = await call("panel/browse", { op: "create", filter: {
+      section: "items", layer: "L1", q: "no-matches-for-this-query"
+    } });
+    for (const result of [direct, browse]) {
+      expect(result).toMatchObject({ status: 200, data: { items: [], sourceAgents } });
+    }
+  }
+  try {
+    await expectSources([]);
+    const meeting = service.addMemory({ content: "meeting example", source: "meeting_recording" });
+    await expectSources(["meeting_recording"]);
+    service.addMemory({ content: "portable example", source: "portable_recording" });
+    await expectSources(["meeting_recording", "portable_recording"]);
+    const selected = await call("panel/browse", { op: "create", filter: {
+      section: "items", layer: "L1", sourceAgent: "meeting_recording", sourceMatch: "exact"
+    } });
+    expect(selected.data).toMatchObject({ total: 1, items: [{ id: meeting.id }],
+      sourceAgents: ["meeting_recording", "portable_recording"] });
+    service.deleteMemory(meeting.id);
+    await expectSources(["portable_recording"]);
+  } finally {
+    await closeMemoryHttpServer(server);
+  }
+});

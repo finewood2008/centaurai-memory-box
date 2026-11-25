@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
 
 const source = await readFile(new URL('../ui/app.js',import.meta.url),'utf8');
-const navigation = source.slice(source.indexOf('async function navigateStarxiaotu('),source.indexOf("document.addEventListener('click',event=>{"));
+const navigation = source.slice(source.indexOf('async function navigateStarxiaotu('),source.indexOf("document.addEventListener('click',event=>{",source.indexOf('async function navigateStarxiaotu(')));
 function fixture(mode, canLeave = true) {
   const state = {ready:true,warehouseId:'warehouse',generation:1,view:'graph',mode};
   const context = vm.createContext({state,workbench:{canLeave:()=>canLeave},

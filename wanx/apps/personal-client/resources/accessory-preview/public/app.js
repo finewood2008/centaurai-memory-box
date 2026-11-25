@@ -7,10 +7,11 @@ const accessoryRoute = location.pathname.replace(/\/$/, '').split('/');
 const inAccessories = accessoryRoute[1] === 'accessories';
 const accessoryPage = inAccessories ? accessoryRoute[2] || 'catalog' : null;
 const accessoryAgents = {
-  disk: { title: '录音圆盘智能体', description: '桌面会议拾音，边录边看实时字幕。', action: '开始录音', empty: '开始第一次圆盘录音后，项目会显示在这里。' },
-  clip: { title: '领夹麦克风智能体', description: '适合随身长时间录音，导入后在盒端异步转写。', action: '导入录音', empty: '导入第一份领夹录音后，项目会显示在这里。' },
+  disk: { title: '会议录音智能体', description: '桌面会议拾音，边录边看实时字幕。', action: '开始录音', empty: '开始第一次圆盘录音后，项目会显示在这里。' },
+  clip: { title: '随身录音智能体', description: '适合随身长时间录音，导入后在盒端异步转写。', action: '导入录音', empty: '导入第一份领夹录音后，项目会显示在这里。' },
 };
 const accessoryAgent = Object.hasOwn(accessoryAgents, accessoryPage) ? accessoryAgents[accessoryPage] : null;
+let accessoryBoxReady = true;
 
 const S = {
   view: 'meeting',
@@ -132,7 +133,36 @@ async function init() {
   if (inAccessories) {
     setupAccessoryShell();
     renderMain();
-    if (!accessoryAgent) return;
+    if (!accessoryAgent) {
+      if (embeddedCatalog) connectCatalogToHost();
+      void refreshHardware();
+      setInterval(() => { if (!document.hidden) void refreshHardware(); }, 5000);
+      return;
+    }
+    window.addEventListener('recording-box-connection', event => {
+      if (typeof event.detail !== 'boolean' || accessoryBoxReady === event.detail) return;
+      accessoryBoxReady = event.detail;
+      if (!accessoryBoxReady) {
+        for (const audio of document.querySelectorAll('audio')) audio.pause();
+        for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close();
+        if (S.rec) {
+          S.rec.boxInterrupted = true;
+          pauseCapture(S.rec);
+          releaseStream(S.rec);
+        }
+      } else {
+        void loadHealth();
+        void loadList();
+      }
+      renderMain();
+    });
+    window.addEventListener('recording-open-project', event => {
+      if (!accessoryBoxReady) return;
+      if (S.rec || S.starting) return toast('请先结束当前录音');
+      if (PROJECT_ID.test(event.detail)) void selectMeeting(event.detail);
+    });
+    void updateCapture();
+    document.querySelector('link[rel="icon"]').href = '/' + accessoryPage + '-agent.svg';
     window.addEventListener('popstate', () => openAccessoryLocation());
   }
   document.querySelectorAll('#nav a').forEach((a) => a.addEventListener('click', (e) => { e.preventDefault(); $('appMenu').open = false; go(a.dataset.view); }));
@@ -411,6 +441,24 @@ function renderMain() {
   const main = inAccessories ? $('accessoryContent') : $('main');
   renderSeq++;
   main.replaceChildren();
+  if (accessoryAgent) {
+    const blocked = !accessoryBoxReady || Boolean(S.rec?.boxInterrupted);
+    document.querySelector('.studio-nav nav').inert = blocked;
+    if (blocked) {
+      $('accessoryDetailBack').hidden = true;
+      const rec = S.rec;
+      const title = accessoryBoxReady ? '录音待保存' : '盒子未连接';
+      const detail = rec ? '录音已暂停。结束后，原音会保存在本机。' : '连接盒子后可使用配件功能。';
+      main.append(h('section', { class:'box-connect-notice accessory-box-connect', 'aria-label':'配件连接提示' },
+        h('span', {class:'box-connect-icon'}, h('span', {class:'box-connect-glyph', 'aria-hidden':'true'})),
+        h('div', {class:'box-connect-copy', role:'status'}, h('strong', null, title), h('p', null, detail),
+          rec?.notice ? h('p', { role:'alert' }, rec.notice.text) : null),
+        rec ? h('button', { class:'box-connect-button', type:'button', disabled:rec.state==='finishing', onclick:finishRecording },
+          rec.state==='finishing' ? '正在保存…' : '结束录音并保存') :
+          h('a', { class:'box-connect-button', href:'/accessories/connect-box' }, '连接盒子')));
+      return;
+    }
+  }
   if (inAccessories) {
     $('accessoryDetailBack').hidden = !accessoryAgent || (S.view === 'meeting' && !S.currentId);
     if (!accessoryAgent) return renderAccessoryCatalog(main);
@@ -451,10 +499,8 @@ function setupAccessoryShell() {
   if (accessoryAgent) {
     const navigate = (key) => key === 'meeting' ? selectMeeting(null) : go(key);
     const rail = h('header', {class:'studio-nav'},
-      h('a', {class:'agent-directory-link', href:ACCESSORIES_PATH, onclick:e => {
-        if (S.rec || S.starting) { e.preventDefault(); toast('请先结束当前录音'); }
-      }}, '← 配件'),
-
+      h('span', {class:'agent-directory-link agent-identity'},
+        h('img', {src:'/' + accessoryPage + '-agent.svg', width:30, height:30, alt:''}), accessoryAgent.title),
       h('nav', {'aria-label':'智能体导航'}, [['meeting','工作台'],['history','历史项目'],['templates','总结偏好']].map(([key,label]) =>
         h('button', {type:'button', 'data-agent-view':key, onclick:() => navigate(key)}, label))));
     $('main').append(h('div', {class:'agent-frame studio-'+accessoryPage}, rail, h('div', {class:'agent-pane'}, back, content)));
@@ -480,20 +526,116 @@ function accessoryArt(source) {
   return h('div', { class: 'accessory-art', 'aria-hidden': 'true' }, svg);
 }
 
+const hardware = {
+  disk: { name:'会议AI定向麦克风', description:'会议现场定向拾音，支持实时字幕。' },
+  clip: { name:'随身AI领夹麦克风', description:'随身录制音频，导入后转写并整理。' },
+  storage: { name:'拓展存储硬盘', description:'在空间中浏览盒子上的外接硬盘。' },
+};
+
+const embeddedCatalog = location.protocol === 'wanx-accessories:' && parent !== window;
+function publishCatalog() {
+  const items = Object.entries(hardware).map(([key, item]) => ({
+    key, title:item.name, status:document.querySelector('[data-hardware="' + key + '"]')?.textContent || '',
+  }));
+  parent.postMessage({type:'catalog-items', items}, '*');
+}
+function connectCatalogToHost() {
+  publishCatalog();
+  window.addEventListener('message', event => {
+    if (event.source === parent && event.data?.type === 'catalog-check') publishCatalog();
+  });
+  document.addEventListener('click', event => {
+    const link = event.target.closest('.accessory-card-link');
+    if (link) {
+      event.preventDefault();
+      parent.postMessage({type:'catalog-open', key:new URL(link.href).pathname.split('/').pop()}, '*');
+    } else if (!event.target.closest('a,button,input,textarea,select') && !getSelection()?.toString()) {
+      parent.postMessage({type:'catalog-background'}, '*');
+    }
+  });
+  document.addEventListener('keydown', event => {
+    if (!event.repeat && !event.isComposing && (event.ctrlKey || event.metaKey)
+      && event.shiftKey && !event.altKey && event.key.toLowerCase() === 'k') {
+      event.preventDefault();
+      parent.postMessage({type:'catalog-guide'}, '*');
+    } else if (event.key === 'Escape') parent.postMessage({type:'catalog-background'}, '*');
+  });
+}
+
+let readingVolumes = false;
+function hardwareState(kind, text) {
+  const node = document.querySelector('[data-hardware="' + kind + '"]');
+  if (node) {
+    node.textContent = text;
+    node.dataset.ready = String(text === '已连接');
+    if (embeddedCatalog) publishCatalog();
+  }
+}
+
+async function refreshHardware() {
+  if (!readingVolumes) {
+    readingVolumes = true;
+    api('/api/nas/volume-status', {json:{}}).then(result => hardwareState('storage', result.connected ? '已连接' : '未连接'))
+      .catch(() => hardwareState('storage', '无法读取盒子连接状态')).finally(() => { readingVolumes = false; });
+  }
+  try {
+    S.usb = await api('/api/usb-inputs');
+    const available = S.usb.supported && !S.usb.unavailable;
+    hardwareState('disk', detectedDisc() ? '已连接' : available ? '未检测到匹配设备' : '连接状态未知');
+    const clip = S.usb.devices.some(device => /领夹|lavalier|lapel/i.test(device.name));
+    hardwareState('clip', clip ? '已连接' : available ? '未检测到匹配设备' : '连接状态未知');
+  } catch {
+    hardwareState('disk', '连接状态未知');
+    hardwareState('clip', '连接状态未知');
+  }
+}
+
 function renderAccessoryCatalog(main) {
-  const directory = accessoryPage !== 'boxes';
-  main.append(h('section', { class: 'accessory-catalog' },
-    h('div', { class: 'accessory-page-head' }, h('h1', null, directory ? '配件' : '盒子'),
-      h('p', null, directory ? '选择配件，进入它的智能体工作台。' : '在记忆盒子中管理主机连接与运行状态。')),
-    directory ? h('div', { class: 'accessory-grid' }, Object.entries({...accessoryAgents,storage:{title:"外接存储",description:"浏览外接硬盘上的文件，查看内容并管理资料。"}}).map(([source, agent]) =>
-      h('a', { class: 'accessory-card', href: `${ACCESSORIES_PATH}/${source}` },
-        h('div', {class:'catalog-art '+source}, accessoryArt(source)), h('div', { class: 'accessory-card-copy' }, h('h2', null, agent.title),
-          h('p', null, agent.description), h('span', { class: 'accessory-card-link' }, '进入工作台 →'))))) :
-      h('a', { class: 'btn', href: ACCESSORIES_PATH }, '查看配件')));
+  main.append(h('section', {class:'accessory-catalog', 'aria-label':'配件目录'},
+    h('div', {class:'accessory-grid'}, Object.entries(hardware).map(([kind, item]) =>
+      h('article', {class:'accessory-card'},
+        h('div', {class:'catalog-art '+kind}, accessoryArt(kind)),
+        h('div', {class:'accessory-card-copy'},
+          h('span', {class:'studio-status', 'data-hardware':kind}, '正在检测…'),
+          h('h2', null, item.name), h('p', null, item.description),
+          h('a', {class:'accessory-card-link', href:ACCESSORIES_PATH + '/' + kind},
+            kind === 'storage' ? '打开空间' : '打开' + accessoryAgents[kind].title)))))));
 }
 
 function authorizationLink() {
   return h('a', {href:'/accessories/connect'}, S.health?.media?.waitingForGrant ? '检查开通状态' : '授权盒端转写');
+}
+
+let captureEnabled = null;
+let captureBusy = false;
+let captureError = '';
+
+async function updateCapture(action) {
+  if (captureBusy) return;
+  captureBusy = true;
+  captureError = '';
+  renderMain();
+  try {
+    const result = await api('/api/recording-capture', action ? {json:{action}} : {});
+    captureEnabled = result.enabled;
+  } catch (error) {
+    captureEnabled = null;
+    captureError = error.message;
+  } finally {
+    captureBusy = false;
+    if (S.view === 'meeting' && !S.currentId) renderMain();
+  }
+}
+
+function captureControl() {
+  const label = captureEnabled ? '移出自动记忆采集' : '添加到自动记忆采集';
+  return h('div', {class:'studio-service'},
+    h('button',{type:'button',class:'studio-link','aria-label':'让 CentaurAI 解释记忆采集',onclick:()=>location.assign('/accessories/guide-capture?capture='+(captureEnabled===null?'unknown':captureEnabled?'on':'off'))},'记忆采集 ✨'),
+    h('span', {role:'status'}, captureError || (captureEnabled === null ? '正在读取采集设置…'
+      : captureEnabled ? '已加入 · 确认后的录音总结会自动存入记忆' : '尚未加入 · 可逐条手动保存总结')),
+    h('button', {class:'studio-link', type:'button', disabled:captureBusy || (captureEnabled === null && !captureError),
+      onclick:() => updateCapture(captureError ? undefined : captureEnabled ? 'remove' : 'add')},
+      captureError ? '重新读取' : label));
 }
 
 function renderAccessoryWorkbench(main) {
@@ -527,6 +669,7 @@ function renderAccessoryWorkbench(main) {
       h('div', {class:'studio-copy'}, status, h('h1', null, accessoryAgent.title),
         h('p', null, disk ? '拾取现场声音，边录边看字幕。' : '把随身录下的长音频，整理成可以回看的文字。'), primary,
         file), accessoryArt('studio-'+accessoryPage)),
+    captureControl(),
     disk && !S.rec ? micPanel() : null,
     h('div', {class:'studio-service'},
       h('span', null, [disk && statusText('live','实时字幕'), statusText('transcribe','文件转写')].filter(Boolean).join(' · ')),
@@ -689,7 +832,7 @@ function micPanel() {
 }
 
 async function testMicrophone() {
-  if (S.micTest?.active || S.rec || S.starting || !S.selectedDeviceId) return;
+  if (!accessoryBoxReady || S.micTest?.active || S.rec || S.starting || !S.selectedDeviceId) return;
   if (S.micTest?.url) URL.revokeObjectURL(S.micTest.url);
   const test = S.micTest = {active:true, message:'仅在本机试录，5 秒后自动停止。'};
   S.setupOpen = true;
@@ -773,7 +916,7 @@ function renderSetup(main) {
 }
 
 async function importClip(file) {
-  if (S.importing || S.starting || S.rec) return;
+  if (!accessoryBoxReady || S.importing || S.starting || S.rec) return;
   S.importing = true;
   renderMain();
   try {
@@ -901,6 +1044,7 @@ async function waitDrained(rec, timeoutMs) {
 const elapsed = (rec) => rec.baseMs + rec.activeMs + (rec.state === 'recording' ? performance.now() - rec.resumedAt : 0);
 
 async function startRecording(existing, source = existing?.source || 'disk') {
+  if (!accessoryBoxReady) return;
   if (!navigator.mediaDevices?.getUserMedia || !window.AudioWorkletNode) { toast('此浏览器不支持 Web Audio 录音（需要 AudioWorklet）'); return; }
   const deviceId = S.selectedDeviceId;
   if (!deviceId) { toast('请先明确选择输入设备'); return; }
@@ -909,6 +1053,7 @@ async function startRecording(existing, source = existing?.source || 'disk') {
   let m = existing;
   let context;
   try {
+    if (!accessoryBoxReady) throw new Error('连接盒子后可使用配件功能。');
     const options = { latencyHint: 'interactive' };
     if (m?.sampleRate) options.sampleRate = m.sampleRate;
     context = new AudioContext(options);
@@ -932,6 +1077,13 @@ async function startRecording(existing, source = existing?.source || 'disk') {
   rec.ctx = context;
   try {
     await ensureGraph(rec);
+    if (!accessoryBoxReady) {
+      rec.boxInterrupted = true;
+      rec.state = 'paused';
+      inp.stream.getTracks().forEach(track => track.stop());
+      await showActiveCapture(m, rec);
+      return;
+    }
     attachStream(rec, inp);
     rec.node.port.postMessage({ type: 'resume' });
   } catch (e) {
@@ -985,7 +1137,7 @@ function onTrackEnded(rec, track) {
 
 async function resumeCapture() {
   const rec = S.rec;
-  if (!rec || rec.state !== 'paused') return;
+  if (!accessoryBoxReady || !rec || rec.boxInterrupted || rec.state !== 'paused') return;
   if (rec.pendingBytes >= MAX_PENDING_PCM) { toast('请等待已录音频保存完成'); return; }
   if (rec.simulated) {
     rec.resumedAt = performance.now(); rec.state = 'recording'; render(); return;
@@ -995,6 +1147,10 @@ async function resumeCapture() {
   try {
     if (!rec.track || rec.track.readyState === 'ended' || rec.deviceId !== want) {
       const inp = await openInput(want);
+      if (!accessoryBoxReady || rec.boxInterrupted) {
+        inp.stream.getTracks().forEach(track => track.stop());
+        return;
+      }
       const count = inp.track.getSettings().channelCount;
       if (count && count !== rec.channels) {
         inp.stream.getTracks().forEach(track => track.stop());
@@ -1005,6 +1161,7 @@ async function resumeCapture() {
       api(`/api/meetings/${rec.meetingId}`, { method: 'PATCH', json: { inputLabel: rec.inputs.join(' → ') } }).catch(() => {});
     }
     if (rec.ctx.state === 'suspended') await rec.ctx.resume();
+    if (!accessoryBoxReady || rec.boxInterrupted) return;
     rec.node.port.postMessage({ type: 'resume' });
     rec.state = 'recording'; rec.resumedAt = performance.now(); rec.notice = null;
   } catch (e) { toast(`无法打开输入：${e.message}`); }
@@ -1023,7 +1180,8 @@ async function finishRecording() {
   if (!rec || rec.state === 'finishing') return;
   pauseCapture(rec);
   rec.state = 'finishing';
-  updateLive();
+  if (rec.boxInterrupted) renderMain();
+  else updateLive();
   await flushWorklet(rec);
   try {
     await waitDrained(rec, 90000);
@@ -1035,11 +1193,12 @@ async function finishRecording() {
     return;
   }
   try {
-    const m = await api(`/api/meetings/${rec.meetingId}/finish`, { json: { chunkCount: rec.nextSeq } });
+    const audioOnly = rec.boxInterrupted || !accessoryBoxReady;
+    const m = await api(`/api/meetings/${rec.meetingId}/finish`, { json: { chunkCount: rec.nextSeq, ...(audioOnly && {audioOnly:true}) } });
     await teardown(rec);
     S.rec = null;
     S.meeting = m; S.lastSig = '';
-    toast('录音已结束，正在保存原音并生成总结');
+    toast(audioOnly ? '录音已结束，正在保存原音' : '录音已结束，正在保存原音并生成总结');
   } catch (e) {
     rec.state = 'paused';
     rec.notice = { kind: 'bad', text: `结束失败：${e.message}` };
@@ -1176,7 +1335,8 @@ async function confirmReview(m, button) {
     const r = await api(`/api/meetings/${m.id}/confirm`, { json: { documentReview: true, rev: m.minutes.rev } });
     if (S.currentId === m.id) { S.meeting = r.meeting; render(); }
     await loadList();
-    toast(accessoryAgent ? '总结已确认，可以选择保存位置' : '总结已确认并存入试用空间');
+    toast(accessoryAgent ? (r.memory.status === 'saved' ? '总结已确认并存入记忆'
+      : r.memory.status === 'pending' ? '总结已确认，采集暂未完成，可点「保存到记忆」重试' : '总结已确认，可以选择保存位置') : '总结已确认并存入试用空间');
   } catch (e) { toast(e.message); button.disabled = false; }
 }
 
@@ -1330,7 +1490,7 @@ function recordingDestinations(m) {
   const version = m.review.version;
   return h('section', {class:'recording-destinations', 'aria-label':'保存位置'},
     h('h3', null, '保存位置'),
-    [['space','空间','原音、完整转录和确认版总结'],['memory','记忆','已确认的总结，来源标记为配件']].map(([key,label,description]) => {
+    [['space','空间','原音、完整转录和确认版总结'],['memory','记忆','已确认的总结及关联原话，按录音智能体归档']].map(([key,label,description]) => {
       const saved = m.savedTo?.[version]?.[key];
       const button = h('button', {class:'btn sm', type:'button', disabled:!!saved, onclick:async () => {
         button.disabled = true;

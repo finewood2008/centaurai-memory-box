@@ -42,7 +42,7 @@
       if (!host) return;
       host.innerHTML = `<section class="space-redaction-settings" aria-labelledby="space-redaction-heading">
         <div class="settings-panel space-redaction-heading">
-          <div><h3 id="space-redaction-heading">空间脱敏规则</h3><p class="muted">在空间的文件菜单选择「脱敏」时使用。规则保存在本客户端。</p></div>
+          <div><h3 id="space-redaction-heading">空间脱敏规则 ${window.memoGuideShell?'<button type="button" class="guide-term" data-guide-term="space-redaction" aria-label="让 CentaurAI 解释空间脱敏规则">✨</button>':''}</h3><p class="muted">在空间的文件菜单选择「脱敏」时使用。规则保存在本客户端。</p></div>
           <button type="button" id="space-redaction-toggle" class="button small" data-redaction-action="toggle" aria-expanded="${state.open}" ${!state.scope || state.pending ? "disabled" : ""}>${state.open ? "收起" : "管理规则"}</button>
         </div>
         ${!state.scope ? `<p class="muted space-redaction-unavailable">请先登录或选择盒子的本地身份。</p>` : ""}

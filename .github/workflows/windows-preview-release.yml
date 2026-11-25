@@ -6,7 +6,7 @@ on:
       version:
         description: 'Preview version matching the client base version'
         required: true
-        default: 1.5.2-windows-preview.1
+        default: 1.5.4-windows-preview.1
         type: string
 
 permissions:
@@ -169,6 +169,25 @@ jobs:
           }
           $verified = Get-Content -LiteralPath (Join-Path $artifacts 'verification-windows-preview.json') -Raw | ConvertFrom-Json
           if ($verified.sourceCommit -ne $env:GITHUB_SHA -or $verified.version -ne $env:MEMOBOX_RELEASE_VERSION -or $verified.smoke.ok -ne $true -or $verified.accessoriesSmoke.ok -ne $true -or $verified.nativeSmoke.nativeModules -lt 1) { throw 'Packaged runtime verification is incomplete' }
+      - name: Verify the generated installer on Windows
+        timeout-minutes: 10
+        run: |
+          $artifacts = Join-Path $env:MEMOBOX_PREVIEW_OUT 'artifacts'
+          $installer = Join-Path $artifacts "CentaurAI-MemoBox-${env:MEMOBOX_RELEASE_VERSION}-windows-x64.exe"
+          $installDir = Join-Path $env:LOCALAPPDATA 'm154-test'
+          if (Test-Path -LiteralPath $installDir) { throw 'Installer test directory already exists' }
+          $process = Start-Process -FilePath $installer -ArgumentList "/S /currentuser /D=$installDir" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Silent install exited with $($process.ExitCode)" }
+          $exe = Join-Path $installDir 'WANX.exe'
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'Installed executable is missing' }
+          $resources = Join-Path $installDir 'resources'
+          $payload = Join-Path $resources 'app.asar'
+          $unpacked = Join-Path $artifacts 'win-unpacked/resources/app.asar'
+          if ((Get-FileHash -LiteralPath $payload).Hash -ne (Get-FileHash -LiteralPath $unpacked).Hash) {
+            throw 'Installer payload differs from the verified Windows package'
+          }
+          $acl = Get-Acl -LiteralPath $installDir
+          if (-not $acl.AreAccessRulesProtected) { throw 'Installer did not protect the installed directory' }
       - name: Upload verified build outputs
         uses: actions/upload-artifact@v4
         with:
@@ -190,7 +209,7 @@ jobs:
           $artifacts = Join-Path $env:MEMOBOX_PREVIEW_OUT 'artifacts'
           $installer = Join-Path $artifacts "CentaurAI-MemoBox-${env:MEMOBOX_RELEASE_VERSION}-windows-x64.exe"
           $assets = @($installer, (Join-Path $artifacts 'SHA256SUMS.txt'), (Join-Path $artifacts 'verification-windows-preview.json'))
-          gh release create $tag @assets --target $env:GITHUB_SHA --prerelease --title "半人马AI记忆盒子 $env:MEMOBOX_RELEASE_VERSION · Windows x64" --notes-file (Join-Path $artifacts 'release-notes.md')
+          gh release create $tag @assets --target $env:GITHUB_SHA --prerelease --title "半人马AI-记忆盒子 $env:MEMOBOX_RELEASE_VERSION · Windows x64" --notes-file (Join-Path $artifacts 'release-notes.md')
           if ($LASTEXITCODE -ne 0) { throw 'GitHub Release creation failed' }
       - name: Detect completed native cache population
         id: cache_ready

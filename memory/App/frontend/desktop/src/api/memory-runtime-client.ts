@@ -301,7 +301,7 @@ export function createHttpMemoryRuntimeClient(config: RuntimeConfig): MemoryRunt
 
     async listPanelItems(input, signal) {
       const page=await browse.list(input.layer ?? "L1",input,signal);
-      if(page) return {items:page.items??[],page:page.page,pageSize:page.pageSize,total:page.total,totalPages:page.totalPages,hasNext:page.hasNext,hasPrev:page.hasPrev,serverTime:page.serverTime};
+      if(page) return {sourceAgents:page.sourceAgents,items:page.items??[],page:page.page,pageSize:page.pageSize,total:page.total,totalPages:page.totalPages,hasNext:page.hasNext,hasPrev:page.hasPrev,serverTime:page.serverTime};
       const path = withQuery("/api/v1/panel/items", PanelItemsInputSchema.parse(input));
       return panelQueue.request(path, (sharedSignal) => requestJson({ config, path, schema: PanelItemsOutputSchema, init: { signal: sharedSignal } }), signal);
     },

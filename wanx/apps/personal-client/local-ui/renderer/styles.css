@@ -119,7 +119,6 @@ button { transition: background .14s, border-color .14s; }
 .device-list { display: grid; gap: 9px; }
 .device-card { display: flex; align-items: center; gap: 12px; padding: 14px 17px; border: 1px solid var(--fn-border-primary); border-radius: 10px; background: var(--fn-bg-elevated); }
 .device-card.selected { border-color: #d1ded0; background: #f7f9f4; }
-.device-icon { display: block; width: 31px; height: 31px; object-fit: contain; flex: 0 0 auto; }
 .device-main { flex: 1; min-width: 0; }
 .device-main h3 { overflow-wrap: anywhere; }
 .device-meta { display: flex; align-items: center; gap: 6px; margin-top: 5px; color: var(--fn-text-tertiary); font-size: 11px; }
@@ -506,7 +505,7 @@ input:focus, select:focus { border-color: var(--fn-color-brand); }
 .box-overview { border: 1px solid var(--fn-border-primary); border-radius: 13px; background: var(--fn-bg-elevated); padding: 24px; }
 .box-overview-heading, .box-identity, .box-section-heading, .box-network, .box-maintenance-target, .box-tool-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
 .box-identity { justify-content: flex-start; }
-.box-identity > img { width: 46px; height: 52px; object-fit: contain; }
+.box-identity > .box-connect-icon { width: 44px; height: 44px; }
 .box-eyebrow { display: block; font-size: 11px; color: var(--fn-text-tertiary); margin-bottom: 7px; }
 .box-identity h3 { font-size: 19px; font-weight: 550; }
 .box-identity p { margin-top: 6px; color: var(--fn-text-tertiary); font-size: 12px; }
@@ -526,10 +525,40 @@ input:focus, select:focus { border-color: var(--fn-color-brand); }
 .box-section-heading h3 { font-size: 14px; margin-bottom: 6px; }
 .box-device-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .box-device-grid .device-card { min-height: 100px; padding: 20px; border-radius: 12px; flex-wrap: wrap; }
+.box-add-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 120px;
+  padding: 20px;
+  border: 1px dashed var(--fn-border-input);
+  border-radius: 13px;
+  background: var(--fn-bg-elevated);
+  color: var(--fn-text-secondary);
+  font-weight: 600;
+}
+.box-add-card:hover:not(:disabled) {
+  border-color: var(--fn-color-brand);
+  background: var(--fn-bg-secondary);
+  color: var(--fn-text-primary);
+}
+.box-add-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--fn-bg-secondary);
+  font-size: 24px;
+  font-weight: 400;
+  line-height: 1;
+}
 .box-device-grid .device-action { flex: 1 1 100%; }
 .box-device-grid .device-card.selected { border-color: #d0dccd; background: #f7faf4; }
 .box-device-grid .device-main h3 { font-size: 14px; }
-.box-device-grid .device-icon { width: 35px; height: 40px; }
+.box-device-grid .box-connect-icon { width: 40px; height: 40px; }
 .box-network { margin-top: 22px; padding: 20px 22px; border: 1px solid var(--fn-border-primary); border-radius: 12px; background: #f8f5f0; }
 .box-network h3 { margin-bottom: 5px; font-size: 13px; }
 .box-maintenance-target { padding: 20px 24px; margin-bottom: 23px; border: 1px solid var(--fn-border-primary); border-radius: 12px; background: var(--fn-bg-elevated); }
@@ -1486,3 +1515,5 @@ input:focus, select:focus { border-color: var(--fn-color-brand); }
   .featured-store > .section-heading { align-items: flex-start; gap: 15px; }
   .featured-store > .section-heading h3 { font-size: 18px; }
 }
+
+#box-device-list { scroll-margin-top: 80px; }

@@ -1,3 +1,4 @@
+import {GuideTerm} from './guide-term.js';
 import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronRight, Folder, History, Orbit, X } from "lucide-react";
 import { Modal } from "../../components/modal.js";
@@ -153,6 +154,7 @@ export function AgentSources({ request, agent, mode, name, refresh, sources, mem
     <button type="button" className="my-ai-button" disabled={pickerDisabled} onClick={() => setAttempt(value => value + 1)}>重试</button></div>;
 
   return <div className="my-ai-codex-sources">
+    <small>任务资料范围 <GuideTerm name="task-access"/></small>
     <div className="my-ai-source-actions" role="group" aria-label="本次任务的检索范围">
       {([
         { kind: "starlink", label: "参考星图", placeholder: "选择仓库", icon: Orbit, scope: sources.warehouse?.name, trigger: warehouseTrigger },
@@ -182,6 +184,7 @@ export function AgentSources({ request, agent, mode, name, refresh, sources, mem
           onClick={() => { if (currentFolder) void save({ ...sources, folder: currentFolder }, true); }}>选择当前文件夹</button>
       </> : picker === "starlink" && sources.warehouse ? <button type="button" className="my-ai-button" disabled={pickerDisabled}
         onClick={() => void save({ ...sources, warehouse: undefined }, true)}>清除选择</button> : null}>
+      <small>可访问的资料范围 <GuideTerm name="task-access"/></small>
       {choosingSpace && <nav className="my-ai-codex-trail" aria-label="文件夹路径">
         <button type="button" disabled={!trail.length || pickerDisabled} onClick={() => { setCatalog(null); setTrail([]); }}>空间</button>
         {trail.map((item, index) => <span key={item.id}><ChevronRight size={13} aria-hidden="true" />

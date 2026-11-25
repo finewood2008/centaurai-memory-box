@@ -169,12 +169,12 @@ export async function packageWindowsPreview({ version, out, repo = repositoryRoo
   const sums = await Promise.all([installers[0], path.basename(verification)].map(async file => `${await checksum(path.join(output,file))}  ${file}`));
   await writeFile(path.join(output, 'SHA256SUMS.txt'), sums.join('\n') + '\n');
   await writeFile(path.join(output, 'release-notes.md'), [
-    '半人马AI记忆盒子 Windows x64 预览版',
+    '半人马AI-记忆盒子 Windows x64 预览版',
     '',
     `- 来源提交 \`${sourceCommit}\`。`,
-    '- 「我的 AI」新增 Google，并区分 WorkBuddy 国内版和海外版。国内版首次配置提供 MCP 信任指引。',
-    '- 空间支持编辑可预览的纯文本文件，文件脱敏可通过右键菜单进入。',
-    '- 打包时验证应用内的备份 Drive SDK，防止缺少模块导致客户端启动失败。',
+    '- 安装向导直接进入安装位置，显示实际安装进度，完成后可选择打开应用。',
+    '- 配件目录和其他板块共用 CentaurAI 侧栏，打开侧栏时保留卡片布局。',
+    '- 星图入口使用「知识星图」，各板块横幅已整合。',
     '- 「配件」支持本机录音。实时字幕、转写和云端总结需匹配的盒端服务与授权。',
     '- 「配件 → 外接存储」可管理连接到盒子的外接硬盘。NAS 入口暂不可用。',
     '- 安装包未签名，预览版不启用正式自动更新。',

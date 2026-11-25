@@ -13,8 +13,17 @@ const hash = value => createHash('sha256').update(value).digest('hex');
 const operations = new Set(['status','search','preview','ask','project','folders','space','memory','disk-list','disk-mkdir','disk-rename','disk-move','disk-trash','disk-trash-list','disk-restore','disk-image','download','upload']);
 const projectId = /^[0-9a-f]{32}$/;
 
-export async function nasRequest({app,client,memoryFile,dialog,window}, op, input) {
+export function nasRequest(context, op, input) {
   if (!operations.has(op) || !input || typeof input !== 'object') throw Error('无效的硬盘操作');
+  return request(context, op, input, false);
+}
+
+export function spaceVolumeRequest(context, {op, ...input}) {
+  if (!['volumes', 'folder', 'preview', 'text-open', 'text-save'].includes(op)) throw Error('无效的硬盘读取操作');
+  return request(context, 'space/' + op, input, true);
+}
+
+async function request({app,client,memoryFile,dialog,window}, op, input, spaceRead) {
   if (client.snapshot().phase !== 'ready') throw Error('请先在「盒子」连接设备。');
   const session = await createApplicationSession({
     applicationId:'centaurai.memobox.nas', hostApplicationId:'ai.centuarai.wanx.client',
@@ -36,16 +45,24 @@ export async function nasRequest({app,client,memoryFile,dialog,window}, op, inpu
       config = JSON.parse(await file.readFile('utf8'));
     } finally { await file.close(); }
     if (config.box!==ctx.boxId || config.user!==String(ctx.user?.id) || !Number.isInteger(config.port) || config.port<1 || config.port>65535 || !/^[\w-]{40,128}$/.test(config.token)) throw Error('设备授权不匹配');
+    const edit = op === 'space/text-save' || op === 'space/text-open';
+    const diskToken = edit ? config.spaceEditToken : spaceRead ? config.spaceReadToken : config.token;
+    if (!/^[\w-]{40,128}$/.test(diskToken || '')) throw Error(edit ? 'SPACE_TEXT_EDIT_UNAVAILABLE' : '空间硬盘浏览尚未配置');
     const signal = AbortSignal.any([abort.signal,AbortSignal.timeout(op==='ask'?260000:115000)]);
     async function box(action, data) {
       session.assertLive();
       const r = await fetch('http://127.0.0.1:'+config.port+'/'+action,{
-        method:'POST',redirect:'error',signal,headers:{Authorization:'Bearer '+config.token,'Content-Type':'application/json'},body:JSON.stringify(data),
+        method:'POST',redirect:'error',signal,headers:{Authorization:'Bearer '+diskToken,'Content-Type':'application/json'},body:JSON.stringify(data),
       }).catch(() => {throw Error('无法连接盒端外接存储服务。请检查设备连接。');});
       const result=await r.json();
       if (!r.ok) throw Error(result.error || '设备请求失败');
       session.assertLive();
       return result;
+    }
+    if (op === 'space/text-open') return {...await box(op,input), transferScope:scope};
+    if (op === 'space/text-save') {
+      if (input.transferScope !== scope) throw Error('SPACE_CONTEXT_CHANGED');
+      return await box(op,input);
     }
     if (op==='upload' || op==='download') {
       const upload=op==='upload';

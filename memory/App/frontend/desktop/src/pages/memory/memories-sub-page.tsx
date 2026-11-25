@@ -1,3 +1,4 @@
+import {GuideTerm} from './guide-term.js';
 import {readMemoryPanelDetail} from "../../api/memory-runtime-client.js";
 import { usePanelReadGuard, usePanelVisible, usePanelVisibilityLifecycle } from "./panel-visibility.js";
 import { canPreservePanelResult } from "./panel-view-status.js";
@@ -22,11 +23,7 @@ import type { MessageKey } from "../../i18n/messages.js";
 import { useTranslation } from "../../i18n/use-translation.js";
 import { ErrorNoticeDetail } from "../error-notice-detail.js";
 import { AlertTriangle, BrainCircuit, CheckCircle2, ChevronRight, Loader2, RefreshCw, Search, Settings2, Sparkles, X } from "./memory-prototype-icons.js";
-import {
-  MEMORY_SOURCE_AGENT_EXCLUSIONS,
-  MemoryAgentFilter,
-  OTHER_MEMORY_SOURCE_AGENT
-} from "./memory-agent-filter.js";
+import { MemoryAgentFilter } from "./memory-agent-filter.js";
 import { MemoryDrawerDeleteAction } from "./memory-delete-action.js";
 import { MemoryAgentSourceTag } from "./memory-agent-source-tag.js";
 import { MemoryMarkdown } from "./memory-markdown.js";
@@ -92,9 +89,8 @@ export function buildPanelItemsInput(filters: MemorySearchFilters): PanelItemsIn
   if (query) {
     input.q = query;
   }
-  if (filters.sourceAgent === OTHER_MEMORY_SOURCE_AGENT) {
-    input.excludedSourceAgents = MEMORY_SOURCE_AGENT_EXCLUSIONS;
-  } else if (filters.sourceAgent) {
+  if (filters.sourceAgent) {
+    input.sourceMatch = "exact";
     input.sourceAgent = filters.sourceAgent;
   }
 
@@ -195,7 +191,9 @@ export function MemoriesSubPage(props: MemoriesSubPageProps) {
         if (!props.client?.resetPanelView) writeMemoryPanelCaches(cacheKeys, data);
         viewStatus.clear();
         setState({ status: "ready", data });
-        if (data.page !== normalizedPage) {
+        if (nextSourceAgent && data.sourceAgents && !data.sourceAgents.includes(nextSourceAgent)) {
+          changeSourceAgent("");
+        } else if (data.page !== normalizedPage) {
           setPage(data.page);
         }
         return data;
@@ -545,7 +543,10 @@ export function MemoriesSubPageView(props: MemoriesSubPageViewProps) {
   const { t } = useTranslation();
 
   return (
-    <section className="memory-panel memory-panel--memories">
+    <section className="memory-panel memory-panel--memories" data-guide-state={props.state.status}
+      data-guide-source={props.sourceAgent || "全部来源"}
+      data-guide-total={props.state.status === "ready" ? props.state.data.total : undefined}
+      data-guide-visible={props.state.status === "ready" ? props.state.data.items.length : undefined}>
       <div className="memory-panel__header">
         <div className="memory-panel__header-main">
           <h3 className="memory-panel__title">
@@ -573,14 +574,20 @@ export function MemoriesSubPageView(props: MemoriesSubPageViewProps) {
               className="memory-search__input"
             />
           </label>
-          <MemoryAgentFilter
-            id="memory-l1-agent-filter"
-            label={t("memory.logs.agentFilter.label")}
-            value={props.sourceAgent}
-            onValueChange={props.onSourceAgentChange}
-            allLabel={t("memory.logs.agentFilter.all")}
-            otherLabel={t("memory.logs.agentFilter.other")}
-          />
+          <div className="memory-source-control">
+            <GuideTerm name="memory-source"/>
+            <MemoryAgentFilter
+              id="memory-l1-agent-filter"
+              sources={props.state.status === "ready"
+                ? props.state.data.sourceAgents ?? [...new Set(props.state.data.items.map(memoryDisplaySource))]
+                : []}
+              label={t("memory.logs.agentFilter.label")}
+              value={props.sourceAgent}
+              onValueChange={props.onSourceAgentChange}
+              allLabel={t("memory.logs.agentFilter.all")}
+              otherLabel={t("memory.logs.agentFilter.other")}
+            />
+          </div>
         </div>
       </div>
       <MemoryListState props={props} />
@@ -631,6 +638,7 @@ function MemoryListState(input: { props: MemoriesSubPageViewProps }) {
           return (
             <div
               key={item.id}
+              data-guide-record={item.id} data-guide-title={primaryText}
               role="button"
               tabIndex={0}
               aria-selected={selected}
@@ -745,7 +753,7 @@ function MemoryDetailPanel(props: {
             />
           )}
         </div>
-        {readyDetail && memoryDisplaySource(readyDetail.item) === "accessories" &&
+        {readyDetail && ["accessories", "meeting_recording", "portable_recording"].includes(memoryDisplaySource(readyDetail.item) ?? "") &&
           <AccessoryProjectLink tags={readyDetail.item.tags} />}
         {readyDetail && <MemoryDrawerDeleteAction onDelete={() => props.onDelete(readyDetail.item.id)} />}
       </aside>

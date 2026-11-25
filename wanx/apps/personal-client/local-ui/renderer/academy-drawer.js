@@ -4,8 +4,9 @@
   const panelMarkup = `
     <header class="academy-toolbar">
       <div class="academy-title-group">
-        <h2 id="academy-title" tabindex="-1">知君</h2>
-        <span class="academy-title-caption" lang="en">memory agent</span>
+        <img class="academy-guide-logo" src="./assets/centaurai-mark.png" width="24" height="24" alt="" draggable="false">
+        <h2 id="academy-title" tabindex="-1">CentaurAI</h2>
+        <span class="academy-title-caption">应用向导</span>
       </div>
       <div class="academy-tools">
         <button id="academy-note-tool" class="academy-tool" aria-expanded="false" aria-controls="academy-note" type="button">
@@ -14,11 +15,11 @@
           <span>便签</span>
         </button>
         <button id="academy-resource-tool" class="academy-tool" aria-expanded="false" aria-controls="academy-resources" type="button">学院</button>
-        <button id="academy-close" class="academy-icon-button" type="button" aria-label="收起知君侧栏" title="收起知君侧栏">×</button>
+        <button id="academy-close" class="academy-icon-button" type="button" aria-label="收起 CentaurAI 侧栏" title="收起 CentaurAI 侧栏">×</button>
       </div>
     </header>
-    <section id="academy-assistant" aria-label="知君对话">
-      <section id="academy-dialogue" aria-label="与知君对话">
+    <section id="academy-assistant" aria-label="CentaurAI 对话">
+      <section id="academy-dialogue" aria-label="与 CentaurAI 对话">
         <div id="academy-dialogue-host"></div>
       </section>
     </section>
@@ -86,7 +87,7 @@
     const app = document.getElementById("app");
     const drawer = document.createElement("aside");
     drawer.id = "academy-drawer";
-    drawer.setAttribute("aria-label", "知君侧栏");
+    drawer.setAttribute("aria-label", "CentaurAI 侧栏");
     drawer.inert = true;
     drawer.innerHTML = panelMarkup;
     const handle = document.createElement("button");
@@ -241,9 +242,9 @@
       handle.hidden = !availableNow();
       document.body.classList.toggle("academy-drawer-open", shown);
       handle.setAttribute("aria-expanded", String(shown));
-      const label = shown ? "收起知君侧栏" : "打开知君侧栏";
+      const label = shown ? "收起 CentaurAI 侧栏" : "打开 CentaurAI 侧栏";
       handle.setAttribute("aria-label", label);
-      handle.title = shown ? "向右拖动或点击，收起知君侧栏" : "向左拖动或点击，打开知君侧栏";
+      handle.title = shown ? "向右拖动或点击，收起 CentaurAI 侧栏" : "向左拖动或点击，打开 CentaurAI 侧栏";
       if (shown !== wasVisible) onOpenChange?.(shown);
     }
 
@@ -365,8 +366,16 @@
     $("close").addEventListener("click", () => requestVisibility(false));
 
     document.addEventListener("keydown", event => {
-      if (!availableNow() || event.defaultPrevented || event.isComposing || document.querySelector("dialog[open]")) return;
-      if (event.key === "Escape" && visible()) {
+      if (event.defaultPrevented || event.isComposing) return;
+      if (document.querySelector("dialog:modal") && !root.contains(event.target)) {
+        if (window.memoGuide && !event.repeat && (event.ctrlKey || event.metaKey) && event.shiftKey && !event.altKey && event.key.toLowerCase() === "k") {
+          event.preventDefault();
+          void window.memoGuide.open(undefined, event.target);
+        }
+        return;
+      }
+      if (!availableNow()) return;
+      if (event.key === "Escape" && visible() && !document.querySelector(":popover-open")) {
         event.preventDefault();
         requestVisibility(false);
       } else if (!event.repeat && (event.ctrlKey || event.metaKey) && event.shiftKey && !event.altKey && event.key.toLowerCase() === "k") {

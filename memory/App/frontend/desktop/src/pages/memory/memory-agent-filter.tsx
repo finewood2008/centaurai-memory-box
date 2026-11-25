@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { Bot, Ellipsis } from "lucide-react";
+import { useTranslation } from "../../i18n/use-translation.js";
 import { Select } from "../../components/Select.js";
 import {
   agentSourceDisplayName,
@@ -16,6 +17,7 @@ const ALL_AGENT_ICON_SOURCES = ["memmy-agent", "codex", "claude_code"] as const;
 export interface MemoryAgentFilterProps {
   id: string;
   value: string;
+  sources?: readonly string[];
   onValueChange: (value: string) => void;
   label: string;
   allLabel: string;
@@ -23,23 +25,24 @@ export interface MemoryAgentFilterProps {
 }
 
 export function MemoryAgentFilter(props: MemoryAgentFilterProps) {
+  const { t } = useTranslation();
   const options = useMemo(() => [
     {
       value: "",
       label: props.allLabel,
-      icon: <AllAgentsIcon />
+      icon: <AllAgentsIcon sources={props.sources?.slice(0, 3) ?? ALL_AGENT_ICON_SOURCES} />
     },
-    ...MEMORY_AGENT_SOURCE_VALUES.map((value) => ({
+    ...(props.sources ?? MEMORY_AGENT_SOURCE_VALUES).map((value) => ({
       value,
-      label: agentSourceDisplayName(value),
+      label: value === "unknown" ? t("common.unknown") : agentSourceDisplayName(value),
       icon: <SourceAgentLogo sourceAgent={value} />
     })),
-    {
+    ...(props.sources ? [] : [{
       value: OTHER_MEMORY_SOURCE_AGENT,
       label: props.otherLabel,
       icon: <Ellipsis size={15} strokeWidth={2} className="memory-source-filter__icon memory-source-filter__icon--other" />
-    }
-  ], [props.allLabel, props.otherLabel]);
+    }])
+  ], [props.allLabel, props.otherLabel, props.sources, t]);
 
   return (
     <Select
@@ -56,10 +59,11 @@ export function MemoryAgentFilter(props: MemoryAgentFilterProps) {
   );
 }
 
-function AllAgentsIcon() {
+function AllAgentsIcon({ sources }: { sources: readonly string[] }) {
+  if (!sources.length) return <Bot size={15} className="memory-source-filter__icon" />;
   return (
     <span className="memory-source-filter__all-icon">
-      {ALL_AGENT_ICON_SOURCES.map((sourceAgent) => (
+      {sources.map((sourceAgent) => (
         <span className="memory-source-filter__all-avatar" key={sourceAgent}>
           <SourceAgentLogo sourceAgent={sourceAgent} />
         </span>

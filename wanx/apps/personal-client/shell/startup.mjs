@@ -4,7 +4,7 @@ import path from "node:path";
 export function createStartupSettings({ app, platform = process.platform, preferenceFile, argv = process.argv, testBuild = false }) {
   // Installed branded source builds have a stable launchable bundle too.
   const installedBundle = platform === "darwin" && app.isInApplicationsFolder?.() === true &&
-    ["半人马AI记忆盒子.app", "半人马AI-记忆盒子.app", "\u4e07\u8c61.app"].includes(path.basename(path.resolve(app.getPath("exe"), "../../..")));
+    ["记忆盒子.app", "半人马AI记忆盒子.app", "半人马AI-记忆盒子.app", "\u4e07\u8c61.app"].includes(path.basename(path.resolve(app.getPath("exe"), "../../..")));
   const windows = platform === "win32";
   const supported = !testBuild && ["darwin", "win32"].includes(platform) && (app.isPackaged || installedBundle);
   const loginArguments = ["--wanx-login-startup"];

@@ -3,8 +3,13 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { setTimeout as pause } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, ipcMain, nativeTheme, screen } from "electron";
+import { app, BrowserWindow, ipcMain, nativeTheme, protocol, screen } from "electron";
 
+import { ACCESSORY_SCHEME, createAccessoriesPreview } from "../../shell/accessories-preview.mjs";
+
+protocol.registerSchemesAsPrivileged([{scheme:ACCESSORY_SCHEME, privileges:{
+  standard:true, secure:true, supportFetchAPI:true, corsEnabled:true,
+}}]);
 const renderer = process.env.WANX_SIDEBAR_RENDERER_DIR ||
   fileURLToPath(new URL("../../build/app/local-ui/renderer/", import.meta.url));
 const noteButton = "#academy-note-tool";
@@ -48,6 +53,8 @@ const baseState = {
   applications: [expertAppRecords.office],
 };
 let hostState = baseState;
+let guideModelCalls = 0;
+let memoryOpenCalls = 0;
 let noteBlocks = [];
 const extraNotes = new Map();
 let nextNote = 0;
@@ -190,7 +197,39 @@ function mockIPC() {
       context: { ...context, label: context.module === "space" ? "万象空间" : "应用市场", examples: ["如何操作？"] },
     },
   }));
-  handle("memory-open", () => ({ available: false }));
+  handle("starlink", (_event, {action,input}) => {
+    if(action!=="starxiaotu-answer")return {ok:false};
+    guideModelCalls++;
+    assert.equal(input.applicationGuide,true);
+    assert.equal(input.warehouseId,undefined);
+    assert.equal(input.retrieval,undefined);
+    if(input.page==='boxes' && input.concept==='box-binding'){
+      assert.equal(typeof input.pageFacts.关联设备数,'number');
+      assert.equal(Object.hasOwn(input.pageFacts,'参考星图'),false);
+      return {ok:true,value:{answer:'模型已解答：'+input.question,model:'fixture-box-default',destination:'boxes',followup:'要怎样核对当前连接？'}};
+    }
+    if (input.question === '请演示回答排版') return {ok:true,value:{
+      answer:'**来源证据**让图谱记录可以用原文核对。\n\n## 如何核对\n1. 看**原文摘录**。\n2. 查看原文位置。\n\n示例 <img src=x onerror=alert(1)>',
+      model:'fixture-box-default',
+    }};
+    if (input.question === '请演示长段落') return {ok:true,value:{
+      answer:'来源证据是支撑图谱记录的原文依据，它会保存相关句子的摘录和出处。'.repeat(5),
+      model:'fixture-box-default',
+    }};
+    if(input.question==='帮我看看设备'){
+      return {ok:true,value:{answer:'主人，先核对设备状态，还是定位设备管理？',choices:['当前设备状态怎样？','定位设备管理栏目']}};
+    }
+    if(input.question==='定位设备管理栏目'){
+      if(!input.pageResults)return {ok:true,value:{answer:'我看一下本页。',lookup:{query:'盒子',area:'page'}}};
+      assert(input.pageResults.length>=2);
+      assert(input.pageResults.every(r=>r.title && r.source && !r.key && !r.target));
+      return {ok:true,value:{answer:'主人，这些入口在当前页面。',model:'fixture-box-default'}};
+    }
+    if(input.question==='请解释默认模型失败')return {ok:false,code:'MODEL_NOT_CONFIGURED'};
+    if(input.question==='帮我找上次的记忆')return {ok:true,value:{answer:'主人，可以到记忆页查看。',destination:'memory'}};
+    return {ok:true,value:{answer:"模型已解答："+input.question,model:"fixture-box-default"}};
+  });
+  handle("memory-open", () => { memoryOpenCalls++; return { available: false }; });
   handle("space-refresh", () => ({ phase: "ready", scope: "fixture-space", tasks: [], annotationAvailable: true }));
   handle("space-list", () => ({ items: [], breadcrumbs: [] }));
   handle("space-links-spaces", () => []);
@@ -520,15 +559,18 @@ async function verifyZhijunMemory() {
   await waitForPanel(null);
 }
 
-async function verifyMultipleNotes() {
+async function verifyMultipleNotes(standalone = false) {
   noteBlocks = [{ type: "text", text: "原来的共享便签" }];
   await click('[data-action="show-space"]');
-  await until(() => run(`Boolean(document.querySelector(${JSON.stringify(noteButton)}))`), "Space note entry");
-  await click(assistantButton);
-  await waitForPanel("assistant");
-  await waitForEdge(true);
-  await click(noteButton);
-  await waitForPanel("note");
+  if (standalone) {
+    await click('[data-action="clipboard-toggle"]');
+  } else {
+    await click(assistantButton);
+    await waitForPanel("assistant");
+    await waitForEdge(true);
+    await click(noteButton);
+    await waitForPanel("note");
+  }
   await until(() => run('getComputedStyle(document.querySelector("#super-clipboard")).opacity === "1"'), "note animation");
   await until(async () => await noteText() === "原来的共享便签", "original note");
   const fill = text => run(`(() => {
@@ -913,6 +955,54 @@ async function verifyAccountSwitch() {
   assert.equal(await noteText(), "");
 }
 
+async function verifyAccessoryOverlay() {
+  await until(() => run('!!document.querySelector(".accessories-tab-host iframe:not([hidden])")'), "live catalog");
+  const catalog = window.webContents.mainFrame.frames.find(frame => frame.url.startsWith(ACCESSORY_SCHEME + ":"));
+  const cardBounds = () => catalog.executeJavaScript(`Array.from(document.querySelectorAll('.accessory-card'),
+    card => card.getBoundingClientRect().toJSON())`);
+  await until(async () => (await cardBounds())[0]?.width > 0, "catalog cards painted");
+  const before = await cardBounds();
+  assert.equal(before.length, 3);
+  const handleCenter = () => run(`(() => {
+    const h = document.querySelector('#academy-edge-handle').getBoundingClientRect();
+    const nav = document.querySelector('.topbar').getBoundingClientRect();
+    return Math.abs((h.top + h.bottom - nav.bottom - innerHeight) / 2) < 1
+      && document.elementFromPoint(h.left + h.width / 2, h.top + h.height / 2)?.closest('#academy-edge-handle') != null;
+  })()`);
+  await until(handleCenter, "the shared centered handle is clickable over the catalog");
+  await click("#academy-edge-handle");
+  await waitForEdge(true);
+  assert(await handleCenter());
+  assert.deepEqual(await cardBounds(), before);
+  assert(await run(`(() => {
+    const d = document.querySelector('#academy-drawer').getBoundingClientRect();
+    const f = document.querySelector('.accessories-tab-host iframe').getBoundingClientRect();
+    const y = f.top + 8;
+    return document.elementFromPoint(d.left - 1, y)?.tagName === 'IFRAME'
+      && !!document.elementFromPoint(d.left + 1, y)?.closest('#academy-drawer');
+  })()`), "the visible catalog ends exactly at the drawer");
+  await click("#academy-edge-handle");
+  await waitForEdge(false);
+  assert.deepEqual(await cardBounds(), before);
+  for (const direction of [-1, 1]) {
+    const {x, y} = await run(`(() => {
+      const r = document.querySelector('#academy-edge-handle').getBoundingClientRect();
+      return {x:r.left + r.width / 2, y:r.top + r.height / 2};
+    })()`);
+    const mouse = (type, offset, buttons) => window.webContents.debugger.sendCommand("Input.dispatchMouseEvent", {
+      type, x:x + direction * offset, y, button:"left", buttons, clickCount:1,
+    });
+    await mouse("mousePressed", 0, 1);
+    for (const offset of [3, 9, 20, 48, 90]) {
+      await mouse("mouseMoved", offset, 1);
+      await pause(16);
+    }
+    await mouse("mouseReleased", 110, 0);
+    await waitForEdge(direction < 0);
+    assert.deepEqual(await cardBounds(), before);
+  }
+}
+
 async function verify() {
   await app.whenReady();
   try {
@@ -941,6 +1031,15 @@ async function verify() {
     window.webContents.on("console-message", event => {
       if (event.level === "error") console.error(event.message);
     });
+    const accessories = createAccessoriesPreview({
+      app, window, BrowserWindow, client:{snapshot:() => hostState},
+      account:{snapshot:() => hostState.account, getIdentity:() => hostState.account, subscribe:() => () => {}},
+      resourceDirectory:fileURLToPath(new URL("../../resources/accessory-preview/", import.meta.url)),
+      dataDirectory:join(app.getPath("userData"), "accessory-fixture"),
+      navigate:page => send("navigate", page),
+    });
+    window.webContents.session.protocol.handle(ACCESSORY_SCHEME, accessories.handleCatalog);
+    ipcMain.handle("wanx-client:accessories-preview", (_event, input) => accessories.show(input));
     await window.loadFile(join(renderer, "index.html"));
     window.webContents.debugger.attach("1.3");
     await until(() => run('Boolean(document.querySelector("[data-action=show-space]"))'), "main navigation");
@@ -963,6 +1062,202 @@ async function verify() {
         if (window.activeSidebar() === "both") window.overlapSeen = true;
       }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ["hidden", "inert"], childList: true });
     } + ")()");
+    if (!process.env.WANX_TEST_LEGACY_SIDEBAR) {
+      if (testMultipleNotes) {
+        await verifyMultipleNotes();
+      } else {
+        await key("K", { metaKey: true, shiftKey: true });
+        await waitForPanel("assistant");
+        assert(await run('document.querySelector("#academy-edge-handle img").src.endsWith("/centaurai-mark.png")'));
+        assert.equal(await run('document.querySelector("#memo-guide-panel [role=log] p").textContent'), "主人，想了解哪个功能，或想打开哪个页面？");
+        assert.equal(await run('document.querySelector("#academy-title").textContent'), "CentaurAI");
+        await run('document.querySelector("#memo-guide-panel textarea").value="未发送的引导问题"');
+        await waitForEdge(true);
+        await click('#memo-guide-panel textarea');
+        await click('.main-nav [data-action=show-boxes]');
+        assert(await shown("assistant"));
+        await run(`(() => {
+          const blank = document.createElement('div');
+          blank.id = 'test-page-background';
+          blank.style.cssText = 'position:fixed;left:12px;top:160px;width:60px;height:80px;z-index:8;background:white';
+          document.body.append(blank);
+        })()`);
+        await click('#test-page-background');
+        await waitForPanel(null);
+        await key("K", {metaKey:true, shiftKey:true});
+        await waitForPanel("assistant");
+        assert.equal(await dialogueDraft(), "未发送的引导问题");
+        await click(noteButton);
+        await waitForPanel("note");
+        await waitForEditor();
+        await holdNoteSave("CentaurAI 侧栏便签");
+        await click('#test-page-background');
+        assert.equal(await shown("note"), true);
+        releaseSave();
+        await waitForPanel(null);
+        await run("document.getElementById('test-page-background').remove()");
+        await key("K", {metaKey:true, shiftKey:true});
+        await waitForPanel("assistant");
+        assert.equal(await dialogueDraft(), "未发送的引导问题");
+        assert.deepEqual(noteBlocks, [{ type: "text", text: "CentaurAI 侧栏便签" }]);
+        await key("Escape");
+        await waitForPanel(null);
+        assert.equal(await run("window.overlapSeen"), false);
+
+        await run(`(async () => {
+          const shares = window.createSpaceSharesUI({request:async()=>[]});
+          shares.hostState({route:'memory', canLaunchApplications:true, account:{accountId:'fixture'}});
+          await shares.open();
+        })()`);
+        await click('dialog:modal [data-guide-term=sharing]');
+        assert(await run('!document.querySelector("section[popover]:popover-open")'));
+        await waitForPanel("assistant");
+        assert(await run('!!document.querySelector("dialog:modal #academy-drawer-root:popover-open")'));
+        await waitForEdge(true);
+        await click('#academy-close');
+        await waitForPanel(null);
+        assert(await run('document.activeElement.matches("[data-guide-term=sharing]")'));
+        await click('dialog:modal [data-share-action=close]');
+        await run('document.querySelector(\'.main-nav [data-action="show-space"]\').click()');
+        await until(() => run('!!document.querySelector("[data-action=space-mkdir]")'), "new folder action");
+        await run('document.querySelector("[data-action=space-mkdir]").click()');
+        await run(`(() => {
+          const field = document.querySelector('#space-name');
+          field.value = '未保存的文件夹名称';
+          field.dispatchEvent(new Event('input', {bubbles:true}));
+        })()`);
+        await key("K", {metaKey:true, shiftKey:true});
+        await waitForPanel("assistant");
+        await run(`(() => {
+          document.querySelector('#memo-guide-panel textarea').value = '打开盒子';
+          document.querySelector('#memo-guide-panel form').requestSubmit();
+        })()`);
+        assert.equal(await run('document.querySelector("#space-name").value'), "未保存的文件夹名称");
+        assert.match(await run('document.querySelector("#memo-guide-panel [data-context]").textContent'), /^空间 › .*新建文件夹$/);
+        await waitForEdge(true);
+        await click('#academy-close');
+        await run('document.querySelector("[data-action=space-dialog-close]").click()');
+
+        await run(`document.querySelector('.main-nav [data-action="show-accessories"]').click()`);
+        assert(await run('!!document.querySelector(".accessories-layout > .wanx-section-banner[data-section=accessories]")'));
+        assert(await run('!!document.querySelector(".accessories-tab-host") && !document.querySelector("[data-guide-term=capture]")'));
+        await verifyAccessoryOverlay();
+
+
+
+        for (const [tab, term] of [['my-ai','task-access'], ['memory','memory-source'],
+          ['space','space-folder'], ['boxes','box-binding']]) {
+          await run(`document.querySelector('.main-nav [data-action="show-${tab}"]').click()`);
+          const marker = `[data-guide-term="${term}"]`;
+          await until(() => run(`Boolean(document.querySelector('${marker}'))`), tab + ' guide marker');
+          assert.equal(await run(`document.querySelector('${marker}').textContent`),'✨');
+          assert.equal(await run('document.querySelectorAll("#app [data-guide-question]").length'),0);
+          assert.equal(await run('document.querySelectorAll("#memo-guide-panel [data-guide-question]").length'),2);
+          await run(`document.querySelector('${marker}').click()`);
+          await waitForPanel("assistant");
+          assert(await run('!document.querySelector("section[popover]:popover-open")'));
+          const label = await run(`document.querySelector('${marker}').getAttribute('aria-label').replace('让 CentaurAI 解释','')`);
+          await until(() => run('document.querySelector("#memo-guide-panel article:last-child p").textContent.startsWith("模型已解答：")'), tab + ' model reply');
+          assert.equal(await run('[...document.querySelectorAll("#memo-guide-panel .guide-user p")].at(-1).textContent'),'什么是'+label+'？');
+          assert.equal(await run('document.querySelectorAll("#memo-guide-panel article:last-child button").length'),0);
+          if(tab==='boxes')assert(await run('document.querySelector("#memo-guide-panel article:last-child details").textContent.includes("关联设备数")'));
+          assert(await run('document.activeElement.matches("#memo-guide-panel textarea")'));
+          await key("Escape");
+          await waitForPanel(null);
+        }
+        await click(assistantButton);
+        await waitForPanel("assistant");
+        async function askGuide(question) {
+          await run(`document.querySelector('#memo-guide-panel textarea').value=${JSON.stringify(question)};
+            document.querySelector('#memo-guide-panel form').requestSubmit()`);
+        }
+        assert(await run('document.querySelector(".academy-guide-logo").src.endsWith("/centaurai-mark.png")'));
+        assert(await run('document.querySelector("[data-guide-question]").getClientRects().length===0'));
+        await click('[popovertarget="guide-suggestions"]');
+        assert(await run('document.querySelector("#guide-suggestions").matches(":popover-open")'));
+        const suggestion=await run('document.querySelector("[data-guide-question]").textContent');
+        await click('[data-guide-question]');await waitForPanel("assistant");
+        assert(await run('!document.querySelector("#guide-suggestions").matches(":popover-open")'));
+        await until(()=>run(`document.querySelector("#memo-guide-panel article:last-child p").textContent===${JSON.stringify('模型已解答：'+suggestion)}`),'suggestion automatically sent');
+        assert(await run('document.querySelector("#memo-guide-panel article:last-child header img").src.endsWith("/centaurai-mark.png")'));
+        await askGuide('你是谁');
+        await until(() => run('document.querySelector("#memo-guide-panel article:last-child p").textContent==="模型已解答：你是谁"'), 'identity uses model');
+        assert(await run('!document.querySelector("#memo-guide-panel [data-guide-sources]")'));
+        await askGuide('请演示回答排版');
+        await until(() => run('!!document.querySelector("#memo-guide-panel article:last-child .guide-answer h4")'), 'formatted answer');
+        assert.deepEqual(await run('[...document.querySelectorAll("#memo-guide-panel article:last-child .guide-answer > *")].map(node=>node.tagName)'), ['P','H4','OL','P']);
+        assert.deepEqual(await run('[...document.querySelectorAll("#memo-guide-panel article:last-child .guide-answer strong")].map(node=>node.textContent)'), ['来源证据','原文摘录']);
+        assert(await run('document.querySelector("#memo-guide-panel article:last-child .guide-answer").textContent.includes("<img src=x onerror=alert(1)>")'));
+        assert.equal(await run('document.querySelector("#memo-guide-panel article:last-child .guide-answer img")'), null);
+        await askGuide('请演示长段落');
+        await until(() => run('document.querySelectorAll("#memo-guide-panel article:last-child .guide-answer p").length>1'), 'long prose split at sentence boundaries');
+        await askGuide('帮我找上次的记忆');
+        await until(()=>run('document.querySelector("#memo-guide-panel article:last-child button")?.textContent==="打开记忆"'),'personal search question gives a navigation action');
+        await click('#academy-close');await waitForPanel(null);
+        await run(`document.querySelector('.main-nav [data-action="show-boxes"]').click()`);
+        await waitForEdge(false);
+        await click(assistantButton);await waitForPanel("assistant");
+        await askGuide('帮我看看设备');
+        await until(()=>run('Array.from(document.querySelectorAll("#memo-guide-panel article:last-child button")).some(b=>b.textContent==="定位设备管理栏目")'),'clarification choices');
+        await run('Array.from(document.querySelectorAll("#memo-guide-panel article:last-child button")).find(b=>b.textContent==="定位设备管理栏目").click()');
+        await until(()=>run('Array.from(document.querySelectorAll("#memo-guide-panel article:last-child button")).some(b=>b.textContent.startsWith("2."))'),'scoped matches');
+        await askGuide('打开第二项');
+        await until(()=>run('document.querySelector("#memo-guide-panel article:last-child p").textContent.includes("已定位到")'),'ordinal result opened');
+        await askGuide('请解释默认模型失败');
+        await until(() => run('document.querySelector("#memo-guide-panel article:last-child p").textContent.includes("尚未配置")'), 'model failure visible');
+        const draft = "重连后继续提问";
+        await run(`document.querySelector('#memo-guide-panel textarea').value=${JSON.stringify(draft)}`);
+        const modelCallsBeforeDisconnect = guideModelCalls;
+        hostState = { ...baseState, phase: "idle", connection: null };
+        send("state", hostState);
+        await until(() => run('!document.querySelector("[data-guide-connection]").hidden'), "assistant is blocked after disconnect");
+        assert.equal(await run('document.querySelector("#memo-guide-panel textarea").value'), draft);
+        assert.equal(await run('document.querySelector("#memo-guide-panel textarea").readOnly'), true);
+        await run('document.querySelector("#memo-guide-panel form").requestSubmit()');
+        await run('document.querySelector("[data-guide-term=box-binding]").click()');
+        await waitForEdge(true);
+        await key("Escape");
+        await waitForPanel(null);
+        await key("K", {metaKey:true, shiftKey:true});
+        await waitForPanel("assistant");
+        assert(await run('document.querySelector("[data-guide-connection] .box-connect-glyph").getClientRects().length>0'));
+        assert(await run('document.querySelector("[data-guide-connection] .box-connect-button").textContent==="连接盒子"'));
+        assert(await run('document.querySelector("#memo-guide-panel form").getClientRects().length===0'));
+        await run('document.querySelector("[data-guide-connection] [data-box-connection]").click()');
+        await waitForPanel(null);
+        assert.equal(await run('document.activeElement.id'), "box-device-list");
+        assert.equal(guideModelCalls, modelCallsBeforeDisconnect);
+        const memoryCallsBeforeNavigation = memoryOpenCalls;
+        for (const [route, view] of [['memory', '记忆'], ['data', '星图'], ['space', '私有云文件'], ['accessories', '配件功能']]) {
+          await run(`document.querySelector('.main-nav [data-action="show-${route}"]').click()`);
+          assert(await run(`Boolean(document.querySelector('.box-connect-notice[aria-label="${view}连接提示"]'))`));
+          assert(await run('!document.querySelector(".memory-host,.accessories-tab-host,#starlink-panel-region")'));
+        }
+        assert.equal(memoryOpenCalls,memoryCallsBeforeNavigation);
+        hostState = { ...baseState, phase: "recovering", connection: null };
+        send("state", hostState);
+        await until(() => run('document.querySelector(".box-connect-status").textContent.includes("正在重连盒子")'), "reconnection status");
+        hostState = baseState;
+        send("state", hostState);
+        await until(() => run('!document.querySelector(".box-connect-status")'), "connected again");
+        await run('document.querySelector(".main-nav [data-action=show-memory]").click()');
+        assert(await run('!!document.querySelector(".memory-host")'));
+        await waitForEdge(false);
+        await click(assistantButton);
+        await waitForPanel("assistant");
+        assert.equal(await run('document.querySelector("#memo-guide-panel textarea").value'), draft);
+        assert.equal(await run('document.querySelector("#memo-guide-panel textarea").readOnly'), false);
+        await key("Escape");
+        await waitForPanel(null);
+        hostState = { ...baseState, phase: "idle", connection: null, devices: [], recovery: {status:"failed"} };
+        send("state", hostState);
+        await until(() => run('document.querySelector(".box-connect-status").textContent.includes("盒子连接失败")'), "failed connection status");
+        await run('document.querySelector(".box-connect-status").click()');
+        await until(() => run('document.activeElement.id === "box-add-device"'), "add-device path without registered boxes");
+      }
+      console.log("WANX_SIDEBAR_UI_PASS");
+      return;
+    }
     if (testMultipleNotes) {
       await verifyMultipleNotes();
       console.log("WANX_SIDEBAR_UI_PASS");

@@ -35,10 +35,11 @@
   }
   async function refresh() {
     const before=epoch;
-    try { const result=await manage('spaces'); if(Array.isArray(result)) spaces=result; requests=[]; }
+    try { const result=await manage('spaces',{personalOnly:options.personalOnly===true}); if(Array.isArray(result)) spaces=options.personalOnly ? result.filter(s=>s.id==='personal') : result; requests=[]; }
     catch(error) { if(before!==epoch)throw error; if(!String(error.message).includes('UPGRADE')&&!String(error.message).includes('404'))throw error; }
     cache.clear();
     await Promise.all([...new Set([...expanded,...automatic])].map(async k=>{const [space,id]=k.split(':');if(!spaces.some(s=>s.id===space&&!s.trashed)){expanded.delete(k);return;}try{await children(space,id);}catch(error){if(before!==epoch)throw error;expanded.delete(k);}}));
+    if (options.personalOnly) return;
     const resolved=await Promise.all(favorites.map(async f=>{
       const space=spaces.find(s=>s.id===f.space);
       if(space && f.id===space.root)return {...f,name:space.name,unavailable:Boolean(space.trashed)};
@@ -77,6 +78,7 @@
   }
   function sidebar() {
     const own=spaces.find(s=>s.id==='personal') || personal();
+    if (options.personalOnly) return `<nav class="space-tree" aria-label="空间位置"><section class="space-nav-section" aria-label="我的空间">${tree(own.id,own.root,'我的空间')}</section></nav>`;
     return `<nav class="space-tree" aria-label="空间位置">${favorites.length?`<section class="space-nav-section" aria-label="常用位置"><h3 class="space-sidebar-caption">常用位置</h3>${favorites.map(f=>{const data=`data-id="${esc(f.id)}" data-space="${esc(f.space)}" data-name="${esc(f.name)}"`;return `<div class="space-favorite" data-sidebar-kind="favorite" ${data}><button class="space-nav ${!position.trash&&position.space===f.space&&position.parent===f.id?'active':''}" data-action="space-folder" ${data} title="${esc(f.name)}${f.unavailable?' · 位置暂不可用':''}" ${f.unavailable?'disabled':''}>${icon('star')}<span>${esc(f.name || '位置暂不可用')}</span></button><button class="space-tree-more" data-workspace-action="menu" data-sidebar-kind="favorite" ${data} aria-label="${esc(f.name)}的快捷入口操作" title="更多操作" aria-haspopup="menu">${icon('more')}</button></div>`;}).join('')}</section>`:''}<section class="space-nav-section" aria-label="我的空间">${tree(own.id,own.root,'我的空间')}</section>${spaces.filter(s=>s.id!=='personal'&&!hiddenSpaces.has(s.id)).map(s=>`<section class="space-nav-section" aria-label="${esc(s.name)}专属盘">${tree(s.id,s.root,s.name,0,[s.member,s.domain==='company'?'公司可见':'个人专属',s.writable===false?'只读':''].filter(Boolean).join(' · '))}</section>`).join('')}</nav>`;
   }
   function footerNavigation() {return `<button class="space-nav space-recycle-entry ${position.trash?'active':''}" data-action="space-recycle" ${position.trash?'aria-current="page"':''}>${icon('trash')}<span>回收站</span></button>`;}
@@ -92,19 +94,19 @@
     const t=menu,choice=(text,command,danger=false)=>`<button role="menuitem" data-workspace-action="menu-command" data-command="${command}" ${danger?'class="danger-text"':''}>${esc(text)}</button>`;
     const disk=spaces.find(s=>s.id===t.space);
     if(disk?.kind==='agent-drive'&&t.id===disk.root)return `<div class="space-context-menu space-sidebar-menu" role="menu" style="left:${t.x}px;top:${t.y}px">${choice('打开专属盘','open')}${choice('接入详情…','manage')}${choice('从侧栏隐藏','hide-space')}${choice(pinned(t.space,t.id)?'取消固定':'固定到常用位置',pinned(t.space,t.id)?'unpin':'pin')}</div>`;
-    let items=choice(t.kind==='folder'?'打开文件夹':'打开','open')+choice('提供给 Agent…','agent-provide');
+    let items=choice(t.kind==='folder'?'打开文件夹':'打开','open')+choice(options.personalOnly?'调用链接':'提供给 Agent…','agent-provide');
     if(t.kind==='favorite')items+=choice('在空间中显示','locate')+'<hr role="separator">'+choice('取消固定','unpin');
     else {
-      items+=choice(pinned(t.space,t.id)?'取消固定':'固定到常用位置',pinned(t.space,t.id)?'unpin':'pin');
+      if (!options.personalOnly) items+=choice(pinned(t.space,t.id)?'取消固定':'固定到常用位置',pinned(t.space,t.id)?'unpin':'pin');
       if(t.kind==='folder')items+='<hr role="separator">'+choice('重命名…','rename')+choice('移动到…','move')+'<hr role="separator">'+choice('移入回收站…','trash',true);
-      else {if(t.space!=='personal')items+=choice('重命名…','rename');items+=choice('空间管理…','manage');if(t.space!=='personal')items+='<hr role="separator">'+choice('移入回收站…','trash',true);}
+      else {if(t.space!=='personal')items+=choice('重命名…','rename');if (!options.personalOnly) items+=choice('空间管理…','manage');if(t.space!=='personal')items+='<hr role="separator">'+choice('移入回收站…','trash',true);}
     }
-    if(t.space==='personal'&&t.kind==='space'&&hiddenSpaces.size)items+=choice('显示隐藏的专属盘','show-hidden');
+    if(t.space==='personal'&&t.kind==='space'&&hiddenSpaces.size&&!options.personalOnly)items+=choice('显示隐藏的专属盘','show-hidden');
     return `<div class="space-context-menu space-sidebar-menu" role="menu" aria-label="${esc(t.name)}的侧栏操作" style="left:${t.x}px;top:${t.y}px">${items}</div>`;
   }
   async function resolveTarget(target) {
     if(target.kind==='space'||spaces.some(s=>s.id===target.space&&s.root===target.id)) {
-      const live=await manage('spaces'),space=live.find(s=>s.id===target.space&&!s.trashed);
+      const live=await manage('spaces',{personalOnly:options.personalOnly===true}),space=live.find(s=>s.id===target.space&&!s.trashed);
       if(!space)throw Error('SPACE_NOT_FOUND');
       return {...target,space:space.id,id:space.root,name:space.name};
     }

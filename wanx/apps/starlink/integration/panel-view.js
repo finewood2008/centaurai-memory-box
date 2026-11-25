@@ -3,7 +3,7 @@
 window.createStarlinkPanelView = ({ request, changed }) => {
   let scope = '', available = false, visible = false, frame, overlay, anchor, observer, positionFrame;
   let controls, legacyQuickKey, directoryEnabled = false, generation = 0;
-  let banner = null;
+  let banner = null, guideProjectKey = null;
   function syncBannerButtons() {
     const inView = visible && available;
     const project = document.querySelector('#starlink-banner-project');
@@ -70,6 +70,24 @@ window.createStarlinkPanelView = ({ request, changed }) => {
           if (typeof listener !== 'function') throw new Error('UNTRUSTED_FRAME');
           listeners.add(listener); return () => listeners.delete(listener);
         },
+        rememberGuideProject(sender,id) {
+          check(sender);
+          if (!guideProjectKey) return;
+          try {
+            if (typeof id==='string' && /^[a-f0-9-]{36}$/.test(id)) window.localStorage.setItem(guideProjectKey,id);
+            else window.localStorage.removeItem(guideProjectKey);
+          } catch {}
+        },
+        ...(window.memoGuideShell && {setGuideView(sender,view) {
+          check(sender);
+          if(visible)window.memoGuideShell.updateStarlinkQuestions(view);
+        }, dismissGuide(sender) {
+          check(sender);
+          if (visible) window.memoGuideShell.dismissOnBackground();
+        }, openGuide(sender, key) {
+          check(sender);
+          if (visible) window.memoGuide.open(key);
+        }}),
         register(sender, value) {
           check(sender); controls = value; controls?.visible?.(visible);
         },
@@ -121,6 +139,7 @@ window.createStarlinkPanelView = ({ request, changed }) => {
       legacyQuickKey = personal && nextAvailable && owner && device
         ? 'wanx.quick-warehouse:' + JSON.stringify(['personal', owner, device, state.dataIdentity?.clientId || state.account?.clientId || null])
         : null;
+      guideProjectKey=personal && nextAvailable && device && owner ? 'memobox.guide.project.'+JSON.stringify([owner,device]) : null;
       available = nextAvailable; visible = active;
       if (overlay) overlay.hidden = !visible;
       controls?.visible?.(visible);
@@ -152,6 +171,26 @@ window.createStarlinkPanelView = ({ request, changed }) => {
       overlay.hidden = false;
       observer?.disconnect(); observer = new ResizeObserver(schedulePosition); observer.observe(anchor);
       position();
+    },
+    guideRecords:(query,area)=>visible && available ? controls?.guideRecords?.(query,area) : [],
+    guideFacts: question => visible && available ? controls?.guideFacts?.(question) : null,
+    guideContext() {
+      if(!available)return null;
+      const live=controls?.guideContext?.();
+      if(live?.ready)return live;
+      try {return {ready:false,project:guideProjectKey && window.localStorage.getItem(guideProjectKey)};} catch {return null;}
+    },
+    canLeave: () => !visible || controls?.canLeave?.() !== false,
+    async guideNavigate(target, expected, valid) {
+      for (let n=0; visible && available && valid() && !controls?.guideContext?.()?.ready && n<80; n++)
+        await new Promise(resolve => setTimeout(resolve,100));
+      if (!visible || !available || !valid()) return false;
+      const context=controls?.guideContext?.();
+      if (!context?.ready || expected && expected!==context.project) return false;
+      if (!context.project && !['warehouses','models'].includes(target.view)) {
+        controls.chooseProject();return {choose:true};
+      }
+      return controls.guideNavigate(target);
     },
     needsLoad: () => false, refresh: async () => {},
     isComposing: () => false, retainInput: () => null,

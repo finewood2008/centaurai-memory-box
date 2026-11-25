@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import disk
+import space_volumes
 import time
 import uuid
 import zipfile
@@ -356,9 +357,14 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         code = 200
         try:
-            if not hmac.compare_digest(
+            space_read = self.path in ("/space/volumes", "/space/folder", "/space/preview")
+            key = self.server.agent.c.get("spaceReadToken") if space_read else self.server.agent.c["token"]
+            space_edit = self.path in ("/space/text-open", "/space/text-save")
+            if space_edit:
+                key = self.server.agent.c.get("spaceEditToken")
+            if not key or not hmac.compare_digest(
                 self.headers.get("Authorization", ""),
-                "Bearer " + self.server.agent.c["token"],
+                "Bearer " + key,
             ):
                 raise Issue("连接授权已失效", 403)
             length = int(self.headers.get("Content-Length", 0))
@@ -383,11 +389,14 @@ class Handler(BaseHTTPRequestHandler):
                         root, spec["parent"], spec["name"], self.rfile, length
                     )
             else:
-                if not 0 < length <= 32000:
+                limit = 6 * space_volumes.volume_text.LIMIT + 32000 if self.path == "/space/text-save" else 32000
+                if not 0 < length <= limit:
                     raise Issue("请求长度无效")
-                value = self.server.agent.handle(
-                    self.path.removeprefix("/"), json.loads(self.rfile.read(length))
-                )
+                data = json.loads(self.rfile.read(length))
+                if space_read or space_edit:
+                    value = space_volumes.handle(self.path.removeprefix("/space/"), data)
+                else:
+                    value = self.server.agent.handle(self.path.removeprefix("/"), data)
         except Issue as e:
             code = e.status
             value = {"error": str(e)}

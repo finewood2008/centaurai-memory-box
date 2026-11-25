@@ -1,6 +1,6 @@
 {
   "name": "centuarai-wanx-client",
-  "version": "1.5.3",
+  "version": "1.5.4",
   "private": true,
   "license": "UNLICENSED",
   "type": "module",
@@ -57,7 +57,7 @@
   "build": {
     "appId": "ai.centuarai.wanx.client",
     "afterPack": "tools/package-client-native.mjs",
-    "productName": "半人马AI记忆盒子",
+    "productName": "半人马AI-记忆盒子",
     "directories": {
       "output": "release",
       "app": "build/app"
@@ -168,5 +168,5 @@
     "@nexusaos/local-provisioning-contracts": "$@nexusaos/local-provisioning-contracts"
   },
   "wanxEdition": "personal",
-  "wanxInternalVersion": "1.5.3"
+  "wanxInternalVersion": "1.5.4"
 }

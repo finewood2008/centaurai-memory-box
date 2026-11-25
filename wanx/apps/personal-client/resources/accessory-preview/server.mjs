@@ -51,8 +51,11 @@ const STATIC = {
   '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
   '/style.css': ['style.css', 'text/css; charset=utf-8'],
   '/accessories.css': ['accessories.css', 'text/css; charset=utf-8'],
+  '/box-connection.css': ['box-connection.css', 'text/css; charset=utf-8'],
   '/accessory-art.svg': ['accessory-art.svg', 'image/svg+xml'],
   '/pcm-worklet.js': ['pcm-worklet.js', 'text/javascript; charset=utf-8'],
+  '/disk-agent.svg': ['disk-agent.svg', 'image/svg+xml'],
+  '/clip-agent.svg': ['clip-agent.svg', 'image/svg+xml'],
   '/favicon.svg': ['favicon.svg', 'image/svg+xml'],
   '/centaurai-mark.png': ['centaurai-mark.png', 'image/png'],
 };
@@ -220,6 +223,11 @@ async function route(req, res, url) {
     process.send?.({type:'recording-first-use'});
     return send(res, 202, imported);
   }
+  if (p === '/api/recording-capture' && PROFILE === 'accessories') {
+    const kind = req.headers['x-recording-agent'];
+    if (is('GET')) return send(res, 200, await Lib.recordingCapture(kind, 'status'));
+    if (is('POST')) return send(res, 200, await Lib.recordingCapture(kind, (await readJsonBody(req)).action));
+  }
   if (p === '/api/settings') {
     if (is('GET')) return send(res, 200, await Lib.getSettings());
     if (is('PUT')) return send(res, 200, await Lib.putSettings(await readJsonBody(req)));
@@ -331,6 +339,16 @@ server.headersTimeout = 20000;
 
 await M.initStore(DATA_DIR);
 await M.openLegacyProjects(process.env.RECORDING_LEGACY_DATA);
+if (PROFILE === 'accessories') {
+  let retrying = false;
+  setInterval(async () => {
+    if (retrying) return;
+    retrying = true;
+    try { await M.retryPendingCapture(); }
+    catch { /* A later pass can retry when local settings are readable. */ }
+    finally { retrying = false; }
+  }, 60000).unref();
+}
 process.on('message', message => {
   if (message?.type === 'recording-grant-pending') {
     waitingForGrant = message.waiting === true;

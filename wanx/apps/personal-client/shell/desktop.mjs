@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 
-export const DESKTOP_NAME = "半人马AI记忆盒子 · CentaurAI MemoBox";
+export const DESKTOP_NAME = "半人马AI-记忆盒子";
 const resource = (name) => fileURLToPath(new URL(`../resources/${name}`, import.meta.url));
 export const APP_ICON = resource("icon.png");
 

@@ -10,7 +10,7 @@ function harness(action, uploadDroppedFiles, tilePositions = [], dom = {}, surfa
   const events = new Map(), documentEvents = new Map(); let onState;
   const root = { focus() {}, addEventListener: (type, handler) => events.set(type, handler), ...surface };
   const window = { wanxClient: { action, uploadDroppedFiles, onSpaceState: handler => { onState = handler; } }, ...globals };
-  vm.runInNewContext(source, { window, document: { querySelector: selector => dom.nodes?.get(selector) || root, querySelectorAll: selector => selector === ".space-file-row" ? tilePositions.map(offsetTop => ({ offsetTop })) : [], addEventListener: (type, handler) => documentEvents.set(type, handler) , ...dom }, setInterval() {}, setTimeout, requestAnimationFrame: () => 1, cancelAnimationFrame() {}, queueMicrotask, URL, Blob, atob, TextDecoder });
+  vm.runInNewContext(source, { window, crypto, document: { querySelector: selector => dom.nodes?.get(selector) || root, querySelectorAll: selector => selector === ".space-file-row" ? tilePositions.map(offsetTop => ({ offsetTop })) : [], addEventListener: (type, handler) => documentEvents.set(type, handler) , ...dom }, setInterval() {}, setTimeout, requestAnimationFrame: () => 1, cancelAnimationFrame() {}, queueMicrotask, URL, Blob, atob, TextDecoder });
   const space = window.wanxSpace;
   space.bind({ render() {} });
   return { space, emit: value => onState(value), event: (type, value) => events.get(type)(value), keydown: event => documentEvents.get("keydown")(event), pointer: (type, event) => documentEvents.get(type)(event),
@@ -657,8 +657,18 @@ test("text preview edits in place and retains the draft after a version conflict
   assert.equal(submissions[0].expected, 3);
   assert.match(h.space.view(), /当前草稿仍在/);
   assert.match(h.space.view(), /&quot;value&quot;:2/);
-  conflict = false;
   await h.click("text-edit-save");
+  assert.equal(submissions.length, 1);
+  conflict = false;
+  file.version = 4;
+  await h.click("text-edit-compare");
+  assert.match(h.space.view(), /保留草稿，基于此版本继续/);
+  await h.click("text-edit-accept");
+  await h.click("dialog-close");
+  assert.match(h.space.view(), /确认放弃/);
+  await h.click("text-edit-keep");
+  await h.click("text-edit-save");
+  assert.equal(submissions[1].expected, 4);
   assert.match(h.space.view(), /已保存到盒子/);
   assert.doesNotMatch(h.space.view(), /id="space-text-editor"/);
 });
@@ -831,4 +841,33 @@ test('sidebar rename checks the source space instead of the currently displayed 
   await fileAction('rename', folder); await h.click('dialog-confirm'); assert.equal(moved.length, 1);
   disks[0].writable = true; disks[1].writable = false;
   await assert.rejects(fileAction('rename', folder), /MCP_DRIVE_READ_ONLY/);
+});
+
+test("an unplugged volume keeps its draft and only submits to the original volume and path", async () => {
+  const target = {volume:"usb-a", path:"文件夹/记录.md", name:"记录.md"};
+  const newText = "仍在编辑\n";
+  let online = true, submitted;
+  const createSpaceVolumes = () => ({
+    watch(){}, leave(){}, active:()=>online, sidebar:()=>"", view:()=>"", editTarget:()=>target,
+    saved(file, text){assert.equal(file, target); assert.equal(text,newText);},
+    async request(op, input){
+      if (op === "text-open") return {text:"开始",version:"v1",editId:"ext-edit-1",transferScope:"owner-a"};
+      if (!online) throw Error("SPACE_VOLUME_OFFLINE");
+      submitted=input;
+      return {saved:true};
+    },
+  });
+  const h = harness(async action => ok(action === "space.refresh" ? {phase:"ready",tasks:[]} : {items:[],breadcrumbs:[]}), undefined, [], {}, {}, {createSpaceVolumes});
+  h.space.hostState(connected("box")); h.space.activate(true); await tick();
+  await h.click("volume-edit");
+  assert.match(h.space.view(), /id="space-text-editor"/);
+  h.event("input",{target:{id:"space-text-editor",value:newText}});
+  online=false;
+  await h.click("text-edit-save");
+  assert.match(h.space.view(), /外接硬盘已断开/);
+  assert.match(h.space.view(), /仍在编辑/);
+  online=true; await h.click("text-edit-save");
+  assert.match(h.space.view(), /已保存到外接硬盘/);
+  assert.equal(submitted.volume,target.volume); assert.equal(submitted.path,target.path);
+  assert.equal(submitted.expected,"v1"); assert.equal(submitted.transferScope,"owner-a");
 });
