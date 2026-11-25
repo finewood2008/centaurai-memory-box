@@ -6,7 +6,7 @@ on:
       version:
         description: 'Preview version matching the client base version'
         required: true
-        default: 1.5.4-windows-preview.1
+        default: 1.5.4-windows-preview.2
         type: string
 
 permissions:

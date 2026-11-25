@@ -50,7 +50,7 @@ export function windowsReleaseConfiguration({ pkg, version, arch, out, trustFile
       installerHeader: path.join(projectRoot, "resources/installer/header.bmp"),
       installerSidebar: path.join(projectRoot, "resources/installer/sidebar.bmp"),
       uninstallerSidebar: path.join(projectRoot, "resources/installer/sidebar.bmp"),
-      perMachine: false, allowElevation: false, allowToChangeInstallationDirectory: true,
+      perMachine: false, allowElevation: false, allowToChangeInstallationDirectory: false,
       deleteAppDataOnUninstall: false, createDesktopShortcut: true, createStartMenuShortcut: true,
       differentialPackage: true, installerLanguages: ["zh_CN"], runAfterFinish: true },
   };

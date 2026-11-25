@@ -33,6 +33,9 @@
 !macro customPageAfterChangeDir
   ; The builder has registered the update flag plugin before invoking this hook.
 Function WanxPreflightPage
+  ${If} $WanxLocationAccepted == 1
+    Abort
+  ${EndIf}
   ; Match electron-builder's directory normalization before validating it.
   !ifdef allowToChangeInstallationDirectory
     Call instFilesPre
@@ -50,6 +53,7 @@ Function WanxPreflightPage
 FunctionEnd
   Page custom WanxPreflightPage
   !define MUI_PAGE_CUSTOMFUNCTION_SHOW WanxInstallShow
+  !define MUI_PAGE_CUSTOMFUNCTION_LEAVE WanxInstallLeave
 !macroend
 
 Function WanxExtractAclTool

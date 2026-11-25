@@ -209,7 +209,7 @@ async function main() {
         oneClick: false,
         perMachine: false,
         allowElevation: false,
-        allowToChangeInstallationDirectory: true,
+        allowToChangeInstallationDirectory: false,
         installerLanguages: ["zh_CN"],
         deleteAppDataOnUninstall: false,
         createDesktopShortcut: true,
