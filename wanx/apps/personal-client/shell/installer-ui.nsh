@@ -6,6 +6,7 @@ SetFont "Microsoft YaHei UI" 9
 !define MUI_BGCOLOR "FCF9F5"
 !define MUI_TEXTCOLOR "302C28"
 !define MUI_HEADER_TRANSPARENT_TEXT
+!define MUI_HEADERIMAGE_BITMAP_STRETCH AspectFitHeight
 !define MUI_DIRECTORYPAGE_TEXT_TOP "请选择半人马AI-记忆盒子的安装位置。应用将为当前 Windows 用户安装。"
 !define MUI_DIRECTORYPAGE_TEXT_DESTINATION "安装位置"
 !define MUI_INSTFILESPAGE_PROGRESSBAR "colored"
@@ -110,9 +111,12 @@ Function WanxWelcomeShow
   ${NSD_CreateButton} 80% 79% 16% 8% "浏览…"
   Pop $0
   ${NSD_OnClick} $0 WanxBrowseLocation
-  ${NSD_CreateLabel} 4% 89% 92% 9% ""
+  ${NSD_CreateLabel} 4% 88% 92% 6% ""
   Pop $WanxLocationError
   SetCtlColors $WanxLocationError 8C291F FCF9F5
+  ${NSD_CreateLabel} 4% 94% 92% 6% "半人马人工智能（深圳）有限公司"
+  Pop $0
+  SetCtlColors $0 69574A FCF9F5
   GetDlgItem $0 $HWNDPARENT 1
   SendMessage $0 ${WM_SETTEXT} 0 "STR:立即安装"
   nsDialogs::Show

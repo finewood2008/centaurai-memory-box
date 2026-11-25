@@ -121,6 +121,9 @@ if ($window -ne [IntPtr]::Zero) {
 if ($location -eq [IntPtr]::Zero) { throw 'The graphical installer did not show the installation location field' }
 if ($OverviewBitmap) {
     $welcome = Find-ChildClass $window '#32770'
+    $company = '^\u534a\u4eba\u9a6c\u4eba\u5de5\u667a\u80fd\uff08\u6df1\u5733\uff09\u6709\u9650\u516c\u53f8$'
+    $companyLabel = [InstallerWindow]::Children($welcome) | Where-Object { [InstallerWindow]::Text($_) -match $company }
+    if (-not $companyLabel) { throw 'The company name is missing from the welcome page' }
     $artwork = [InstallerWindow]::Children($welcome) | Where-Object {
         [InstallerWindow]::Class($_) -eq 'Static' -and ([InstallerWindow]::GetWindowLong($_, -16) -band 0x1F) -eq 14
     } | Select-Object -First 1
