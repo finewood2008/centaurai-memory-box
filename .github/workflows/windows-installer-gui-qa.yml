@@ -47,7 +47,15 @@ jobs:
           '@
           $text = Get-Content -Raw $script
           if (-not $text.Contains($old)) { throw 'Cannot prepare compile-check fixture' }
-          $text.Replace($old, $addition) | Set-Content -Encoding utf8 $script
+          $reset = @'
+          Page custom FixtureResetInstallLocation
+          Function FixtureResetInstallLocation
+            StrCpy $INSTDIR "$LOCALAPPDATA\\Programs\\WanxInstallerCompileCheck"
+            Abort
+          FunctionEnd
+          !insertmacro customPageAfterChangeDir
+          '@
+          $text.Replace($old, $addition).Replace('!insertmacro customPageAfterChangeDir', $reset) | Set-Content -Encoding utf8 $script
           node $script "$env:RUNNER_TEMP/fixture"
           if ($LASTEXITCODE -ne 0) { throw 'Fixture did not compile' }
       - name: Inspect the real native dialog using the lightweight fixture
