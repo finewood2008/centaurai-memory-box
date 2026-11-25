@@ -22,12 +22,11 @@ ShowInstDetails nevershow
 !define PROJECT_DIR "${nsisPath(root)}"
 !define VERSION "${version}"
 !define APP_FILENAME "WanxInstallerCompileCheck"
-!define allowToChangeInstallationDirectory
 !define isUpdated '\"\" == \"updated\"'
 !define MUI_HEADERIMAGE
 !define MUI_HEADERIMAGE_RIGHT
-!define MUI_HEADERIMAGE_BITMAP "${nsisPath(path.join(root, "resources/installer/header.bmp"))}"
-!define MUI_WELCOMEFINISHPAGE_BITMAP "${nsisPath(path.join(root, "resources/installer/sidebar.bmp"))}"
+!define MUI_HEADERIMAGE_BITMAP "${nsisPath(path.join(root, "resources/installer/illustrated/windows-header.bmp"))}"
+!define MUI_WELCOMEFINISHPAGE_BITMAP "${nsisPath(path.join(root, "resources/installer/illustrated/windows-finish.bmp"))}"
 !define MUI_UNWELCOMEFINISHPAGE_BITMAP "${nsisPath(path.join(root, "resources/installer/sidebar.bmp"))}"
 Var installMode
 ${uninstall ? "!define BUILD_UNINSTALLER" : ""}
@@ -38,10 +37,7 @@ ${uninstall ? `
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_UNPAGE_FINISH
 ` : `
-!insertmacro MUI_PAGE_DIRECTORY
-Function instFilesPre
-  ; The real function is supplied by electron-builder.
-FunctionEnd
+!insertmacro customWelcomePage
 !insertmacro customPageAfterChangeDir
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH

@@ -6,8 +6,12 @@ on:
       version:
         description: 'Preview version matching the client base version'
         required: true
-        default: 1.5.4-windows-preview.1
+        default: 1.5.4-windows-preview.2
         type: string
+      publish_release:
+        description: 'Publish the verified build to GitHub Releases'
+        default: true
+        type: boolean
 
 permissions:
   contents: write
@@ -169,6 +173,18 @@ jobs:
           }
           $verified = Get-Content -LiteralPath (Join-Path $artifacts 'verification-windows-preview.json') -Raw | ConvertFrom-Json
           if ($verified.sourceCommit -ne $env:GITHUB_SHA -or $verified.version -ne $env:MEMOBOX_RELEASE_VERSION -or $verified.smoke.ok -ne $true -or $verified.accessoriesSmoke.ok -ne $true -or $verified.nativeSmoke.nativeModules -lt 1) { throw 'Packaged runtime verification is incomplete' }
+      - name: Verify the graphical installation on Windows
+        shell: powershell
+        run: |
+          $artifacts = Join-Path $env:MEMOBOX_PREVIEW_OUT 'artifacts'
+          $installer = Join-Path $artifacts "CentaurAI-MemoBox-${env:MEMOBOX_RELEASE_VERSION}-windows-x64.exe"
+          .github/scripts/windows-installer-gui-qa.ps1 -Installer $installer -OutputPath "$env:RUNNER_TEMP/memobox-gui-qa" -ExpectedPayload (Join-Path $artifacts 'win-unpacked/resources/app.asar') -OverviewBitmap 'wanx/apps/personal-client/resources/installer/illustrated/windows-overview.bmp'
+      - name: Upload Windows graphical installation screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: memobox-windows-installation-screenshots
+          path: ${{ runner.temp }}/memobox-gui-qa/
       - name: Verify the generated installer on Windows
         timeout-minutes: 10
         run: |
@@ -200,6 +216,7 @@ jobs:
             ${{ env.MEMOBOX_PREVIEW_OUT }}/artifacts/verification-windows-preview.json
             ${{ env.MEMOBOX_PREVIEW_OUT }}/artifacts/release-notes.md
       - name: Publish a new Windows prerelease
+        if: inputs.publish_release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

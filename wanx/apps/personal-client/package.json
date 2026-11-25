@@ -128,6 +128,16 @@
         "NSBluetoothPeripheralUsageDescription": "记忆盒子使用蓝牙发现附近的盒子并配置 Wi-Fi。"
       }
     },
+    "dmg": {
+      "background": "resources/installer/illustrated/macos-dmg-background.jpg",
+      "icon": "resources/icon.icns",
+      "iconSize": 76,
+      "iconTextSize": 13,
+      "contents": [
+        { "x": 195, "y": 185, "type": "file" },
+        { "x": 525, "y": 185, "type": "link", "path": "/Applications" }
+      ]
+    },
     "win": {
       "icon": "resources/icon.ico",
       "target": [
@@ -152,8 +162,8 @@
     },
     "nsis": {
       "include": "shell/installer.nsh",
-      "installerHeader": "resources/installer/header.bmp",
-      "installerSidebar": "resources/installer/sidebar.bmp",
+      "installerHeader": "resources/installer/illustrated/windows-header.bmp",
+      "installerSidebar": "resources/installer/illustrated/windows-finish.bmp",
       "uninstallerSidebar": "resources/installer/sidebar.bmp",
       "oneClick": false,
       "perMachine": false,
@@ -161,7 +171,7 @@
       "installerLanguages": [
         "zh_CN"
       ],
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": false
     }
   },
   "overrides": {

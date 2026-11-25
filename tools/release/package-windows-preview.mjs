@@ -96,7 +96,7 @@ export async function writePreviewBuildConfig({ configFile, pkg, client, staged,
     win: { ...pkg.build.win, signExecutable: false, executableName: 'WANX', requestedExecutionLevel: 'asInvoker', target: [{ target: 'nsis', arch: ['x64'] }],
       artifactName: `CentaurAI-MemoBox-${version}-windows-x64.exe` },
     nsis: { ...pkg.build.nsis, include: path.join(client, 'shell/installer.nsh'),
-      oneClick: false, perMachine: false, allowElevation: false, allowToChangeInstallationDirectory: true,
+      oneClick: false, perMachine: false, allowElevation: false, allowToChangeInstallationDirectory: false,
       deleteAppDataOnUninstall: false, differentialPackage: false, useZip: true },
   };
   await writeFile(configFile, JSON.stringify(options, null, 2) + '\n');
@@ -172,7 +172,7 @@ export async function packageWindowsPreview({ version, out, repo = repositoryRoo
     '半人马AI-记忆盒子 Windows x64 预览版',
     '',
     `- 来源提交 \`${sourceCommit}\`。`,
-    '- 安装向导直接进入安装位置，显示实际安装进度，完成后可选择打开应用。',
+    '- 全新插画安装向导展示 MB-01 雾银盒子与四项核心功能，可直接安装或更改安装位置。安装时显示实际进度。',
     '- 配件目录和其他板块共用 CentaurAI 侧栏，打开侧栏时保留卡片布局。',
     '- 星图入口使用「知识星图」，各板块横幅已整合。',
     '- 「配件」支持本机录音。实时字幕、转写和云端总结需匹配的盒端服务与授权。',
