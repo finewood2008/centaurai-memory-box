@@ -31,6 +31,23 @@
 !macroend
 
 !macro customPageAfterChangeDir
+  ; The builder has registered the update flag plugin before invoking this hook.
+Function WanxPreflightPage
+  ; Match electron-builder's directory normalization before validating it.
+  !ifdef allowToChangeInstallationDirectory
+    Call instFilesPre
+  !endif
+  Call WanxCheckInstallPath
+  ${If} $0 == 0
+    Abort
+  ${EndIf}
+  ${If} ${isUpdated}
+    MessageBox MB_ICONSTOP|MB_OK "$1"
+    SetErrorLevel 1603
+    Quit
+  ${EndIf}
+  Call WanxShowPathError
+FunctionEnd
   Page custom WanxPreflightPage
   !define MUI_PAGE_CUSTOMFUNCTION_SHOW WanxInstallShow
 !macroend
@@ -65,23 +82,6 @@ Function WanxCheckInstallPath
     Return
   ${EndIf}
   Call WanxWriteAclFailureLog
-FunctionEnd
-
-Function WanxPreflightPage
-  ; Match electron-builder's directory normalization before validating it.
-  !ifdef allowToChangeInstallationDirectory
-    Call instFilesPre
-  !endif
-  Call WanxCheckInstallPath
-  ${If} $0 == 0
-    Abort
-  ${EndIf}
-  ${If} ${isUpdated}
-    MessageBox MB_ICONSTOP|MB_OK "$1"
-    SetErrorLevel 1603
-    Quit
-  ${EndIf}
-  Call WanxShowPathError
 FunctionEnd
 
 !macro customInstall
