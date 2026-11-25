@@ -1,6 +1,8 @@
 param(
     [Parameter(Mandatory)][string] $Installer,
-    [Parameter(Mandatory)][string] $OutputPath
+    [Parameter(Mandatory)][string] $OutputPath,
+    [string] $ExpectedPayload,
+    [string] $OverviewBitmap
 )
 $ErrorActionPreference = 'Stop'
 New-Item -ItemType Directory -Force -Path $OutputPath | Out-Null
@@ -17,9 +19,12 @@ public static class InstallerWindow {
     [DllImport("user32.dll")] public static extern bool EnumWindows(Callback callback, IntPtr data);
     [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr hwnd, Callback callback, IntPtr data);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hwnd);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowLong(IntPtr hwnd, int index);
     [DllImport("user32.dll")] public static extern bool IsWindowEnabled(IntPtr hwnd);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out int processId);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd, out Rectangle rect);
+    [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr hwnd);
+    [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hwnd, uint msg, IntPtr wp, IntPtr lp);
     [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hwnd, IntPtr dc, uint flags);
     [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
     [DllImport("user32.dll")] public static extern IntPtr GetDlgItem(IntPtr hwnd, int id);
@@ -99,7 +104,7 @@ function Find-Window([int] $ProcessId, [string] $TextPattern) {
 
 $process = Start-Process -FilePath $Installer -ArgumentList '/LANG=2052' -PassThru
 $pattern = '\u8bb0\u5fc6\u76d2\u5b50|MemoBox'
-$finished = '\u5b89\u88c5\u5b8c\u6210|Finish'
+$finished = '^(\u5b8c\u6210|Finish)'
 "UserInteractive=$([Environment]::UserInteractive), Session=$($process.SessionId), Explorer=$(@(Get-Process explorer -ErrorAction SilentlyContinue).Count)" |
     Set-Content (Join-Path $OutputPath 'session.txt')
 $window = [IntPtr]::Zero
@@ -110,12 +115,39 @@ for ($i = 0; $i -lt 100 -and $location -eq [IntPtr]::Zero; $i++) {
     if ($window -ne [IntPtr]::Zero) { $location = Find-ChildClass $window 'Edit' }
 }
 if ($window -ne [IntPtr]::Zero) { Save-InstallerDialog $window '01-welcome' }
+if ($window -ne [IntPtr]::Zero) {
+    "DPI=$([InstallerWindow]::GetDpiForWindow($window))" | Add-Content (Join-Path $OutputPath 'session.txt')
+}
 if ($location -eq [IntPtr]::Zero) { throw 'The graphical installer did not show the installation location field' }
+if ($OverviewBitmap) {
+    $welcome = Find-ChildClass $window '#32770'
+    $company = '^\u534a\u4eba\u9a6c\u4eba\u5de5\u667a\u80fd\uff08\u6df1\u5733\uff09\u6709\u9650\u516c\u53f8$'
+    $companyLabel = [InstallerWindow]::Children($welcome) | Where-Object { [InstallerWindow]::Text($_) -match $company }
+    if (-not $companyLabel) { throw 'The company name is missing from the welcome page' }
+    $artwork = [InstallerWindow]::Children($welcome) | Where-Object {
+        [InstallerWindow]::Class($_) -eq 'Static' -and ([InstallerWindow]::GetWindowLong($_, -16) -band 0x1F) -eq 14
+    } | Select-Object -First 1
+    if (-not $artwork) { throw 'No bitmap control found inside the welcome page' }
+    $bounds = New-Object InstallerWindow+Rectangle
+    [void][InstallerWindow]::GetWindowRect($artwork, [ref]$bounds)
+    $reference = [Drawing.Bitmap]::new((Resolve-Path $OverviewBitmap).Path)
+    try {
+        $width = $bounds.Right - $bounds.Left
+        $height = $bounds.Bottom - $bounds.Top
+        $expectedHeight = $width * $reference.Height / $reference.Width
+        if ($width -lt 200 -or [Math]::Abs($height - $expectedHeight) -gt 1) {
+            throw "The welcome illustration was distorted or too small: ${width}x${height}"
+        }
+        "WelcomeArtwork=${width}x${height}" | Add-Content (Join-Path $OutputPath 'session.txt')
+    } finally { $reference.Dispose() }
+}
 $next = [InstallerWindow]::GetDlgItem($window, 1)
 $installRoot = Join-Path $env:LOCALAPPDATA 'Programs\MemoBox-GuiQA'
 [void][InstallerWindow]::SetControlText($location, 0xC, [IntPtr]::Zero, $installRoot)
-[void][InstallerWindow]::SendMessage($next, 0xF5, [IntPtr]::Zero, [IntPtr]::Zero)
+[void][InstallerWindow]::PostMessage($next, 0xF5, [IntPtr]::Zero, [IntPtr]::Zero)
 $capturedProgress = $false
+$animationStarted = $null
+$animationFrames = [Collections.Generic.HashSet[string]]::new()
 $capturedFinish = $false
 for ($i = 0; $i -lt 350; $i++) {
     Start-Sleep -Milliseconds 250
@@ -124,6 +156,27 @@ for ($i = 0; $i -lt 350; $i++) {
     if (-not $capturedProgress -and (Find-ChildClass $window 'msctls_progress32') -ne [IntPtr]::Zero) {
         Save-InstallerDialog $window '02-installing'
         $capturedProgress = $true
+    }
+    $animation = Find-ChildClass $window 'SysAnimate32'
+    if ($animation -ne [IntPtr]::Zero -and $null -eq $animationStarted) { $animationStarted = Get-Date }
+    if ($animation -ne [IntPtr]::Zero -and $animationFrames.Count -lt 3 -and $i % 4 -eq 0) {
+        $frame = New-Object InstallerWindow+Rectangle
+        [void][InstallerWindow]::GetWindowRect($animation, [ref]$frame)
+        $bitmap = [Drawing.Bitmap]::new(($frame.Right - $frame.Left), ($frame.Bottom - $frame.Top))
+        $graphics = [Drawing.Graphics]::FromImage($bitmap)
+        try {
+            $graphics.CopyFromScreen($frame.Left, $frame.Top, 0, 0, $bitmap.Size)
+            $framePath = Join-Path $OutputPath 'frame-current.png'
+            $bitmap.Save($framePath, [Drawing.Imaging.ImageFormat]::Png)
+            if ($animationFrames.Add((Get-FileHash $framePath).Hash)) {
+                Move-Item $framePath (Join-Path $OutputPath "02-slide-$($animationFrames.Count).png")
+            } else {
+                Remove-Item $framePath
+            }
+        } finally {
+            $graphics.Dispose()
+            $bitmap.Dispose()
+        }
     }
     $next = [InstallerWindow]::GetDlgItem($window, 1)
     if ([InstallerWindow]::IsWindowEnabled($next) -and [InstallerWindow]::Text($next) -match $finished) {
@@ -146,3 +199,15 @@ if (-not $process.WaitForExit(15000) -or $process.ExitCode -ne 0) { throw 'Insta
 $installed = @(Get-ChildItem $installRoot -Filter '*.exe' -Recurse | Where-Object { $_.Name -notlike '*uninstall*' })
 if (-not $installed.Count) { throw 'No application files found in the selected location' }
 if (-not $capturedProgress) { throw 'No installation progress window was captured' }
+if ($ExpectedPayload) {
+    $appAsar = @(Get-ChildItem $installRoot -Filter 'app.asar' -Recurse)
+    if ($appAsar.Count -ne 1 -or (Get-FileHash $appAsar[0].FullName).Hash -ne (Get-FileHash $ExpectedPayload).Hash) {
+        throw 'The graphical installer produced a different app payload'
+    }
+    $applicationDir = Split-Path $appAsar[0].DirectoryName
+    if (-not (Get-Acl -LiteralPath $applicationDir).AreAccessRulesProtected) { throw 'The graphical installation ACL is not protected' }
+    if ($null -eq $animationStarted) { throw 'The graphical installation never displayed the feature slides' }
+    if ($animationFrames.Count -lt 2 -and ((Get-Date) - $animationStarted).TotalSeconds -ge 6) {
+        throw 'The graphical installation did not show a changing feature illustration'
+    }
+}

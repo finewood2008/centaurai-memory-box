@@ -203,8 +203,8 @@ async function main() {
       },
       nsis: {
         include: path.join(root, "shell", "installer.nsh"),
-        installerHeader: path.join(root, "resources", "installer", "header.bmp"),
-        installerSidebar: path.join(root, "resources", "installer", "sidebar.bmp"),
+        installerHeader: path.join(root, "resources", "installer", "illustrated", "windows-header.bmp"),
+        installerSidebar: path.join(root, "resources", "installer", "illustrated", "windows-finish.bmp"),
         uninstallerSidebar: path.join(root, "resources", "installer", "sidebar.bmp"),
         oneClick: false,
         perMachine: false,

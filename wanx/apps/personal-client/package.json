@@ -162,8 +162,8 @@
     },
     "nsis": {
       "include": "shell/installer.nsh",
-      "installerHeader": "resources/installer/header.bmp",
-      "installerSidebar": "resources/installer/sidebar.bmp",
+      "installerHeader": "resources/installer/illustrated/windows-header.bmp",
+      "installerSidebar": "resources/installer/illustrated/windows-finish.bmp",
       "uninstallerSidebar": "resources/installer/sidebar.bmp",
       "oneClick": false,
       "perMachine": false,
