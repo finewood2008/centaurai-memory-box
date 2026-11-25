@@ -278,6 +278,7 @@ test("My AI puts the chosen retrieval instructions into the optimized prompt and
     ...(warehouseId && { warehouse: { id: warehouseId, name: "支持仓库" } }),
   });
   const task = createMyAiTask({
+    platform: "darwin",
     protocolRegistered: () => true,
     openExternal: url => { delivered.push(new URL(url).searchParams.get("prompt")); },
     copyText: text => { copied.push(text); },
