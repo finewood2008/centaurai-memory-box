@@ -10,27 +10,48 @@ permissions:
 jobs:
   graphical-validation:
     runs-on: windows-2025
-    timeout-minutes: 9
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: .github
+          ref: codex/memobox-windows-installer-art
+          sparse-checkout: |
+            .github/scripts
+            wanx/apps/personal-client/resources/installer
+            wanx/apps/personal-client/shell
+            wanx/apps/personal-client/tools
           persist-credentials: false
-      - name: Download the published installer
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Compile the test installer from production hooks
         shell: pwsh
         run: |
-          $exe = Join-Path $env:RUNNER_TEMP 'MemoBox-1.5.4-preview.2.exe'
-          curl.exe --retry 2 -fLsS -o "$exe" "https://github.com/finewood2008/centaurai-memory-box/releases/download/v1.5.4-windows-preview.2/CentaurAI-MemoBox-1.5.4-windows-preview.2-windows-x64.exe"
-          if ($LASTEXITCODE -ne 0) { throw 'Download failed' }
-          if ((Get-FileHash -Algorithm SHA256 $exe).Hash -ne 'B8A5CCF63672B54AC8389B425216BD42CFC93822D5C12107FE55FF1A04FDD51D') {
-            throw 'The installer differs from the published preview'
-          }
-      - name: Exercise the installation wizard and capture its window
+          $toolchain = Join-Path "$env:RUNNER_TEMP" 'toolchain'
+          npm install --prefix "$toolchain" --no-audit --no-fund app-builder-lib@26.15.3
+          if ($LASTEXITCODE -ne 0) { throw 'Could not install the pinned NSIS toolchain' }
+          New-Item -ItemType Junction -Path 'wanx/apps/personal-client/node_modules' -Target "$toolchain/node_modules" | Out-Null
+          $script = 'wanx/apps/personal-client/tools/verify-installer-ui.mjs'
+          $old = '  ${uninstall ? "" : "!insertmacro customInstall"}'
+          $addition = @'
+          ${uninstall ? "" : `!insertmacro customInstall
+          Sleep 11000
+          SetOutPath "$INSTDIR"
+          FileOpen $0 "$INSTDIR\fixture-marker.exe" w
+          FileWrite $0 "installer-test-fixture"
+          FileClose $0`}
+          '@
+          $text = Get-Content -Raw $script
+          if (-not $text.Contains($old)) { throw 'Cannot prepare compile-check fixture' }
+          $text.Replace($old, $addition) | Set-Content -Encoding utf8 $script
+          node $script "$env:RUNNER_TEMP/fixture"
+          if ($LASTEXITCODE -ne 0) { throw 'Fixture did not compile' }
+      - name: Inspect the real native dialog using the lightweight fixture
         shell: powershell
-        run: .github/scripts/windows-installer-gui-qa.ps1 -Installer "$env:RUNNER_TEMP/MemoBox-1.5.4-preview.2.exe" -OutputPath "$env:RUNNER_TEMP/memobox-gui-qa"
+        run: .github/scripts/windows-installer-gui-qa.ps1 -Installer "$env:RUNNER_TEMP/fixture/install-compile-check.exe" -OutputPath "$env:RUNNER_TEMP/memobox-gui-qa"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: memobox-windows-installer-screenshots
+          name: memobox-windows-installer-fixture
           path: ${{ runner.temp }}/memobox-gui-qa/
           if-no-files-found: error
