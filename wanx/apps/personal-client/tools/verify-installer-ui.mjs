@@ -26,7 +26,7 @@ ShowInstDetails nevershow
 !define MUI_HEADERIMAGE
 !define MUI_HEADERIMAGE_RIGHT
 !define MUI_HEADERIMAGE_BITMAP "${nsisPath(path.join(root, "resources/installer/header.bmp"))}"
-!define MUI_WELCOMEFINISHPAGE_BITMAP "${nsisPath(path.join(root, "resources/installer/sidebar.bmp"))}"
+!define MUI_WELCOMEFINISHPAGE_BITMAP "${nsisPath(path.join(root, "resources/installer/illustrated/windows-finish.bmp"))}"
 !define MUI_UNWELCOMEFINISHPAGE_BITMAP "${nsisPath(path.join(root, "resources/installer/sidebar.bmp"))}"
 Var installMode
 ${uninstall ? "!define BUILD_UNINSTALLER" : ""}

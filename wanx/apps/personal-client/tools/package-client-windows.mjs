@@ -48,7 +48,7 @@ export function windowsReleaseConfiguration({ pkg, version, arch, out, trustFile
         ...(certificateFile ? { certificateFile: path.resolve(certificateFile) } : { certificateSha1 }) } },
     nsis: { ...pkg.build.nsis, include: path.join(projectRoot, "shell/installer.nsh"), oneClick: false,
       installerHeader: path.join(projectRoot, "resources/installer/header.bmp"),
-      installerSidebar: path.join(projectRoot, "resources/installer/sidebar.bmp"),
+      installerSidebar: path.join(projectRoot, "resources/installer/illustrated/windows-finish.bmp"),
       uninstallerSidebar: path.join(projectRoot, "resources/installer/sidebar.bmp"),
       perMachine: false, allowElevation: false, allowToChangeInstallationDirectory: false,
       deleteAppDataOnUninstall: false, createDesktopShortcut: true, createStartMenuShortcut: true,
