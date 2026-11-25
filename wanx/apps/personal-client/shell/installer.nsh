@@ -33,7 +33,9 @@
 !macro customPageAfterChangeDir
   ; The builder has registered the update flag plugin before invoking this hook.
 Function WanxPreflightPage
-  ${If} $WanxLocationAccepted == 1
+  ${If} $WanxAcceptedLocation != ""
+    ; The per-user mode page resets $INSTDIR after the welcome page.
+    StrCpy $INSTDIR "$WanxAcceptedLocation"
     Abort
   ${EndIf}
   ; Match electron-builder's directory normalization before validating it.

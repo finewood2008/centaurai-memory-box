@@ -28,7 +28,7 @@ Var WanxArtHeight
 Var WanxProgressAnimation
 Var WanxLocation
 Var WanxLocationError
-Var WanxLocationAccepted
+Var WanxAcceptedLocation
 
 !macro customWelcomePage
   Page custom WanxWelcomeShow WanxWelcomeLeave
@@ -160,7 +160,7 @@ Function WanxWelcomeLeave
     ${NSD_SetText} $WanxLocationError "$1"
     Abort
   ${EndIf}
-  StrCpy $WanxLocationAccepted 1
+  StrCpy $WanxAcceptedLocation "$INSTDIR"
 FunctionEnd
 
 Function WanxShowPathError
