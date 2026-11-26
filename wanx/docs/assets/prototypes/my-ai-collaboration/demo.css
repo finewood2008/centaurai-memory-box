@@ -1,0 +1,69 @@
+body[data-memory-surface="my-ai"] { font-family: Nunito, -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif }
+.demo-top { display:flex; align-items:center; justify-content:space-between; gap:16px; min-height:62px; padding:9px 28px; border-bottom:1px solid #e5dacd; background:#faf7f2; color:#302d29 }
+.demo-brand, .demo-account { display:flex; align-items:center; gap:8px; min-width:0 }
+.demo-brand img { width:29px; height:29px; object-fit:contain }
+.demo-brand strong, .demo-brand small { display:block; white-space:nowrap }
+.demo-brand strong { font-size:15px; font-weight:700 }
+.demo-brand small { font-size:10px; color:#6b6054 }
+.demo-top nav { display:flex; align-items:center; gap:3px; padding:3px; border-radius:10px; background:#f0eae1 }
+.demo-top nav span { display:grid; place-items:center; min-width:65px; padding:6px 12px; border-radius:8px; color:#6b6054; font-size:13px; white-space:nowrap }
+.demo-top nav span[aria-current] { background:#fffdf8; color:#302d29; font-weight:650; box-shadow:0 1px 2px #6b60541a }
+.demo-account { min-width:120px; justify-content:flex-end; gap:9px; color:#6b6054 }
+.demo-account span { display:grid; place-items:center; width:27px; height:27px; color:#6e4a3c; background:#eaddce; border-radius:50%; font-size:12px }
+.demo-banner { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:17px 30px; border-bottom:1px solid #ece2d6; background:#fbf8f3; color:#302d29 }
+.demo-banner > div { display:flex; align-items:center; gap:11px }
+.demo-banner img { width:44px; height:44px; object-fit:contain }
+.demo-banner h1 { margin:0; font-size:21px; font-weight:680; line-height:1.2 }
+.demo-banner p { margin:5px 0 0; color:#6b6054; font-size:12px }
+.demo-banner > p { display:flex; align-items:center; gap:6px; flex:none; margin:0; color:#326760 }
+.demo-workspace { max-width:1400px; margin-inline:auto }
+.demo-toolbar { display:flex; align-items:center; justify-content:space-between; gap:8px 14px; flex-wrap:wrap }
+.demo-select { display:flex; align-items:center; gap:7px; color:#6b6054; font-size:12px }
+.demo-select select { padding:6px 9px; background:#fffdf8; color:#302d29; border:1px solid #e2d6c6; border-radius:9px }
+.demo-disclosure { margin:0; color:#6b6054; font-size:11px; text-align:right }
+@media (max-width:760px) {
+  .demo-top { flex-wrap:wrap; gap:8px; padding:8px 15px }
+  .demo-top nav { order:3; flex-basis:100%; justify-content:space-between; overflow:auto }
+  .demo-top nav span { min-width:auto; padding-inline:8px }
+  .demo-banner { padding:12px 15px }
+}
+@media (max-width:480px) {
+  .demo-banner > p { display:none }
+  .demo-banner img { width:35px; height:35px }
+  .demo-banner p { font-size:11px }
+}
+.demo-banner > p[data-connected="false"] { color:#805630 }
+.demo-model-workbench { min-height:500px }
+.demo-model-agent-mark.my-ai-agent-logo { width:38px; height:38px; flex:none; border:1px solid var(--color-border-stone) }
+.demo-model-agent-mark.my-ai-agent-logo img { width:24px; height:24px }
+.demo-model-options { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px }
+.demo-model-option { display:grid; align-content:start; gap:12px; min-height:111px; padding:12px; border:1px solid var(--color-border-stone); border-radius:11px; background:#fcf9f3 }
+.demo-model-option[data-current="true"] { border-color:var(--my-ai-selection-line); background:#f2f6f2 }
+.demo-model-option-title { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:8px }
+.demo-model-option-title strong, .demo-model-option-title small { display:block; overflow-wrap:anywhere }
+.demo-model-option-title strong { font-size:13px; font-weight:650 }
+.demo-model-option-title small { margin-top:3px; color:var(--my-ai-text-secondary); font-size:11px }
+.demo-model-option .my-ai-button { justify-self:start }
+.demo-model-current, .demo-model-source-label { display:inline-flex; align-items:center; gap:3px; border-radius:99px; padding:3px 7px; white-space:nowrap; background:var(--my-ai-selection-bg); color:var(--my-ai-selection-ink); font-size:11px; font-weight:600 }
+.demo-model-source-label[data-box="false"] { background:#f0e9de; color:var(--my-ai-text-secondary) }
+.demo-model-warning { margin:0 }
+.demo-model-composer .my-ai-prompt-box { padding:7px 12px 10px }
+.demo-model-composer .my-ai-text-field { margin:0 }
+.demo-model-composer textarea { min-height:65px }
+.demo-model-launch { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; padding-top:8px; border-top:1px solid var(--color-border-stone) }
+.demo-model-feedback { color:#375848; font-size:12px; line-height:1.5 }
+.demo-model-feedback:empty { margin-top:-20px }
+.demo-model-history { margin:0; padding:0; list-style:none; border:1px solid var(--color-border-stone); border-radius:9px }
+.demo-model-history li { display:flex; align-items:center; flex-wrap:wrap; justify-content:space-between; gap:8px; padding:8px 11px; font-size:12px }
+.demo-model-history li + li { border-top:1px solid var(--color-border-stone) }
+.demo-model-history-name, .demo-model-history-detail { display:flex; align-items:center; flex-wrap:wrap; gap:7px; overflow-wrap:anywhere }
+.demo-model-history-name > span, .demo-model-history-detail { color:var(--my-ai-text-secondary) }
+.demo-model-picker { display:grid; gap:8px; margin:0; padding:0 }
+.demo-model-picker label { display:flex; align-items:center; gap:9px; padding:9px 11px; border:1px solid var(--color-border-stone); border-radius:9px; cursor:pointer; color:var(--color-text-ink) }
+.demo-model-picker label[data-selected="true"] { border-color:var(--my-ai-selection-line); background:var(--my-ai-selection-bg) }
+.demo-model-picker input { appearance:auto; accent-color:var(--my-ai-selection-ink) }
+.demo-model-picker strong, .demo-model-picker small { display:block }
+.demo-model-picker strong { font-size:13px }
+.demo-model-picker small { color:var(--my-ai-text-secondary); font-size:11px }
+@container (max-width:490px) { .demo-model-options { grid-template-columns:1fr } }
+@container (max-width:360px) { .demo-model-option-title { grid-template-columns:auto minmax(0,1fr) }.demo-model-current { grid-column:2; justify-self:start } }

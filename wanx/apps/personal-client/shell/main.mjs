@@ -90,7 +90,12 @@ import { createMemoryWorkspace, MEMORY_SCHEME, resolveMemoryRuntimeFile } from "
 import { createMemoryRuntimeSupervisor, resolveManagedMemorySource } from "./local-memory-runtime.mjs";
 import { readBackupSourceBinding } from "./memory-backup-identity.mjs";
 import { memoryLibraryRuntime, readMemoryLibrary } from "./memory-source-profile.mjs";
+import { createCodexModelConfig } from "./my-ai-codex-model-config.mjs";
+import { createBoxCloudTransport, createMyAiCloudRoutes } from "./my-ai-cloud-route.mjs";
 import { createMyAiTask } from "./my-ai-task.mjs";
+import { createMyAiCollaboration } from "./my-ai-collaboration.mjs";
+import { createCollaborationSources } from "./my-ai-collaboration-sources.mjs";
+import { createCollaborationModels } from "./my-ai-collaboration-models.mjs";
 import { createMyAiLauncher } from "./my-ai-launch.mjs";
 import { createMyAiInstallations } from "./my-ai-install.mjs";
 import { createMyAiMemoryTransfer } from "./my-ai-memory-transfer.mjs";
@@ -109,8 +114,20 @@ import { createAnnotationModelClient } from "./annotation-model-client.mjs";
 import { testPackageIdentity, TEST_APP_ID, TEST_PRODUCT_NAME } from "../updates/test-build.mjs";
 import { createTestUpdateRuntime } from "../updates/test-runtime.mjs";
 
-const testBuild = app.isPackaged ? testPackageIdentity(JSON.parse(readFileSync(path.join(app.getAppPath(), "package.json"), "utf8"))) : null;
-const windowName = testBuild ? TEST_PRODUCT_NAME : DESKTOP_NAME;
+const packagedManifest = app.isPackaged ? JSON.parse(readFileSync(path.join(app.getAppPath(), "package.json"), "utf8")) : null;
+const testBuild = packagedManifest ? testPackageIdentity(packagedManifest) : null;
+const cloudPilot = packagedManifest?.wanxCloudCliPilot === true;
+if (cloudPilot) {
+  const pilotData = path.join(app.getPath("appData"), "MemoBox Cloud CLI Pilot");
+  mkdirSync(pilotData, { recursive: true, mode: 0o700 });
+  app.setPath("userData", pilotData);
+}
+const windowName = cloudPilot ? "记忆盒子 · 云模型验收版" : testBuild ? TEST_PRODUCT_NAME : DESKTOP_NAME;
+const collaborationModels = process.env.MEMOBOX_COLLAB_PILOT === "1" ? createCollaborationModels() : null;
+if (collaborationModels) {
+  for (const provider of collaborationModels.recipients)
+    delete process.env["MEMOBOX_COLLAB_" + provider.id.toUpperCase() + "_KEY"];
+}
 const controlURL = new URL("../local-ui/renderer/index.html", import.meta.url).href;
 protocol.registerSchemesAsPrivileged([MEMORY_SCHEME, ACCESSORY_SCHEME].map(scheme => ({ scheme, privileges: {
   standard: true, secure: true, supportFetchAPI: true, corsEnabled: true,
@@ -430,7 +447,7 @@ if (process.argv.includes("--wanx-managed-app")) {
           deviceId: client.snapshot().connection?.deviceId || null }),
       });
       updates = { client: clientUpdates, box: boxUpdates };
-      updateChecks = createUpdateChecks({ updates: clientUpdates, getAccount: () => account.snapshot(), enabled: !testRuntime });
+      updateChecks = createUpdateChecks({ updates: clientUpdates, getAccount: () => account.snapshot(), enabled: !testRuntime && !cloudPilot });
       const updateListeners = [clientUpdates.subscribe(() => { notifications?.update(clientUpdates.snapshot()); deliveryScheduler.sync(); void broadcast?.publish(); }),
         boxUpdates.subscribe(() => { desktop?.sync(client.snapshot()); void broadcast?.publish(); })];
       let updateAccount = JSON.stringify(account.getIdentity());
@@ -597,7 +614,9 @@ if (process.argv.includes("--wanx-managed-app")) {
         openModels: () => sendToLiveFrame(control, 'wanx-client:navigate', 'dialogue-models'),
       });
       const memoryLibrary = await readMemoryLibrary(userData);
-      const memoryRuntimeLayout = memoryLibraryRuntime(memoryLibrary, userData);
+      const memoryRuntimeLayout = memoryLibraryRuntime(memoryLibrary, userData, cloudPilot
+        ? { ...process.env, MEMMY_HOME: path.join(userData, "memory") } : process.env);
+      if (cloudPilot) memoryRuntimeLayout.root = userData;
       const memoryEnv = memoryRuntimeLayout?.env ?? process.env;
       delete process.env.MEMMY_ISOLATED_CODEX_PROFILE;
       const memorySource = testRuntime || memoryEnv.MEMMY_RUNTIME_CONFIG_PATH?.trim() ? null : await resolveManagedMemorySource({
@@ -658,6 +677,20 @@ if (process.argv.includes("--wanx-managed-app")) {
         getScope: () => dataInteractionKey(client.snapshot(), process.env.WANX_CONSUMER_URL || DEFAULT_CONSUMER_URL),
       });
       const agentInstallations = createMyAiInstallations({ directory: path.join(userData, "my-ai-programs") });
+      const cloudRoutes = process.platform === "darwin" ? createMyAiCloudRoutes({
+        desktopConfig: createCodexModelConfig({
+          file: path.join(process.env.CODEX_HOME || path.join(app.getPath("home"), ".codex"), "config.toml"),
+          journal: path.join(userData,"codex-gateways","model-switch-recovery.json"),
+        }),
+        desktopGatewayDir: path.join(userData, "codex-gateways"),
+        context: () => {
+          const state = client.snapshot();
+          return { owner: dataOwnerKey(state, serviceURL), box: state.connection?.deviceId, scope: boxScope() };
+        },
+        transport: createBoxCloudTransport(client),
+        store: createSecureAccountStore({ filePath: path.join(userData, "my-ai-cloud-models.enc"), safeStorage }),
+      }) : null;
+      const unsubscribeCloud = cloudRoutes && client.subscribe(() => cloudRoutes.sync());
       const agentLauncher = createMyAiLauncher({
         directory: path.join(memoryRuntimeLayout?.root ?? userData, "my-ai-launch"),
         openFile: file => shell.openPath(file),
@@ -724,6 +757,25 @@ if (process.argv.includes("--wanx-managed-app")) {
         }),
         getState: () => client.snapshot(),
         agentAccess,
+        myAiCollaboration: collaborationModels ? createMyAiCollaboration({
+          identity: () => {
+            const state = client.snapshot();
+            return { owner: dataOwnerKey(state, serviceURL), box: state.connection?.deviceId, scope: dataInteractionKey(state, serviceURL),
+              account: state.dataIdentity?.profileId ? ["local", state.dataIdentity.profileId] : ["account", serviceURL, state.account?.accountId] };
+          },
+          sources: createCollaborationSources({ sources, memory: myAiMemory, starlink }),
+          models: collaborationModels,
+          store: createSecureAccountStore({ filePath: path.join(userData, "my-ai-collaboration.enc"), safeStorage }),
+          async saveReport(markdown, check) {
+            const result = await dialog.showSaveDialog(control, {
+              title: "导出研究方案", defaultPath: "研究方案.md", filters: [{ name: "Markdown", extensions: ["md"] }],
+            });
+            if (result.canceled || !result.filePath) return false;
+            await check();
+            await writeFile(result.filePath, markdown, { encoding: "utf8", mode: 0o600 });
+            return true;
+          },
+        }) : undefined,
         memoryTransfer,
         claudeChatImport: createClaudeChatHistoryImport({
           runtimeFile: memoryRuntimeFile,
@@ -738,7 +790,7 @@ if (process.argv.includes("--wanx-managed-app")) {
         client, serviceURL: process.env.WANX_CONSUMER_URL || DEFAULT_CONSUMER_URL,
         preferenceFile: path.join(userData, "memory-model-source"),
         myAiTask: createMyAiTask({
-          launcher: agentLauncher, installations: agentInstallations,
+          launcher: agentLauncher, cloudRoutes, installations: agentInstallations,
           protocolRegistered: url => Boolean(app.getApplicationNameForProtocol(url).trim()),
           applicationForProtocol: url => app.getApplicationInfoForProtocol(url),
           openExternal: url => shell.openExternal(url),
@@ -867,6 +919,8 @@ if (process.argv.includes("--wanx-managed-app")) {
           uiState.invalidateOpen();
           personalWorkshop?.close();
           await agentAccess.close();
+          unsubscribeCloud?.();
+          cloudRoutes?.close();
           await agentLauncher.close();
           personalDataService?.close();
           starlinkPanel?.close();

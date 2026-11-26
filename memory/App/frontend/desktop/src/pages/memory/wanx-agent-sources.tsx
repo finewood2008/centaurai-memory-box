@@ -17,10 +17,10 @@ interface SelectionResponse {
   memoryAgent?: string | null;
 }
 
-export function AgentSources({ request, agent, mode, name, refresh, sources, memoryNames = {}, onSourcesChange, onReady, onSavingChange, disabled }: {
+export function AgentSources({ request, agent, mode, name, refresh, sources, memoryNames = {}, onSourcesChange, onReady, onSavingChange, disabled, taskOnly = false }: {
   request: MyAiRequest; agent: string; mode?: string; name: string; refresh: number;
   sources: TaskSources; memoryNames?: Record<string, string>; onSourcesChange: (sources: TaskSources) => void; onReady: (ready: boolean) => void;
-  onSavingChange?: (saving: boolean) => void; disabled: boolean;
+  onSavingChange?: (saving: boolean) => void; disabled: boolean; taskOnly?: boolean;
 }) {
   const [status, setStatus] = useState<AgentAccessStatus | null>(null);
   const [picker, setPicker] = useState<SourceKind | null>(null);
@@ -68,7 +68,7 @@ export function AgentSources({ request, agent, mode, name, refresh, sources, mem
     setFeedback(null);
     setPicker(null);
     setMemoryChoices([]);
-    onChange.current({ memoryEnabled: false });
+    if (!taskOnly) onChange.current({ memoryEnabled: false });
     void Promise.all([
       request<AgentAccessStatus>("agent-context/status", controller.signal, { agent, mode }),
       request<SelectionResponse>("agent-context/selection", controller.signal, { agent, mode }),
@@ -95,7 +95,7 @@ export function AgentSources({ request, agent, mode, name, refresh, sources, mem
         savingChanged.current?.(false);
       }
     };
-  }, [agent, mode, refresh, request, loadAttempt]);
+  }, [agent, mode, refresh, request, loadAttempt, taskOnly]);
 
   useEffect(() => {
     if (!picker || !ready || unavailable) return;
@@ -159,9 +159,9 @@ export function AgentSources({ request, agent, mode, name, refresh, sources, mem
     <small>任务资料范围 <GuideTerm name="task-access"/></small>
     <div className="my-ai-source-actions" role="group" aria-label="本次任务的检索范围">
       {([
-        { kind: "starlink", label: "参考星图", placeholder: "选择仓库", icon: Orbit, scope: sources.warehouse?.name, trigger: warehouseTrigger },
-        { kind: "space", label: "空间文件", placeholder: "选择文件夹", icon: Folder, scope: sources.folder?.name, trigger: folderTrigger },
-        { kind: "memory", label: "智能体记忆", placeholder: "选择 Agent", icon: History, scope: memoryLabel, trigger: memoryTrigger },
+        { kind: "starlink", label: taskOnly ? "星图仓库" : "参考星图", placeholder: "选择仓库", icon: Orbit, scope: sources.warehouse?.name, trigger: warehouseTrigger },
+        { kind: "space", label: taskOnly ? "个人空间" : "空间文件", placeholder: "选择文件夹", icon: Folder, scope: sources.folder?.name, trigger: folderTrigger },
+        { kind: "memory", label: taskOnly ? "历史记忆" : "智能体记忆", placeholder: "选择 Agent", icon: History, scope: memoryLabel, trigger: memoryTrigger },
       ] as const).map(({ kind, label, placeholder, icon: Icon, scope, trigger }) => (
         <button key={kind} ref={trigger} type="button" className="my-ai-button my-ai-source-trigger"
           data-selected={Boolean(scope)} disabled={pickerDisabled} aria-haspopup="dialog" aria-expanded={picker === kind}
@@ -197,7 +197,7 @@ export function AgentSources({ request, agent, mode, name, refresh, sources, mem
         : choosingMemory ? <div className="my-ai-warehouse-list">
           {[
             { id: undefined, name: "不检索记忆" },
-            { id: null, name: "全部 Agent" },
+            ...(!taskOnly ? [{ id: null, name: "全部 Agent" }] : []),
             ...(catalog?.agents ?? []),
           ].map(item => {
             const selected = item.id === undefined ? !sources.memoryEnabled : sources.memoryEnabled && sources.memoryAgent === item.id;

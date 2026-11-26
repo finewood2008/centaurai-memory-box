@@ -13,6 +13,8 @@ import { MemorySourcesContent, visibleAgentSources } from "../memory-sources-pag
 
 import { formatBackupInterval, MemorySyncSummary, type BackupStatus } from "./wanx-memory-backup.js";
 import { AgentSources } from "./wanx-agent-sources.js";
+import { MyAiCloudSource } from "./wanx-my-ai-cloud-source.js";
+import { MyAiCollaboration, MyAiModeTabs } from "./wanx-my-ai-collaboration.js";
 import { connectionProgress, contextAgentId, managedAgentIds, modeCapabilities, workBuddyTrustHint, type Agent, type AgentAccessStatus, type ConnectionActivity, type ConnectionOperation, type MyAiRequest, type TaskSources } from "./wanx-my-ai-model.js";
 
 type AppAction = "launch" | "download" | "install" | "uninstall" | "hide-agent" | "show-agent";
@@ -29,6 +31,9 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
   const scanState = useRef(state.agentSources);
   scanState.current = state.agentSources;
   const [sourceRefresh, setSourceRefresh] = useState(0);
+  const [cloudModels, setCloudModels] = useState(false);
+  const [collaborationEnabled, setCollaborationEnabled] = useState(false);
+  const [collaboration, setCollaboration] = useState(false);
   const [installed, setInstalled] = useState<Agent[] | null>(null);
   const [apps, setApps] = useState<Agent[]>([]);
   const [hiddenAgents, setHiddenAgents] = useState<string[]>([]);
@@ -84,13 +89,15 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
   }, [sessionToken]);
 
   async function loadAgents(signal: AbortSignal) {
-    const info = await request<{ agents: Agent[]; apps?: Agent[]; hiddenAgents?: string[]; agentAccess?: Record<string, AgentAccessStatus>; integrationUnavailable?: string }>("status", signal);
+    const info = await request<{ agents: Agent[]; apps?: Agent[]; hiddenAgents?: string[]; agentAccess?: Record<string, AgentAccessStatus>; integrationUnavailable?: string; collaboration?: boolean; cloudModels?: boolean }>("status", signal);
     if (!signal.aborted) {
       setInstalled(info.agents.filter(agent => managedAgentIds.has(agent.id)));
       setApps((info.apps ?? []).filter(agent => managedAgentIds.has(agent.id)));
       setHiddenAgents(info.hiddenAgents ?? []);
       setAgentAccess(info.agentAccess ?? {});
       setIntegrationUnavailable(info.integrationUnavailable ?? "");
+      setCloudModels(info.cloudModels === true);
+      setCollaborationEnabled(info.collaboration === true);
     }
   }
 
@@ -117,6 +124,8 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
     currentAction.current = false;
     currentAppAction.current = false;
     setInstalled(null);
+    setCollaborationEnabled(false);
+    setCollaboration(false);
     setAgentAccess({});
     setConnectionActivity(undefined);
     setIntegrationUnavailable("");
@@ -709,6 +718,8 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
             {memoryError && <button type="button" className="my-ai-button" onClick={retryMemory}>重新连接记忆服务</button>}
           </>}
         </section>
+        {cloudModels && active && ["codex", "codex_cli", "claude_code", "gemini"].includes(active.id) &&
+          <MyAiCloudSource key={sessionToken + active.id} agent={active} request={request} />}
         {active && <section className="my-ai-composer" aria-labelledby="my-ai-task-title">
           <h3 id="my-ai-task-title">发起一个任务</h3>
           <div className="my-ai-prompt-box">
@@ -761,7 +772,11 @@ export default function MyAi({ sessionToken, memoryError, retryMemory }: MyAiPro
 
   return <main className="wanx-memory-settings wanx-my-ai">
     <AgentSourceScanReconciler />
-    <MemorySyncSummary sessionToken={sessionToken} statusOnly>{renderWorkbench}</MemorySyncSummary>
+    {collaborationEnabled && <MyAiModeTabs collaboration={collaboration} onChange={setCollaboration} />}
+    {collaboration && collaborationEnabled
+      ? <MyAiCollaboration key={sessionToken} request={request} onBack={() => setCollaboration(false)}
+        memoryNames={Object.fromEntries(state.agentSources.items.map(source => [source.sourceId, source.displayName]))} />
+      : <MemorySyncSummary sessionToken={sessionToken} statusOnly>{renderWorkbench}</MemorySyncSummary>}
     <Modal open={chooserOpen} title="添加应用" subtitle="从官方渠道安装应用，或重新接入已断开的智能体。" className="my-ai-app-chooser"
       headerIcon={<Plus size={18} aria-hidden="true" />} closeLabel="关闭应用列表" closeContent={<X size={18} aria-hidden="true" />}
       onClose={closeAppChooser}>

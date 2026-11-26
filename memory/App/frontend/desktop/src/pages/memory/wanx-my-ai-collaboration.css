@@ -1,0 +1,85 @@
+.my-ai-collab-tabs { display:flex; width:fit-content; max-width:100%; gap:3px; padding:3px; border:1px solid var(--color-border-stone); border-radius:11px; background:#f5efe6 }
+.my-ai-collab-tabs .my-ai-button { border-color:transparent; min-height:32px; padding-inline:12px }
+.my-ai-collab-tabs [aria-pressed="true"] { background:var(--color-background-paper); border-color:var(--color-border-stone); color:var(--color-text-ink); box-shadow:0 1px 2px #5b46360b }
+.my-ai-collab { min-height:470px }
+.my-ai-collab-sidebar { display:flex; flex-direction:column; min-width:0 }
+.my-ai-collab-sidebar h3 { margin:23px 6px 3px; color:var(--my-ai-text-secondary); font-size:12px; font-weight:600 }
+.my-ai-collab-sidebar .my-ai-help { padding-inline:6px }
+.my-ai-collab-sidebar .my-ai-agent-list { margin:3px 0 12px }
+.my-ai-collab-new { margin-top:14px }
+.my-ai-collab-scope { display:flex; gap:6px; align-items:center; margin-top:auto; padding:18px 6px 2px; color:var(--my-ai-text-secondary); font-size:11px }
+.my-ai-collab-main { display:grid; align-content:start; gap:20px; container-type:inline-size }
+.my-ai-collab-title { display:flex; align-items:flex-start; gap:12px; min-width:0 }
+.my-ai-collab-mark { display:grid; width:38px; height:38px; flex:0 0 38px; place-items:center; border:1px solid #e6d9ca; border-radius:11px; background:#f5ede3; color:var(--color-action-sky) }
+.my-ai-collab-title h2 { font-size:19px; line-height:1.32; font-weight:650; margin:0 }
+.my-ai-collab-title h2:focus { outline:none }
+.my-ai-collab-title p { font-size:12px; line-height:1.55; color:var(--my-ai-text-secondary); margin:4px 0 0; overflow-wrap:anywhere; white-space:pre-wrap }
+.my-ai-collab-section { display:grid; align-content:start; gap:9px; min-width:0 }
+.my-ai-collab-section h3, .my-ai-collab-report h3 { display:flex; align-items:center; gap:8px; margin:0; color:var(--color-text-ink); font-size:14px; font-weight:650 }
+.my-ai-collab-roles { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:8px }
+.my-ai-collab-role { display:grid; grid-template-columns:auto minmax(0, 1fr) auto; gap:8px; align-items:center; min-width:0; min-height:57px; border:1px solid var(--color-border-stone); border-radius:10px; padding:8px 10px; background:#fcf9f3; color:var(--color-text-ink); text-align:start }
+.my-ai-collab-role strong, .my-ai-collab-role small { display:block; overflow-wrap:anywhere }
+.my-ai-collab-role strong { font-size:13px; font-weight:650 }
+.my-ai-collab-role small { font-size:11px; line-height:1.45; margin-top:2px; color:var(--my-ai-text-secondary) }
+.my-ai-collab-dot { width:7px; height:7px; background:#b08e5e; border-radius:50% }
+.my-ai-collab-dot[data-ready="true"] { background:#528274 }
+.my-ai-collab-composer { padding:10px 12px 12px }
+.my-ai-collab-main .my-ai-collab-composer .my-ai-text-field { margin:0 0 8px }
+.my-ai-collab-main .my-ai-collab-composer textarea { padding:7px 3px 12px; min-height:105px }
+.my-ai-collab-composer .my-ai-codex-sources { border-top:1px solid var(--color-border-stone); padding-top:7px }
+.my-ai-collab-composer .my-ai-source-actions { max-width:100% }
+.my-ai-collab-footer, .my-ai-collab-jobbar { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap }
+.my-ai-collab-footer { padding-top:13px; border-top:1px solid var(--color-border-stone) }
+.my-ai-collab-footer .my-ai-help { display:flex; align-items:center; gap:7px; min-width:0 }
+.my-ai-collab-footer .my-ai-help svg { flex:none }
+.my-ai-collab-back { justify-self:start }
+.my-ai-collab-preview-body { display:grid; grid-template-columns:minmax(0, 1fr) minmax(170px, .52fr); gap:16px }
+.my-ai-collab-draft { margin:0 0 6px; padding:12px; background:#f5efe6; border-radius:9px; overflow-wrap:anywhere; white-space:pre-wrap; font-size:13px; line-height:1.55 }
+.my-ai-collab-count { color:var(--my-ai-text-secondary); font-size:11px; font-weight:500 }
+.my-ai-collab-evidence { display:grid; gap:7px }
+.my-ai-collab-evidence-item { border:1px solid var(--color-border-stone); border-radius:10px; padding:8px 10px; background:#fcf9f3 }
+.my-ai-collab-evidence-item[data-checked="true"] { border-color:var(--my-ai-selection-line); background:#f2f6f2 }
+.my-ai-collab-evidence-item label { display:flex; align-items:center; gap:8px; cursor:pointer }
+.my-ai-collab-evidence-item label input { display:inline-block; appearance:auto; width:15px; height:15px; accent-color:var(--my-ai-selection-ink) }
+.my-ai-collab-evidence-item strong, .my-ai-collab-evidence-item small { display:block; overflow-wrap:anywhere }
+.my-ai-collab-evidence-item strong { font-size:13px }
+.my-ai-collab-evidence-item small { margin-top:2px; color:var(--my-ai-text-secondary); font-size:11px }
+.my-ai-collab-evidence-item details { margin:5px 0 0 23px; color:var(--my-ai-text-secondary); font-size:12px }
+.my-ai-collab-evidence-item summary { display:flex; align-items:center; gap:4px; cursor:pointer }
+.my-ai-collab-evidence-item summary::-webkit-details-marker { display:none }
+.my-ai-collab-evidence-item details[open] summary svg { transform:rotate(180deg) }
+.my-ai-collab-evidence-item details p { white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.55; margin-bottom:2px }
+.my-ai-collab-recipients .my-ai-help { line-height:1.55 }
+.my-ai-collab-notice { display:flex; align-items:center; flex-wrap:wrap; gap:8px; padding:10px 12px; border:1px solid #cbded5; border-radius:10px; background:#f0f5f1; color:#365f56; font-size:12px; line-height:1.5 }
+.my-ai-collab-notice[data-tone="warning"] { border-color:#ead5b8; background:#faf1e4; color:#74491f }
+.my-ai-collab-notice .my-ai-button { margin-inline-start:auto }
+.my-ai-collab-notice ul { margin:4px 0 0; padding-inline-start:18px }
+.my-ai-collab-status { display:inline-flex; align-items:center; gap:6px; border-radius:99px; padding:5px 9px; color:var(--my-ai-selection-ink); background:var(--my-ai-selection-bg); font-size:12px; font-weight:600 }
+.my-ai-collab-status:is([data-state="needs-review"],[data-state="failed"]) { color:#74491f; background:#faf1e4 }
+.my-ai-collab-phases { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:8px; margin:0; padding:0; list-style:none }
+.my-ai-collab-phases li { display:flex; align-items:center; gap:8px; padding:9px; border:1px solid var(--color-border-stone); border-radius:9px; color:var(--my-ai-text-secondary); font-size:12px }
+.my-ai-collab-phases li span { display:grid; width:22px; height:22px; place-items:center; flex:0 0 22px; border-radius:100%; background:#f0e9de }
+.my-ai-collab-phases li[data-state="current"] { border-color:var(--my-ai-selection-line); background:#f2f6f2; color:var(--my-ai-selection-ink); font-weight:650 }
+.my-ai-collab-phases li:is([data-state="current"],[data-state="done"]) span { background:var(--my-ai-selection-bg); color:var(--my-ai-selection-ink) }
+.my-ai-collab-analysis { grid-template-columns:repeat(2, minmax(0, 1fr)) }
+.my-ai-collab-analysis button:enabled { cursor:pointer }
+.my-ai-collab-analysis button:enabled:hover { border-color:var(--my-ai-selection-line) }
+.my-ai-collab-report { display:grid; gap:12px }
+.my-ai-collab-report > section { padding:13px 14px; background:#fcf9f3; border:1px solid var(--color-border-stone); border-radius:10px; color:var(--color-text-ink) }
+.my-ai-collab-report :is(p, ul, blockquote) { margin:6px 0 0; font-size:13px; line-height:1.65; white-space:pre-wrap; overflow-wrap:anywhere }
+.my-ai-collab-report ul { padding-inline-start:19px }
+.my-ai-collab-report li + li { margin-top:4px }
+.my-ai-collab-report blockquote { border-inline-start:2px solid var(--my-ai-selection-line); padding-inline-start:10px }
+.my-ai-collab-cite { display:inline-flex; margin-inline-start:5px; padding:0 5px; border-radius:5px; border:1px solid var(--my-ai-selection-line); background:var(--my-ai-selection-bg); color:var(--my-ai-selection-ink); font-size:11px; cursor:pointer; vertical-align:baseline }
+.modal-backdrop.my-ai-collab-drawer-backdrop { place-items:stretch end; padding:0 }
+.my-ai-collab-drawer-backdrop .my-ai-collab-drawer { width:min(100%,430px); height:100%; max-height:none; border-radius:16px 0 0 16px }
+@container (max-width:525px) { .my-ai-collab-preview-body { grid-template-columns:1fr } }
+@container (max-width:400px) {
+  .my-ai-collab-roles, .my-ai-collab-analysis { grid-template-columns:1fr }
+  .my-ai-collab-role { min-height:46px }
+  .my-ai-collab-phases li { flex-direction:column; text-align:center }
+}
+@media (max-width:700px) {
+  .my-ai-collab-sidebar { border-inline-end:0; border-bottom:1px solid var(--color-border-stone) }
+  .my-ai-collab-scope { display:none }
+}

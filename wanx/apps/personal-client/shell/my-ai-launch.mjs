@@ -84,7 +84,7 @@ export function createMyAiLauncher({ directory, executable = process.execPath, o
     const file = path.join(directory, id + ".json");
     const commandFile = path.join(directory, id + (platform === "win32" ? ".ps1" : ".command"));
     const expires = now() + lifetime;
-    const task = { id, agent: String(input.agent), executable: input.executable, args: input.args, cwd: input.cwd,
+    const task = { id, ...(input.cloudRoute && { cloudRoute: input.cloudRoute }), agent: String(input.agent), executable: input.executable, args: input.args, cwd: input.cwd,
       prompt: input.prompt, resources: input.resources ?? "", expires };
     const serialized = JSON.stringify(task);
     if (Buffer.byteLength(serialized, "utf8") > MAX_LAUNCH_PAYLOAD_BYTES) throw fail("任务内容过大，请缩短提示词或资料范围后重试。");

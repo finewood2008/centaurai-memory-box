@@ -13,7 +13,7 @@ import { smokePackagedAccessories } from './smoke-packaged-accessories.mjs';
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 const checksum = async file => createHash('sha256').update(await readFile(file)).digest('hex');
 export function previewVersion(value, base) {
-  if (typeof value !== 'string' || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-windows-preview\.[1-9]\d*$/.test(value)) throw new Error('WINDOWS_PREVIEW_VERSION_REQUIRED');
+  if (typeof value !== 'string' || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-windows-preview\.[1-9]\d*)?$/.test(value)) throw new Error('WINDOWS_PREVIEW_VERSION_REQUIRED');
   if (base && value.split('-')[0] !== base) throw new Error('WINDOWS_PREVIEW_SOURCE_VERSION_MISMATCH');
   return value;
 }

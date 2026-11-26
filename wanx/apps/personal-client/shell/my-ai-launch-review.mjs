@@ -1,4 +1,5 @@
 import { lstat, readFile, rm, writeFile } from "node:fs/promises";
+import { cloudCliOptions } from "./my-ai-cloud-protocol.mjs";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 import path from "node:path";
@@ -43,6 +44,7 @@ async function requestApproval(file, task) {
 export async function runLaunchReview(file, { question, output = process.stdout, spawnChild = spawn, approve = requestApproval, now = Date.now,
   platform = process.platform, resolveCli = resolveWindowsCli, env = process.env } = {}) {
   const task = await readLaunchPayload(file);
+  const cloud = cloudCliOptions(task.cloudRoute);
   let readline, terminal;
   try {
     if (task.expires <= now()) throw new Error("任务已过期，请在盒子中重新发起。");
@@ -50,6 +52,7 @@ export async function runLaunchReview(file, { question, output = process.stdout,
       terminal = reconnectWindowsConsole();
       if (terminal) output = terminal.output;
     }
+    if (task.cloudRoute) output.write("模型来源：记忆盒子转发至云端 · " + display(task.cloudRoute.model) + "\n");
     output.write(`\n${display(task.agent)}\n工作目录：${display(task.cwd)}\n资料范围：${display(task.resources || "未选择空间或星图")}\n\n${display(task.prompt || "打开空白会话")}\n\n`);
     await writeFile(file + ".ready", task.id, { mode: 0o600 });
     // Start reading only when the question can consume a line. Creating this
@@ -71,10 +74,10 @@ export async function runLaunchReview(file, { question, output = process.stdout,
     await terminal?.releaseInput();
     if (answer.trim()) return { started: false, canceled: true };
     if (task.expires <= now()) throw new Error("任务已过期，请在盒子中重新发起。");
-    const command = platform === "win32" ? await resolveCli(task.executable, task.args) : { executable: task.executable, args: task.args };
+    const command = platform === "win32" ? await resolveCli(task.executable, task.args) : { executable: task.executable, args: [...cloud.args, ...task.args] };
     if (task.expires <= now()) throw new Error("任务已过期，请在盒子中重新发起。");
     await approve(file, task);
-    const childEnv = { ...myAiCliEnvironment(env, platform) };
+    const childEnv = { ...myAiCliEnvironment(env, platform), ...cloud.env };
     delete childEnv.ELECTRON_RUN_AS_NODE;
     if (command.runAsNode) childEnv.ELECTRON_RUN_AS_NODE = "1";
     const child = spawnChild(command.executable, command.args, { cwd: task.cwd, stdio: terminal?.stdio ?? "inherit", shell: false, env: childEnv });
@@ -86,6 +89,9 @@ export async function runLaunchReview(file, { question, output = process.stdout,
   } finally {
     readline?.close();
     terminal?.close();
+    if (task.cloudRoute) await fetch("http://127.0.0.1:" + task.cloudRoute.port + "/session", {
+      method: "DELETE", headers: { authorization: "Bearer " + task.cloudRoute.token }, signal: AbortSignal.timeout(1000),
+    }).catch(() => {});
     // Windows consumes readiness in the launcher. Keep that acknowledgment
     // durable even when the user cancels before its next polling interval.
     await Promise.all([file, ...(platform === "win32" ? [] : [file + ".ready"]), file + ".request", file + ".approved", file.replace(/\.json$/, ".command"), file.replace(/\.json$/, ".ps1")].map(target => rm(target, { force: true }).catch(() => {})));

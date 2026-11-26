@@ -78,7 +78,9 @@ test('a runtime package asset cannot follow a source-machine symlink outside the
 
 test('preview versions are constrained and never silently replace an existing release or tag', async () => {
   assert.equal(previewVersion('1.0.6-windows-preview.2','1.0.6'),'1.0.6-windows-preview.2');
-  for(const version of ['1.0.6','v1.0.6-windows-preview.2','1.0.6-windows-preview.0','1.0.6-windows-preview.2;echo']) assert.throws(()=>previewVersion(version));
+  assert.equal(previewVersion('1.5.6','1.5.6'),'1.5.6');
+  assert.throws(()=>previewVersion('1.5.6','1.5.5'),/SOURCE_VERSION_MISMATCH/);
+  for(const version of ['1.0','v1.0.6-windows-preview.2','1.0.6-windows-preview.0','1.0.6-windows-preview.2;echo']) assert.throws(()=>previewVersion(version));
   assert.throws(()=>previewVersion('1.0.7-windows-preview.2','1.0.6'),/SOURCE_VERSION_MISMATCH/);
   let calls=0; await assertReleaseTargetFree({repository:'owner/repo',version:'1.0.6-windows-preview.2',token:'fixture',request:async(url,init)=>{calls++;assert.equal(init.headers.authorization,'Bearer fixture');return {status:404,ok:false};}}); assert.equal(calls,2);
   await assert.rejects(assertReleaseTargetFree({repository:'owner/repo',version:'1.0.6-windows-preview.2',token:'fixture',request:async()=>({status:200,ok:true})}),/TARGET_ALREADY_EXISTS/);

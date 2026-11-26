@@ -67,7 +67,7 @@ async function versionOfApplication(application) {
 export function createMyAiTask({
   protocolRegistered = () => false, applicationForProtocol, openExternal, openApplication, revealApplication,
   copyText, starlink, polish, assertClientUsable = () => {}, boxScope, codexContext, agentAccess, openLongWindowsDraft, windowsCodex,
-  commandInstalled, resolveCommand, findApplication, launcher, installations, integrationUnavailable,
+  commandInstalled, resolveCommand, findApplication, launcher, cloudRoutes, installations, integrationUnavailable,
   platform = process.platform, env = process.env, home = homedir(), version = runFile,
 }) {
   const desktopPaths = platform === "win32" ? path.win32 : path.posix;
@@ -205,6 +205,8 @@ export function createMyAiTask({
   }
 
   return async function task(action, input = {}, assertScope = () => {}, signal) {
+    if (action.startsWith("model-source/") && cloudRoutes)
+      return cloudRoutes.action(action.slice("model-source/".length), target(input).id, input.ref, assertScope);
     if (action === "agent-access/status" && agentAccess) return agentAccess.status(assertScope);
     if (action === "agent-access/copy-removal-command") {
       const agent = target(input);
@@ -254,7 +256,7 @@ export function createMyAiTask({
     if (action === "status") {
       const catalog = (await Promise.all(agentCatalog.map(detect))).map(item => item.public);
       assertScope();
-      return { agents: catalog.filter(agent => agent.installed), ...(integrationUnavailable && { integrationUnavailable }),
+      return { ...(cloudRoutes && { cloudModels: true }), agents: catalog.filter(agent => agent.installed), ...(integrationUnavailable && { integrationUnavailable }),
         ...(agentAccess && { agentAccess: await agentAccess.status(assertScope) }),
         apps: catalog.map(agent => ({ ...agent, downloadLabel: agent.variant === "cli" ? "安装说明" : "官方下载" })),
       };
@@ -283,7 +285,7 @@ export function createMyAiTask({
       }
       if (agent.variant === "cli") {
         if (!detected.executable || !launcher) throw inputError("未找到可用 CLI 或终端启动助手。");
-        return launcher.launch({ agent: agent.name, executable: detected.executable, args: [], cwd: input.workspacePath ?? home }, assertScope);
+        return launcher.launch({ cloudRoute: await cloudRoutes?.launch(agent.id, assertScope), agent: agent.name, executable: detected.executable, args: [], cwd: input.workspacePath ?? home }, assertScope);
       }
       await openDesktop(agent, detected, input.mode);
       assertScope();
@@ -309,7 +311,7 @@ export function createMyAiTask({
         if (agent.variant === "cli") {
           if (!detected.executable || !launcher) throw inputError("未找到可用 CLI 或终端启动助手。");
           const args = agent.id === "gemini" ? ["--prompt-interactive=" + prompt] : ["--", prompt];
-          return await launcher.prepare({ agent: agent.name, executable: detected.executable, args, cwd: input.workspacePath ?? home, prompt,
+          return await launcher.prepare({ cloudRoute: await cloudRoutes?.launch(agent.id, assertScope), agent: agent.name, executable: detected.executable, args, cwd: input.workspacePath ?? home, prompt,
             resources: [prepared?.resources?.folder?.name, prepared?.resources?.warehouse?.name, selected?.memoryEnabled && "历史记忆"].filter(Boolean).join("、") }, assertScope);
         }
         if (agent.delivery === "draft" && detected.public.prefill) {

@@ -66,7 +66,7 @@ export function resolveMemoryRuntimeFile(env = process.env, home = homedir(), ma
 
 export function createMemoryWorkspace({
   assets, getState, fetchAsset, request = fetch, client, serviceURL, preferenceFile, protectFile,
-  localStorage, backup, myAiTask, memoryTransfer, claudeChatImport, runtime, agentVisibilityStore, agentAccess, manageAgentSync = Boolean(runtime),
+  localStorage, backup, myAiTask, memoryTransfer, claudeChatImport, runtime, agentVisibilityStore, agentAccess, myAiCollaboration, manageAgentSync = Boolean(runtime),
   onPipelineBlockers,
   runtimeFile = resolveMemoryRuntimeFile(),
 }) {
@@ -218,6 +218,7 @@ export function createMemoryWorkspace({
 
   function sync() {
     const scope = currentScope();
+    myAiCollaboration?.sync();
     localMemorySpace?.initialize();
     if (!models || scope === activatedScope) return;
     activatedScope = scope;
@@ -235,9 +236,11 @@ export function createMemoryWorkspace({
       ["GET", "PUT"].includes(method);
     const backupRoute = memoryBackup && url.pathname === "/api/wanx-memory/backup" && ["GET", "POST"].includes(method);
     const reconnect = runtime && url.pathname === "/api/wanx-memory/reconnect" && method === "POST";
-    const taskAction = (myAiTask || memoryTransfer || claudeChatImport) && (/^\/api\/wanx-memory\/my-ai\/(status|warehouses|optimize|handoff|copy|launch|download|install|uninstall|hide-agent|show-agent|agent-access\/(?:status|connect|test|disconnect|output|copy-removal-command)|agent-context\/(?:status|catalog|selection|configuration)|memory-transfer\/(?:status|export|preview|import|rollback)|claude-chat-import\/(?:preview|commit)|codex-context\/(?:status|catalog|connect|disconnect))$/.exec(url.pathname)?.[1]);
+    const taskAction = (myAiTask || memoryTransfer || claudeChatImport) && (/^\/api\/wanx-memory\/my-ai\/(model-source\/(?:status|catalog|select)|status|warehouses|optimize|handoff|copy|launch|download|install|uninstall|hide-agent|show-agent|agent-access\/(?:status|connect|test|disconnect|output|copy-removal-command)|agent-context\/(?:status|catalog|selection|configuration)|memory-transfer\/(?:status|export|preview|import|rollback)|claude-chat-import\/(?:preview|commit)|codex-context\/(?:status|catalog|connect|disconnect))$/.exec(url.pathname)?.[1]);
+    const collaborationAction = myAiCollaboration && /^\/api\/wanx-memory\/my-ai\/collaboration\/(config|catalog|preview|start|list|status|cancel|export)$/.exec(url.pathname)?.[1];
+    const collaborationRoute = collaborationAction && method === (["config", "list"].includes(collaborationAction) ? "GET" : "POST");
     const taskRoute = taskAction && method === (["status", "warehouses", "agent-access/status", "codex-context/status"].includes(taskAction) ? "GET" : "POST");
-    if ((!backupRoute && !reconnect && !taskRoute && !modelSettings && !routes[method]?.some(rule => rule.test(url.pathname))) ||
+    if ((!backupRoute && !reconnect && !taskRoute && !collaborationRoute && !modelSettings && !routes[method]?.some(rule => rule.test(url.pathname))) ||
         /%(?:2f|5c|00)/i.test(url.pathname)) return status("forbidden", "此记忆服务操作不可用。");
     const header = input.headers.get("x-memmy-local-token") || "";
     const selected = session;
@@ -278,7 +281,7 @@ export function createMemoryWorkspace({
           : "本机记忆服务未能启动，请稍后重试。");
       }
     }
-    if (taskRoute) {
+    if (taskRoute || collaborationRoute) {
       const assertScope = () => {
         if (input.signal.aborted || currentScope() !== selected.scope || session !== selected) {
           throw Object.assign(new Error("记忆会话已结束，请重新打开。"), { status: 403 });
@@ -293,7 +296,9 @@ export function createMemoryWorkspace({
         }
         if (!data || typeof data !== "object" || Array.isArray(data)) return status("invalid_request", "任务请求格式无效。");
         let result;
-        if (taskAction.startsWith("memory-transfer/")) {
+        if (collaborationRoute) {
+          result = await myAiCollaboration.action(collaborationAction, data, assertScope, input.signal);
+        } else if (taskAction.startsWith("memory-transfer/")) {
           if (!memoryTransfer) return status("unavailable", "本机记忆传输尚不可用。");
           result = await memoryTransfer.action(taskAction.slice("memory-transfer/".length), data, assertScope);
         } else if (taskAction.startsWith("claude-chat-import/")) {
@@ -323,7 +328,7 @@ export function createMemoryWorkspace({
             const preferences = (await readVisibility())[key] ?? [];
             const disabled = manageAgentSync ? await syncAccess(null, undefined, assertScope).catch(() => null) : null;
             const ids = Array.isArray(disabled?.disabledSourceIds) ? disabled.disabledSourceIds.filter(isAgentPreferenceId) : preferences;
-            result = { ...result, hiddenAgents: [...new Set([...preferences, ...ids])] };
+            result = { ...result, hiddenAgents: [...new Set([...preferences, ...ids])], ...(myAiCollaboration && { collaboration: true }) };
           }
         }
         assertScope();
@@ -335,6 +340,7 @@ export function createMemoryWorkspace({
         if (["BOX_CONNECTION_REQUIRED", "DIALOGUE_CONTEXT_CHANGED", "HOST_SESSION_EXPIRED"].includes(error.code))
           return status("unavailable", "请确认盒子已连接后重试。");
         if (error.code === "APPLICATION_MODEL_UNAVAILABLE") return status("unavailable", "盒子默认模型暂不可用，请检查模型配置后重试。");
+        if (collaborationRoute) return status("unavailable", "协作任务暂不可用，请检查本机存储或盒子连接。");
         const message = {
           warehouses: "暂时无法读取星图仓库，请检查盒子连接。",
           launch: "暂时无法打开应用，请重新检测。",
@@ -440,7 +446,7 @@ export function createMemoryWorkspace({
     async close() {
       clearInterval(pipelineTimer);
       pipelineCheck?.abort();
-      await Promise.all([models?.close(), localMemorySpace?.close(), memoryBackup?.close(), visibilityWrites]);
+      await Promise.all([models?.close(), localMemorySpace?.close(), memoryBackup?.close(), myAiCollaboration?.close(), visibilityWrites]);
     },
   };
 }

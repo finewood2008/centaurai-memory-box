@@ -638,3 +638,57 @@ it("omits the accessory agent section and its capture controls from My AI", asyn
   expect(sidebar.textContent).not.toMatch(/配件智能体|会议录音智能体|随身录音智能体/);
   expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes("/my-ai/recording/"))).toBe(false);
 });
+
+it("selects a box cloud model and restores the original subscription on the same agent", async () => {
+  agents = [agent("codex_cli", "Codex CLI")];
+  const model = {name:"云模型",model:"cloud",ref:"admin-managed-example/cloud"};
+  respond = async (action, body) => {
+    if (action === "status") return Response.json({agents, cloudModels:true});
+    if (action === "model-source/status") return Response.json({selected:null, connected:true});
+    if (action === "model-source/catalog") return Response.json({models:[model]});
+    if (action === "model-source/select") return Response.json({selected:body.ref ? model : null, connected:true});
+  };
+  await render();
+  expect(host.querySelector('[aria-label="模型来源"]')?.nextElementSibling).toBe(host.querySelector(".my-ai-composer"));
+  await act(async () => button("使用记忆盒子模型").click());
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain(model.ref);
+  await act(async () => button("确认使用盒端模型").click());
+  expect(host.textContent).toContain("下次打开新会话时使用 cloud");
+  await act(async () => button("切回原订阅").click());
+  expect(posts.filter(row => row.action === "model-source/select").map(row => row.body)).toEqual([
+    {agent:"codex_cli",ref:model.ref},{agent:"codex_cli",ref:null},
+  ]);
+  expect(host.textContent).toContain("已切回原订阅");
+});
+
+it.each(["codex","codex_cli","claude_code","gemini"])("places model source immediately above the task for %s", async id => {
+  agents = [agent(id,id)];
+  respond = async action => {
+    if (action === "status") return Response.json({agents,cloudModels:true});
+    if (action === "model-source/status") return Response.json({selected:null,connected:true});
+  };
+  await render();
+  expect(host.querySelector(".my-ai-composer")?.previousElementSibling?.getAttribute("aria-label")).toBe("模型来源");
+});
+
+it("explains the shared Codex default and distinguishes writing the model config from a model receipt", async () => {
+  agents = [agent("codex", "Codex 客户端")];
+  const model = {name:"Cloud",model:"cloud",ref:"admin-managed-example/cloud"};
+  respond = async (action, body) => {
+    if (action === "status") return Response.json({agents,cloudModels:true});
+    if (action === "model-source/status") return Response.json({selected:null,connected:true});
+    if (action === "model-source/catalog") return Response.json({models:[model]});
+    if (action === "model-source/select") return Response.json(body.ref
+      ? {selected:model,connected:true,gateway:{helper:"/private/helper",receivedAt:null}}
+      : {selected:null,connected:true});
+  };
+  await render();
+  await act(async () => button("使用记忆盒子模型").click());
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain("桌面与 CLI 共用");
+  await act(async () => button("确认使用盒端模型").click());
+  expect(host.textContent).toContain("已写入 Codex 模型配置");
+  expect(host.textContent).not.toContain("最近云端回执");
+  expect(host.querySelector('input[value="/private/helper"]')).toBeNull();
+  await act(async () => button("切回原订阅").click());
+  expect(host.textContent).toContain("已恢复 Codex 原模型配置");
+});

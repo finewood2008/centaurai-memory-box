@@ -664,3 +664,44 @@ body[data-memory-surface="my-ai"] {
     translate: -50% 0;
   }
 }
+
+.my-ai-cloud-source {
+  container-type: inline-size;
+  margin-block: 9px; min-width: 0; padding: 11px 14px;
+  border: 1px solid #e1d7c8; border-radius: 13px;
+  background: linear-gradient(110deg, #fbf5eb, #fffdf8 65%);
+}
+.my-ai-cloud-source[data-cloud="true"] {
+  border-color: #cadbd1; background: linear-gradient(110deg, #edf5ee, #fffdf8 65%);
+}
+.my-ai-cloud-source + .my-ai-composer { margin-top: 11px; padding-top: 0; border-top: 0; }
+.my-ai-cloud-row { display: flex; align-items: center; justify-content: space-between; gap: 9px 14px; }
+.my-ai-cloud-info { flex: 1; min-width: 0; }
+.my-ai-cloud-info h3 { display: flex; align-items: center; gap: 6px; margin: 0; color: #756758; font-size: 11px; line-height: 15px; font-weight: 550; }
+.my-ai-cloud-info strong { display: block; overflow-wrap: anywhere; margin-top: 2px; color: #493d32; font-size: 15px; font-weight: 600; line-height: 20px; }
+[data-cloud="true"] > .my-ai-cloud-row .my-ai-cloud-info strong { color: #315c4f; }
+.my-ai-cloud-actions { display: inline-flex; align-items: stretch; gap: 2px; padding: 3px; background: #f1ece3; border: 1px solid #e2dace; border-radius: 11px; }
+.my-ai-cloud-actions button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px;
+  padding: 4px 9px; border: 1px solid transparent; border-radius: 8px; background: transparent;
+  font: inherit; font-size: 12px; font-weight: 550; color: #6c6055; white-space: nowrap; cursor: pointer;
+}
+.my-ai-cloud-actions button[aria-pressed="true"] { color: #884836; background: #fffaf3; border-color: #ddcabb; box-shadow: 0 1px 3px #543b2612; }
+.my-ai-cloud-actions button:nth-child(2)[aria-pressed="true"] { color: #265c4b; background: #e6f2e9; border-color: #b5cebe; }
+.my-ai-cloud-actions button:not(:disabled):hover { background: #fffdf8; }
+.my-ai-cloud-actions button:focus-visible { outline: 2px solid #357461; outline-offset: 2px; }
+.my-ai-cloud-actions button:disabled { opacity: .5; cursor: default; }
+.my-ai-cloud-source .my-ai-feedback { margin: 7px 0 0; }
+.my-ai-cloud-picker small { display: block; color: #686157; font-size: 12px; line-height: 17px; overflow-wrap: anywhere; }
+@container (max-width: 355px) {
+  .my-ai-cloud-row { flex-direction: column; align-items: stretch; }
+  .my-ai-cloud-info { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+  .my-ai-cloud-info strong { margin: 0; }
+  .my-ai-cloud-actions button { flex: 1; }
+}
+.my-ai-cloud-picker { display: grid; gap: 7px; border: 0; padding: 4px; max-height: 48vh; overflow: auto; }
+.my-ai-cloud-picker label { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--color-border-stone); border-radius: 9px; grid-template-columns: auto 1fr; align-items: center; cursor: pointer; }
+.my-ai-cloud-picker label:has(:checked) { border-color: #849e94; background: #edf4ef; }
+.my-ai-cloud-picker span { display: grid; gap: 4px; }
+.my-ai-native-gateway { border-top: 1px solid #d7e2d8; margin-top: 9px; padding-top: 7px; color: #466458; font-size: 12px; }
+.my-ai-native-gateway p { margin: 5px 0; line-height: 1.5; }
