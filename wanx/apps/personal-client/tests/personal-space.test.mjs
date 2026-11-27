@@ -21,6 +21,7 @@ async function fixture(t, overrides = {}) {
       requests.push(input); context(); await overrides.beforeRequest?.(input);
       let value = {};
       if (input.path.endsWith("/overview")) value = { protocolVersion: 1 };
+      else if (input.path.endsWith("/folders") && input.method === "POST") value = {id:"f".repeat(32)};
       else if (input.path.endsWith("/uploads") && input.method === "POST") { const b = JSON.parse(input.body); remote ||= { ...b, offset: 0, state: "pending" }; value = remote; }
       else if (input.method === "PUT") { assert.ok(input.body.length <= 1024 * 1024); assert.equal(input.headers["x-content-sha256"], hash(input.body)); uploaded.push(input.body); remote.offset += input.body.length; value = { offset: remote.offset }; }
       else if (input.path.endsWith("/complete")) { assert.equal(JSON.parse(input.body).digest, hash(Buffer.concat(uploaded))); remote.state = "complete"; }
@@ -31,11 +32,43 @@ async function fixture(t, overrides = {}) {
   } };
   const source = path.join(root, "source.bin"), destination = path.join(root, "saved.bin");
   await writeFile(source, payload);
-  const options = { client, store: { async load() { return structuredClone(saved); }, async save(v) { saved = structuredClone(v); } }, serviceURL: "https://accounts.test", chooseUploads: overrides.chooseUploads || (async () => [source]), chooseDownload: async () => destination };
+  const options = { client, store: { async load() { return structuredClone(saved); }, async save(v) { saved = structuredClone(v); } }, serviceURL: "https://accounts.test", chooseUploads: overrides.chooseUploads || (async () => [source]), chooseDownload: async () => destination, mountedSource: overrides.mountedSource };
   let service = await createPersonalSpace(options);
   t.after(() => service.close());
   return { get service() { return service; }, async restart() { await service.close(); service = await createPersonalSpace(options); }, requests, payload, source, destination, saved: () => saved, switch(value) { state = { ...state, ...value }; for (const fn of listeners) fn(); } };
 }
+test("copying an existing disk folder uses the normal upload contract and publishes the target", async t => {
+  const data = Buffer.from("原有资料");
+  const reads = [];
+  const f = await fixture(t, {
+    mountedSource: async (operation, input) => {
+      reads.push([operation, input]);
+      if(operation === "folder") return {
+        total:1, items:[input.path === "数据" ? {name:"项目",folder:true} : {name:"记录.txt",folder:false}],
+      };
+      return {size:data.length, version:"v1", data:input.length ? data.toString("base64") : ""};
+    },
+  });
+  await f.service.operation("import-volume", {volume:"usb@8-1",path:"数据",directory:true,space_id:"personal"});
+  assert.deepEqual(reads.map(([operation, input]) => [operation,input.path]), [
+    ["folder","数据"],["folder","数据/项目"],["file","数据/项目/记录.txt"],["file","数据/项目/记录.txt"],
+  ]);
+  assert.equal(JSON.parse(f.requests.find(request => request.path.endsWith("/uploads")).body).name, "记录.txt");
+  assert.equal(f.requests.filter(request => request.path.endsWith("/complete")).length, 1);
+  assert.equal(JSON.parse(f.requests.find(request => request.method === "PATCH").body).name, "数据");
+  assert.equal(f.requests.some(request => request.method === "DELETE"), false);
+});
+
+test("copying rejects a source version change before committing the upload", async t => {
+  const f = await fixture(t, {mountedSource: async (_, input) => ({
+    size:1, version:input.length ? "new" : "original", data:"eA==",
+  })});
+  await assert.rejects(f.service.operation("import-volume", {volume:"usb@8-1",path:"记录.txt",space_id:"personal"}),
+    {code:"SPACE_REMOTE_FILE_CHANGED"});
+  assert.equal(f.requests.some(request => request.path.endsWith("/complete")), false);
+  assert.equal(f.requests.filter(request => request.method === "DELETE").length, 1);
+});
+
 test("large transfers remain chunked, private paths stay out of renderer, and download is verified", async t => {
   const f = await fixture(t);
   await f.service.uploads("");

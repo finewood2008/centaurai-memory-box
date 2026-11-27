@@ -51,7 +51,7 @@ function codexCatalog(selected) {
   }]};
 }
 
-export function createMyAiCloudRoutes({ context, transport, store, onResult, desktopGatewayDir, desktopConfig }) {
+export function createMyAiCloudRoutes({ context, transport, store, onResult, desktopGatewayDir, desktopConfig, platform = process.platform }) {
   let serial = Promise.resolve(), listener, listening, closed = false;
   const leases = new Map();
   let desktop, desktopQueue = Promise.resolve();
@@ -143,7 +143,7 @@ export function createMyAiCloudRoutes({ context, transport, store, onResult, des
     return {
       selected: active?.selected ?? null, connected:Boolean(context().scope),
       ...(recoveryError && {recoveryError}),
-      ...(active && {gateway:{base:desktop.base, helper:desktop.helper, receivedAt:desktop.receivedAt}}),
+      ...(active && {gateway:{base:desktop.base, helper:desktop.helper, helperCommand:desktop.helperCommand, helperArgs:desktop.helperArgs, receivedAt:desktop.receivedAt}}),
     };
   }
   async function selectDesktop(ref, check) {
@@ -169,9 +169,14 @@ export function createMyAiCloudRoutes({ context, transport, store, onResult, des
     const pending = path.join(directory,randomBytes(12).toString("hex"));
     try {
       const token = randomBytes(32).toString("hex");
-      const helper = path.join(directory, "credential");
-      // Codex reads this command's stdout. The renderer only receives its path.
-      await writeFile(pending, "#!/bin/sh\nprintf '%s\\n' '" + token + "'\n", {mode:0o700,flag:"wx"});
+      const helper = path.join(directory, platform === "win32" ? "credential.ps1" : "credential");
+      // Use an explicit interpreter and argv on Windows; no global shell or Node installation is required.
+      const helperCommand = platform === "win32"
+        ? path.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe") : helper;
+      const helperArgs = platform === "win32" ? ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", helper] : [];
+      const script = platform === "win32" ? "[Console]::Out.WriteLine('" + token + "')\r\n"
+        : "#!/bin/sh\nprintf '%s\\n' '" + token + "'\n";
+      await writeFile(pending, script, {mode:0o700,flag:"wx"});
       live();
       if (desktop) revoke(desktop.token);
       await rename(pending, helper);
@@ -180,14 +185,14 @@ export function createMyAiCloudRoutes({ context, transport, store, onResult, des
       const catalog = path.join(directory, "models.json");
       await writeFile(catalog,JSON.stringify(codexCatalog(selected)),{mode:0o600});
       live();
-      desktopConfig?.apply({base,helper,catalog,model:selected.model});
+      desktopConfig?.apply({base,helper,helperCommand,helperArgs,catalog,model:selected.model});
       recoveryError = undefined;
       leases.set(token, {agent:"codex",selected,scope:snapshot.scope,expires:Date.now()+12*3600000,abort:new AbortController()});
-      desktop = {token,directory,helper,base,receivedAt:null};
+      desktop = {token,directory,helper,helperCommand,helperArgs,base,receivedAt:null};
       return desktopStatus();
     } catch (error) {
       await rm(pending,{force:true});
-      if (!desktop) await rm(path.join(directory,"credential"),{force:true});
+      if (!desktop) await rm(path.join(directory,platform === "win32" ? "credential.ps1" : "credential"),{force:true});
       if (desktopConfig?.pending()) recoveryError = "Codex 配置需要恢复。";
       throw error;
     }

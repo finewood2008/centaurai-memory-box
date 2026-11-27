@@ -3,12 +3,16 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { readMemoryConnection } from "./local-memory-runtime.mjs";
-import { nasRequest, spaceVolumeRequest } from "./accessory-nas.mjs";
+import { isAttachedVolume, nasRequest } from "./accessory-nas.mjs";
+import { packagedAudioEnvironment } from "./audio-tools.mjs";
 import { recordingSession } from "./accessory-media-session.mjs";
 import { dataInteractionKey } from "../device-trust/data-context.mjs";
 
 
-function toolEnvironment() {
+function toolEnvironment(app) {
+  if (process.platform === "win32" && app.isPackaged) {
+    return { PATH: process.env.PATH || process.env.Path || "", ...packagedAudioEnvironment(process.resourcesPath) };
+  }
   const common = ["/opt/homebrew/opt/ffmpeg-full/bin", "/opt/homebrew/bin", "/usr/local/bin"];
   const executable = name => common.map(directory => path.join(directory, name)).find(existsSync);
   return {
@@ -19,15 +23,18 @@ function toolEnvironment() {
 }
 
 export const ACCESSORY_SCHEME = "wanx-accessories";
+const MEETING_RECORDING_APP = "centaurai.memobox.recording";
 const catalogFiles = new Set(["/accessories", "/app.js", "/style.css", "/accessories.css",
   "/box-connection.css", "/accessory-art.svg", "/centaurai-mark.png", "/favicon.svg"]);
 
-export function createAccessoriesPreview({ app, window, BrowserWindow, navigate, resourceDirectory, dataDirectory, memoryFile, ensureMemory, client, account, dialog, safeStorage, onError }) {
+export function createAccessoriesPreview({ app, window, BrowserWindow, navigate, resourceDirectory, dataDirectory, memoryFile, ensureMemory, client, account, dialog, safeStorage, launchApplication, installApplication, onError }) {
   let worker, catalog, revision = 0;
   let runtime;
+  let openingRecorder;
   const windows = new Map();
-  const names = { disk: "会议录音智能体", clip: "随身录音智能体" };
+  const names = { disk: "会议录音智能体", clip: "随身录音智能体", storage: "硬盘管理智能体" };
   const validKind = kind => kind === "disk" || kind === "clip";
+  const hasRecordingWindow = () => windows.has("disk") || windows.has("clip");
   let localAccount;
   const accountId = () => account?.snapshot().phase === 'authenticated' ? account.getIdentity()?.accountId : null;
   const owner = { app, client, safeStorage };
@@ -43,11 +50,12 @@ export function createAccessoriesPreview({ app, window, BrowserWindow, navigate,
     lastConnection = next;
     ++connectionRevision;
     invalidateCatalog();
+    windows.get("storage")?.destroy();
     if (mediaSession || !next) attachSession(null);
     for (const agentWindow of windows.values()) {
       if (!agentWindow.isDestroyed()) void sendConnection(agentWindow.webContents).catch(() => {});
     }
-    if (next && windows.size) void connectMedia();
+    if (next && hasRecordingWindow()) void connectMedia();
   }
   function requireBox(expected = connectionKey()) {
     if (!expected || expected !== connectionKey()) throw Object.assign(new Error("连接盒子后可使用配件功能。"), {code:"BOX_CONNECTION_REQUIRED"});
@@ -99,7 +107,7 @@ export function createAccessoriesPreview({ app, window, BrowserWindow, navigate,
 
   async function connectMedia(retry = false) {
     const openedOn = connectionKey();
-    if (closed || !runtime || !windows.size || !openedOn || localAccount !== accountId()) return;
+    if (closed || !runtime || !hasRecordingWindow() || !openedOn || localAccount !== accountId()) return;
     if (connecting || (!retry && mediaSession)) return;
     const view = runtime, capturedAccount = localAccount, generation = connectionRevision;
     const current = () => !closed && runtime === view && capturedAccount === accountId()
@@ -129,7 +137,7 @@ export function createAccessoriesPreview({ app, window, BrowserWindow, navigate,
     const processHandle = spawn(process.execPath, [entry], {
       cwd: resourceDirectory,
       env: {
-        ...toolEnvironment(),
+        ...toolEnvironment(app),
         ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
         HOME: app.getPath("home"),
         ELECTRON_RUN_AS_NODE: "1",
@@ -147,11 +155,12 @@ export function createAccessoriesPreview({ app, window, BrowserWindow, navigate,
       if (worker !== processHandle) return;
       if (message?.type === 'nas-request') {
         let result, error;
-        try { const context = {app,client,memoryFile,dialog,window};
-          result = message.op === 'volume-status'
-            ? { connected:(await spaceVolumeRequest(context, {op:'volumes'})).length > 0 }
-            : await nasRequest(context, message.op, message.input); }
-        catch (e) { error = e.message; }
+        try {
+          const openedOn = requireBox();
+          result = await nasRequest({app,client,memoryFile,dialog,window}, message.op, message.input);
+          requireBox(openedOn);
+          if (message.summary) result = {configured:result.configured, mounted:result.volumes.length, waiting:result.waiting.length};
+        } catch (e) { error = e.message; }
         if (processHandle === worker && processHandle.connected)
           processHandle.send({type:'nas-result',id:message.id,result,error}, () => {});
         return;
@@ -259,8 +268,22 @@ export function createAccessoriesPreview({ app, window, BrowserWindow, navigate,
     if (kind) contents.on("did-finish-load", () => { void sendConnection(contents).catch(() => {}); });
     contents.on("will-navigate", (event, url) => {
       const destination = new URL(url);
+      if (kind === "storage" && connectionKey() && destination.origin === entry.origin
+        && ["/accessories/storage", "/accessories/storage/drive"].includes(destination.pathname)) return;
       event.preventDefault();
       if (destination.origin !== entry.origin) return;
+      if (kind === "storage" && destination.pathname === "/accessories") {
+        window.show(); window.focus(); navigate("accessories"); return;
+      }
+      if (kind === "storage" && destination.pathname === "/accessories/storage/space" && connectionKey()) {
+        const volume = destination.searchParams.get("volume");
+        const openedOn = connectionKey();
+        void isAttachedVolume({app,client}, volume).then(online => {
+          if (!online || openedOn !== connectionKey() || contents.isDestroyed() || window.isDestroyed()) return;
+          window.show(); window.focus(); navigate({destination:"space-volume", volume});
+        }).catch(() => {});
+        return;
+      }
       if (destination.pathname === '/accessories/connect-box') {
         window.show(); window.focus(); navigate('box-connection'); return;
       }
@@ -281,7 +304,8 @@ export function createAccessoriesPreview({ app, window, BrowserWindow, navigate,
 
   async function openAgent(kind, id) {
     const openedOn = requireBox();
-    if (!validKind(kind) || (id !== undefined && !/^m-\d{8}-\d{6}-[a-f0-9]{6}$/.test(id))) throw new Error("录音项目无效");
+    if (!validKind(kind) && kind !== "storage") throw new Error("配件智能体无效");
+    if (id !== undefined && (!validKind(kind) || !/^m-\d{8}-\d{6}-[a-f0-9]{6}$/.test(id))) throw new Error("录音项目无效");
     const connection = await ensureRuntime();
     requireBox(openedOn);
     const url = new URL("/accessories/" + kind, connection.entry);
@@ -299,7 +323,7 @@ export function createAccessoriesPreview({ app, window, BrowserWindow, navigate,
       try { await agentWindow.loadURL(url.href); }
       catch (error) { if (!agentWindow.isDestroyed()) agentWindow.destroy(); throw error; }
       await sendConnection(agentWindow.webContents);
-      void connectMedia();
+      if (validKind(kind)) void connectMedia();
     } else if (id) {
       await agentWindow.webContents.executeJavaScript("window.dispatchEvent(new CustomEvent('recording-open-project',{detail:" + JSON.stringify(id) + "}))");
     }
@@ -313,6 +337,32 @@ export function createAccessoriesPreview({ app, window, BrowserWindow, navigate,
   function activeCatalog(selected) {
     return selected && selected === catalog && !closed && localAccount === accountId()
       && selected.box === connectionKey();
+  }
+
+  async function openMeetingRecorder(box) {
+    try { await launchApplication(MEETING_RECORDING_APP); }
+    catch (error) {
+      if (error.code !== "APPLICATION_NOT_INSTALLED") throw error;
+      const {response} = await dialog.showMessageBox(window, {
+        type:"info", title:"会议录音智能体", message:"请先安装会议录音智能体",
+        detail:"选择会议录音智能体的 ZIP 安装包。安装完成后会打开独立应用。",
+        buttons:["取消", "选择安装包"], defaultId:1, cancelId:0, noLink:true,
+      });
+      if (response !== 1) return {status:"not-installed"};
+      requireBox(box);
+      try {
+        if (!await installApplication(MEETING_RECORDING_APP)) return {status:"not-installed"};
+      } catch (failure) {
+        const message = failure.code === "APPLICATION_MANIFEST_MISMATCH"
+          ? "请选择会议录音智能体的 ZIP 安装包。" : "暂时无法安装，请检查安装包后重试。";
+        await dialog.showMessageBox(window, {type:"warning", title:"会议录音智能体", message, buttons:["知道了"]});
+        return {status:"not-installed"};
+      }
+      requireBox(box);
+      await launchApplication(MEETING_RECORDING_APP);
+    }
+    requireBox(box);
+    return {status:"ready"};
   }
 
   // Only the catalog's public assets and its two hardware indicators are exposed
@@ -349,10 +399,13 @@ export function createAccessoriesPreview({ app, window, BrowserWindow, navigate,
       return {status:"hidden"};
     }
     const box = requireBox();
-    if (input?.project) return openAgent(input.project.kind, input.project.id);
+    if (input?.project && validKind(input.project.kind)) return openAgent(input.project.kind, input.project.id);
     if (input?.guideOpen && activeCatalog(catalog) && input.catalogHost === catalog.host) {
-      if (validKind(input.guideOpen)) return openAgent(input.guideOpen);
-      if (input.guideOpen === "storage") { navigate("space"); return {status:"ready"}; }
+      if (input.guideOpen === "disk") {
+        return openingRecorder ||= openMeetingRecorder(box).finally(() => { openingRecorder = undefined; });
+      }
+      if (validKind(input.guideOpen) || input.guideOpen === "storage") return openAgent(input.guideOpen);
+      if (input.guideOpen === "storage-space") { navigate("space"); return {status:"ready"}; }
     }
     if (input?.visible !== true || closed || window.isDestroyed() || !accountId()) return {status:"unavailable"};
     const pending = ensureRuntime();

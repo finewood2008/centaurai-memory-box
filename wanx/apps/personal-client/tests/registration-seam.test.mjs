@@ -18,6 +18,7 @@ async function harness(t, options = {}) {
     set innerHTML(value) { this.textContent = value.replace(/<[^>]*>/g, ""); } };
   const inputs = { "#account-name": { value: "13800138000" }, '[data-action="send-registration-code"]': button };
   vm.runInNewContext(source, {
+    queueMicrotask,
     window: { wanxClient: {
       getLocalState: async () => state,
       onLocalState() {},

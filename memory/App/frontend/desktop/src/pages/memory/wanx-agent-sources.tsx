@@ -17,10 +17,10 @@ interface SelectionResponse {
   memoryAgent?: string | null;
 }
 
-export function AgentSources({ request, agent, mode, name, refresh, sources, memoryNames = {}, onSourcesChange, onReady, onSavingChange, disabled, taskOnly = false }: {
+export function AgentSources({ request, agent, mode, name, refresh, sources, memoryNames = {}, onSourcesChange, onReady, onSavingChange, disabled, taskOnly = false, allowAllMemory = !taskOnly }: {
   request: MyAiRequest; agent: string; mode?: string; name: string; refresh: number;
   sources: TaskSources; memoryNames?: Record<string, string>; onSourcesChange: (sources: TaskSources) => void; onReady: (ready: boolean) => void;
-  onSavingChange?: (saving: boolean) => void; disabled: boolean; taskOnly?: boolean;
+  onSavingChange?: (saving: boolean) => void; disabled: boolean; taskOnly?: boolean; allowAllMemory?: boolean;
 }) {
   const [status, setStatus] = useState<AgentAccessStatus | null>(null);
   const [picker, setPicker] = useState<SourceKind | null>(null);
@@ -71,20 +71,22 @@ export function AgentSources({ request, agent, mode, name, refresh, sources, mem
     if (!taskOnly) onChange.current({ memoryEnabled: false });
     void Promise.all([
       request<AgentAccessStatus>("agent-context/status", controller.signal, { agent, mode }),
-      request<SelectionResponse>("agent-context/selection", controller.signal, { agent, mode }),
+      taskOnly ? null : request<SelectionResponse>("agent-context/selection", controller.signal, { agent, mode }),
     ]).then(([state, saved]) => {
       if (controller.signal.aborted) return;
       setStatus(state);
-      const selection = saved.selection ?? saved;
-      onChange.current({
-        folder: saved.resources?.folder ?? (selection.folderId ? { id: selection.folderId, name: "已保存的文件夹" } : undefined),
-        warehouse: saved.resources?.warehouse ?? (selection.warehouseId ? { id: selection.warehouseId, name: "已保存的星图仓库" } : undefined),
-        memoryEnabled: selection.memoryEnabled === true,
-        memoryAgent: selection.memoryEnabled === true ? selection.memoryAgent : undefined,
-      });
+      if (saved) {
+        const selection = saved.selection ?? saved;
+        onChange.current({
+          folder: saved.resources?.folder ?? (selection.folderId ? { id: selection.folderId, name: "已保存的文件夹" } : undefined),
+          warehouse: saved.resources?.warehouse ?? (selection.warehouseId ? { id: selection.warehouseId, name: "已保存的星图仓库" } : undefined),
+          memoryEnabled: selection.memoryEnabled === true,
+          memoryAgent: selection.memoryEnabled === true ? selection.memoryAgent : undefined,
+        });
+      }
       setReady(true);
       readiness.current(true);
-      if (saved.warning) setFeedback({ text: saved.warning });
+      if (saved?.warning) setFeedback({ text: saved.warning });
     }).catch(cause => {
       if (!controller.signal.aborted) setFeedback({ text: cause instanceof Error ? cause.message : "无法读取已保存的资料范围。" });
     });
@@ -120,6 +122,11 @@ export function AgentSources({ request, agent, mode, name, refresh, sources, mem
   async function save(next: TaskSources, close = false) {
     const signal = lifecycle.current?.signal;
     if (!signal || signal.aborted || change.current || pickerDisabled) return;
+    if (taskOnly) {
+      onChange.current(next);
+      if (close) closePicker();
+      return;
+    }
     change.current = true;
     setSaving(true);
     savingChanged.current?.(true);
@@ -197,7 +204,7 @@ export function AgentSources({ request, agent, mode, name, refresh, sources, mem
         : choosingMemory ? <div className="my-ai-warehouse-list">
           {[
             { id: undefined, name: "不检索记忆" },
-            ...(!taskOnly ? [{ id: null, name: "全部 Agent" }] : []),
+            ...(allowAllMemory ? [{ id: null, name: "全部 Agent" }] : []),
             ...(catalog?.agents ?? []),
           ].map(item => {
             const selected = item.id === undefined ? !sources.memoryEnabled : sources.memoryEnabled && sources.memoryAgent === item.id;

@@ -2006,6 +2006,9 @@ const flushActions = () => new Promise(resolve => setImmediate(resolve));
 const actionButton = (h, action) => h.app.innerHTML.match(new RegExp(`<button[^>]*data-action="${action}"[^>]*>[\\s\\S]*?</button>`))?.[0];
 
 test("Owner support uses cloud IPC while offline, confirms approval and keeps revocation pending device cleanup", async () => {
+  const css = await readFile(new URL("../local-ui/renderer/styles.css", import.meta.url), "utf8");
+  assert.equal(/\[data-action="support-open"\][^{]*\{[^}]*display:\s*none\b/.test(css), false,
+    "the box owner's remote assistance button must be visible");
   let receipt = supportReceipt();
   const decisions = [], revocations = [];
   const h = await harness(supportState(), [], { support: {

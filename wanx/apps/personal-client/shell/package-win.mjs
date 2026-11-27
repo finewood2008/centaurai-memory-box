@@ -1,3 +1,4 @@
+import { audioToolsResources, prepareAudioTools, verifyAudioTools } from "../tools/package-audio-tools.mjs";
 import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -92,6 +93,7 @@ function sourceFingerprint() {
 async function main() {
   assertPackagedMemoryTarget({platform:"win32", arch:"x64"});
   const input = preflight();
+  await prepareAudioTools({ clientRoot: root, arch: "x64" });
   const quickPackage = process.env.WANX_QUICK_PACKAGE === "1";
   const skipTests = process.env.WANX_SKIP_TESTS === "1";
   if (path.isAbsolute(input.goExecutable))
@@ -186,6 +188,7 @@ async function main() {
       ],
       extraResources: [
         ...memory.extraResources,
+        ...audioToolsResources(root),
         { from: binary, to: `network/${binaryName}` },
         { from: discovery, to: "network/wanx-discovery-win32-x64.exe" },
         { from: path.join(native, "bin", "NETBIRD-LICENSE"), to: "network/NETBIRD-LICENSE" },
@@ -219,6 +222,7 @@ async function main() {
         runAfterFinish: true,
       },
       afterPack: async ({ appOutDir }) => {
+        verifyAudioTools(path.join(appOutDir, "resources", "audio-tools"));
         const asar = path.join(appOutDir, "resources", "app.asar");
         const { listPackage, extractFile } = require("@electron/asar");
         const packedEntries = new Map(listPackage(asar).map(value => [

@@ -55,6 +55,12 @@ Web 默认 `http://localhost:5173`，现有 Vite 将 `/api` 和 API WebSocket �
 
 万象账号服务默认 `https://boss.nexusaos.qitus.cn/prod-api`，部署时可通过 `WANX_CONSUMER_URL` 指定 HTTPS 服务地址。网络管理地址默认 `https://p2p.qeeshu.com`。管理 API 凭据只配置在服务端，不能分发给客户端。
 
+## 录音文件导入
+
+在「配件 → 随身录音智能体」选择原文件。单个文件最多 16 GiB，按 4 MiB 分块写入本机。导入中断后，重新选择同一原文件可从已保存的位置继续。客户端核对完整文件后归档原音，转写失败时仍可回听。
+
+本机用 FFmpeg 准备录音的处理片段。音频工具不可用时，客户端仍保存原音，工具就绪后可重试。文字转写根据盒端能力逐段处理，合并后的时间戳用于定位原音。支持长录音的盒端可对最长 8 小时的录音做说话人校正，在不同处理段中为同一发言人保留同一个标签。[媒体处理服务](../../server/services/media-processing/README.md#录音的说话人分割)
+
 ## 桌面入口与登录启动
 
 客户端标准导航为 **应用 / AI对话 / 空间 / 盒子**。「AI对话」复用众见的模型与会话接口，每轮选择一个模型。切换到另一个模型会开启新对话，保留输入草稿；原对话保留在历史中。同一模型内可连续对话；已取消同题多答。原众见入口统一进入此 Tab。界面直接在客户端渲染，适配小窗口，不另开应用窗口。
@@ -248,3 +254,5 @@ Codex 等智能体通过 MCP 连接本机记忆盒子客户端。客户端读取
 
 默认启动使用仓库内的 `apps/memory`，首次先执行 `npm ci --prefix apps/memory`，之后直接从仓库根目录运行 `npm run start:mini`。启动流程构建记忆前端、Memory 与 backend，并将适配 Electron 的服务准备到 `build/local-memory`；后续按源码摘要复用缓存，`build:studio` 重建应用目录后也会恢复记忆界面。`WANX_MEMORY_BOX_ROOT` 仅用于覆盖为另一份源码。若设置 `MEMMY_RUNTIME_CONFIG_PATH`，客户端会连接指定的外部管理服务，不再准备第二套本机后端。
 
+
+Windows x64 个人版随包携带 FFmpeg 和 FFprobe，安装版从 resources/audio-tools 调用。构建脚本 tools/package-audio-tools.mjs 按 tools/audio-tools-win-x64.json 固定的版本和 SHA-256 准备组件，首次获取后复用本机缓存。源码 Windows 正式包、预览包及内部包入口共用该准备步骤，打包台也执行同一步骤。组件缺失、摘要不匹配、架构不符或缺少 libopus 会停止构建。随包 LICENSE.txt、COPYING.GPLv3、SOURCE.json 和 BUILD.txt 记录许可证、来源及构建参数。

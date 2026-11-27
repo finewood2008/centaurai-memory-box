@@ -77,3 +77,14 @@ test("CLI and desktop mode revocation resolves their shared integration and scan
   assert.equal((await h.request("hide-agent", { agent: "codex_cli" })).status, 200);
   assert.deepEqual(h.calls.slice(-2), [["disconnect", "codex"], ["sync", { enabled: false }]]);
 });
+
+test("review is session-gated and the client without a collaboration pilot exposes no follow-up routes", async t => {
+  const h = await fixture(t);
+  const input = { agent: "codex", text: "整理发布清单", agentContext: { memoryEnabled: false } };
+  assert.equal((await h.request("review-handoff", input, "wrong-token")).status, 403);
+  assert.equal((await h.request("review-handoff", input)).status, 200);
+  assert.deepEqual(h.calls, [["review-handoff", input]]);
+  for (const action of ["tasks/list", "collaboration/config", "collaboration/list"]) {
+    assert.equal((await h.request(action, {}, h.token, "GET")).status, 403);
+  }
+});

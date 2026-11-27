@@ -1,22 +1,26 @@
 // 会议存储与会后流程：片段先落盘 → 异步识别；结束后组合原音 → 完整转录 → 纪要草稿 → 核对确认版。
 import { promises as fs, createReadStream } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import {
   SAMPLE_RATE, writeFileAtomic, writeJson, readJson, withLock, newMeetingId, RE, cleanText,
-  safeName, sha256, insideDir, HttpError, localStamp,
+  safeName, sha256, insideDir, HttpError, localStamp, syncDirectory,
 } from './util.mjs';
 import { pcmStats, wavHeader } from './wav.mjs';
-import { media, requireSample, fileDigest } from './media.mjs';
+import { media, requireSample, fileDigest, CLOUD_ASR } from './media.mjs';
 import { saveSpaceFiles, submitAccessoryMemory } from './destinations.mjs';
-import { audioType, probeAudio, prepareParts } from './audio-input.mjs';
+import { audioType, probeAudio, prepareDiarizationAudio, prepareParts, MAX_DIARIZATION_AUDIO_MS } from './audio-input.mjs';
 import { captions, finishCaptions, sendLiveFrame } from './live-captions.mjs';
-import { generateMinutes, sanitizeItems, openPendingCount, renderMinutesMd, renderTranscriptTxt, legacySummarySections } from './minutes.mjs';
+import { editSpeakerState, expectedSpeakerCount, newSpeakers, normalizeTurns, speakerProjection, withSpeakerTurns } from './speaker-annotations.mjs';
+import { generateMinutes, meetingTopic, sanitizeItems, openPendingCount, renderMinutesMd, renderTranscriptTxt, legacySummarySections } from './minutes.mjs';
 import { writeMeetingMemory, saveDemoAccessoryMemory, initLibrary, getSettings, resolveMinutesTemplate } from './library.mjs';
 import { DEFAULT_TEMPLATE_ID, templateSnapshot, validateInstruction } from './minutes-templates.mjs';
 
 export const P = {};
 const cache = new Map();
 const pipelines = new Set();
+const speakerJobs = new Map();
+const SPEAKER_DURATION_LIMIT = '超过 8 小时的原音已保存，暂不支持说话人校正。';
 
 export const LIMITS = {
   chunkMaxBytes: 8 * 1024 * 1024,
@@ -55,7 +59,7 @@ export async function initStore(dataDir) {
           m.transcript = { ...m.transcript, status: 'offline', error: '请连接盒子后重试转写。' };
           m.minutes = { ...m.minutes, status: 'waiting', error: '' };
         }
-        else if (pending.includes(m.transcript?.status)) restart.push([m.id, 'transcript']);
+        else if (m.pendingTranscription || pending.includes(m.transcript?.status)) restart.push([m.id, 'transcript']);
         else if (pending.includes(m.minutes?.status)) restart.push([m.id, 'minutes']);
         recoverInterrupted(m);
       }
@@ -63,7 +67,7 @@ export async function initStore(dataDir) {
       await persist(m);
     } catch (e) { console.warn(`跳过无法读取的会议 ${name}: ${e.message}`); }
   }
-  for (const [id, stage] of restart) runPipeline(id, stage, undefined, true);
+  for (const [id, stage] of restart) runPipeline(id, stage, { retryFailed: true, mode: must(id).pendingTranscription });
 }
 
 function recoverInterrupted(m) {
@@ -71,6 +75,7 @@ function recoverInterrupted(m) {
   for (const key of ['audio', 'transcript', 'minutes']) {
     if (['running', 'pending', 'composing'].includes(m[key]?.status)) m[key] = { ...m[key], status: 'error', error };
   }
+  if (m.speakerState?.status === 'running') m.speakerState = { ...m.speakerState, status: 'error', error };
 }
 
 const legacyProjects = new Map();
@@ -121,22 +126,28 @@ async function update(id, fn) {
 export function summary(m) {
   return {
     id: m.id, title: m.title, createdAt: m.createdAt, state: m.state,
+    ...(m.source === 'disk' && { topic: meetingTopic(m.minutes.document) }),
     durationMs: durationOf(m), source: m.source, sample: m.sample === true,
     chunks: m.chunks.length,
     audio: m.audio.status, transcript: m.transcript.status, minutes: m.minutes.status,
     review: m.review.status, reviewVersion: m.review.version,
   };
 }
-export const listMeetings = () => [...cache.values()].filter(isVisible).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(summary);
+export const listMeetings = () => [...cache.values()].filter(m => isVisible(m) && m.state !== 'importing').sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(summary);
 
 export function view(id) {
-  const m = must(id);
+  const { speakerState, liveDraft, audioImportIds: _imports, ...m } = must(id);
   const live = captions(id);
+  const { speakers, segments } = speakerProjection(speakerState || newSpeakers(), m.transcript.segments);
   return {
     ...m,
+    speakers,
+    transcript: { ...m.transcript, segments },
+    bookmarks: (m.bookmarks || []).map(mark => ({ ...mark, positionMs: Math.round(mark.sampleOffset * 1000 / m.sampleRate) })),
+    ...(m.source === 'disk' && { topic: meetingTopic(m.minutes.document) }),
     durationMs: durationOf(m),
     chunks: m.chunks.map(({ sha256: _h, ...c }) => c),
-    draft: live.lines, liveStatus: live.status,
+    draft: live.lines.length ? live.lines : liveDraft || [], liveStatus: live.status,
     openPending: openPendingCount(m.minutes.items),
     summarySections: m.minutes.document?.sections || legacySummarySections(m.minutes),
     pipelineRunning: pipelines.has(m.id),
@@ -145,7 +156,14 @@ export function view(id) {
 }
 
 // —— 创建 / 修改 ——
-export async function createMeeting({ title, inputLabel, memoryEnabled, templateId, templateRevision, source = 'disk', sample = false, sampleRate = SAMPLE_RATE, channels = 1 }) {
+export async function createMeeting(options) {
+  const m = await createMeetingRecord(options);
+  return view(m.id);
+}
+
+async function createMeetingRecord({ title, inputLabel, memoryEnabled, templateId, templateRevision, source = 'disk', sample = false, sampleRate = SAMPLE_RATE, channels = 1, liveCaptionMode = 'local', liveCloudConsent }, imported) {
+  if (!['local', 'cloud'].includes(liveCaptionMode)) throw new HttpError(400, '实时字幕方式无效');
+  if (liveCaptionMode === 'cloud' && (source !== 'disk' || liveCloudConsent !== true)) throw new HttpError(400, '云端实时字幕需要同意发送本条录音的实时音频');
   if (!['disk', 'clip'].includes(source)) throw new HttpError(400, '录音来源无效');
   if (!Number.isSafeInteger(sampleRate) || sampleRate < 8000 || sampleRate > 96000 ||
     !Number.isSafeInteger(channels) || channels < 1 || channels > 8) throw new HttpError(400, '音频采集格式无效');
@@ -160,19 +178,30 @@ export async function createMeeting({ title, inputLabel, memoryEnabled, template
     memoryEnabled: memoryEnabled !== false,
     minutesTemplate: templateSnapshot(template),
     folder: `${localStamp(now.toISOString()).replace(/[: ]/g, (c) => (c === ' ' ? '_' : ''))}_${safeName(t)}_${id.slice(-6)}`,
-    state: 'recording', sampleRate, channels,
+    state: 'recording', sampleRate, channels, liveCaptionMode,
     chunks: [], totalSamples: 0, finishedAt: null,
     audio: { status: 'recording', error: '', bytes: 0, durationMs: 0 },
     transcript: { status: 'none', source: '', segments: [], error: '', failedChunks: [], updatedAt: null },
+    speakerState: newSpeakers(), bookmarks: [],
     minutes: { status: 'none', model: '', error: '', items: [], dropped: 0, rev: 0, generatedAt: null, origin: '' },
     review: { status: 'none', version: 0, confirmedAt: null, versions: [] },
     memory: { status: 'none', count: 0, version: 0 },
     imports: [],
   };
+  if (liveCaptionMode === 'cloud') {
+    // Bind consent to the box/account that was selected when recording began.
+    // If the box disconnected during setup the original audio can still be saved.
+    m.mediaScope = await media.scope().catch(() => null);
+  }
+  if (imported) {
+    m.audioImportIds = [imported.id];
+    m.state = 'importing';
+    m.audio = { ...m.audio, status: 'importing', name: imported.archiveName, bytes: imported.bytes, inputSha256: imported.digest };
+  }
   await fs.mkdir(path.join(meetingDir(id), 'chunks'), { recursive: true });
-  cache.set(id, m);
   await persist(m);
-  return view(id);
+  cache.set(id, m);
+  return m;
 }
 
 export async function patchMeeting(id, body) {
@@ -187,6 +216,37 @@ export async function patchMeeting(id, body) {
       m.memoryEnabled = body.memoryEnabled;
     }
     if ('inputLabel' in body) m.inputLabel = cleanText(body.inputLabel, 120);
+  });
+  return view(id);
+}
+
+function bookmarkNote(value = '') {
+  const note = cleanText(value, 301);
+  if (typeof value !== 'string' || note.length > 300) throw new HttpError(400, '备注最多 300 字');
+  return note;
+}
+
+export async function addBookmark(id, { sampleOffset, note }) {
+  await update(id, (m) => {
+    if (m.source !== 'disk' || m.state !== 'recording') throw new HttpError(409, '只能在圆盘录制中添加重点');
+    const maximum = Math.floor(LIMITS.totalPcmBytes / ((m.channels || 1) * 2));
+    if (!Number.isSafeInteger(sampleOffset) || sampleOffset < 0 || sampleOffset > maximum) {
+      throw new HttpError(400, '重点标记的原音位置无效');
+    }
+    const text = bookmarkNote(note);
+    m.bookmarks ||= [];
+    if (m.bookmarks.length >= 5000) throw new HttpError(409, '重点标记已达上限');
+    m.bookmarks.push({ id: randomUUID(), sampleOffset, note: text });
+  });
+  return view(id);
+}
+
+export async function changeBookmark(id, bookmarkId, body) {
+  await update(id, (m) => {
+    const index = (m.bookmarks || []).findIndex(mark => mark.id === bookmarkId);
+    if (index < 0) throw new HttpError(404, '重点标记不存在');
+    if (body === null) m.bookmarks.splice(index, 1);
+    else m.bookmarks[index] = { ...m.bookmarks[index], note: bookmarkNote(body.note) };
   });
   return view(id);
 }
@@ -218,6 +278,8 @@ export async function saveChunk(id, seq, buf) {
     };
     m.chunks.push(chunk);
     m.totalSamples += chunk.samples;
+    const { lines } = captions(id);
+    if (lines.length) m.liveDraft = lines;
     await persist(m);
     return { chunk, duplicate: false };
   });
@@ -239,49 +301,133 @@ async function assertMediaScope(m, service = media) {
   });
 }
 
-export async function pushLiveFrame(id, frame) {
+export async function pushLiveFrame(id, frame, sampleOffset) {
   const m = must(id);
   if (m.source !== 'disk' || m.state !== 'recording') throw new HttpError(409, '当前录音未开启实时字幕');
   const service = media;
+  if (m.liveCaptionMode === 'cloud' && !m.mediaScope) return { status: 'offline' };
   try { await assertMediaScope(m, service); }
   catch (error) { if (error.offline) return { status: 'offline' }; throw error; }
-  return { status: await sendLiveFrame(id, frame, service) };
+  const positionMs = sampleOffset === undefined ? undefined : Math.floor(sampleOffset * 1000 / m.sampleRate);
+  if (m.state !== 'recording') return { status: 'ended' };
+  return { status: await sendLiveFrame(id, frame, service, m.liveDraft, positionMs, m.liveCaptionMode === 'cloud') };
 }
 
-export async function importAudio(file, name, { source = 'clip', sample = false, templateId, templateRevision } = {}) {
+const isImportId = value => typeof value === 'string' && /^(?:[0-9a-f]{32}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/.test(value);
+const matchingImport = importId => [...cache.values()].find(m => !legacyProjects.has(m.id) && m.audioImportIds?.includes(importId));
+
+export function findImportedAudio(importId) {
+  if (!isImportId(importId)) return null;
+  const m = matchingImport(importId);
+  return m?.audio.status === 'saved' ? view(m.id) : null;
+}
+
+async function archiveImport(file, archive, staged) {
+  try {
+    await fs.link(file, archive);
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+    const existing = await fs.lstat(archive);
+    if (!existing.isFile() || existing.dev !== staged.dev || existing.ino !== staged.ino || existing.size !== staged.size) {
+      throw new HttpError(409, '已保留的录音文件与上传不一致');
+    }
+  }
+}
+
+export async function importAudio(file, name, { source = 'clip', sample = false, templateId, templateRevision, importId, inputSha256 } = {}) {
   const ext = path.extname(name).toLowerCase();
   if (!audioType(name)) throw new HttpError(415, '请选择 WAV、MP3、M4A、FLAC、OGG 或其他支持的音频');
+  const archived = '原始录音' + ext;
+  if (importId !== undefined && (!isImportId(importId) || sample || !insideDir(P.data, file))) throw new HttpError(400, '录音上传标识无效');
+  if (inputSha256 !== undefined && (!importId || typeof inputSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(inputSha256))) throw new HttpError(400, '录音文件摘要无效');
+  const staged = await fs.lstat(file);
+  if (!staged.isFile() || !staged.size) throw new HttpError(415, '请选择有效的录音文件');
   let metadata;
   try { metadata = await probeAudio(file); }
-  catch (err) { throw new HttpError(415, err.message); }
-  const digest = await fileDigest(file);
-  const bytes = (await fs.stat(file)).size;
+  catch (error) {
+    if (!error.audioToolUnavailable) throw new HttpError(415, error.message);
+    metadata = { durationMs: 0, metadataStatus: 'pending', metadataError: error.message };
+  }
+  const digest = inputSha256 ?? await fileDigest(file);
+  const bytes = staged.size;
   return withLock('imports', async () => {
-    if (!sample) {
-      const prior = [...cache.values()].filter(isVisible).find((m) => !m.sample && m.source === source && m.audio?.inputSha256 === digest && m.audio.status === 'saved');
-      if (prior) return view(prior.id);
+    const reserved = importId ? matchingImport(importId) : null;
+    if (reserved) {
+      if (reserved.source !== source || reserved.audio.inputSha256 !== digest || reserved.audio.bytes !== bytes ||
+          (reserved.audio.status === 'importing' && reserved.audio.name !== archived)) {
+        throw new HttpError(409, '上传与已记录的原音不一致');
+      }
+      if (reserved.audio.status === 'saved') return view(reserved.id);
+    } else if (!sample) {
+      const prior = [...cache.values()].filter(isVisible).find(m => !m.sample && m.source === source &&
+        m.audio?.inputSha256 === digest && m.audio.status === 'saved' && (!importId || !legacyProjects.has(m.id)));
+      if (prior) {
+        if (importId) await withLock(prior.id, async () => {
+          const row = cache.get(prior.id);
+          const linked = { ...row, audioImportIds: [...(row.audioImportIds || []), importId] };
+          await persist(linked);
+          await syncDirectory(meetingDir(prior.id));
+          cache.set(prior.id, linked);
+        });
+        return view(prior.id);
+      }
     }
     const title = sample ? (source === 'disk' ? '示例 · 圆盘会议' : '示例 · 领夹巡检') : path.basename(name, ext);
-    const original = await createMeeting({ title, inputLabel: sample ? '内置合成音频' : name, source, sample, templateId, templateRevision });
-    const m = must(original.id);
-    const archived = '原始录音' + ext;
+    const m = reserved || await createMeetingRecord(
+      { title, inputLabel: sample ? '内置合成音频' : name, source, sample, templateId, templateRevision },
+      importId ? { id: importId, bytes, digest, archiveName: archived } : undefined,
+    );
     await fs.mkdir(spaceDir(m), { recursive: true });
-    await fs.copyFile(file, path.join(spaceDir(m), archived));
-    await update(m.id, async (row) => {
-      row.state = 'finished';
-      row.finishedAt = new Date().toISOString();
-      row.audio = { ...metadata, name: archived, bytes, status: 'saved', inputSha256: digest };
-      row.transcript.status = 'pending';
-      row.minutes.status = 'pending';
+    const archive = path.join(spaceDir(m), archived);
+    if (importId) {
+      await archiveImport(file, archive, staged);
+      // Commit the archive link before the upload store can remove its staging link.
+      for (const directory of [spaceDir(m), P.space, P.spaceRoot, P.data]) await syncDirectory(directory);
+    } else await fs.copyFile(file, archive);
+    await withLock(m.id, async () => {
+      const row = {
+        ...cache.get(m.id), state: 'finished', finishedAt: new Date().toISOString(),
+        audio: { ...metadata, name: archived, bytes, status: 'saved', inputSha256: digest },
+        transcript: { ...m.transcript, status: 'pending' },
+        minutes: { ...m.minutes, status: 'pending' },
+      };
+      if (metadata.durationMs > MAX_DIARIZATION_AUDIO_MS) {
+        row.speakerState = { ...row.speakerState, status: 'unavailable', error: SPEAKER_DURATION_LIMIT };
+      }
       await writeMeta(row);
+      await persist(row);
+      if (importId) {
+        for (const directory of [spaceDir(row), meetingDir(row.id), P.meetings]) await syncDirectory(directory);
+      }
+      cache.set(m.id, row);
     });
     runPipeline(m.id, 'transcript');
     return view(m.id);
   });
 }
 
+async function audioMetadata(id) {
+  const m = must(id);
+  if (m.audio.durationMs > 0) return m.audio;
+  const metadata = await probeAudio(audioFile(id));
+  return update(id, async row => {
+    row.audio = { ...row.audio, ...metadata };
+    delete row.audio.metadataStatus;
+    delete row.audio.metadataError;
+    await writeMeta(row);
+    return row.audio;
+  });
+}
+
 // —— 结束与会后流程 ——
+function requestedTranscription({ transcriptionMode = 'local', cloudConsent } = {}) {
+  if (!['local', 'cloud'].includes(transcriptionMode)) throw new HttpError(400, '转写方式无效');
+  if (transcriptionMode === 'cloud' && cloudConsent !== true) throw new HttpError(400, '请先确认上传本条录音进行云端精转');
+  return transcriptionMode;
+}
+
 export async function finishMeeting(id, body = {}) {
+  const mode = requestedTranscription(body);
   const expected = body.chunkCount;
   if (expected !== undefined && (!Number.isSafeInteger(expected) || expected < 0)) throw new HttpError(400, 'chunkCount 无效');
   const started = await update(id, (m) => {
@@ -291,21 +437,36 @@ export async function finishMeeting(id, body = {}) {
     }
     m.state = 'finished';
     m.finishedAt = new Date().toISOString();
+    const { lines } = captions(id);
+    if (lines.length) m.liveDraft = lines;
+    for (const mark of m.bookmarks || []) mark.sampleOffset = Math.min(mark.sampleOffset, m.totalSamples);
     if (body.audioOnly === true) m.audioOnly = true;
+    else m.pendingTranscription = mode;
     m.audio = { ...m.audio, status: 'pending', error: '' };
     m.transcript = { ...m.transcript, status: 'pending', error: '' };
     m.minutes = { ...m.minutes, status: 'pending', error: '' };
     m.review = { ...m.review, status: 'none' };
     return true;
   });
-  if (started) { finishCaptions(id); runPipeline(id, 'audio'); }
+  if (started) {
+    runPipeline(id, 'audio', { mode });
+    const lines = await finishCaptions(id);
+    if (lines.length) await update(id, row => { row.liveDraft = lines; });
+  }
   return view(id);
 }
 
 const STAGES = ['audio', 'transcript', 'minutes'];
-export async function retryStage(id, stage, { templateId, templateRevision, rev, instruction } = {}) {
+export async function retryStage(id, stage, body = {}) {
+  const { templateId, templateRevision, rev, instruction, expectedSpeakers } = body;
+  const mode = requestedTranscription(body);
+  if (mode === 'cloud' && stage !== 'transcript') throw new HttpError(400, '云端精转仅用于完整逐字稿');
   const m = must(id);
-  if (!STAGES.includes(stage)) throw new HttpError(400, 'stage 必须是 audio / transcript / minutes');
+  if (stage === 'speakers') {
+    await startSpeakerCorrection(id, expectedSpeakerCount(expectedSpeakers));
+    return view(id);
+  }
+  if (!STAGES.includes(stage)) throw new HttpError(400, 'stage 必须是 audio / transcript / speakers / minutes');
   if ((templateId !== undefined || instruction !== undefined) && stage !== 'minutes') throw new HttpError(400, '只能为总结设置生成要求');
   const template = templateId === undefined ? null : await resolveMinutesTemplate(templateId);
   if (templateRevision !== undefined && templateRevision !== template?.revision) throw new HttpError(409, '模板已更新，请重新选择');
@@ -316,11 +477,11 @@ export async function retryStage(id, stage, { templateId, templateRevision, rev,
   if (rev !== undefined && rev !== m.minutes.rev) throw new HttpError(409, '纪要已更新，请重新打开后操作');
   const selected = template && templateSnapshot(template);
   const requested = instruction !== undefined ? { ...selected, name: '本次自定义', rules: validateInstruction(instruction), revision: 1 } : selected;
-  runPipeline(id, stage, requested, true, stage === 'minutes');
+  runPipeline(id, stage, { template: requested, retryFailed: true, summaryRequested: stage === 'minutes', mode });
   return view(id);
 }
 
-function runPipeline(id, from, template, retryFailed = false, summaryRequested = false) {
+function runPipeline(id, from, { template, retryFailed = false, summaryRequested = false, mode = 'local' } = {}) {
   if (pipelines.has(id)) return;
   pipelines.add(id);
   (async () => {
@@ -335,10 +496,114 @@ function runPipeline(id, from, template, retryFailed = false, summaryRequested =
         return;
       }
     }
-    if (i <= 1 && !(await finalTranscript(id, retryFailed))) return;
+    if (i <= 1) {
+      const ready = await finalTranscript(id, retryFailed, mode);
+      const m = must(id);
+      if (m.source !== 'clip' && !speakerJobs.has(id) && (m.speakerState?.status || 'none') === 'none') {
+        const capability = await media.requireCapability('audio.transcribe', { diarization: true }).catch(() => null);
+        if (capability && !speakerJobs.has(id) && (m.speakerState?.status || 'none') === 'none') {
+          if (m.audio.durationMs > MAX_DIARIZATION_AUDIO_MS) {
+            await update(id, row => {
+              row.speakerState = { ...(row.speakerState || newSpeakers()), status: 'unavailable', error: SPEAKER_DURATION_LIMIT };
+            });
+          } else {
+            await startSpeakerCorrection(id, null);
+          }
+        }
+      }
+      if (!ready || m.minutes.rev > 0) return;
+    }
     await makeMinutes(id, template, retryFailed, summaryRequested);
   })().catch((e) => console.error(`会后流程异常 ${id}: ${e.stack || e.message}`))
     .finally(() => pipelines.delete(id));
+}
+
+async function startSpeakerCorrection(id, expectedSpeakers) {
+  if (speakerJobs.has(id)) throw new HttpError(409, '说话人正在校正');
+  const token = Symbol(id);
+  speakerJobs.set(id, token);
+  const releaseJob = () => { if (speakerJobs.get(id) === token) speakerJobs.delete(id); };
+  let requestId;
+  try {
+    await update(id, (m) => {
+      if (m.state !== 'finished' || m.audio.status !== 'saved') {
+        throw new HttpError(409, '请先完成原始录音保存');
+      }
+      if (m.audio.durationMs > MAX_DIARIZATION_AUDIO_MS) throw new HttpError(409, SPEAKER_DURATION_LIMIT);
+      const state = m.speakerState || newSpeakers();
+      requestId = ['error', 'unavailable'].includes(state.status) && state.expectedSpeakers === expectedSpeakers
+        ? state.requestId : null;
+      requestId ||= 'speakers-' + randomUUID();
+      m.speakerState = { ...state, status: 'running', error: '', expectedSpeakers, requestId };
+    });
+  } catch (error) {
+    releaseJob();
+    throw error;
+  }
+  void correctSpeakers(id, expectedSpeakers, requestId, releaseJob).finally(releaseJob)
+    .catch(error => console.error('无法保存说话人校正状态:', error.message));
+}
+
+async function correctSpeakers(id, expectedSpeakers, requestId, releaseJob) {
+  const service = media;
+  const m = must(id);
+  const directory = path.join(P.tmp, id + '-speakers');
+  let turns, failure;
+  try {
+    const audio = await audioMetadata(id);
+    if (audio.durationMs > MAX_DIARIZATION_AUDIO_MS) throw Object.assign(new Error(SPEAKER_DURATION_LIMIT), { offline: true });
+    await assertMediaScope(m, service);
+    const capability = await service.requireCapability('audio.transcribe', { diarization: true });
+    const file = await prepareDiarizationAudio(audioFile(id), audio.durationMs, capability, directory);
+    const inputSha256 = await fileDigest(file);
+    const transferId = requestId + '-' + inputSha256.slice(0, 16);
+    const result = await service.transcribe(file, transferId, {
+      retryFailed: true, inputSha256, options: { mode: 'diarize', ...(expectedSpeakers !== null ? { expectedSpeakers } : {}) },
+    });
+    turns = normalizeTurns(result, audio.durationMs);
+  } catch (error) {
+    failure = error;
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true }).catch(() => {});
+  }
+  try {
+    if (failure) throw failure;
+    await update(id, async (row) => {
+      const speakerState = { ...withSpeakerTurns(row.speakerState, turns), status: 'done', error: '' };
+      if (row.transcript.segments.length) await writeTranscript({ ...row, speakerState });
+      releaseJob();
+      row.speakerState = speakerState;
+    });
+  } catch (error) {
+    await update(id, (row) => {
+      releaseJob();
+      row.speakerState = { ...row.speakerState, status: error.offline ? 'unavailable' : 'error', error: cleanText(error.message, 250) || '说话人校正未完成' };
+    });
+  }
+}
+
+export async function patchSpeakers(id, body) {
+  await update(id, async (m) => {
+    if (m.state !== 'finished' || m.audio.status !== 'saved') throw new HttpError(409, '请先完成原始录音保存');
+    const speakerState = editSpeakerState(m.speakerState || newSpeakers(), body, m.transcript.segments);
+    if (m.transcript.segments.length) await writeTranscript({ ...m, speakerState });
+    m.speakerState = speakerState;
+  });
+  return view(id);
+}
+
+const transcriptWithSpeakers = (m) => {
+  const state = m.speakerState || newSpeakers();
+  const { speakers, segments } = speakerProjection(state, m.transcript.segments);
+  const names = new Map(speakers.labels.map(label => [label.id, label.name]));
+  return segments.map(segment => segment.speakerIds === undefined ? segment : {
+    ...segment, speakerNames: segment.speakerIds.map(id => names.get(id) || id),
+  });
+};
+
+function writeTranscript(m) {
+  return writeFileAtomic(path.join(spaceDir(m), FILES.transcript),
+    renderTranscriptTxt({ ...m, transcript: { ...m.transcript, segments: transcriptWithSpeakers(m) } }));
 }
 
 async function writeMeta(m) {
@@ -346,7 +611,7 @@ async function writeMeta(m) {
     schema: 1, meeting_id: m.id, title: m.title, recorded_at: m.createdAt, finished_at: m.finishedAt,
     duration_ms: m.audio.durationMs, sample_rate: m.audio.sampleRate || SAMPLE_RATE, channels: m.audio.channels || 1, input: m.inputLabel, source: m.source,
     files: { audio: audioName(m), transcript: FILES.transcript, minutes: minutesName(m) },
-    transcript: { status: m.transcript.status, source: m.transcript.source, segments: m.transcript.segments.length },
+    transcript: { status: m.transcript.status, source: m.transcript.source, mode: m.transcript.mode || 'local', segments: m.transcript.segments.length },
     minutes: { status: m.minutes.status, generator: m.minutes.model ? `wanx.media:${m.minutes.model}` : '', review: m.review.status, versions: m.review.versions, template: m.minutes.template && { id: m.minutes.template.id, name: m.minutes.template.name, revision: m.minutes.template.revision } },
     note: '试用空间记录，与正式盒子/星图隔离。',
   };
@@ -382,6 +647,7 @@ async function composeAudio(id) {
     return true;
   } catch (e) {
     await update(id, (mm) => {
+      delete mm.pendingTranscription;
       mm.audio = { ...mm.audio, status: 'error', error: cleanText(e.message, 300) };
       mm.transcript.status = 'waiting';
       mm.minutes.status = 'waiting';
@@ -390,26 +656,35 @@ async function composeAudio(id) {
   }
 }
 
-async function finalTranscript(id, retryFailed) {
+async function finalTranscript(id, retryFailed, mode) {
+  const cloud = mode === 'cloud';
+  const previous = must(id).transcript;
+  const keepPrior = ['done', 'partial'].includes(previous.status) && previous.segments.length > 0;
   const m = await update(id, (row) => {
     delete row.audioOnly;
-    row.transcript = { ...row.transcript, status: 'running', error: '' };
-    row.minutes = { ...row.minutes, status: 'pending', error: '' };
+    row.pendingTranscription = mode;
+    delete row.transcriptionError;
+    if (!keepPrior) row.transcript = { ...row.transcript, status: 'running', error: '' };
+    if (!row.minutes.rev && !keepPrior) row.minutes = { ...row.minutes, status: 'pending', error: '' };
   });
   const directory = path.join(P.tmp, id);
   try {
     const service = media;
+    const audio = await audioMetadata(id);
     await assertMediaScope(m, service);
     const source = path.join(spaceDir(m), audioName(m));
-    const files = await prepareParts(source, m.audio.durationMs, await service.requireCapability('audio.transcribe'), directory);
+    const limits = await service.requireCapability(cloud ? CLOUD_ASR : 'audio.transcribe');
+    const files = await prepareParts(source, audio.durationMs, limits, directory);
+    const models = new Set();
     const segments = [];
     const failed = [];
     for (const [index, part] of files.entries()) {
       try {
         const digest = (await fileDigest(part.file)).slice(0, 20);
-        const tag = m.sample ? 'demo-' + m.source : 'recording';
-        const result = await service.transcribe(part.file, tag + '-' + id + '-' + index + '-' + digest, { retryFailed });
+        const tag = cloud ? 'cloud-recording' : m.sample ? 'demo-' + m.source : 'recording';
+        const result = await service.transcribe(part.file, tag + '-' + id + '-' + index + '-' + digest, { retryFailed, cloudConsent: cloud });
         if (!Array.isArray(result.segments)) throw new Error('媒体转录时间轴无效');
+        if (typeof result.model === 'string' && result.model.trim()) models.add(cleanText(result.model, 100));
         for (const t of result.segments) {
           const text = cleanText(t?.text, 2200);
           if (!text || !Number.isFinite(t?.startMs) || !Number.isFinite(t?.endMs) || t.endMs <= t.startMs || t.startMs < 0 || t.startMs >= part.durationMs) continue;
@@ -419,26 +694,34 @@ async function finalTranscript(id, retryFailed) {
           });
         }
       } catch (err) {
-        if (err.offline) throw err;
+        if (err.offline || cloud || keepPrior) throw err;
         failed.push(index + 1);
       }
     }
     if (failed.length && !segments.length) throw new Error('盒端转写未完成，请重试');
+    if (keepPrior && !segments.length) throw new Error('本次转写未识别出语音，已保留原逐字稿');
     const status = failed.length ? 'partial' : 'done';
     await update(id, async (row) => {
-      row.transcript = {
-        status, source: files.length === 1 ? 'wanx.media' : 'chunks', segments, failedChunks: failed,
+      const transcript = {
+        status, mode, ...(models.size && { model: [...models].join(' / ') }), source: files.length === 1 ? 'wanx.media' : 'chunks', segments, failedChunks: failed,
         error: failed.length ? `第 ${failed.join('、')} 段等待重试` : '', updatedAt: new Date().toISOString(),
       };
-      if (failed.length) row.minutes.status = 'waiting';
-      await writeFileAtomic(path.join(spaceDir(row), FILES.transcript), renderTranscriptTxt(row));
+      await writeTranscript({ ...row, transcript });
+      row.transcript = transcript;
+      delete row.pendingTranscription;
+      if (failed.length && !row.minutes.rev) row.minutes.status = 'waiting';
       await writeMeta(row);
     });
     return !failed.length;
   } catch (error) {
     await update(id, async (row) => {
-      row.transcript = { ...row.transcript, status: error.offline || error.status === 503 ? 'offline' : 'error', error: cleanText(error.message, 230) };
-      row.minutes = { ...row.minutes, status: 'waiting', error: '等待完整转写' };
+      delete row.pendingTranscription;
+      const detail = cleanText(error.message, 230);
+      if (keepPrior) row.transcriptionError = detail;
+      else {
+        row.transcript = { ...row.transcript, mode, status: error.offline || error.status === 503 ? 'offline' : 'error', error: detail };
+        if (!row.minutes.rev) row.minutes = { ...row.minutes, status: 'waiting', error: '等待完整转写' };
+      }
       await writeMeta(row);
     });
     return false;
@@ -449,11 +732,18 @@ async function finalTranscript(id, retryFailed) {
 
 async function makeMinutes(id, requestedTemplate, retryFailed, summaryRequested) {
   const service = media;
-  if (service.summaryOnRequest && !summaryRequested && must(id).transcript.segments.length) {
+  const project = must(id);
+  const diskRequiresTemplateSelection = project.source === 'disk' && process.env.RECORDING_MODULE_PROFILE === 'accessories';
+  if ((service.summaryOnRequest || diskRequiresTemplateSelection) && !summaryRequested && project.transcript.segments.length) {
     await update(id, mm => { mm.minutes = { ...mm.minutes, status: 'waiting', error: '' }; });
     return;
   }
-  const m = await update(id, (mm) => { mm.minutes = { ...mm.minutes, status: 'running', error: '' }; });
+  const m = await update(id, mm => {
+    const previous = mm.minutes;
+    const needsNewJob = previous.needsNewSummaryJob || ['RETRY_NOT_ALLOWED', 'SUMMARY_CLOUD_RESUBMIT_REQUIRED'].includes(previous.error);
+    mm.minutes = { ...previous, status: 'running', error: '',
+      ...(summaryRequested && needsNewJob && { generationId: randomUUID(), needsNewSummaryJob: false }) };
+  });
   if (!m.transcript.segments.length) {
     await update(id, (mm) => { mm.minutes = { ...mm.minutes, status: 'empty', error: '转录为空，没有可提取的内容；可手动编写纪要' }; mm.review.status = 'draft'; });
     return;
@@ -461,17 +751,21 @@ async function makeMinutes(id, requestedTemplate, retryFailed, summaryRequested)
   try {
     const template = requestedTemplate || m.minutes.template || m.minutesTemplate || templateSnapshot(await resolveMinutesTemplate(DEFAULT_TEMPLATE_ID));
     await assertMediaScope(m, service);
-    const r = await generateMinutes(id, m.transcript.segments, template, m.minutes.rev, retryFailed, service);
+    const speakerRevision = m.speakerState?.rev || 0;
+    const r = await generateMinutes(id, transcriptWithSpeakers(m), template, m.minutes.rev, retryFailed, service,
+      { includeTopic: diskRequiresTemplateSelection, generationId: m.minutes.generationId });
     if (!r.sections.length && !r.text?.trim()) throw new Error('盒端未生成有效总结');
     await update(id, async (mm) => {
-      mm.minutes = { status: 'done', model: r.model, error: '', items: [], rev: mm.minutes.rev + 1, generatedAt: new Date().toISOString(), origin: 'model', template, document: { sections: r.sections, ...(r.text ? { text: r.text } : {}) } };
+      mm.minutes = { status: 'done', model: r.model, error: '', items: [], rev: mm.minutes.rev + 1, generatedAt: new Date().toISOString(), origin: 'model', speakerRevision, template,
+        document: { sections: r.sections, ...(r.text && { text: r.text }), ...(r.topic && { topic: r.topic }) } };
       mm.review.status = 'draft';
       await writeFileAtomic(path.join(spaceDir(mm), minutesName(mm)), renderMinutesMd(mm));
       await writeMeta(mm);
     });
   } catch (e) {
     await update(id, async (mm) => {
-      mm.minutes = { ...mm.minutes, status: e.offline ? 'offline' : 'error', error: cleanText(e.message, 300) };
+      mm.minutes = { ...mm.minutes, status: e.offline ? 'offline' : 'error', error: cleanText(e.message, 300),
+        ...(e.needsNewSummaryJob && { needsNewSummaryJob: true }) };
       if (mm.review.status === 'none') mm.review.status = 'draft';
       await writeMeta(mm);
     });
@@ -487,7 +781,7 @@ export async function saveMinutes(id, body) {
     if ('documentText' in body) {
       const text = typeof body.documentText === 'string' ? cleanText(body.documentText, 60001, { multiline: true }) : '';
       if (!text || text.length > 60000) throw new HttpError(400, '总结需要填写，最多 60000 字');
-      m.minutes.document = { sections: m.minutes.document?.sections || legacySummarySections(m.minutes), text };
+      m.minutes.document = { ...m.minutes.document, sections: m.minutes.document?.sections || legacySummarySections(m.minutes), text };
     } else {
       if (m.minutes.document) throw new HttpError(400, '请提交录音总结正文');
       try { m.minutes.items = sanitizeItems(body.items, m.transcript.segments, m.minutes.items); } catch (e) { throw new HttpError(400, e.message); }
@@ -557,7 +851,7 @@ export function audioFile(id) {
 
 export async function spaceList() {
   const out = [];
-  for (const m of [...cache.values()].filter(isVisible).sort((a, b) => b.createdAt.localeCompare(a.createdAt))) {
+  for (const m of [...cache.values()].filter(m => isVisible(m) && m.state !== 'importing').sort((a, b) => b.createdAt.localeCompare(a.createdAt))) {
     const dir = spaceDir(m);
     const files = [];
     for (const [key, name] of Object.entries({ ...FILES, audio: audioName(m), minutes: minutesName(m) })) {

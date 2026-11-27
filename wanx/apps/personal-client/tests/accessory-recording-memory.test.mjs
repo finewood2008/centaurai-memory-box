@@ -3,8 +3,46 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { confirmMinutes, createMeeting, finishMeeting, getMeetingRaw, initStore, retryPendingCapture, saveChunk, view } from "../resources/accessory-preview/lib/meetings.mjs";
+import { confirmMinutes, createMeeting, finishMeeting, getMeetingRaw, initStore, listMeetings, retryPendingCapture, saveChunk, saveMinutes, view } from "../resources/accessory-preview/lib/meetings.mjs";
 import { recordingCapture } from "../resources/accessory-preview/lib/library.mjs";
+import { generateMinutes } from "../resources/accessory-preview/lib/minutes.mjs";
+
+test("meeting topics come from the same summary, survive editing, and leave the original recording name intact", async t => {
+  const directory = await mkdtemp(path.join(tmpdir(), "memobox-recording-topic-"));
+  t.after(() => rm(directory, {recursive:true, force:true}));
+  await initStore(directory);
+  const record = await createMeeting({source:"disk", title:"原录音名称"});
+  const legacy = await createMeeting({source:"disk", title:"旧录音"});
+  getMeetingRaw(legacy.id).state = "finished";
+  await saveMinutes(legacy.id, {rev:0, documentText:"会议主题：产品试用安排\n行动项：核对名单"});
+  const clip = await createMeeting({source:"clip", title:"领夹录音"});
+  getMeetingRaw(clip.id).state = "finished";
+  await saveMinutes(clip.id, {rev:0, documentText:"会议主题：领夹内容"});
+  const fixture = {
+    async ensureTemplate(name, instructions) {
+      assert.match(name, /^会议录音智能体/);
+      assert.match(instructions, /topic/);
+      return "fixture";
+    },
+    async summarize() {
+      return {text:JSON.stringify({topic:"周五试用安排", sections:[
+        {heading:"决定", blocks:[{text:"周五开放试用。", evidence:[0], quote:"周五开放试用"}]},
+      ]})};
+    },
+  };
+  const result = await generateMinutes(record.id, [{i:0, fromMs:1200, text:"周五开放试用。"}],
+    {id:"general", rules:"按原话整理"}, 0, false, fixture, {includeTopic:true});
+  const meeting = getMeetingRaw(record.id);
+  meeting.state = "finished";
+  meeting.minutes.document = {topic:result.topic, sections:result.sections};
+  await saveMinutes(record.id, {rev:meeting.minutes.rev, documentText:"改写会议纪要。"});
+  await initStore(directory);
+  const list = listMeetings();
+  assert.equal(view(record.id).title, "原录音名称");
+  assert.equal(list.find(({id}) => id === record.id).topic, "周五试用安排");
+  assert.equal(view(clip.id).topic, undefined);
+  assert.equal(list.find(({id}) => id === legacy.id).topic, "产品试用安排");
+});
 
 test("confirmed recordings respect their agent switch and retry the same version with its transcript evidence", async t => {
   const directory = await mkdtemp(path.join(tmpdir(), "memobox-recording-capture-"));

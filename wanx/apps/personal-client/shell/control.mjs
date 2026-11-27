@@ -219,7 +219,7 @@ export function registerControlActions({
   reads.add("space-redaction-rules");
   reads.add("space-open-text-edit");
   register("space-annotation-workbench-contract", () => ANNOTATION_WORKBENCH_CONTRACT);
-  for (const method of ["snapshot", "refresh", "stat", "list", "mkdir", "move", "trash", "restore", "purge", "uploads", "download", "downloads", "transfer", "preview", "cancel-preview", "open-text-edit", "save-text-edit", "restore-version", "annotation", "set-annotation", "auto-annotate", "search-annotations", "annotation-workbench", "redaction-rules", "save-redaction-rules", "redact"]) {
+  for (const method of ["snapshot", "refresh", "stat", "list", "mkdir", "move", "trash", "restore", "purge", "uploads", "download", "downloads", "transfer", "preview", "cancel-preview", "open-text-edit", "save-text-edit", "restore-version", "import-volume", "annotation", "set-annotation", "auto-annotate", "search-annotations", "annotation-workbench", "redaction-rules", "save-redaction-rules", "redact"]) {
     register(`space-${method}`, async (input = {}) => {
       if (!personalSpace) throw new Error("SPACE_UNAVAILABLE");
       if (method === "annotation-workbench") return personalSpace.operation(method, validateWorkbenchInput(input));

@@ -50,32 +50,23 @@ function compose(c){
   const q=el('textarea');q.placeholder=current?'继续问这几份文件…':'你想从这些文件中了解什么？';q.setAttribute('aria-label','问题');
   c.append(q,action(current?'继续提问':'提问',()=>ask(q.value),'primary'));
 }
-async function save(op,turn){
-  const t=current.turns[turn], d=modal(op==='space'?'保存到空间':'确认存入记忆');
+function saveToMemory(turn){
+  const t=current.turns[turn], d=modal('确认存入记忆');
   const feedback=el('p');
-  let parent='';const select=el('select');const trail=[{id:'',name:'空间根目录'}];
-  async function folders(){
-    const result=await api('folders',{parent});select.replaceChildren(new Option(trail.at(-1).name,''));
-    if(trail.length>1)select.add(new Option('返回上级目录','..'));
-    for(const f of result.folders)select.add(new Option(f.name,f.id));
-  }
-  if(op==='space'){
-    d.append(select);select.onchange=()=>work(async()=>{const id=select.value;if(!id)return;if(id==='..')trail.pop();else trail.push({id,name:select.selectedOptions[0].text});parent=trail.at(-1).id;await folders();});
-  } else {d.append(el('pre',t.answer),el('small','来源 · 配件 / 外接硬盘 / '+current.device+' · '+t.refs.map(r=>r.path).join('、')));}
-  const go=action('确认保存',async()=>{try{const receipt=await api(op,{id:current.id,turn,parent});if(!receipt.id)throw Error('未收到保存回执');d.close();notice.textContent=op==='space'?'已保存到空间 · '+trail.at(-1).name:'已存入记忆 · 配件 / 外接硬盘';}catch(e){feedback.textContent=e.message;}},'primary');
+  d.append(el('pre',t.answer),el('small','来源 · 配件 / 外接硬盘 / '+current.device+' · '+t.refs.map(r=>r.path).join('、')));
+  const go=action('确认保存',async()=>{try{const receipt=await api('memory',{id:current.id,turn});if(!receipt.id)throw Error('未收到保存回执');d.close();notice.textContent='已存入记忆 · 配件 / 外接硬盘';}catch(e){feedback.textContent=e.message;}},'primary');
   d.append(feedback,action('取消',()=>d.close()),go);
-  if(op==='space'){go.disabled=true;try{await folders();go.disabled=false;}catch(e){feedback.textContent=e.message;}}
 }
 function renderProject(){
   main.replaceChildren();main.append(action('‹ 硬盘文件',home,'item'));
   current.turns.forEach((t,i)=>{
     const c=card(t.question);c.append(el('pre',t.answer));
     t.refs.forEach((r,k)=>c.append(action('['+(k+1)+'] '+r.path,async()=>{const v=await api('preview',{ref:r});const d=modal(r.path);d.append(el('small',v.ref.size+' 字节'),el('pre',v.text),action('关闭',()=>d.close()));},'item sources')));
-    const row=el('div',undefined,'row');row.append(action('保存到空间',()=>save('space',i)),action('存入记忆',()=>save('memory',i)));c.append(row);
+    const row=el('div',undefined,'row');row.append(action('存入记忆',()=>saveToMemory(i)));c.append(row);
   });compose(card('继续问'));
 }
 
-const fmtSize=n=>n>=1024**3?(n/1024**3).toFixed(1)+' GB':n>=1024**2?(n/1024**2).toFixed(1)+' MB':n>=1024?(n/1024).toFixed(1)+' KB':n+' B';
+const fmtSize=n=>n>=10**12?(n/10**12).toFixed(1)+' TB':n>=1024**3?(n/1024**3).toFixed(1)+' GB':n>=1024**2?(n/1024**2).toFixed(1)+' MB':n>=1024?(n/1024).toFixed(1)+' KB':n+' B';
 function refOf(entry){return {path:entry.path,version:entry.version};}
 async function filePreview(entry){
   const ref=refOf(entry),image=/\.(jpe?g|png|webp|gif|bmp|tiff?)$/i.test(entry.path);
@@ -171,10 +162,92 @@ function types(){
   const nas=el('section',undefined,'type-card inactive');nas.setAttribute('aria-disabled','true');nas.append(el('span','▥','type-icon'),el('h2','外接 NAS'),el('p','通过网络连接品牌 NAS。'),el('small','暂不可用'));
   cards.append(disk,nas);
 }
+async function manageStorage() {
+  let previous;
+  document.title = '硬盘管理智能体 · 记忆盒子';
+  document.querySelector('h1').textContent = '硬盘管理智能体';
+  $('home').hidden = $('history').hidden = $('types').hidden = true;
+  $('types').href = '/accessories/storage/drive';
+  $('types').textContent = '文件与问答';
+  const refreshButton = action('重新检测', () => detect());
+  document.querySelector('nav').append(refreshButton);
+
+  async function detect(quiet = false) {
+    let inventory;
+    try { inventory = await api('volume-status'); }
+    catch (error) {
+      $('device').textContent = '外接存储服务暂不可用';
+      $('scope').textContent = error.message;
+      $('types').hidden = true;
+      main.replaceChildren();
+      previous = undefined;
+      return;
+    }
+    const {configured, volumes, waiting} = inventory;
+    const state = JSON.stringify(inventory);
+    if (quiet && state === previous) return;
+    previous = state;
+    if (!volumes.length) $('types').hidden = true;
+    else void api('status').then(({online}) => {
+      if (previous === state) $('types').hidden = !online;
+    }).catch(() => { if (previous === state) $('types').hidden = true; });
+    $('device').textContent = !configured ? '待配置硬盘访问' : volumes.length ? `已连接 · ${volumes.length} 个外接卷`
+      : waiting.length ? '已检测到外接硬盘' : '未检测到外接硬盘';
+    $('scope').textContent = !configured ? '完成当前盒子的外接存储服务配对后，可重新检测。'
+      : volumes.length ? ''
+      : waiting.length ? '在盒子系统中挂载硬盘后，空间会自动出现入口。'
+      : '把硬盘通过 USB 接入盒子。';
+    main.replaceChildren();
+    for (const volume of volumes) {
+      const panel = card(volume.name);
+      const facts = [volume.label && volume.label !== volume.name ? `卷标 ${volume.label}` : '', volume.filesystem?.toUpperCase(),
+        volume.readOnly === true ? '只读挂载' : volume.readOnly === false ? '已挂载' : '',
+        Number.isFinite(volume.free) && Number.isFinite(volume.size)
+          ? `可用 ${fmtSize(volume.free)} / ${fmtSize(volume.size)}` : ''].filter(Boolean);
+      if (facts.length) panel.append(el('p', facts.join(' · '), 'drive-facts'));
+      const actions = el('div', undefined, 'row');
+      const link = el('a', '在空间中打开', 'drive-action');
+      link.href = '/accessories/storage/space?' + new URLSearchParams({volume:volume.id});
+      actions.append(link);
+      if (volume.canRename) actions.append(action('设置显示名称', () => {
+        const dialog = modal('设置显示名称');
+        const input = el('input'), feedback = el('p');
+        input.type = 'text';
+        input.maxLength = 48;
+        input.setAttribute('aria-label', '空间中的硬盘名称');
+        input.value = volume.name === volume.label ? '' : volume.name;
+        input.placeholder = volume.label;
+        feedback.setAttribute('role', 'status');
+        const save = action('保存', async () => {
+          try {
+            await api('volume-name', {volume:volume.id, name:input.value});
+            dialog.close();
+            await detect();
+          } catch (error) { feedback.textContent = error.message; }
+        }, 'primary');
+        input.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.isComposing) save.click(); });
+        dialog.append(el('p', '留空将使用硬盘卷标。'), input, feedback, action('取消', () => dialog.close()), save);
+        input.focus();
+      }));
+      panel.append(actions);
+    }
+    for (const disk of waiting) {
+      const panel = card(disk.name);
+      panel.append(el('p', (Number.isFinite(disk.size) ? fmtSize(disk.size) + ' · ' : '') + '尚无可用的挂载卷', 'drive-facts'));
+    }
+  }
+
+  await work(detect);
+  setInterval(() => {
+    if (!document.hidden && !document.querySelector('dialog')) void work(() => detect(true));
+  }, 5000);
+}
 if(location.pathname==='/accessories/storage/drive'){
   document.title='外接硬盘 · 外接存储';document.querySelector('h1').textContent='外接硬盘';
+  $('types').textContent='硬盘管理';
   $('home').onclick=()=>work(home);$('history').onclick=()=>work(listProjects);
   setInterval(()=>{if(!busy && !document.hidden && device && !device.online && !current && !document.querySelector('dialog'))work(home);},7000);
   window.addEventListener('hashchange',()=>{if(!busy && current?.id!==location.hash.slice(1))work(()=>location.hash?openProject(location.hash.slice(1)):home());});
   work(async()=>{await refresh();if(location.hash)await openProject(location.hash.slice(1));else await showFiles();}).then(()=>{if(!main.childElementCount){$('device').textContent='等待连接';main.append(action('重新连接',home,'primary'));}});
-}else types();
+}else if(location.pathname==='/accessories/storage') void manageStorage();
+else types();

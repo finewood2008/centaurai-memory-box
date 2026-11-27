@@ -1,3 +1,4 @@
+import { audioToolsDirectory, verifyAudioTools } from "./package-audio-tools.mjs";
 import { verifyPackagedStarlink } from '../../builder/tools/assemble-starlink.mjs';
 import { createHash } from "node:crypto";
 import { lstat, readFile } from "node:fs/promises";
@@ -66,7 +67,7 @@ export async function verifyClipboardNative({resourcesPath, sourceDirectory, arc
 export async function probeNativeEngine(binaryPath) {
   const engine = createSidecar({ binaryPath });
   try {
-    const status = await engine.request("status", {}, { timeoutMs: 5000 });
+    const status = await engine.request("status");
     if (status?.phase !== "disabled") throw new Error("CLIENT_NATIVE_ENGINE_SMOKE_FAILED");
   } finally { await engine.close(); }
 }
@@ -84,6 +85,10 @@ export default async function afterPack(context) {
   verifyPackagedMaintenance(resourcesPath);
   await verifyPackagedStarlink(path.join(resourcesPath,"app.asar"), context.packager.projectDir);
   await verifyPackagedMemoryLayout({resourcesPath, platform});
+  if (platform === "win32") verifyAudioTools(path.join(resourcesPath, "audio-tools"), {
+    sourceDirectory: audioToolsDirectory(context.packager.projectDir),
+    certificateSha1: context.packager.config.win?.signtoolOptions?.certificateSha1,
+  });
   if(platform==='darwin')await verifyClipboardNative({resourcesPath,arch,sourceDirectory:path.join(context.packager.projectDir,'native/bin')});
   const canRun = platform === process.platform && arch === process.arch;
   if (canRun)

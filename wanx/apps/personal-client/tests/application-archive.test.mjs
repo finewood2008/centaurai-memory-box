@@ -52,6 +52,16 @@ test("ZIP installs a bundled executable and enforces its platform and architectu
   }
 });
 
+test("a fixed application entry cannot install a ZIP for a different application", async t => {
+  const f = await fixture(t);
+  await writeApplicationZip(f.archivePath, files());
+  await assert.rejects(f.installer.install({ archivePath: f.archivePath, expectedApplicationId: "test.other" }),
+    { code: "APPLICATION_MANIFEST_MISMATCH" });
+  assert.deepEqual(await f.installer.list(), []);
+  const record = await f.installer.install({ archivePath: f.archivePath, expectedApplicationId: manifest.applicationId });
+  assert.equal(record.applicationId, manifest.applicationId);
+});
+
 test("ZIP preserves internal framework symlinks after staging cleanup", { skip: process.platform === "win32" }, async t => {
   const f = await fixture(t);
   await writeApplicationZip(f.archivePath, [

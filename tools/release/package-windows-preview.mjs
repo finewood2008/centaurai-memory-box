@@ -9,6 +9,7 @@ import { stageLocalMemory } from './stage-local-memory.mjs';
 import { repairLockedSqlite } from './repair-locked-sqlite.mjs';
 import { smokePackagedMemory } from './smoke-packaged-memory.mjs';
 import { smokePackagedAccessories } from './smoke-packaged-accessories.mjs';
+import { audioToolsResources, prepareAudioTools } from '../../wanx/apps/personal-client/tools/package-audio-tools.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 const checksum = async file => createHash('sha256').update(await readFile(file)).digest('hex');
@@ -88,7 +89,7 @@ export async function writePreviewBuildConfig({ configFile, pkg, client, staged,
     asar: true, npmRebuild: false, nodeGypRebuild: false, forceCodeSigning: false,
     directories: { ...pkg.build.directories, output },
     extraMetadata: { version, wanxBuild: buildIdentity },
-    extraResources: [...(pkg.build.extraResources || []), { from: staged, to: 'local-memory' },
+    extraResources: [...(pkg.build.extraResources || []), ...audioToolsResources(client), { from: staged, to: 'local-memory' },
       // electron-builder excludes a copy source's root node_modules even for
       // extraResources. Copy that directory explicitly to preserve the graph.
       { from: path.join(staged, 'node_modules'), to: 'local-memory/node_modules' },
@@ -132,6 +133,7 @@ export async function packageWindowsPreview({ version, out, repo = repositoryRoo
   const output = path.join(out, 'artifacts');
   const buildIdentity = { schemaVersion: 1, buildId: `${process.env.GITHUB_RUN_ID || Date.now()}-${sourceCommit.slice(0,12)}`, sourceCommit,
     channel: 'internal', securityEpoch: 0, installationScope: 'per-user', distributionClass: 'unsigned-internal-only' };
+  await prepareAudioTools({ clientRoot: client });
   const configFile = await writePreviewBuildConfig({ configFile: path.join(out, 'resolved-build-config.json'), pkg, client, staged, output, version, buildIdentity });
   const previousDiscovery = process.env.CSC_IDENTITY_AUTO_DISCOVERY;
   process.env.CSC_IDENTITY_AUTO_DISCOVERY = 'false';
@@ -172,12 +174,11 @@ export async function packageWindowsPreview({ version, out, repo = repositoryRoo
     '半人马AI-记忆盒子 Windows x64 预览版',
     '',
     `- 来源提交 \`${sourceCommit}\`。`,
-    '- 全新插画安装向导展示 MB-01 雾银盒子与四项核心功能，可直接安装或更改安装位置。安装时显示实际进度。',
-    '- 配件目录和其他板块共用 CentaurAI 侧栏，打开侧栏时保留卡片布局。',
-    '- 星图入口使用「知识星图」，各板块横幅已整合。',
-    '- 「配件」支持本机录音。实时字幕、转写和云端总结需匹配的盒端服务与授权。',
-    '- 「配件 → 外接存储」可管理连接到盒子的外接硬盘。NAS 入口暂不可用。',
-    '- 安装包未签名，预览版不启用正式自动更新。',
+    '- 「空间」使用同一套界面管理内置 SSD 和外接盘，支持右键操作及跨盘复制和移动。外接盘需由新版盒端空间服务挂载。',
+    '- 「配件」中的硬盘管理智能体仅管理外接盘。',
+    '- 「我的 AI」新增提示词优化，更新任务核对和 Codex 交接入口。帮助面板增加反馈入口。',
+    '- 录音支持完善后的音频导入、字幕和纪要流程。在线能力取决于匹配的盒端服务与授权。',
+    '- Windows x64 安装包为未签名预览版本，使用独立下载入口。',
     '- 安装包内的原生依赖和本机记忆服务已在 Windows CI 验证。',
     '- 真实盒子登录、备份恢复和跨设备行为待实机联测。',
     '',

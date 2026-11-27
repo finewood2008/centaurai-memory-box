@@ -66,7 +66,7 @@ export async function verifyClipboardNative({resourcesPath, sourceDirectory, arc
 export async function probeNativeEngine(binaryPath) {
   const engine = createSidecar({ binaryPath });
   try {
-    const status = await engine.request("status", {}, { timeoutMs: 5000 });
+    const status = await engine.request("status");
     if (status?.phase !== "disabled") throw new Error("CLIENT_NATIVE_ENGINE_SMOKE_FAILED");
   } finally { await engine.close(); }
 }

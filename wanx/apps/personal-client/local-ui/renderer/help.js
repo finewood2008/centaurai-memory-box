@@ -1,5 +1,5 @@
 // Main process owns public cache persistence and scheduling; this is only its renderer view.
-window.createHelpView = function ({ request, changed, now = Date.now, productContent = window.memoboxHelpContent }) {
+window.createHelpView = function ({ request, changed, now = Date.now, productContent = window.memoboxHelpContent, feedbackOnly = false }) {
   const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   let data = productContent || null, etag = null, visible = false, pending = null, generation = 0;
   let loading = false;
@@ -17,7 +17,7 @@ window.createHelpView = function ({ request, changed, now = Date.now, productCon
     } else sceneNotice = "相关分类暂未提供，已展示全部问题。";
   }
   let draft = { content: "", contact: "", categoryId: null, itemId: null };
-  let draftQuestion = "", feedbackOpen = false, feedbackPending = null, feedbackError = "", feedbackNotice = "";
+  let draftQuestion = "", feedbackOpen = feedbackOnly, feedbackPending = null, feedbackError = "", feedbackNotice = "";
   let feedbackRetryAt = 0, feedbackScope = "minute", feedbackTimer = null;
   const remaining = () => Math.max(0, Math.ceil((feedbackRetryAt - now()) / 1000));
   function countdown() {
@@ -126,19 +126,21 @@ window.createHelpView = function ({ request, changed, now = Date.now, productCon
     return task;
   }
   function feedbackMarkup() {
+    const id = feedbackOnly ? "guide-feedback" : "faq-feedback";
+    const entryLabel = draft.content || draft.contact ? "继续填写反馈" : feedbackOnly ? "再写一条" : "告诉我们";
     return `<section class="faq-feedback" aria-label="问题反馈">
-      <div class="faq-feedback-heading"><div><h3>没找到答案？</h3><p class="muted">告诉我们你遇到的问题，帮助我们改进记忆盒子。</p></div>${!feedbackOpen ? `<button class="button" data-action="help-feedback-open">${draft.content || draft.contact ? "继续填写反馈" : "告诉我们"}</button>` : ""}</div>
+      <div class="faq-feedback-heading"><div><h3>${feedbackOnly ? "问题反馈" : "没找到答案？"}</h3><p class="muted">${feedbackOnly ? "描述问题和触发步骤，便于我们复现。" : "告诉我们你遇到的问题，帮助我们改进记忆盒子。"}</p></div>${!feedbackOpen ? `<button class="button" type="button" data-action="help-feedback-open">${entryLabel}</button>` : ""}</div>
       ${feedbackNotice ? `<p class="notice success" role="status">${esc(feedbackNotice)}</p>` : ""}
       ${feedbackOpen ? `<form data-form="help-feedback" class="faq-feedback-form" novalidate>
-        <p class="faq-feedback-privacy" id="faq-feedback-privacy">请勿填写密码、密钥、验证码。我们只用于改进帮助内容。</p>
+        <p class="faq-feedback-privacy" id="${id}-privacy">请勿填写密码、密钥、验证码。${feedbackOnly ? "" : "我们只用于改进帮助内容。"}</p>
         ${draft.itemId != null ? `<div class="faq-feedback-related"><span>关联问题：${esc(draftQuestion || "此前查看的问题")}</span><button type="button" class="button small" data-action="help-feedback-unlink" aria-label="移除关联问题">移除</button></div>` : ""}
-        <label for="faq-feedback-content">问题描述 <span class="muted">必填 · 最多 2000 字</span></label>
-        <textarea id="faq-feedback-content" name="content" rows="5" maxlength="2000" aria-describedby="faq-feedback-privacy" placeholder="${esc(query ? `你搜索了“${query}”，可以描述尚未解决的问题。` : "你遇到了什么问题？试过哪些操作？")}">${esc(draft.content)}</textarea>
-        <label for="faq-feedback-contact">联系方式 <span class="muted">选填 · 便于回访，可不填</span></label>
-        <input id="faq-feedback-contact" name="contact" type="text" maxlength="128" value="${esc(draft.contact)}" autocomplete="off" placeholder="邮箱、电话或其他联系方式" />
-        <p class="faq-feedback-hint">无需登录或连接盒子。目前暂不支持在客户端查看处理进度；草稿仅在当前窗口保留，关闭窗口后不保存。</p>
+        <label for="${id}-content">问题描述 <span class="muted">必填 · 最多 2000 字</span></label>
+        <textarea id="${id}-content" name="content" rows="${feedbackOnly ? 4 : 5}" maxlength="2000" aria-describedby="${id}-privacy" placeholder="${esc(query ? `你搜索了“${query}”，可以描述尚未解决的问题。` : "你遇到了什么问题？试过哪些操作？")}">${esc(draft.content)}</textarea>
+        <label for="${id}-contact">联系方式 <span class="muted">选填 · 便于回访，可不填</span></label>
+        <input id="${id}-contact" name="contact" type="text" maxlength="128" value="${esc(draft.contact)}" autocomplete="off" placeholder="邮箱、电话或其他联系方式" />
+        <p class="faq-feedback-hint">${feedbackOnly ? "无需连接盒子。草稿仅在当前窗口保留。" : "无需登录或连接盒子。目前暂不支持在客户端查看处理进度；草稿仅在当前窗口保留，关闭窗口后不保存。"}</p>
         ${feedbackError ? `<p class="notice error" role="alert">${esc(feedbackError)}</p>` : ""}
-        <div class="settings-actions"><button class="button primary" type="submit" aria-busy="${Boolean(feedbackPending)}" ${feedbackPending || remaining() ? "disabled" : ""}>${feedbackPending ? "正在提交…" : remaining() ? feedbackScope === "day" ? "今日次数已用完" : `${remaining()} 秒后可提交` : "提交反馈"}</button><button type="button" class="button" data-action="help-feedback-close">收起</button></div>
+        <div class="settings-actions"><button class="button primary" type="submit" aria-busy="${Boolean(feedbackPending)}" ${feedbackPending || remaining() ? "disabled" : ""}>${feedbackPending ? "正在提交…" : remaining() ? feedbackScope === "day" ? "今日次数已用完" : `${remaining()} 秒后可提交` : "提交反馈"}</button>${feedbackOnly ? "" : `<button type="button" class="button" data-action="help-feedback-close">收起</button>`}</div>
       </form>` : ""}
     </section>`;
   }
@@ -155,6 +157,7 @@ window.createHelpView = function ({ request, changed, now = Date.now, productCon
       if (!value) { generation++; pending = null; }
     },
     refresh,
+    renderFeedback: feedbackMarkup,
     action(action, input = {}) {
       if (action === "help-feedback-submit") return submitFeedback(input);
       if (action === "help-feedback-open") {

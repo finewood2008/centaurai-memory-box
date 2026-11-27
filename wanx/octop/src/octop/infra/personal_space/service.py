@@ -161,6 +161,9 @@ class PersonalSpace:
                 "CREATE TABLE IF NOT EXISTS space_storage (space_id TEXT PRIMARY KEY, base TEXT NOT NULL, directory TEXT NOT NULL)"
             )
             db.execute(
+                "CREATE TABLE IF NOT EXISTS space_mounted_volumes (volume TEXT PRIMARY KEY, space_id TEXT NOT NULL UNIQUE)"
+            )
+            db.execute(
                 "CREATE TABLE IF NOT EXISTS object_locations (id TEXT PRIMARY KEY, directory TEXT NOT NULL)"
             )
             db.execute(
@@ -177,6 +180,9 @@ class PersonalSpace:
         ).fetchone()
         if row is None:
             raise SpaceError("SPACE_NOT_FOUND", 404)
+        from .storage import check_mounted_storage, directory_for
+
+        check_mounted_storage(db, directory_for(self, db, space_id))
         return cast(sqlite3.Row, row)
 
     def _parent(self, db: sqlite3.Connection, parent: str, space_id: str = "personal") -> str:
@@ -215,7 +221,7 @@ class PersonalSpace:
     def _object(self, item_id: str, partial: bool = False) -> Path:
         if not _ID.fullmatch(item_id):
             raise SpaceError("SPACE_NOT_FOUND", 404)
-        from .storage import safe_directory
+        from .storage import check_mounted_storage, safe_directory
 
         with self._db() as db:
             row = db.execute(
@@ -223,6 +229,7 @@ class PersonalSpace:
             ).fetchone()
             directory = Path(row[0]) if row else self.objects
             safe_directory(directory)
+            check_mounted_storage(db, directory)
             return directory / (item_id + (".part" if partial else ".blob"))
 
     @contextlib.contextmanager

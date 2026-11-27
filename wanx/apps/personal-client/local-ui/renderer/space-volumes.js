@@ -1,7 +1,7 @@
 (() => {
-  window.createSpaceVolumes = ({render, esc, icon, fileIcon, size}) => {
+  window.createSpaceVolumes = ({render, esc, icon, fileIcon, size, onInventoryChanged}) => {
     let drives = [], selected = null, path = "", offset = 0, listing, preview, error;
-    let scope = null, timer, generation = 0, requestId = 0;
+    let scope = null, timer, refresh, reading, generation = 0, requestId = 0, unavailable = false;
 
     async function request(op, input = {}) {
       const reply = await window.wanxClient.action("space-volumes", {op, ...input});
@@ -14,28 +14,37 @@
       path = "";
       offset = 0;
       listing = preview = error = null;
+      unavailable = false;
     }
     function watch(nextScope) {
       if (scope === nextScope) return;
       scope = nextScope;
       const epoch = ++generation;
       clearTimeout(timer);
+      refresh = reading = null;
       drives = [];
       leave();
       if (!scope) return;
-      async function poll() {
-        let next;
-        try { next = await request("volumes"); }
-        catch { next = []; }
-        if (epoch !== generation) return;
-        if (Array.isArray(next) && JSON.stringify(next) !== JSON.stringify(drives)) {
-          drives = next;
-          if (selected && !drives.some(v => v.id === selected.id)) leave();
-          render();
-        }
-        timer = setTimeout(poll, 4000);
-      }
-      void poll();
+      refresh = function poll() {
+        if (reading) return reading;
+        clearTimeout(timer);
+        reading = request("volumes").catch(() => []).then(next => {
+          if (epoch !== generation) return;
+          if (Array.isArray(next) && JSON.stringify(next) !== JSON.stringify(drives)) {
+            drives = next;
+            if (selected) {
+              selected = drives.find(v => v.id === selected.id);
+              if (!selected) leave();
+            }
+            render();
+            onInventoryChanged?.();
+          }
+          reading = null;
+          timer = setTimeout(poll, 4000);
+        });
+        return reading;
+      };
+      void refresh();
     }
     async function open(folder, page = 0, file = "") {
       const id = ++requestId;
@@ -61,10 +70,16 @@
     function button(label, op, value = "") {
       return `<button class="text-button" data-action="space-volume-${op}" data-value="${esc(value)}">${esc(label)}</button>`;
     }
-    function sidebar() {
-      return drives.map(v => `<button class="space-nav ${selected?.id === v.id ? "active" : ""}" data-action="space-volume-select" data-value="${esc(v.id)}" title="外接硬盘 · ${esc(v.name)}">${icon("drive")}<span>${esc(v.name)}</span></button>`).join("");
+    const volumeKey = id => id.slice(0,id.lastIndexOf("@"));
+    function sidebar(managed = []) {
+      return drives.filter(v => v.id === selected?.id || !managed.includes(volumeKey(v.id))).map(v => `<button class="space-nav ${selected?.id === v.id ? "active" : ""}" data-action="space-volume-open" data-value="${esc(v.id)}" title="外接硬盘 · ${esc(v.name)}">${icon("drive")}<span>${esc(v.name)}</span></button>`).join("");
+    }
+    function originals(key) {
+      const drive = drives.find(v => volumeKey(v.id) === key);
+      return drive ? button("浏览盘上原有文件", "select", drive.id) : "";
     }
     function view() {
+      if (unavailable) return `<div class="space-toolbar"><strong>${esc(selected.name)}</strong></div><section class="empty-state"><h3>外接硬盘暂无法进入文件管理</h3><p>请确认盒端空间服务支持外接硬盘，并且硬盘已挂载为可写。</p>${button("重试", "open", selected.id)} ${button("浏览盘上原有文件", "select", selected.id)}</section>`;
       let parts = [];
       const crumbs = [button(selected.name, "folder"), ...path.split("/").filter(Boolean).map(p => {
         parts.push(p);
@@ -82,12 +97,15 @@
         const rows = listing.items.map(item => `<button class="space-file-row" data-action="space-volume-${item.folder ? "child" : "file"}" data-value="${esc(item.name)}"><span class="space-file-name">${fileIcon({name:item.name, kind:item.folder ? "folder" : "file"})}<strong>${esc(item.name)}</strong></span><span class="space-file-detail">${item.folder ? "文件夹" : size(item.size)}</span></button>`).join("");
         content = `<section class="space-files"><div class="space-file-list">${rows || '<p>此文件夹为空</p>'}</div></section><footer class="space-statusbar">${listing.total} 个项目 ${offset > 0 ? button("上一页","page",offset-listing.pageSize) : ""} ${offset+listing.pageSize < listing.total ? button("下一页","page",offset+listing.pageSize) : ""}</footer>`;
       }
-      return `<div class="space-toolbar"><strong>${esc(selected.name)}</strong><span>外接硬盘</span>${button(preview ? "返回文件夹" : "刷新", "folder", path)}</div><div class="space-pathbar"><div class="space-breadcrumbs">${crumbs.join(" › ")}</div></div>${content}`;
+      const copy = !error && (preview?.result || (!preview && listing && path))
+        ? button(preview ? "复制文件到空间…" : "复制文件夹到空间…", "import") : "";
+      return `<div class="space-toolbar"><strong>${esc(selected.name)}</strong><span>盘上原有文件</span>${button("打开硬盘空间", "open", selected.id)}${button(preview ? "返回文件夹" : "刷新", "folder", path)}${copy}</div><div class="space-pathbar"><div class="space-breadcrumbs">${crumbs.join(" › ")}</div></div>${content}`;
     }
     function action(op, value) {
       if (op === "select") {
         const drive = drives.find(v => v.id === value);
         if (!drive) return;
+        unavailable = false;
         selected = drive;
         return open("");
       }
@@ -98,9 +116,25 @@
       if (op === "page") return open(path, Number(value));
       if (op === "retry") return open(path, offset, preview?.name);
     }
+    async function showUnavailable(value) {
+      const epoch = generation, ticket = requestId;
+      if (!drives.some(v => v.id === value)) await refresh?.();
+      if (!scope || epoch !== generation || requestId !== ticket) return;
+      const drive = drives.find(v => v.id === value);
+      if (!drive) return;
+      leave();
+      selected = drive;
+      unavailable = true;
+      render();
+    }
     function editTarget() {
       if (!selected || !preview) return null;
       return {volume:selected.id, path:[path, preview.name].filter(Boolean).join("/"), name:preview.name};
+    }
+    function importTarget() {
+      if (!selected || error || (!path && !preview) || (preview ? !preview.result : !listing)) return null;
+      const source = preview ? [path,preview.name].filter(Boolean).join("/") : path;
+      return {volume:selected.id, volumeName:selected.name, path:source, name:source.split("/").at(-1), directory:!preview};
     }
     function saved(target, text) {
       const current = editTarget();
@@ -108,6 +142,6 @@
         preview.result = {text:text.slice(0,65536), truncated:text.length > 65536};
       }
     }
-    return { watch, leave, sidebar, view, action, editTarget, request, saved, active: () => Boolean(selected) };
+    return { watch, leave, sidebar, originals, view, action, showUnavailable, editTarget, importTarget, request, saved, active: () => Boolean(selected) };
   };
 })();

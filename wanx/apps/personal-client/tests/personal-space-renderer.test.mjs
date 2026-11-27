@@ -4,12 +4,14 @@ import vm from "node:vm";
 import { readFile } from "node:fs/promises";
 
 const source = await readFile(new URL("../local-ui/renderer/personal-space.js", import.meta.url), "utf8");
+const volumeSource = await readFile(new URL("../local-ui/renderer/space-volumes.js", import.meta.url), "utf8");
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const connected = box => ({ route: "applications", canLaunchApplications: true, account: { accountId: "owner" }, activeDeviceId: box, devices: [{ deviceId: box, name: box }] });
-function harness(action, uploadDroppedFiles, tilePositions = [], dom = {}, surface = {}, globals = {}) {
+function harness(action, uploadDroppedFiles, tilePositions = [], dom = {}, surface = {}, globals = {}, withVolumes = false) {
   const events = new Map(), documentEvents = new Map(); let onState;
   const root = { focus() {}, addEventListener: (type, handler) => events.set(type, handler), ...surface };
   const window = { wanxClient: { action, uploadDroppedFiles, onSpaceState: handler => { onState = handler; } }, ...globals };
+  if (withVolumes) vm.runInNewContext(volumeSource, {window, setTimeout: () => 0, clearTimeout() {}});
   vm.runInNewContext(source, { window, crypto, document: { querySelector: selector => dom.nodes?.get(selector) || root, querySelectorAll: selector => selector === ".space-file-row" ? tilePositions.map(offsetTop => ({ offsetTop })) : [], addEventListener: (type, handler) => documentEvents.set(type, handler) , ...dom }, setInterval() {}, setTimeout, requestAnimationFrame: () => 1, cancelAnimationFrame() {}, queueMicrotask, URL, Blob, atob, TextDecoder });
   const space = window.wanxSpace;
   space.bind({ render() {} });
@@ -28,6 +30,52 @@ function workspaceFixture(disks = [{ id: 'personal', name: '我的空间', root:
     sidebar: () => '', footerNavigation: () => '', navigation: () => '', menuView: () => '', dialogView: () => '', recycled: () => '',
   };
 }
+
+test("opening an attached disk uses the ordinary Space workspace and actions", async () => {
+  const personal = {id:"personal", name:"我的空间", root:""};
+  const mounted = {id:"b".repeat(32), root:"c".repeat(32), name:"数据盘",
+    volume:"test-usb", kind:"volume-space", writable:true, storage:{available:true}};
+  const h = harness(async (action, input) => {
+    if (action === "space.refresh") return ok({phase:"ready", tasks:[]});
+    if (action === "space-volumes") return ok([{id:"test-usb@8-2", name:mounted.name}]);
+    if (action === "space.list") return ok(listed(input.space_id === mounted.id ? "external-note.txt" : "ssd-note.txt"));
+    throw Error(action);
+  }, undefined, [], {}, {}, {wanxWorkspaces:workspaceFixture([personal,mounted])}, true);
+  h.space.hostState(connected("box"));
+  h.space.activate(true);
+  await tick();
+  await h.click("volume-open", "", {value:"test-usb@8-2"});
+  assert.match(h.space.view(), /external-note.txt/);
+  const rightClick = item => h.event("contextmenu", {preventDefault() {}, clientX:100, clientY:100, target:{
+    closest: selector => selector === ".space-file-list" ? {} : item ? {dataset:{entryId:item}} : null,
+  }});
+  rightClick();
+  for (const label of ["新建文件夹", "上传文件"]) assert.match(h.space.view(), new RegExp(label));
+  rightClick("a".repeat(32));
+  for (const label of ["复制到", "移动到", "移入回收站"]) assert.match(h.space.view(), new RegExp(label));
+});
+
+test("an attached disk missing its workspace is not opened as raw files by default", async () => {
+  const volume = {id:"test-usb@8-2", name:"数据盘"};
+  let rawReads = 0, inventoryReads = 0;
+  const h = harness(async (action, input) => {
+    if (action === "space.refresh") return ok({phase:"ready", tasks:[]});
+    if (action === "space.list") return ok(listed("ssd-note.txt"));
+    if (input?.op === "volumes") { inventoryReads++; return ok([volume]); }
+    rawReads++;
+    return ok({items:[], total:0, pageSize:100});
+  }, undefined, [], {}, {}, {wanxWorkspaces:workspaceFixture()}, true);
+  h.space.hostState(connected("box")); h.space.activate(true); await tick();
+  assert.equal(inventoryReads, 1);
+  assert.ok(h.space.view().includes('data-action="space-volume-open"'));
+  await h.click("volume-open", "", {value:volume.id});
+  assert.match(h.space.view(), /外接硬盘暂无法进入文件管理/);
+  assert.doesNotMatch(h.space.view(), /ssd-note.txt/);
+  assert.equal(rawReads, 0);
+  await h.click("volume-select", "", {value:volume.id});
+  assert.match(h.space.view(), /盘上原有文件/);
+  assert.equal(rawReads, 1);
+});
 
 test("an early box event clears private content and late results cannot refill the new account", async () => {
   let resolveList, block = false;

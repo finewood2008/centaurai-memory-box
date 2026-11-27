@@ -204,6 +204,39 @@ export function createMyAiTask({
     throw inputError("此应用没有可用的启动入口，请先安装后重新检测。");
   }
 
+  function explicitTaskScope(input) {
+    return input.agentContext === undefined && input.codexContext === undefined
+      ? { ...input, agentContext: { memoryEnabled: false } } : input;
+  }
+
+  async function reviewHandoff(input, assertScope) {
+    const agent = target(input);
+    if (!validText(input.text, 16000) || !input.text.isWellFormed()) throw inputError("请输入有效的提示词。");
+    const scope = boxScope();
+    const check = () => {
+      assertScope();
+      if (scope !== boxScope()) throw inputError("盒子连接已变化，请重新核对。");
+    };
+    const selected = await selection(input, check);
+    if (hasSelection(selected) && !scope) throw inputError("请连接盒子，或清空本次资料后重试。");
+    const resources = hasSelection(selected) ? await context(input).describe(selected, check) : {};
+    const model = cloudRoutes && ["codex", "codex_cli", "claude_code", "gemini"].includes(agent.id)
+      ? await cloudRoutes.action("status", agent.id, undefined, check) : undefined;
+    check();
+    const modelName = model?.selected?.name || model?.selected?.model || model?.desktopDefault;
+    const resolved = {
+      agentName: agent.name,
+      model: modelName ? "记忆盒子云模型 · " + modelName
+        : model?.recoveryError ? "客户端模型来源待确认"
+        : model ? "原客户端配置（具体模型由客户端决定）" : "由智能体客户端决定",
+      sources: { ...resources, memoryEnabled: selected?.memoryEnabled === true,
+        ...(selected?.memoryEnabled && { memoryAgent: selected.memoryAgent }) },
+    };
+    const confirmation = createHash("sha256").update(JSON.stringify([scope, agent.id, input.mode, input.text,
+      selected, resolved, model?.selected?.ref, model?.selected?.model, model?.desktopDefault])).digest("hex");
+    return { confirmation, context: resolved };
+  }
+
   return async function task(action, input = {}, assertScope = () => {}, signal) {
     if (action.startsWith("model-source/") && cloudRoutes)
       return cloudRoutes.action(action.slice("model-source/".length), target(input).id, input.ref, assertScope);
@@ -291,11 +324,17 @@ export function createMyAiTask({
       assertScope();
       return { opened: true };
     }
+    if (action === "review-handoff") return reviewHandoff(explicitTaskScope(input), assertScope);
     if (action === "copy" || action === "handoff") {
       const agent = target(input);
       if (!validText(input.text, 16000)) throw inputError("提示词无效。");
       if (!input.text.isWellFormed()) throw inputError("提示词包含无法导入的字符，请编辑后重试。");
-      const selected = await effectiveSelection(input, assertScope);
+      const taskInput = input.confirmation === undefined ? input : explicitTaskScope(input);
+      const confirm = input.confirmation === undefined ? null : async () => {
+        const reviewed = await reviewHandoff(taskInput, assertScope);
+        if (reviewed.confirmation !== input.confirmation) throw inputError("任务、模型或资料范围已变化，请重新核对。");
+      };
+      const selected = await effectiveSelection(taskInput, assertScope);
       const prepared = selected !== undefined ? await context(input).prepare(selected, assertScope) : null;
       let prompt = input.text;
       if (prepared) {
@@ -305,13 +344,19 @@ export function createMyAiTask({
       }
       try {
         assertScope();
-        if (action === "copy") { copyText(prompt); return { copied: true }; }
+        if (action === "copy") {
+          if (confirm) await confirm();
+          copyText(prompt);
+          return { copied: true };
+        }
         const detected = await detect(agent);
         assertScope();
         if (agent.variant === "cli") {
           if (!detected.executable || !launcher) throw inputError("未找到可用 CLI 或终端启动助手。");
           const args = agent.id === "gemini" ? ["--prompt-interactive=" + prompt] : ["--", prompt];
-          return await launcher.prepare({ cloudRoute: await cloudRoutes?.launch(agent.id, assertScope), agent: agent.name, executable: detected.executable, args, cwd: input.workspacePath ?? home, prompt,
+          const cloudRoute = await cloudRoutes?.launch(agent.id, assertScope);
+          if (confirm) await confirm();
+          return await launcher.prepare({ cloudRoute, agent: agent.name, executable: detected.executable, args, cwd: input.workspacePath ?? home, prompt,
             resources: [prepared?.resources?.folder?.name, prepared?.resources?.warehouse?.name, selected?.memoryEnabled && "历史记忆"].filter(Boolean).join("、") }, assertScope);
         }
         if (agent.delivery === "draft" && detected.public.prefill) {
@@ -323,21 +368,25 @@ export function createMyAiTask({
           }
           const limit = platform === "win32" ? WINDOWS_EXTERNAL_URL_LIMIT : OTHER_EXTERNAL_URL_LIMIT;
           if (agent.id === "codex" && platform === "win32" && windowsCodex) {
+            if (confirm) await confirm();
             await windowsCodex.open(url.href);
             assertScope();
             return { opened: true, delivery: "draft" };
           }
           if (url.href.length <= limit && (agent.id !== "claude_desktop" || prompt.length <= 14_000)) {
+            if (confirm) await confirm();
             await openExternal(url.href);
             assertScope();
             return { opened: true, delivery: "draft" };
           }
           if (agent.id === "codex" && platform === "win32" && openLongWindowsDraft) {
+            if (confirm) await confirm();
             await openLongWindowsDraft(prompt);
             assertScope();
             return { opened: true, delivery: "draft" };
           }
         }
+        if (confirm) await confirm();
         copyText(prompt);
         let opened = false;
         if (detected.public.installed) { await openDesktop(agent, detected, input.mode); opened = true; }

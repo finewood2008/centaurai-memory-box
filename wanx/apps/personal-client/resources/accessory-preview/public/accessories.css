@@ -607,3 +607,153 @@
 
 .agent-identity { display:inline-flex; align-items:center; gap:9px; }
 .accessory-card .accessory-card-link { display:inline-flex; align-items:center; min-height:32px; }
+
+.recording-mark-controls, .recording-speaker-heading, .recording-speaker-row,
+.recording-speaker-tags { display:flex; align-items:center; flex-wrap:wrap; gap:8px }
+.recording-mark-controls { margin-top:12px }
+.recording-mark-controls input, .recording-speaker-tools input { min-width:0; max-width:100% }
+.recording-speaker-tools, .recording-bookmarks { padding:8px 13px 12px; border-top:1px solid var(--line) }
+.recording-speaker-heading, .recording-speaker-row { margin:5px 0 }
+.recording-speaker-tag { border:1px solid var(--line); border-radius:10px; padding:1px 7px; font-size:12px; white-space:nowrap }
+.recording-transcript-text { min-width:0; flex:1 }
+.recording-transcript-text .btn { margin-left:6px }
+.recording-transcript-line { display:block; overflow-wrap:anywhere }
+.live-transcript .recording-speaker-tags { margin-right:6px }
+.recording-bookmark-note { overflow-wrap:anywhere; flex:1 }
+.recording-version-text { white-space:pre-wrap; max-height:50vh; overflow:auto; margin:0 }
+
+.studio-disk .studio-nav nav[hidden],
+.studio-disk .disk-caption-footer:has(button[hidden]),
+.studio-disk .disk-detail > [hidden] { display:none }
+.studio-disk .accessory-workbench { display:grid; grid-template-columns:minmax(0,1.8fr) minmax(250px,1fr); gap:20px; align-items:start }
+.studio-disk .disk-workbench-setup { min-width:0 }
+.studio-disk .accessory-workbench .studio-shelf { min-width:0; margin:0 }
+.studio-disk .accessory-workbench .accessory-project-row { grid-template-columns:minmax(0,1fr) auto; gap:4px 8px }
+.studio-disk .accessory-workbench .accessory-project-name { grid-column:1/-1 }
+.studio-disk {
+  --disk-inset: clamp(14px, 2.6vw, 28px);
+}
+.studio-disk .agent-live { grid-template-columns:minmax(0,1fr); gap:12px }
+.studio-disk .agent-live > .head { grid-column:1/-1; flex-wrap:wrap; margin:0; overflow-wrap:anywhere }
+.studio-disk .agent-live .capture { padding:12px var(--disk-inset) }
+.studio-disk .disk-capture-bar { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:16px }
+.studio-disk .disk-capture-bar .row { flex-wrap:wrap }
+.studio-disk .disk-capture-bar .timer strong { font-size:28px }
+.studio-disk .disk-saved-duration { margin-top:5px; font-size:12px; font-variant-numeric:tabular-nums }
+.studio-disk .disk-capture-meter { display:grid; gap:3px; min-width:0 }
+.studio-disk .disk-capture-meter .wave { height:32px; background:var(--card) }
+.studio-disk .disk-capture-meter p { font-size:12px; overflow-wrap:anywhere }
+.studio-disk .live-transcript .card-h { padding:14px var(--disk-inset); flex-wrap:wrap }
+.studio-disk .live-transcript h2,
+.studio-disk .disk-transcript-heading h2,
+.studio-disk .summary-header h2 { font-size:19px; letter-spacing:-.02em }
+.studio-disk .disk-caption-status { margin-left:auto; font-size:12px }
+.studio-disk .disk-caption-status.is-live { color:var(--studio-accent); font-weight:650 }
+.studio-disk .disk-caption-status.is-live::before { content:""; display:inline-block; width:6px; height:6px; margin-inline-end:6px; border-radius:50%; background:currentColor; vertical-align:2px }
+.studio-disk .disk-caption-note { padding:9px var(--disk-inset) 0; font-size:12px }
+.studio-disk .disk-caption-footer { display:flex; justify-content:flex-end; padding:8px var(--disk-inset); border-top:1px solid var(--line) }
+.studio-disk .live-transcript .tr { padding:8px var(--disk-inset); min-height:160px; max-height:52vh }
+.studio-disk .live-transcript .line { grid-template-columns:4.5em minmax(0,1fr); padding:10px 0; overflow-wrap:anywhere }
+.studio-disk .disk-caption-time { font:12px/1.8 var(--mono); white-space:nowrap }
+.studio-disk .disk-caption-partial { margin-inline-start:8px; font-size:12px; color:var(--studio-accent) }
+.studio-disk .line:has(.disk-caption-partial) { color:var(--mute) }
+
+.studio-disk .recording-detail.disk-detail { min-width:0; grid-template-columns:minmax(0,1fr); gap:14px }
+.studio-disk .disk-detail .detail-heading { align-items:baseline; flex-wrap:wrap; margin:0 }
+.studio-disk .disk-detail .listening { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:12px; padding:7px var(--disk-inset) }
+.studio-disk .disk-detail .listening :is(.card-h,.audio-strip,.playback-speed,.empty) { padding:0 }
+.studio-disk .disk-detail .listening .card-h { border-bottom:0; white-space:nowrap }
+.studio-disk .disk-detail .listening .playback-speed { white-space:nowrap }
+.studio-disk .disk-detail .listening .playback-speed select { width:auto }
+.studio-disk .disk-detail-tabs { padding:0; gap:18px; border-bottom:1px solid var(--line) }
+.studio-disk .disk-detail-tabs button { margin-bottom:-1px; padding:8px 4px; border:0; border-bottom:2px solid transparent; border-radius:0; background:transparent; font-size:15px }
+.studio-disk .disk-detail-tabs button[aria-pressed=true] { border-bottom-color:var(--studio-accent); font-weight:650 }
+.studio-disk .disk-transcript { display:grid; grid-template-columns:minmax(0,1fr) minmax(180px,25%); align-items:start; gap:14px }
+.studio-disk .disk-transcript-text { min-width:0; padding:14px var(--disk-inset) }
+.studio-disk .disk-transcript-heading { display:flex; align-items:baseline; gap:10px; margin-bottom:8px }
+.studio-disk .disk-transcript .transcript-tools { padding:0 0 12px; flex-wrap:wrap }
+.studio-disk .disk-transcript .transcript-tools input { flex:1 1 150px; min-width:0 }
+.studio-disk .disk-transcript .transcript-tools select { width:auto; max-width:100% }
+.studio-disk .disk-match-controls { flex-wrap:wrap }
+.studio-disk .disk-transcript .ex { max-height:52vh; padding:0; border-top:1px solid var(--line) }
+.studio-disk .disk-transcript .exl { display:grid; grid-template-columns:5.2em minmax(0,1fr) auto; align-items:start; gap:8px; padding:12px 8px; border-bottom:1px solid var(--line); overflow-wrap:anywhere }
+.studio-disk .disk-transcript .exl > .ts { justify-self:start; min-height:26px; color:var(--studio-accent) }
+.studio-disk .disk-transcript .exl[hidden], .studio-disk .disk-transcript .empty[hidden] { display:none }
+.studio-disk .disk-transcript .recording-transcript-line { margin-top:3px; line-height:1.8 }
+.studio-disk .disk-search-match { box-shadow:inset 3px 0 var(--studio-accent); background:var(--cover-light) }
+
+.studio-disk .summary-header { padding:12px var(--disk-inset); column-gap:12px }
+.studio-disk .summary-header .summary-actions { flex-wrap:wrap }
+.studio-disk .disk-summary-layout { display:grid; grid-template-columns:minmax(0,1.65fr) minmax(255px,1fr); align-items:start }
+.studio-disk .disk-summary-outline { display:flex; flex-wrap:wrap; align-items:baseline; gap:3px; margin-bottom:16px }
+.studio-disk .summary-document .disk-summary-outline h3 { margin:0 4px 0 0; padding:0; border:0; font-size:12px; color:var(--mute) }
+.studio-disk .disk-summary-outline button { border:0; border-radius:6px; padding:4px 8px; background:transparent; text-align:left; color:var(--studio-accent); font-size:13px; overflow-wrap:anywhere }
+.studio-disk .disk-summary-outline button:hover { background:var(--cover-light) }
+.studio-disk .disk-summary-source { min-width:0; padding:var(--disk-inset); background:var(--cover-light); border:solid var(--cover-line); border-width:0 0 1px 1px; border-radius:0 0 12px 12px }
+.studio-disk .disk-source-content { display:grid; gap:10px; overflow-wrap:anywhere }
+.studio-disk .disk-source-heading { display:flex; gap:8px; justify-content:space-between; align-items:baseline }
+.studio-disk .disk-source-heading h3 { font-size:17px }
+.studio-disk .disk-source-content blockquote { margin:0; padding-left:12px; border-left:2px solid var(--cover-line); line-height:1.8 }
+.studio-disk .disk-source-actions { align-items:start }
+.studio-disk .disk-summary-source .listening { margin-top:14px; padding:10px; grid-template-columns:minmax(0,1fr) auto; gap:6px }
+.studio-disk .disk-summary-source .listening .audio-strip { grid-column:1/-1; grid-row:2 }
+.studio-disk .disk-summary-source .listening .card-h { font-size:13px }
+.studio-disk .summary-document { padding:18px var(--disk-inset) 22px }
+.studio-disk .summary-document h3 { padding-bottom:5px; border-bottom:1px solid var(--line); font-size:17px; color:var(--studio-accent); overflow-wrap:anywhere }
+.studio-disk .summary-document section+section,
+.studio-disk .summary-document p+h3 { margin-top:22px }
+.studio-disk .summary-paragraph { max-width:72ch }
+.studio-disk .disk-source-link { display:inline-block; margin:0 4px; padding:3px 8px; border:1px solid transparent; border-radius:6px; background:var(--cover-light); color:var(--studio-accent); font:12px/1.5 var(--mono); white-space:nowrap }
+.studio-disk .disk-source-link:hover, .studio-disk .disk-source-link[aria-pressed=true] { border-color:var(--cover-line); background:var(--cover) }
+.studio-disk .disk-source-link[aria-pressed=true] { font-weight:650 }
+.studio-disk .disk-confirmed-versions { padding:0 var(--disk-inset) 14px; flex-wrap:wrap }
+.studio-disk .disk-speaker-panel { padding:11px; border:1px solid var(--line) }
+.studio-disk .disk-speaker-panel h2 { margin:0; font-size:16px }
+.studio-disk .disk-speaker-note { margin-bottom:8px; font-size:12px }
+.studio-disk .disk-speaker-panel [role='status'] { margin-block:8px 0 }
+.studio-disk .disk-speaker-panel .recording-speaker-row { gap:5px; margin:0; padding:9px 0; border-top:1px solid var(--line) }
+.studio-disk .disk-speaker-name { max-width:100%; min-height:26px; background:transparent; color:var(--studio-accent); cursor:pointer }
+.studio-disk .disk-speaker-name:hover, .studio-disk .disk-speaker-name:focus-visible { background:var(--cover-light); text-decoration:underline }
+.studio-disk .disk-speaker-panel .disk-speaker-actions { width:100%; gap:4px; flex-wrap:wrap }
+.studio-disk .disk-speaker-actions .btn { padding-inline:6px }
+.studio-disk .disk-speaker-conflict { color:#82541d }
+.studio-disk .recording-speaker-tag { white-space:normal; overflow-wrap:anywhere }
+@media (min-width:761px) {
+  .studio-disk .agent-live { grid-template-columns:minmax(0,1fr) minmax(230px,29%) }
+  .studio-disk .disk-capture-bar { grid-template-columns:minmax(0,1fr); gap:12px }
+}
+@media (max-width:760px) {
+  .studio-disk .agent-live .capture { grid-row:2 }
+  .studio-disk .accessory-workbench, .studio-disk .disk-transcript, .studio-disk .disk-summary-layout { grid-template-columns:minmax(0,1fr) }
+  .studio-disk .disk-summary-source { border-width:1px 0 0 }
+}
+@media (max-width:520px) {
+  .studio-disk .disk-capture-bar { grid-template-columns:auto minmax(0,1fr); gap:10px }
+  .studio-disk .disk-capture-bar .row { grid-column:1/-1 }
+  .studio-disk .disk-detail .listening { grid-template-columns:minmax(0,1fr) auto }
+  .studio-disk .disk-detail .listening .audio-strip { grid-column:1/-1; grid-row:2 }
+  .studio-disk .disk-transcript .exl { grid-template-columns:4.7em minmax(0,1fr) }
+  .studio-disk .disk-transcript .exl > button:last-child:not(:first-child) { grid-column:2; justify-self:start }
+}
+
+/* 领夹导入录音：原音回听、完整逐字稿与总结。 */
+.studio-clip .clip-detail > * { min-width:0 }
+.studio-clip .clip-detail .listening {
+  grid-column:1/-1; display:grid; grid-template-columns:auto minmax(0,1fr) auto;
+  align-items:center; gap:16px; padding:16px 20px; background:#244b3c; color:#f4f7ee;
+}
+.studio-clip .clip-detail .listening :is(.card-h,.audio-strip,.playback-speed,.empty) { margin:0; padding:0; border:0; color:inherit }
+.studio-clip .clip-detail .playback-speed { white-space:nowrap }
+.studio-clip .clip-detail .playback-speed select { width:auto; color:#243f30 }
+.clip-transcript-head { display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:15px 18px; border-bottom:1px solid var(--line) }
+.clip-transcript-head h2 { margin:0; font-size:17px }
+.clip-transcript-head input { margin-left:auto; width:min(150px,100%) }
+.clip-paragraphs { max-height:65vh; overflow:auto; padding:18px 22px; line-height:1.9; overflow-wrap:anywhere; white-space:pre-wrap }
+.clip-paragraphs p { margin:0 0 1em }
+.clip-paragraphs p:last-child { margin-bottom:0 }
+.clip-transcript-status { margin:14px 18px }
+@media (max-width:760px) {
+  .studio-clip .clip-detail .listening { grid-template-columns:minmax(0,1fr) auto; gap:8px; padding:12px 16px }
+  .studio-clip .clip-detail .audio-strip { grid-column:1/-1; grid-row:2 }
+  .clip-paragraphs { max-height:50vh; padding:16px }
+}

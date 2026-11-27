@@ -38,7 +38,7 @@ const key = node => node.key.keys.map(part=>part.name ?? part.value);
 const setting = (nodes,name) => nodes.find(n => n.type === "TOMLKeyValue" && key(n).length === 1 && key(n)[0] === name);
 const splice = (text,[start,end],value) => text.slice(0,start)+value+text.slice(end);
 
-function prepare(text, {base,helper,model,catalog}) {
+function prepare(text, {base,helper,helperCommand = helper,helperArgs = [],model,catalog}) {
   const nodes = document(text);
   if (setting(nodes,"profile")) throw new Error("Codex 当前使用具名配置档。请先在 Codex 选回默认配置档，再使用自动切换。");
   const values = {model,model_provider:provider,model_catalog_json:catalog};
@@ -55,7 +55,7 @@ function prepare(text, {base,helper,model,catalog}) {
   for (const edit of replacements.sort((a,b)=>b.range[0]-a.range[0])) edited=splice(edited,edit.range,edit.value);
   const block = ["", "[model_providers."+provider+"]", 'name = "MemoBox Cloud"', "base_url = "+JSON.stringify(base),
     'wire_api = "responses"', "supports_websockets = false", "requires_openai_auth = false",
-    "auth = { command = "+JSON.stringify(helper)+", refresh_interval_ms = 1000 }",""].join(newline);
+    "auth = { command = "+JSON.stringify(helperCommand)+(helperArgs.length ? ", args = "+JSON.stringify(helperArgs) : "")+", refresh_interval_ms = 1000 }",""].join(newline);
   // Parsing again detects conflicts with existing user-owned provider definitions.
   const next = added+edited+block;
   document(next);

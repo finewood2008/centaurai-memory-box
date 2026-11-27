@@ -16,7 +16,7 @@
     "grantIssuer": "Desktop Host for foreground defaults; trusted box installation operator for explicit grants",
     "authorizationMode": "Read and write checked per operation; durable worker rechecks expiring grant before claim, while running and at result publication.",
     "foregroundDesktop": {
-      "capabilities": ["audio.transcribe", "audio.transcribe.streaming", "text.summarize"],
+      "capabilities": ["audio.transcribe", "audio.transcribe.cloud", "audio.transcribe.streaming", "audio.transcribe.streaming.cloud", "text.summarize"],
       "request": "Use the authenticated desktop Host connection and omit X-Media-Grant. The Host supplies an app-specific credential.",
       "space": "Server-bound space, or personal if the platform session has no bound space",
       "requires": "Compatible desktop Host, Bridge and media service on a platform-authenticated box connection",
@@ -27,7 +27,15 @@
     "capability": "audio.transcribe.streaming",
     "create": "POST /asr/sessions",
     "createStatus": 201,
-    "createRequest": "empty body, authenticated through Bridge using the Host default credential or an explicit grant",
+    "createRequest": "An empty request selects local captions. Use the cloud request only after obtaining consent to transmit live audio for this recording.",
+    "cloud": {
+      "discovery": "audio.transcribe.streaming.cloud with configured = true",
+      "createRequest": {"capability": "audio.transcribe.streaming.cloud", "cloudConsent": true},
+      "verifyReceipt": {"capability": "audio.transcribe.streaming.cloud", "processingLocation": "cloud"},
+      "model": "qwen3-asr-flash-realtime",
+      "events": "Apply partial and final to the same segmentId. On end, keep reading until the final events and the end receipt have arrived.",
+      "scope": "Live audio only. File transcription uses an independent choice and grant."
+    },
     "createResponse": "id, streamPath, ticket, ticketExpiresAt (Unix seconds), audio, maxFrameBytes, idleTimeoutSeconds, maxDurationSeconds",
     "connect": "WebSocket at streamPath on the same trusted Bridge; no query string",
     "subprotocols": ["wanx.asr.v1", "wanx.asr.ticket.<ticket>"],
@@ -47,9 +55,11 @@
       "ready": {"type": "ready"},
       "partial": {"type": "partial", "segmentId": 0, "text": "replace the current draft for segmentId"},
       "final": {"type": "final", "segmentId": 0, "text": "commit the completed segment"},
+      "speaker": {"type": "speaker", "segmentId": 0, "speakerIds": ["speaker-1"]},
       "end": {"type": "end", "durationMs": 100},
       "error": {"type": "error", "code": "STREAM_GRANT_REVOKED"}
     },
+    "speakerAttribution": "Optional when audio.transcribe.streaming.speakerDiarization is true. Speaker events can update an existing text segment. IDs are anonymous and scoped to the stream; an empty array means unknown. Text and recording can continue without speaker events.",
     "persistence": "The service does not store stream audio or transcripts. File jobs and application archival are independent.",
     "delegation": "Interactive media grants only; background worker delegations cannot request this capability."
   },
@@ -164,6 +174,12 @@
   ],
   "capabilities": {
     "audio.transcribe": {
+      "diarization": {
+        "discovery": "audio.transcribe.speakerDiarization and maxDiarizationDurationSeconds",
+        "options": {"mode": "diarize", "expectedSpeakers": "Optional integer 1–12; omit for automatic estimation"},
+        "output": ["speakerTurns[].startMs", "speakerTurns[].endMs", "speakerTurns[].speakerIds", "durationMs"],
+        "semantics": "Submit one independent job containing the entire recording, using a timeline-preserving encoding if needed to meet the input size limit. The service processes long recordings in bounded windows and reconciles speaker IDs across them. Offsets use the original audio timeline. Empty speakerIds means unknown, multiple IDs means overlapping speakers. Labels are local to one result. Use a new requestId for a new estimate."
+      },
       "format": [
         "WAV",
         "FLAC",
@@ -182,6 +198,13 @@
         "segments[].text",
         "text"
       ]
+    },
+    "audio.transcribe.cloud": {
+      "processingLocation": "cloud",
+      "options": {"cloudConsent": true},
+      "input": "User-selected recording, after per-recording consent to send its audio to the cloud provider. Check configured before upload.",
+      "result": "Transcript text, model and segments with startMs and endMs on the original audio timeline.",
+      "delegation": "Foreground only. A local transcription grant does not authorize cloud transcription."
     },
     "image.ocr": {
       "output": [

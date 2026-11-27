@@ -257,3 +257,23 @@ test("Electron protocol exposes collaboration only on the authorized personal me
   requestState = { account: { phase: "authenticated", accountId: "b", clientId: "client" } };
   assert.equal((await hit("collaboration/config", headers)).status, 403);
 });
+
+test("a prompt team binds only its configured recipients and approved evidence to the preview",async t=>{
+  const f=fixture({config:recipients.map(r=>({...r,configured:r.id!=="claude"}))});
+  t.after(()=>f.service.close());
+  const draft={purpose:"prompt",target:"codex",team:["gemini","gpt"],task,selection};
+  for(const team of [["gemini"],["gemini","gemini"],["claude","gpt"]])
+    await assert.rejects(f.service.action("preview",{...draft,team}));
+  const p=await f.service.action("preview",draft);
+  assert.deepEqual(p.recipients.map(r=>r.id),draft.team);
+  assert.equal(f.calls.length,0);
+  const job=await f.run(p,["E1"]);
+  await state(f.service,job.id,"completed");
+  assert.deepEqual(f.calls.map(c=>[c.provider,c.stage]),[["gemini","research"],["gpt","research"],["gemini","synthesize"],["gpt","review"]]);
+  for(const call of f.calls){
+    assert.equal(call.body.purpose,"prompt");assert.equal(call.body.target,"codex");
+    assert.deepEqual(call.body.evidence,[{id:"E1",text:evidence[0].text}]);
+  }
+  assert.equal((await f.service.action("list")).jobs.length,0);
+  assert.equal((await f.service.action("list",{purpose:"prompt",target:"codex"})).jobs.length,1);
+});

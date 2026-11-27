@@ -1,6 +1,6 @@
 {
   "name": "centuarai-wanx-client",
-  "version": "1.5.6",
+  "version": "1.5.7",
   "private": true,
   "license": "UNLICENSED",
   "type": "module",
@@ -181,5 +181,5 @@
     "@nexusaos/local-provisioning-contracts": "$@nexusaos/local-provisioning-contracts"
   },
   "wanxEdition": "personal",
-  "wanxInternalVersion": "1.5.6"
+  "wanxInternalVersion": "1.5.7"
 }

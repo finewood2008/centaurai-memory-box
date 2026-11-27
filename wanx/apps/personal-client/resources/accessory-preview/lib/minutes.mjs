@@ -23,24 +23,53 @@ function splitText(lines, maxBytes) {
   return batches;
 }
 
-function decodeResult(raw, segments) {
+function cleanTopic(value) {
+  if (typeof value !== 'string') return '';
+  const topic = cleanText(value, 61).replace(/\s+/g, ' ');
+  return topic.length <= 60 && !/^(无|暂无|未知|未提及|未明确|无法确定|会议|会议录音|会议主题|会议纪要|智能总结|录音总结|无明确主题|未命名会议)[。.]?$/.test(topic)
+    ? topic : '';
+}
+
+export function meetingTopic(document) {
+  const explicit = cleanTopic(document?.topic);
+  if (explicit) return explicit;
+  const text = typeof document?.text === 'string' ? document.text : '';
+  const labelled = text.match(/^ *(?:#{1,6} +)?(?:会议主题|会议标题)[：:] *([^\r\n]+)$/m);
+  const section = document?.sections?.find(({ heading }) => heading === '会议主题' || heading === '会议标题');
+  return cleanTopic(labelled?.[1]) || cleanTopic(section?.blocks?.[0]?.text);
+}
+
+function decodeResult(raw, segments, includeTopic) {
   try {
     const parsed = JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g, ''));
+    const topic = includeTopic ? cleanTopic(parsed?.topic) : '';
     const sections = verifySections(parsed?.sections, segments);
-    if (sections.length) return { sections };
+    if (sections.length) return { sections, ...(topic && { topic }) };
     const body = Array.isArray(parsed?.sections) ? parsed.sections.flatMap(section => [
       typeof section?.heading === 'string' ? section.heading : '',
       ...(Array.isArray(section?.blocks) ? section.blocks.map(block => typeof block?.text === 'string' ? block.text : '') : []),
     ]).filter(Boolean).join('\n\n') : '';
-    return { sections: [], text: body || raw };
+    return { sections: [], text: body || raw, ...(topic && { topic }) };
   } catch { return { sections: [], text: raw }; }
 }
 
-export async function generateMinutes(recordingId, segments, template, revision, retryFailed = false, service = media) {
-  const name = template.id ? '录音智能体 · ' + template.id : '本次总结 · ' + recordingId;
-  const templateId = await service.ensureTemplate(name, instruction + '\n用户总结偏好：' + template.rules);
-  const base = sha256(Buffer.from(recordingId + revision + template.rules)).slice(0, 30);
-  const lines = segments.map(segment => '[' + segment.i + '] ' + cleanText(segment.text, 2200));
+const speakerPrefix = segment => {
+  if (!segment.speakerNames) return '';
+  if (segment.speakerConflict) return '〔归属待核对〕 ';
+  if (!segment.speakerNames.length) return '〔归属不明〕 ';
+  return '〔' + segment.speakerNames.join(' / ') + '〕 ';
+};
+
+export async function generateMinutes(recordingId, segments, template, revision, retryFailed = false, service = media, { includeTopic = false, generationId } = {}) {
+  const name = includeTopic ? '会议录音智能体 · ' + (template.id || recordingId)
+    : template.id ? '录音智能体 · ' + template.id : '本次总结 · ' + recordingId;
+  const topicInstruction = includeTopic
+    ? '\n在同一个 JSON 对象中提供 topic 作为整场会议的简短主题，只用转录中能确认的内容，最多 30 字。无法确定时设为空字符串。' : '';
+  const templateId = await service.ensureTemplate(name, instruction + topicInstruction + '\n用户总结偏好：' + template.rules);
+  const lines = segments.map(segment => '[' + segment.i + '] ' + speakerPrefix(segment) + cleanText(segment.text, 2200));
+  const identity = [recordingId, revision, template.rules + topicInstruction, lines];
+  if (generationId) identity.push(generationId);
+  const base = sha256(Buffer.from(JSON.stringify(identity))).slice(0, 30);
   let inputs = splitText(lines, 12500);
   let result;
   for (let pass = 0; pass < 10; pass++) {
@@ -51,7 +80,7 @@ export async function generateMinutes(recordingId, segments, template, revision,
       if (!output) throw new Error('盒端还没有返回有效的总结正文');
       outputs.push(output);
     }
-    if (outputs.length === 1) return { model: result.model || '盒端媒体', ...decodeResult(outputs[0], segments) };
+    if (outputs.length === 1) return { model: result.model || '盒端媒体', ...decodeResult(outputs[0], segments, includeTopic) };
     const next = splitText(outputs.map(value => '候选总结（合并主题并保留原引用）：' + value), 28500);
     if (next.length >= inputs.length) {
       const docs = outputs.map(value => decodeResult(value, segments));
@@ -206,11 +235,12 @@ export function renderTranscriptTxt(m) {
   const head = [
     `# ${m.title} · 完整转录`,
     `# meeting_id: ${m.id}`,
-    `# 来源：盒内归档原音，盒端媒体转写（${t.source === 'chunks' ? '按片段组合' : '整段识别'}）`,
+    `# 来源：归档原音，${t.mode === 'cloud' ? '云端精转' : '盒端媒体转写'}（${t.source === 'chunks' ? '按片段组合' : '整段识别'}）`,
+    t.model ? `# 转写模型：${t.model}` : null,
     `# 生成时间：${t.updatedAt || ''}`,
     t.status === 'partial' ? `# 注意：片段 ${(t.failedChunks || []).join(', ')} 识别失败，可在应用中重试` : null,
     '',
   ].filter((l) => l !== null);
-  const lines = (t.segments || []).map((s) => `[${s.i}] [${fmtMs(s.fromMs)} - ${fmtMs(s.toMs)}] ${s.text}`);
+  const lines = (t.segments || []).map((s) => `[${s.i}] [${fmtMs(s.fromMs)} - ${fmtMs(s.toMs)}] ${speakerPrefix(s)}${s.text}`);
   return head.concat(lines).join('\n') + '\n';
 }

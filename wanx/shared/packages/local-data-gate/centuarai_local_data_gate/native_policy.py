@@ -250,6 +250,13 @@ OCTOP_RULES = (
     ("POST", r"/api/personal-space/(?:agent-access|connection-access)", "space", "read", MIB),
     (
         "POST",
+        rf"/api/personal-space/(?:spaces/mounted-volume|files/{FILE}/transfer)",
+        "space",
+        "write",
+        MIB,
+    ),
+    (
+        "POST",
         rf"/api/personal-space/(?:uploads/{FILE}/complete|files/{FILE}/(?:previous|edit-uploads)|trash/{FILE}/restore)",
         "space",
         "write",
@@ -577,6 +584,12 @@ def classify_octop(method, target, transport, application_id, data_context=None)
             if re.fullmatch(rf"/api/personal-space/files/{FILE}/edit-uploads", path):
                 need(application_id == "wanx-host", "LOCAL_DATA_ROUTE_DENIED")
                 need(method == "POST" and transport == "http" and target == path, "LOCAL_DATA_ROUTE_DENIED")
+            if re.fullmatch(rf"/api/personal-space/(?:spaces/mounted-volume|files/{FILE}/transfer)", path):
+                need(
+                    application_id == "wanx-host" and data_context in (None, "personal")
+                    and method == "POST" and transport == "http" and target == path,
+                    "LOCAL_DATA_ROUTE_DENIED",
+                )
             preview = re.fullmatch(rf"/api/_client/space-previews/{FILE}(?:/content)?", path)
             if preview:
                 need(application_id == "wanx-host", "LOCAL_DATA_ROUTE_DENIED")

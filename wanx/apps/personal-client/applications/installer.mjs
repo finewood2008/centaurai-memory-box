@@ -238,13 +238,18 @@ export function createApplicationInstaller({ rootDir, now = () => Date.now(), co
       } finally { await rm(staging,{recursive:true,force:true}); }
     }
     if (archivePath !== undefined) {
-      if (typeof archivePath !== "string" || !archivePath || sourceDir || Object.keys(options).length)
+      const {expectedApplicationId, ...extra} = options;
+      if (typeof archivePath !== "string" || !archivePath || sourceDir || Object.keys(extra).length ||
+          (expectedApplicationId !== undefined && typeof expectedApplicationId !== "string"))
         throw fail("APPLICATION_SOURCE_REQUIRED");
       await mkdir(rootDir, { recursive: true, mode: 0o700 });
       const staging = await mkdtemp(path.join(await realpath(rootDir), ".unpacking-"));
       try {
         const extracted = await extractApplicationArchive(archivePath, staging);
-        return await installDirectory({ sourceDir: extracted }, signal);
+        const manifest = await readApplicationManifest(path.join(extracted, "application.manifest.json"));
+        if (expectedApplicationId !== undefined && manifest.applicationId !== expectedApplicationId)
+          throw fail("APPLICATION_MANIFEST_MISMATCH");
+        return await installDirectory({ sourceDir: extracted, manifest }, signal);
       } finally { await rm(staging, { recursive: true, force: true }); }
     }
     return installDirectory({ sourceDir, ...options }, signal);

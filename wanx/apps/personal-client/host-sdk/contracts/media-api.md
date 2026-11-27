@@ -1,6 +1,6 @@
 # 万象盒端媒体 API v1
 
-面向接入万象盒子的应用研发团队。文件语音转写、图片文字识别、实时字幕和 LLM 总结共用服务 `wanx.media`，业务路径前缀为 `/api/services/wanx.media/v1`。应用通过 App Kit 的桌面 Host SDK 访问当前连接的盒子。语音转写、图片文字识别和实时字幕在盒内推理，LLM 总结由盒端受理，默认使用平台为设备配置的万象托管云端模型。
+面向接入万象盒子的应用研发团队。文件语音转写、图片文字识别、实时字幕和 LLM 总结共用服务 `wanx.media`，业务路径前缀为 `/api/services/wanx.media/v1`。应用通过 App Kit 的桌面 Host SDK 访问当前连接的盒子。默认文件转写、图片文字识别和默认实时字幕在盒内推理。会议录音可为单条录音分别选择云端实时字幕和云端精转，LLM 总结由盒端受理，默认使用平台为设备配置的万象托管云端模型。
 
 [机器可读合同与其他媒体能力](homeai-media.v1.json) · [App Kit 合同目录](README.md)
 
@@ -9,8 +9,10 @@
 | 业务 | 所需能力 | 调用方式 |
 | --- | --- | --- |
 | 已有录音转文字 | `audio.transcribe` | HTTP 文件作业，返回全文和原录音时间点 |
+| 已有录音云端精转 | `audio.transcribe.cloud` | 用户同意上传这条录音后，盒端按语音段向云模型提交音频 |
 | 图片或截图读文字 | `image.ocr` | HTTP 文件作业，返回全文、原图尺寸和词框 |
 | 麦克风实时字幕 | `audio.transcribe.streaming` | HTTP 申请会话，WebSocket 双向传输 PCM 与字幕 |
+| 云端实时字幕 | `audio.transcribe.streaming.cloud` | 用户确认实时上传本次录音后，盒端通过 WebSocket 转发音频并回传字幕 |
 | 对转写稿、OCR 文本等生成总结 | `text.summarize` | HTTP 创建云端模型总结任务并轮询结果，支持实例模板 |
 | 盒内后台文件处理 | 对应的文件能力及限时委托 | 受信盒内服务使用回环接口 |
 
@@ -69,9 +71,9 @@
 }
 ```
 
-顶层 `processingLocation: "box"` 表示任务服务在当前盒子运行。总结能力项的 `processingLocation: "cloud"` 表示实际推理在云端。
+顶层 `processingLocation: "box"` 表示任务服务在当前盒子运行。云端精转和总结能力项的 `processingLocation: "cloud"` 表示实际推理在云端。
 
-用设备实际返回的限制。当前通用文件上限为 256 MiB。单图上限 3200 万像素，安装兼容 HEVC 解码器后才可能额外返回 `heic`、`heif` 和 `heif.maxPrimaryFrames: 1`。文件 ASR 支持的容器以 `formats` 为准，解码时长最长 3600 秒。OCR 和文件 ASR 使用 `options: {}`，模型、OCR 语言包和 ASR 识别策略由盒端配置。应用选择已获授权且可读取的文件，上传原始字节。
+用设备实际返回的限制。当前通用文件上限为 256 MiB。单图上限 3200 万像素，安装兼容 HEVC 解码器后才可能额外返回 `heic`、`heif` 和 `heif.maxPrimaryFrames: 1`。文件 ASR 支持的容器以 `formats` 为准，解码时长最长 3600 秒。OCR 和本地文件 ASR 使用 `options: {}`，模型、OCR 语言包和 ASR 识别策略由盒端配置。应用选择已获授权且可读取的文件，上传原始字节。
 
 ## 3. 文件 ASR 与图片 OCR
 
@@ -132,7 +134,30 @@
 }
 ```
 
-`language` 是模型识别的语种，`segments[].id` 是该次结果内的字符串段标识。`startMs`、`endMs` 为相对原录音起点的毫秒数。盒端文件 VAD 过滤无声区间后仍映射回原音时间轴。`text` 是所有有效段按顺序用换行拼接的全文。无有效语音时作业为 `failed`，`error` 为 `AUDIO_NO_SPEECH`。纪要、说话人标注和待办属于应用层，API 返回识别稿供应用进一步处理。
+`language` 是模型识别的语种，`segments[].id` 是该次结果内的字符串段标识。`startMs`、`endMs` 为相对原录音起点的毫秒数。盒端文件 VAD 过滤无声区间后仍映射回原音时间轴。`text` 是所有有效段按顺序用换行拼接的全文。无有效语音时作业为 `failed`，`error` 为 `AUDIO_NO_SPEECH`。纪要、发言人命名、人工修订和待办由应用管理。
+
+### 云端精转
+
+先检查能力列表中 `audio.transcribe.cloud` 的 `configured` 为 `true`，再提示用户本条录音的音频将经万象中转站（QeeToken）发送到阿里云百炼。用户确认后，使用该能力创建文件作业，传入 `options: {"cloudConsent":true}`，按同一文件上传协议提交与轮询。云端精转和本地转写需要各自的 `requestId`。较早的服务只提供本地转写；应用可在能力缺失时说明云端精转尚未开通。
+
+结果包含实际模型、全文和语音段。段落起止时间由盒端在原音上切分获得，适合点击回听。实时字幕和说话人分割继续使用各自的盒端接口。
+
+### 会后发言归属校正
+
+能力发现中的 `audio.transcribe.speakerDiarization` 为 `true` 时，可以沿用 `audio.transcribe` 的授权提交独立作业。创建作业时使用 `options: {"mode":"diarize"}`，可再传入 `expectedSpeakers`（1 至 12 的整数），人数作为识别提示。作业处理整份原音，单份录音上限以 `maxDiarizationDurationSeconds` 为准。应用可保留已有逐字稿并直接在原音时间轴上叠加结果。
+
+```json
+{
+  "speakerTurns": [
+    {"startMs": 240, "endMs": 1800, "speakerIds": ["speaker-1"]},
+    {"startMs": 1800, "endMs": 2150, "speakerIds": ["speaker-1", "speaker-2"]},
+    {"startMs": 3100, "endMs": 3420, "speakerIds": []}
+  ],
+  "durationMs": 4100
+}
+```
+
+多个 ID 表示同一时间段内的重叠发言，空数组表示归属不明。匿名 ID 在单次整场结果内有效。改变人数或重新估计时提交新 `requestId`。原作业失败可用现有 `/retry` 重试。应用在新结果确认前可继续使用已有文字和原音。
 
 ### OCR 结果
 
@@ -155,7 +180,9 @@
 
 ## 4. 实时 ASR WebSocket
 
-1. 用 HTTP `POST /asr/sessions` 创建会话，空请求体，由桌面 Host 提供默认凭据。成功为 201，返回 `id`、`streamPath`、`ticket`、`ticketExpiresAt`、`audio`、`maxFrameBytes`、`idleTimeoutSeconds`、`maxDurationSeconds`。一次性票据最长有效 30 秒，也受授权期限约束。票据和连接路径按原样使用。
+本地和云端共用桌面 Host 与盒端之间的 WebSocket 协议。请在开始录音前选择推理位置，默认本地。云端需要先发现已配置的 `audio.transcribe.streaming.cloud` 能力，向用户说明本次录音的音频将实时经万象中转站（QeeToken）发送到阿里云百炼，并取得本次同意。实时字幕与会后精转各自授权，允许分别选择。
+
+1. 用 HTTP `POST /asr/sessions` 创建会话，由桌面 Host 提供默认凭据。本地会话使用空请求体。云端会话使用 JSON `{"capability":"audio.transcribe.streaming.cloud","cloudConsent":true}`；发送音频前确认回执的 `capability` 与请求一致且 `processingLocation` 为 `cloud`。成功为 201，返回 `id`、`streamPath`、`ticket`、`ticketExpiresAt`、`audio`、`maxFrameBytes`、`idleTimeoutSeconds`、`maxDurationSeconds`。一次性票据最长有效 30 秒，也受授权期限约束。票据和连接路径按原样使用。
 2. 同一 Host 会话中调用 `host.openStream(streamPath, {protocols: ['wanx.asr.v1', 'wanx.asr.ticket.' + ticket]})`。按此顺序设置两个子协议，服务端协商 `wanx.asr.v1`。凭据仅通过对应的 HTTP 头或 WebSocket 子协议传递，连接路径不带查询参数。为套接字立即注册事件，收到 `ready` 后再发送音频。
 3. 按采集速率发送 16 kHz、单声道、带符号 16 位小端的裸 PCM。帧为非空偶数字节，最多 6400 字节，推荐 100 ms 即 3200 字节。发送速率为每秒 32000 字节，允许短时突发但应持续按采集节奏。每盒只允许一路活跃实时会话，15 秒无音频触发空闲关闭，单会话最长 3600 秒。
 4. 录制结束时发送文本 JSON `{"type":"end"}`，等待剩余 `final` 和 `end` 回执。连接断开后重新申请会话和票据，应用可以保存本地已采集原音。
@@ -165,10 +192,11 @@
 | `{"type":"ready"}` | 开始发送 PCM |
 | `{"type":"partial","segmentId":0,"text":"周六"}` | 按段 ID 替换临时字幕，空文本清除该草稿 |
 | `{"type":"final","segmentId":0,"text":"周六上午开会。"}` | 提交该段文字，盒端配置标点模型时可带标点 |
+| `{"type":"speaker","segmentId":0,"speakerIds":["speaker-1"]}` | 可选，按段 ID 更新发言归属，空数组为归属不明 |
 | `{"type":"end","durationMs":3200}` | 流接收完成，时长以盒端收到的 PCM 字节为准，随后正常关闭 |
 | `{"type":"error","code":"STREAM_IDLE_TIMEOUT"}` | 停止本轮发送，提示或按原因建立新会话 |
 
-实时事件无逐段时间戳。媒体服务实时会话不持久化原音和字幕。需要回听、可归档稿或逐段时间点时，由应用在采集时保存授权原音，结束后走 `audio.transcribe` 文件作业。判断流程完成以收到 `end` 为准。
+云端会话中，QeeToken 转发的临时结果对应 `partial`，整句定稿对应同一 `segmentId` 的 `final`。云端实时字幕仅提供文字，整场说话人校正仍可在会后单独运行。实时字幕事件无逐段时间戳。检测到实时分人能力时，发言人标签在文字之后可增量到达，匿名 ID 只在同一实时会话内有效，断开后由应用保留先前的草稿。媒体服务实时会话不持久化原音和字幕。需要回听、可归档稿或逐段时间点时，由应用在采集时保存授权原音，结束后走 `audio.transcribe` 文件作业。判断流程完成以收到 `end` 为准。
 
 ## 5. LLM 总结与模板
 

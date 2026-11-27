@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createLocalEncryption, isLocalCiphertext } from "../account/local-encryption.mjs";
 import { acceptsMediaGrant, isMediaAsrStream } from "../app-host/media-grant.mjs";
 
 test("only explicit media-service routes receive the grant", () => {
@@ -219,7 +220,7 @@ test("an open recorder remains available on box disconnect, but ends when the ac
   assert.throws(session.assertLive, { code: "HOST_SESSION_EXPIRED" });
 });
 
-async function recordingFixture(t, { foreground = true, summaryConfigured = true } = {}) {
+async function recordingFixture(t, { foreground = true, summaryConfigured = true, storageForProfile } = {}) {
   const fs = await import('node:fs/promises');
   const os = await import('node:os');
   const path = await import('node:path');
@@ -281,7 +282,8 @@ async function recordingFixture(t, { foreground = true, summaryConfigured = true
       },
     })},
     dialog:{showMessageBox:async()=>assert.fail('recording asked for separate authorization')},
-    safeStorage:{isEncryptionAvailable:()=>true,encryptString:s=>Buffer.from(s),decryptString:b=>b.toString()},
+    safeStorage: storageForProfile ? storageForProfile(root) :
+      {isEncryptionAvailable:()=>true,encryptString:s=>Buffer.from(s),decryptString:b=>b.toString()},
   };
   return {
     ctx, received, secret,
@@ -331,7 +333,7 @@ test('recording uses the signed-in box session for ASR and requested cloud summa
   t.after(() => worker.attachMedia(null));
   assert.deepEqual(await worker.media.status(), {
     mode:'box',connected:true,granted:['audio.transcribe','audio.transcribe.streaming','text.summarize'],
-    transcribe:true,live:true,summarize:true,summaryLocation:'cloud',summaryOnRequest:true,
+    transcribe:true,cloudTranscribe:false,live:true,cloudLive:false,summarize:true,summaryLocation:'cloud',summaryOnRequest:true,
   });
   await meetings.initStore(active.data);
   const {id} = await meetings.createMeeting({title:'合成录音'});
@@ -420,6 +422,47 @@ test('recording reuses a previously delivered grant and its project directory', 
   const reopened = await fixture.open();
   assert.equal(fixture.received.at(-1).grant, fixture.secret);
   assert.equal(reopened.data, active.data);
+});
+
+test('recording migrates its legacy grant once and reopens the same project directory', async t => {
+  const { mkdir, readFile, writeFile } = await import('node:fs/promises');
+  const { join } = await import('node:path');
+  const encrypted = Buffer.from('v10-recording-fixture');
+  let legacyReads = 0;
+  const fixture = await recordingFixture(t, {
+    foreground: false,
+    storageForProfile: directory => createLocalEncryption({
+      directory,
+      legacyStorage: {
+        isEncryptionAvailable: () => legacyReads === 0,
+        decryptString(bytes) {
+          assert.deepEqual(bytes, encrypted);
+          legacyReads++;
+          return JSON.stringify({ instance: 'disc-instance', grant: fixture.secret });
+        },
+      },
+    }),
+  });
+  const scope = fixture.scopeDir();
+  const grantFile = join(scope, 'media-grant.enc');
+  await mkdir(scope, { recursive: true });
+  await writeFile(grantFile, encrypted, { mode: 0o600 });
+
+  const active = await fixture.open();
+  assert.equal(fixture.received.at(-1).grant, fixture.secret);
+  assert.ok(isLocalCiphertext(await readFile(grantFile)));
+  await active.session.close();
+
+  const reopened = await fixture.open();
+  assert.equal(fixture.received.at(-1).grant, fixture.secret);
+  assert.equal(reopened.data, active.data);
+  assert.equal(legacyReads, 1);
+});
+
+test('the accessory host uses the main-process credential adapter', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const source = await readFile(new URL('../shell/main.mjs', import.meta.url), 'utf8');
+  assert.ok(/createAccessoriesPreview\(\{[^}]*\bsafeStorage\s*,/.test(source));
 });
 
 test('a box that rejects automatic recording media does not open a fake session', async t => {

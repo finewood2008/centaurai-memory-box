@@ -57,3 +57,19 @@ test('a disk text edit keeps the file ID distinct from its upload ID', async () 
   assert.equal(calls[1].action, 'upload-complete');
   assert.equal(calls[1].params.id, up);
 });
+
+test('a newly mounted owned volume uses the normal box file API', async () => {
+  let catalog = [];
+  const routing = createDriveRouting({
+    scope: () => 'owner:box',
+    catalog: async () => catalog,
+    send: () => assert.fail('a mounted personal volume does not use an agent drive'),
+  });
+  assert.equal((await routing.route('/overview')).handled, false);
+  catalog = [{id:sid, root, kind:'volume-space', storage:{available:true}}];
+  assert.deepEqual(await routing.route(`/files?space_id=${sid}&parent=&trash=true`), {
+    handled:false, path:`/files?parent=${root}&trash=true`,
+  });
+  assert.deepEqual(await routing.route('/uploads', {method:'POST', body:{space_id:sid,parent:root}}), {handled:false});
+  assert.deepEqual(await routing.route(`/files/${fid}`, {spaceId:sid}), {handled:false});
+});

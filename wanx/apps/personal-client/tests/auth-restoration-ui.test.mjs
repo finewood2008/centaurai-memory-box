@@ -41,6 +41,7 @@ async function harness(initialPhase, options = {}) {
     addEventListener: (name, fn) => events.set(name, fn),
   };
   vm.runInNewContext(source, {
+    queueMicrotask,
     window: { addEventListener() {}, wanxClient: {
       getLocalState: async () => current,
       onLocalState: listener => { onState = listener; },

@@ -4,10 +4,13 @@ import hashlib
 import os
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from octop.infra.personal_space.service import CHUNK_SIZE, PersonalSpace, SpaceError
+from octop.infra.personal_space.shares import SpaceShares
+from octop.infra.personal_space.workspaces import Workspaces
 
 
 def upload(space: PersonalSpace, data: bytes, name: str = "hello.txt", parent: str = "") -> dict:
@@ -17,6 +20,78 @@ def upload(space: PersonalSpace, data: bytes, name: str = "hello.txt", parent: s
         chunk = data[offset : offset + CHUNK_SIZE]
         space.upload_chunk(item_id, offset, chunk, hashlib.sha256(chunk).hexdigest())
     return space.upload_complete(item_id, hashlib.sha256(data).hexdigest())
+
+
+def test_mounted_space_reuses_copy_move_edit_trash_and_share(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from octop.infra.personal_space import mounted_spaces
+
+    mount = tmp_path / "usb"
+    mount.mkdir()
+    original_on_disk = mount / "already-here.txt"
+    original_on_disk.write_bytes(b"external original")
+    monkeypatch.setattr(mounted_spaces, "mounted_directory", lambda path: Path(path))
+    online = {mount}
+    monkeypatch.setattr(Path, "is_mount", lambda path: path in online)
+    space = Workspaces(tmp_path / ".wanx-personal-space", 1)
+    attached = space.bind_mounted_volume("usb-01", "资料盘", str(mount))
+    assert space.bind_mounted_volume("usb-01", "资料盘", str(mount))["id"] == attached["id"]
+    assert [entry["name"] for entry in space.spaces()] == ["我的空间", "资料盘"]
+
+    folder = space.mkdir("", "项目")["id"]
+    old = upload(space, b"draft", "memo.md", folder)
+    copied = space.transfer(folder, attached["root"], attached["id"], copy=True)
+    external_file = space.listing(copied["id"])["items"][0]
+    ref = external_file["id"]
+    assert space.read_chunk(old["id"], 0, 100)[0] == b"draft"
+    assert space._object(ref).is_relative_to(mount)
+    assert space.read_chunk(ref, 0, 100)[0] == b"draft"
+
+    changes = b"final"
+    digest = hashlib.sha256(changes).hexdigest()
+    edit = uuid.uuid4().hex
+    space.begin_text_edit(ref, external_file["version"], edit, len(changes), digest)
+    space.upload_chunk(edit, 0, changes, digest)
+    assert space.upload_complete(edit, digest)["id"] == ref
+    space.trash(ref)
+    assert space.listing(attached["root"], trash=True)["items"][0]["id"] == ref
+    space.restore(ref)
+
+    shares = SpaceShares(
+        tmp_path,
+        1,
+        "Actor",
+        resolve_user=lambda actor: SimpleNamespace(
+            id=actor, display_name="Actor", username="actor", role="member"
+        ),
+    )
+    share = shares.create_share(uuid.uuid4().hex, "personal", ref, attached["id"], "read", 0)
+    assert share["state"] == "active"
+    online.clear()
+    assert space.spaces()[1]["storage"]["available"] is False
+    with pytest.raises(SpaceError, match="SPACE_VOLUME_OFFLINE"):
+        space.transfer(copied["id"], "", "personal")
+    assert space.read_chunk(old["id"], 0, 100)[0] == b"draft"
+    assert shares.list_shares()[0]["state"] == "unavailable"
+
+    new_mount = tmp_path / "usb-remounted"
+    mount.rename(new_mount)
+    online.add(new_mount)
+    rebound = space.bind_mounted_volume("usb-01", "资料盘", str(new_mount))
+    assert rebound["id"] == attached["id"]
+    assert space.read_chunk(ref, 0, 100)[0] == changes
+    copied_back = space.transfer(copied["id"], "", "personal", copy=True)
+    assert (
+        space.read_chunk(space.listing(copied_back["id"])["items"][0]["id"], 0, 100)[0] == changes
+    )
+    moved = space.transfer(copied["id"], "", "personal")
+    assert moved["id"] == copied["id"]
+    assert space.read_chunk(ref, 0, 100)[0] == changes
+    assert space.metadata(ref)["previous_digest"] == hashlib.sha256(b"draft").hexdigest()
+    assert not space._object(ref).is_relative_to(new_mount)
+    assert space.listing(attached["root"])["items"] == []
+    assert (new_mount / original_on_disk.name).read_bytes() == b"external original"
 
 
 def test_text_edit_publishes_a_version_under_the_original_id(tmp_path: Path) -> None:

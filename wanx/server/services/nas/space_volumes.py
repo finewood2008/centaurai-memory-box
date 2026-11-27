@@ -13,23 +13,40 @@ from pathlib import Path
 PAGE = 100
 
 
-def mounted_volumes():
-    columns = "NAME,TRAN,TYPE,UUID,LABEL,MOUNTPOINTS,MAJ:MIN"
-    output = subprocess.check_output(["lsblk", "-J", "-e", "7", "-o", columns], timeout=4)
+def usb_storage():
+    columns = "NAME,TRAN,TYPE,UUID,LABEL,MOUNTPOINTS,MAJ:MIN,FSTYPE,SIZE,RO,MODEL"
+    output = subprocess.check_output(["lsblk", "-J", "-b", "-e", "7", "-o", columns], timeout=4)
     owner = pwd.getpwuid(os.getuid()).pw_name
     roots = (Path("/run/media") / owner, Path("/media") / owner)
-    volumes = {}
+    volumes, waiting = {}, []
+
+    def descendants(device):
+        yield device
+        for child in device.get("children", ()):
+            yield from descendants(child)
+
     for disk in json.loads(output)["blockdevices"]:
-        if disk["tran"] != "usb":
+        if disk["tran"] != "usb" or disk["type"] != "disk":
             continue
-        for device in [disk, *disk.get("children", [])]:
+        mounted = False
+        for device in descendants(disk):
             for target in device.get("mountpoints") or []:
                 if not target or Path(target).parent not in roots:
                     continue
                 major, minor = map(int, device["maj:min"].split(":"))
                 volume_id = f'{device["uuid"] or device["name"]}@{major}-{minor}'
-                volumes[volume_id] = (device["label"] or Path(target).name, target, os.makedev(major, minor))
-    return volumes
+                volumes.setdefault(volume_id, (
+                    device["label"] or Path(target).name, target, os.makedev(major, minor), device,
+                ))
+                mounted = True
+        if not mounted:
+            waiting.append({"name": (disk.get("model") or "").strip() or "USB 硬盘", "size": disk.get("size")})
+    return volumes, waiting
+
+
+def mounted_volumes():
+    volumes, _ = usb_storage()
+    return {key: value[:3] for key, value in volumes.items()}
 
 
 @contextmanager
@@ -54,11 +71,33 @@ def open_item(mount, device, path, *, directory):
         os.close(fd)
 
 
+def volume_inventory(include_mount=False):
+    mounts, waiting = usb_storage()
+    volumes = []
+    for volume_id, (name, mount, device, info) in mounts.items():
+        try:
+            with open_item(mount, device, "", directory=True) as fd:
+                usage = os.fstatvfs(fd)
+                volumes.append({
+                    "id": volume_id, "name": name, "uuid": info.get("uuid"),
+                    "filesystem": info.get("fstype"), "size": usage.f_blocks * usage.f_frsize,
+                    "free": usage.f_bavail * usage.f_frsize,
+                    "readOnly": bool(usage.f_flag & os.ST_RDONLY),
+                    **({"mount": mount} if include_mount else {}),
+                })
+        except (OSError, ValueError):
+            # An unmount can complete between lsblk and opening the volume.
+            waiting.append({"name": name, "size": info.get("size")})
+    return {"volumes": volumes, "waiting": waiting}
+
+
 def handle(op, data):
+    if op == "volumes" and data.get("inventory") is True:
+        return volume_inventory(data.get("includeMount") is True)
     volumes = mounted_volumes()
     if op == "volumes":
         return [{"id": key, "name": value[0]} for key, value in volumes.items()]
-    if op not in ("folder", "preview", "text-open", "text-save"):
+    if op not in ("folder", "preview", "file", "text-open", "text-save"):
         raise ValueError("无效的读取操作")
     volume = volumes.get(data.get("volume"))
     if not volume:
@@ -84,6 +123,20 @@ def handle(op, data):
             offset = max(0, int(data.get("offset", 0)))
             return {"items": rows[offset:offset+PAGE], "total": len(rows), "pageSize": PAGE}
         size = os.fstat(fd).st_size
+        if op == "file":
+            offset = data.get("offset", 0)
+            length = data.get("length", 0)
+            if type(offset) is not int or type(length) is not int or offset < 0 or not 0 <= length <= 1024**2:
+                raise ValueError("SPACE_CHUNK_INVALID")
+            st = os.fstat(fd)
+            version = f"{st.st_ino}:{st.st_size}:{st.st_mtime_ns}:{st.st_ctime_ns}"
+            if data.get("version") not in (None, version):
+                raise ValueError("SPACE_REMOTE_FILE_CHANGED")
+            content = os.pread(fd, length, offset)
+            after = os.fstat(fd)
+            if st.st_size != after.st_size or st.st_mtime_ns != after.st_mtime_ns or st.st_ctime_ns != after.st_ctime_ns:
+                raise ValueError("SPACE_REMOTE_FILE_CHANGED")
+            return {"size": st.st_size, "version": version, "data": base64.b64encode(content).decode()}
         suffix = Path(path).suffix.lower()
         if suffix in {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"} and size <= 40 * 1024**2:
             from PIL import Image, ImageOps

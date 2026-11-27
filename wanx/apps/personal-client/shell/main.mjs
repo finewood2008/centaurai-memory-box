@@ -93,9 +93,6 @@ import { memoryLibraryRuntime, readMemoryLibrary } from "./memory-source-profile
 import { createCodexModelConfig } from "./my-ai-codex-model-config.mjs";
 import { createBoxCloudTransport, createMyAiCloudRoutes } from "./my-ai-cloud-route.mjs";
 import { createMyAiTask } from "./my-ai-task.mjs";
-import { createMyAiCollaboration } from "./my-ai-collaboration.mjs";
-import { createCollaborationSources } from "./my-ai-collaboration-sources.mjs";
-import { createCollaborationModels } from "./my-ai-collaboration-models.mjs";
 import { createMyAiLauncher } from "./my-ai-launch.mjs";
 import { createMyAiInstallations } from "./my-ai-install.mjs";
 import { createMyAiMemoryTransfer } from "./my-ai-memory-transfer.mjs";
@@ -104,7 +101,7 @@ import { createCodexContext } from "./codex-context.mjs";
 import { createCodexContextConfig, findCodexCli } from "./codex-context-config.mjs";
 import { detectWindowsCodex, openWindowsCodex } from "./windows-codex.mjs";
 import { createCodexContextSources } from "./codex-context-sources.mjs";
-import { spaceVolumeRequest } from "./accessory-nas.mjs";
+import { mountedSpaceCandidates, readMountedSpaceSource, spaceVolumeRequest } from "./accessory-nas.mjs";
 import { ACCESSORY_SCHEME, createAccessoriesPreview } from "./accessories-preview.mjs";
 import { createSemanticaMcpClient } from "./semantica-mcp-client.mjs";
 import { createMyAiAccess, createMyAiMemoryAccess } from "./my-ai-access.mjs";
@@ -123,11 +120,6 @@ if (cloudPilot) {
   app.setPath("userData", pilotData);
 }
 const windowName = cloudPilot ? "记忆盒子 · 云模型验收版" : testBuild ? TEST_PRODUCT_NAME : DESKTOP_NAME;
-const collaborationModels = process.env.MEMOBOX_COLLAB_PILOT === "1" ? createCollaborationModels() : null;
-if (collaborationModels) {
-  for (const provider of collaborationModels.recipients)
-    delete process.env["MEMOBOX_COLLAB_" + provider.id.toUpperCase() + "_KEY"];
-}
 const controlURL = new URL("../local-ui/renderer/index.html", import.meta.url).href;
 protocol.registerSchemesAsPrivileged([MEMORY_SCHEME, ACCESSORY_SCHEME].map(scheme => ({ scheme, privileges: {
   standard: true, secure: true, supportFetchAPI: true, corsEnabled: true,
@@ -502,8 +494,32 @@ if (process.argv.includes("--wanx-managed-app")) {
       control.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
       control.webContents.on("will-navigate", event => event.preventDefault());
       control.webContents.on("will-attach-webview", event => event.preventDefault());
+      const confirmLocalApplicationArchive = async (archivePath, openAfterInstall = false) => {
+        const result = await dialog.showMessageBox(control, {
+          type: "warning", title: "安装本地应用", message: "确认安装此应用包？",
+          detail: `${path.basename(archivePath)}\n请仅安装来自可信来源的应用包。${openAfterInstall ? "安装完成后会打开应用。" : "安装不会自动打开应用，已有业务数据会保留。"}`,
+          buttons: ["取消", "安装"], defaultId: 0, cancelId: 0, noLink: true,
+        });
+        return result.response === 1;
+      };
+      const selectApplicationArchive = async () => {
+        const result = await dialog.showOpenDialog(control, {
+          title: "选择应用安装包",
+          buttonLabel: "选择安装包",
+          filters: [{ name: "应用压缩包", extensions: ["zip"] }],
+          properties: ["openFile"],
+        });
+        return result.canceled ? null : result.filePaths[0];
+      };
       const accessoriesPreview = createAccessoriesPreview({
-        app, window: control, BrowserWindow, client, account, dialog, safeStorage: osSafeStorage,
+        app, window: control, BrowserWindow, client, account, dialog, safeStorage,
+        launchApplication: applicationId => applications.launch(applicationId),
+        installApplication: async expectedApplicationId => {
+          const archivePath = await selectApplicationArchive();
+          if (!archivePath || !await confirmLocalApplicationArchive(archivePath, true)) return false;
+          await applications.install({ archivePath, expectedApplicationId });
+          return true;
+        },
         navigate: page => sendToLiveFrame(control, "wanx-client:navigate", page),
         memoryFile: () => memoryRuntimeFile, ensureMemory: () => memoryRuntime.ensure(),
         resourceDirectory: app.isPackaged ? path.join(process.resourcesPath, "accessory-preview")
@@ -544,7 +560,8 @@ if (process.argv.includes("--wanx-managed-app")) {
         },
       });
       personalSpace = await createPersonalSpace({
-        driveCatalog: () => { if(!spaceLinks)throw Object.assign(new Error("BOX_CONNECTION_REQUIRED"),{code:"BOX_CONNECTION_REQUIRED"});return spaceLinks.manage("mcp-drives"); },
+        driveCatalog: () => { if(!spaceLinks)throw Object.assign(new Error("BOX_CONNECTION_REQUIRED"),{code:"BOX_CONNECTION_REQUIRED"});return spaceLinks.manage("file-drives"); },
+        mountedSource: (op, input) => readMountedSpaceSource({app,client}, op, input),
         onEvent: event => timings.transfer(event),
         client, serviceURL: process.env.WANX_CONSUMER_URL || DEFAULT_CONSUMER_URL,
         store: createSecureAccountStore({ filePath: path.join(userData, "space-transfers.enc"), safeStorage }),
@@ -590,6 +607,7 @@ if (process.argv.includes("--wanx-managed-app")) {
           client, serviceURL: process.env.WANX_CONSUMER_URL || DEFAULT_CONSUMER_URL,
           store: createSecureAccountStore({ filePath: path.join(userData, "space-links.enc"), safeStorage }),
           agentHubOptions: {team: false},
+          mountedVolumes: () => mountedSpaceCandidates({app,client}),
           copyText: text => clipboard.writeText(text),
           chooseStorageDirectory: async () => {
             const result = await dialog.showOpenDialog(control, {
@@ -740,6 +758,22 @@ if (process.argv.includes("--wanx-managed-app")) {
         },
       });
       if (!testRuntime) void agentAccess.restore(reportError).catch(reportError);
+      const myAiTask = createMyAiTask({
+        launcher: agentLauncher, cloudRoutes, installations: agentInstallations,
+        protocolRegistered: url => Boolean(app.getApplicationNameForProtocol(url).trim()),
+        applicationForProtocol: url => app.getApplicationInfoForProtocol(url),
+        openExternal: url => shell.openExternal(url),
+        windowsCodex: process.platform === "win32" ? { detect: detectWindowsCodex, open: openWindowsCodex } : undefined,
+        openApplication: file => shell.openPath(file),
+        revealApplication: file => shell.showItemInFolder(file),
+        copyText: text => clipboard.writeText(text),
+        boxScope,
+        codexContext: agentAccess.codex,
+        agentAccess,
+        starlink: (action, input) => personalDataService.action(action, input),
+        assertClientUsable: () => clientUpdates.assertUsable(),
+        polish: (text, signal, assertSource) => aiDialogue.polishTask(text, signal, assertSource),
+      });
       const memoryWorkspace = createMemoryWorkspace({
         assets: path.join(app.getAppPath(), "local-ui", "memory"),
         runtimeFile: memoryRuntimeFile, runtime: memoryRuntime,
@@ -757,25 +791,6 @@ if (process.argv.includes("--wanx-managed-app")) {
         }),
         getState: () => client.snapshot(),
         agentAccess,
-        myAiCollaboration: collaborationModels ? createMyAiCollaboration({
-          identity: () => {
-            const state = client.snapshot();
-            return { owner: dataOwnerKey(state, serviceURL), box: state.connection?.deviceId, scope: dataInteractionKey(state, serviceURL),
-              account: state.dataIdentity?.profileId ? ["local", state.dataIdentity.profileId] : ["account", serviceURL, state.account?.accountId] };
-          },
-          sources: createCollaborationSources({ sources, memory: myAiMemory, starlink }),
-          models: collaborationModels,
-          store: createSecureAccountStore({ filePath: path.join(userData, "my-ai-collaboration.enc"), safeStorage }),
-          async saveReport(markdown, check) {
-            const result = await dialog.showSaveDialog(control, {
-              title: "导出研究方案", defaultPath: "研究方案.md", filters: [{ name: "Markdown", extensions: ["md"] }],
-            });
-            if (result.canceled || !result.filePath) return false;
-            await check();
-            await writeFile(result.filePath, markdown, { encoding: "utf8", mode: 0o600 });
-            return true;
-          },
-        }) : undefined,
         memoryTransfer,
         claudeChatImport: createClaudeChatHistoryImport({
           runtimeFile: memoryRuntimeFile,
@@ -789,22 +804,7 @@ if (process.argv.includes("--wanx-managed-app")) {
         fetchAsset: url => net.fetch(url),
         client, serviceURL: process.env.WANX_CONSUMER_URL || DEFAULT_CONSUMER_URL,
         preferenceFile: path.join(userData, "memory-model-source"),
-        myAiTask: createMyAiTask({
-          launcher: agentLauncher, cloudRoutes, installations: agentInstallations,
-          protocolRegistered: url => Boolean(app.getApplicationNameForProtocol(url).trim()),
-          applicationForProtocol: url => app.getApplicationInfoForProtocol(url),
-          openExternal: url => shell.openExternal(url),
-          windowsCodex: process.platform === "win32" ? { detect: detectWindowsCodex, open: openWindowsCodex } : undefined,
-          openApplication: file => shell.openPath(file),
-          revealApplication: file => shell.showItemInFolder(file),
-          copyText: text => clipboard.writeText(text),
-          boxScope,
-          codexContext: agentAccess.codex,
-          agentAccess,
-          starlink: (action, input) => personalDataService.action(action, input),
-          assertClientUsable: () => clientUpdates.assertUsable(),
-          polish: (text, signal, assertSource) => aiDialogue.polishTask(text, signal, assertSource),
-        }),
+        myAiTask,
         protectFile: file => protectPrivateFile(file, { packaged: app.isPackaged }),
         localStorage: {
           defaultDirectory: path.join(memoryRuntimeLayout?.root ?? userData, "空间", "本机", "万象记忆库"),
@@ -876,23 +876,8 @@ if (process.argv.includes("--wanx-managed-app")) {
         updates,
         support,
         allowDevelopmentInstall: !app.isPackaged && process.env.WANX_ALLOW_DEVELOPMENT_INSTALL === "1",
-        confirmLocalApplicationArchive: async archivePath => {
-          const result = await dialog.showMessageBox(control, {
-            type: "warning", title: "安装本地应用", message: "确认安装此应用包？",
-            detail: `${path.basename(archivePath)}\n请仅安装来自可信来源的应用包。安装不会自动打开应用，已有业务数据会保留。`,
-            buttons: ["取消", "安装"], defaultId: 0, cancelId: 0, noLink: true,
-          });
-          return result.response === 1;
-        },
-        selectApplicationArchive: async () => {
-          const result = await dialog.showOpenDialog(control, {
-            title: "选择应用安装包",
-            buttonLabel: "选择安装包",
-            filters: [{ name: "应用压缩包", extensions: ["zip"] }],
-            properties: ["openFile"],
-          });
-          return result.canceled ? null : result.filePaths[0];
-        },
+        confirmLocalApplicationArchive,
+        selectApplicationArchive,
       });
       unsubscribe = client.subscribe(() => {
         accessoriesPreview.syncConnection();

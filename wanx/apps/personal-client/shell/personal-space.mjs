@@ -31,7 +31,7 @@ const fileStat = file => stat(file).catch(error => { if (error.code === "ENOENT"
 
 // Lives in the main process. Local paths come from a native picker or preload's
 // File conversion; credentials, remote URLs and user ids never come from the renderer.
-export async function createPersonalSpace({ client, store, annotationStore, workbenchStore, redactionStore, enableTextEditing = false, annotationAI, annotationExtract, serviceURL, chooseUploads, chooseDownload, chooseDownloadDirectory, driveCatalog, onChanged = () => {}, onEvent = () => {}, retryBaseMs = 1000, maxRetries = 6, recoveryCooldownMs = 30_000, random = Math.random }) {
+export async function createPersonalSpace({ client, store, annotationStore, workbenchStore, redactionStore, enableTextEditing = false, annotationAI, annotationExtract, serviceURL, chooseUploads, chooseDownload, chooseDownloadDirectory, driveCatalog, mountedSource, onChanged = () => {}, onEvent = () => {}, retryBaseMs = 1000, maxRetries = 6, recoveryCooldownMs = 30_000, random = Math.random }) {
   let restored = [], storageError = null;
   try { restored = await store.load() || []; if (!Array.isArray(restored)) throw new Error("Invalid transfer records"); }
   catch { storageError = "SECURE_STORAGE_READ_FAILED"; restored = []; }
@@ -149,7 +149,11 @@ export async function createPersonalSpace({ client, store, annotationStore, work
   async function request(connection, route, { method = "GET", body, signal, raw = false, headers = {}, prefix = PREFIX, spaceId } = {}) {
     if (signal?.aborted) throw fail("SPACE_PAUSED");
     connection.context();
-    if(prefix===PREFIX){const d=await driveRouting.route(route,{method,body,signal,raw,headers,spaceId});if(d.handled)return d.value;}
+    if(prefix===PREFIX){
+      const routed=await driveRouting.route(route,{method,body,signal,raw,headers,spaceId});
+      if(routed.handled)return routed.value;
+      if(routed.path)route=routed.path;
+    }
     const deadline = AbortSignal.timeout(route.endsWith("/complete") ? 120_000 : 60_000);
     let response;
     try {
@@ -195,6 +199,7 @@ export async function createPersonalSpace({ client, store, annotationStore, work
   }
   async function operation(action, input = {}) {
     if (action === "open-text-edit" || action === "save-text-edit") return editTextFile(action, input);
+    if (action === "import-volume") return importVolume(input);
     if (action === "annotation-workbench") return workbench.run(input);
     if (["annotation-stage-import", "annotation-pending-imports"].includes(action)) return annotations.localOperation(action, input);
     if (["redaction-rules", "save-redaction-rules", "redact"].includes(action)) {
@@ -216,6 +221,98 @@ export async function createPersonalSpace({ client, store, annotationStore, work
       case "restore": return request(connection, `/trash/${id(input.id)}/restore`, { method: "POST" });
       case "purge": return request(connection, `/trash/${id(input.id)}`, { method: "DELETE" });
       default: throw fail("SPACE_ACTION_INVALID");
+    }
+  }
+  async function importVolume({ volume, path: sourcePath, directory, parent = "", space_id: spaceId }) {
+    if (!mountedSource || typeof volume !== "string" || !/^[A-Za-z0-9_.:-]+@\d+-\d+$/.test(volume) ||
+      typeof sourcePath !== "string" || sourcePath.length > 4096 ||
+      sourcePath.split("/").some(part => !part || part.startsWith("."))) throw fail("SPACE_INVALID_DESTINATION");
+    const connection = await connect(), epoch = generation;
+    const owner = dataInteractionKey(client.snapshot(), serviceURL);
+    const check = () => {
+      connection.context();
+      if (closed || generation !== epoch || !owner || owner !== dataInteractionKey(client.snapshot(), serviceURL))
+        throw fail("SPACE_CONTEXT_CHANGED");
+    };
+    const destination = spaceId === "personal" ? spaceId : id(spaceId);
+    const send = (route, options) => { check(); return request(connection, route, {...options, spaceId:destination}); };
+    const read = async (op, path, input = {}) => {
+      check();
+      const value = await mountedSource(op, {volume, path, ...input});
+      check();
+      return value;
+    };
+    const createFolder = (parent, fileName) => send("/folders", {
+      method:"POST", body:{parent:folder(parent), name:name(fileName), space_id:destination},
+    });
+    async function copyFile(path, parent, fileName) {
+      const {size,version} = await read("file", path);
+      if (!Number.isSafeInteger(size) || size < 0 || typeof version !== "string") throw fail("SPACE_REMOTE_FILE_CHANGED");
+      const uploadId = randomUUID().replaceAll("-", "");
+      const route = `/uploads/${uploadId}`;
+      try {
+        await send("/uploads",{method:"POST", body:{id:uploadId, parent:folder(parent), name:name(fileName), size, space_id:destination}});
+        const checksum = createHash("sha256");
+        for (let offset = 0; offset < size;) {
+          const length = Math.min(RECOVERY_CHUNK, size - offset);
+          const result = await read("file", path, {offset,length,version});
+          const data = Buffer.from(result.data, "base64");
+          if (result.version !== version || result.size !== size || data.length !== length) throw fail("SPACE_REMOTE_FILE_CHANGED");
+          checksum.update(data);
+          const chunk = {method:"PUT",body:data,
+            headers:{"content-type":"application/octet-stream","x-content-sha256":hash(data)}};
+          let confirmed;
+          try { confirmed = await send(`${route}?offset=${offset}`, chunk); }
+          catch (error) {
+            if (!transient(error)) throw error;
+            confirmed = await send(route);
+            if (confirmed.offset === offset) confirmed = await send(`${route}?offset=${offset}`, chunk);
+          }
+          offset += length;
+          if (confirmed.offset !== offset) throw fail("SPACE_UPLOAD_OFFSET_INVALID");
+        }
+        const digest = checksum.digest("hex");
+        const complete = {method:"POST",body:{digest}};
+        try { return await send(route+"/complete",complete); }
+        catch (error) {
+          if (!transient(error)) throw error;
+          return await send(route+"/complete",complete);
+        }
+      } catch (error) {
+        await Promise.resolve().then(() => send(route, {method:"DELETE"})).catch(() => {});
+        throw error;
+      }
+    }
+    const fileName = sourcePath.split("/").at(-1);
+    if (!directory) return copyFile(sourcePath, parent, fileName);
+    const staging = await createFolder(parent, ".importing-" + randomUUID());
+    try {
+      const queue = [{path:sourcePath, id:staging.id}];
+      for (const current of queue) {
+        let total, offset = 0;
+        const names = new Set();
+        do {
+          const listing = await read("folder", current.path, {offset});
+          total ??= listing.total;
+          if (total !== listing.total || !Array.isArray(listing.items) ||
+            (!listing.items.length && offset < total)) throw fail("SPACE_REMOTE_FILE_CHANGED");
+          for (const item of listing.items) {
+            name(item.name);
+            if (names.has(item.name)) throw fail("SPACE_REMOTE_FILE_CHANGED");
+            names.add(item.name);
+            const child = current.path + "/" + item.name;
+            if (item.folder) {
+              const created = await createFolder(current.id, item.name);
+              queue.push({path:child, id:created.id});
+            } else await copyFile(child, current.id, item.name);
+          }
+          offset += listing.items.length;
+        } while (offset < total);
+      }
+      return await send(`/files/${id(staging.id)}`, {method:"PATCH",body:{parent:folder(parent),name:name(fileName)}});
+    } catch (error) {
+      await Promise.resolve().then(() => send(`/files/${id(staging.id)}`, {method:"DELETE"})).catch(() => {});
+      throw error;
     }
   }
   async function metadata(connection, itemId, spaceId) { return request(connection, `/files/${id(itemId)}`, {spaceId}); }
@@ -861,8 +958,9 @@ export async function createPersonalSpace({ client, store, annotationStore, work
     if ([".ppt", ".pptx", ".doc", ".docx"].includes(ext)) {
       if (entry.size > 64 * 1024 * 1024) throw fail("SPACE_PREVIEW_TOO_LARGE");
       const disk = await driveRouting.locate(entry.id); current();
+      const drive = disk?.connection_id;
       const prefix = "/api/_client/space-previews";
-      const route = `/${entry.id}?version=${entry.version}${disk ? `&drive=${disk.connection_id}` : ""}`;
+      const route = `/${entry.id}?version=${entry.version}${drive ? `&drive=${drive}` : ""}`;
       let state = await request(connection, route, { prefix, method: "POST" }); current();
       const deadline = Date.now() + 150_000;
       while (state.state === "processing" && Date.now() < deadline) {
@@ -874,7 +972,7 @@ export async function createPersonalSpace({ client, store, annotationStore, work
       const chunks = [];
       for (let offset = 0; offset < state.size; offset += CHUNK) {
         current();
-        const value = await request(connection, `/${entry.id}/content?version=${entry.version}${disk ? `&drive=${disk.connection_id}` : ""}&offset=${offset}&length=${CHUNK}`, { prefix, raw: true });
+        const value = await request(connection, `/${entry.id}/content?version=${entry.version}${drive ? `&drive=${drive}` : ""}&offset=${offset}&length=${CHUNK}`, { prefix, raw: true });
         current();
         if (hash(value.bytes) !== value.headers["x-content-sha256"]) throw fail("SPACE_CHUNK_INVALID");
         chunks.push(value.bytes);

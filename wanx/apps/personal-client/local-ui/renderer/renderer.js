@@ -283,12 +283,14 @@ async function openHelpDrawer(target) {
   await helpView?.refresh();
 }
 
+async function requestHelp(action, input) {
+  const response = await window.wanxClient.action(action, input);
+  if (!response.ok) throw Object.assign(new Error(response.code), { code: response.code, userMessage: response.userMessage, limitScope: response.limitScope, retryAfterSeconds: response.retryAfterSeconds });
+  return response.value;
+}
+
 const helpView = window.createHelpView?.({
-  request: async (action, input) => {
-    const response = await window.wanxClient.action(action, input);
-    if (!response.ok) throw Object.assign(new Error(response.code), { code: response.code, userMessage: response.userMessage, limitScope: response.limitScope, retryAfterSeconds: response.retryAfterSeconds });
-    return response.value;
-  },
+  request: requestHelp,
   changed: () => { if (helpDrawer) renderHelpDrawer(); else if (currentState && page === "help") render(currentState); },
 });
 let applicationsTab = "wanx";
@@ -478,6 +480,9 @@ const sidebarRoot = document.querySelector("#academy-drawer-root");
 let academyDrawer;
 academyDrawer = sidebarRoot && window.createAcademyDrawer?.({
   root: sidebarRoot,
+  feedback: window.createHelpView?.({
+    request: requestHelp, feedbackOnly: true, changed: () => academyDrawer?.renderFeedback(),
+  }),
   onOpenChange: syncAcademyContents,
   onTabChange: syncAcademyContents,
   onSectionRequest: section => void requestSidebar(true, { section }),
@@ -3504,6 +3509,8 @@ window.wanxClient.onNavigate?.((destination) => {
   if (destination==='global-guide' || destination==='guide-capture'){window.memoGuide?.open(destination==='guide-capture'?'capture':undefined);return;}
   if (destination === "ai-dialogue") { void window.memoGuide?.open(); return; }
   if (!currentState || currentState.route === "auth" || page === "provisioning") return;
+  const volume = destination?.destination === "space-volume" ? destination.volume : null;
+  if (volume && currentState.canLaunchApplications) destination = "space";
   if (![homePage, "memory", "data", "space", "boxes", "accessories", "settings", "credits", "profile", "notifications"].includes(destination)) return;
   profileMenuOpen = false;
   if (destination === "memory") {
@@ -3515,6 +3522,7 @@ window.wanxClient.onNavigate?.((destination) => {
   if (page === "boxes") void refreshTransfers();
   notice = null;
   render(currentState);
+  if (volume && page === "space") void window.wanxSpace?.openVolume(volume);
 });
 window.wanxSetup?.subscribe((snapshot) => {
   if ((snapshot.pairingSessionId && wifiPicker.sessionId && snapshot.pairingSessionId !== wifiPicker.sessionId) ||

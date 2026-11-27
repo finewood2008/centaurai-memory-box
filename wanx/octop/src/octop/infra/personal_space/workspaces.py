@@ -11,8 +11,9 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from .mounted_spaces import mounted_space
 from .service import SpaceError, validate_name
-from .storage import bind_object, cleanup, directory_for, info, relocate, set_storage
+from .storage import bind_object, cleanup, digest, directory_for, info, relocate, set_storage
 from .sync import SYNC_ACTIONS, SpaceSync, policy_value
 
 
@@ -42,6 +43,16 @@ class Workspaces(SpaceSync):
             for row in db.execute("SELECT * FROM spaces ORDER BY created,id"):
                 item = dict(row)
                 item["storage"] = info(self, db, row["id"])
+                mounted = db.execute(
+                    "SELECT volume FROM space_mounted_volumes WHERE space_id=?", (row["id"],)
+                ).fetchone()
+                if mounted:
+                    item.update(
+                        kind="volume-space",
+                        domain="personal",
+                        volume=mounted["volume"],
+                        writable=item["storage"]["available"],
+                    )
                 item["bytes"] = db.execute(
                     "SELECT COALESCE(SUM(size+previous_size),0) FROM entries WHERE space_id=?",
                     (row["id"],),
@@ -66,7 +77,15 @@ class Workspaces(SpaceSync):
             return result
 
     def storage_location(self, space_id: str, path: str) -> dict[str, Any]:
+        with self._db() as db:
+            if db.execute(
+                "SELECT 1 FROM space_mounted_volumes WHERE space_id=?", (space_id,)
+            ).fetchone():
+                raise SpaceError("SPACE_MANAGED_ROOT", 403)
         return set_storage(self, space_id, path)
+
+    def bind_mounted_volume(self, volume: str, name: str, mount: str) -> dict[str, Any]:
+        return mounted_space(self, volume, name, mount)
 
     def approve(
         self,
@@ -174,6 +193,10 @@ class Workspaces(SpaceSync):
         if space_id == "personal":
             raise SpaceError("SPACE_MANAGED_ROOT", 403)
         with self._db() as db:
+            if db.execute(
+                "SELECT 1 FROM space_mounted_volumes WHERE space_id=?", (space_id,)
+            ).fetchone():
+                raise SpaceError("SPACE_MANAGED_ROOT", 403)
             row = db.execute("SELECT * FROM spaces WHERE id=?", (space_id,)).fetchone()
             if row is None:
                 raise SpaceError("SPACE_NOT_FOUND", 404)
@@ -393,15 +416,21 @@ class Workspaces(SpaceSync):
                         new_parent = parent if current == item_id else mapping[row["parent"]]
                         if row["kind"] == "file":
                             bind_object(self, db, new_id, space_id)
+                            target = self._object(new_id)
                             # Stream copy to a new immutable object; never share lifecycle ownership.
                             with (
                                 self._open(row["blob"] or current) as source,
                                 self._open(new_id, write=True) as dest,
                             ):
-                                created.append(self._object(new_id))
+                                created.append(target)
                                 shutil.copyfileobj(source, dest, 4194304)
                                 dest.flush()
                                 os.fsync(dest.fileno())
+                            if item["space_id"] != space_id and (
+                                target.stat().st_size != row["size"]
+                                or (row["digest"] and digest(target) != row["digest"])
+                            ):
+                                raise SpaceError("SPACE_CHUNK_INVALID", 409)
                         db.execute(
                             "INSERT INTO entries(id,parent,name,kind,size,modified,digest,space_id,trashed) VALUES(?,?,?,?,?,?,?,?,?)",
                             (

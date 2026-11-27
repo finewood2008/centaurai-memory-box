@@ -55,7 +55,8 @@ window.createAccessoriesPreview = function createAccessoriesPreview(request) {
         && typeof item.title === "string" && typeof item.status === "string");
       feedback("ready");
       frame.hidden = false;
-    } else if (message?.type === "catalog-open" && items.some(item => item.key === message.key)) {
+    } else if (message?.type === "catalog-open" && items.some(item =>
+      item.key === message.key || (item.key === "storage" && message.key === "storage-space"))) {
       void openItem(message.key, catalogHost);
     } else if (message?.type === "catalog-background") window.memoGuideShell?.dismissOnBackground();
     else if (message?.type === "catalog-guide") document.querySelector("#academy-edge-handle")?.click();

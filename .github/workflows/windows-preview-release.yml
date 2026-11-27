@@ -6,7 +6,7 @@ on:
       version:
         description: 'Preview version matching the client base version'
         required: true
-        default: '1.5.6'
+        default: '1.5.7'
         type: string
       publish_release:
         description: 'Publish the verified build to GitHub Releases'
@@ -145,6 +145,9 @@ jobs:
       - name: Validate recording authorization and packaged backup SDK
         working-directory: wanx/apps/personal-client
         run: node --test tests/media-grant.test.mjs tests/package-client-memory.test.mjs
+      - name: Validate external drive operations and permissions
+        working-directory: wanx/apps/personal-client
+        run: node --test tests/accessory-nas.test.mjs tests/space-links.test.mjs tests/space-volumes.test.mjs tests/personal-space-renderer.test.mjs
       - name: Validate mixed local collection and per-device backups
         working-directory: wanx/apps/personal-client
         run: |

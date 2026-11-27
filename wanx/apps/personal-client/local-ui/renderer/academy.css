@@ -323,7 +323,7 @@ body.space-note-open #academy-drawer-root { z-index: 71; }
     font-weight: 550;
     white-space: nowrap;
   }
-  .academy-tool:hover { background: var(--soft); border-color: #dac7b3; color: var(--accent-deep); }
+  .academy-tool:hover, #academy-feedback-tool[aria-expanded="true"] { background: var(--soft); border-color: #dac7b3; color: var(--accent-deep); }
   .academy-tool svg { flex: none; }
   .academy-return-icon, [aria-expanded="true"] > .academy-note-tool-icon { display: none; }
   [aria-expanded="true"] > .academy-return-icon { display: block; }
@@ -340,6 +340,11 @@ body.space-note-open #academy-drawer-root { z-index: 71; }
   .secondary:hover:not(:disabled) { background: var(--soft); }
 
   .content-panel { padding: 13px 14px 16px; }
+  #academy-feedback .faq-feedback { margin: 0; }
+  #academy-feedback .faq-feedback-form { gap: 9px; margin-top: 12px; }
+  #academy-feedback .faq-feedback-form :is(textarea, input) { font-size: 14px; }
+  #academy-feedback .faq-feedback-form textarea { min-height: 108px; }
+  #academy-feedback .faq-feedback-form .notice { margin-top: 0; }
   .resource-card {
     padding: 12px;
     border: 1px solid var(--line);

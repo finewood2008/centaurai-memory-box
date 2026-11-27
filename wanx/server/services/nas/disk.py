@@ -28,17 +28,24 @@ def name(value):
     return value
 
 
+def open_directory(parent, child, device):
+    fd = os.open(child, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+    if os.fstat(fd).st_dev == device:
+        return fd
+    os.close(fd)
+    raise ValueError("路径不属于此硬盘")
+
+
 @contextmanager
 def folder(root, rel):
     if not isinstance(rel, str) or len(rel) > 2048:
         raise ValueError("目录无效")
+    device = os.fstat(root).st_dev
     fd = os.dup(root)
     try:
         for child in rel.split("/") if rel else []:
             name(child)
-            sub = os.open(
-                child, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd
-            )
+            sub = open_directory(fd, child, device)
             os.close(fd)
             fd = sub
         yield fd
@@ -65,7 +72,8 @@ def row(rel, st):
 def check(fd, leaf, requested):
     st = os.stat(leaf, dir_fd=fd, follow_symlinks=False)
     if (
-        not (stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode))
+        st.st_dev != os.fstat(fd).st_dev
+        or not (stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode))
         or requested != row(leaf, st)["version"]
     ):
         raise ValueError("文件已变化，请刷新。")
@@ -89,7 +97,7 @@ def opened(root, ref):
         file = os.open(leaf, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
     with os.fdopen(file, "rb") as stream:
         st = os.fstat(file)
-        if not stat.S_ISREG(st.st_mode) or row(leaf, st)["version"] != ref["version"]:
+        if st.st_dev != os.fstat(root).st_dev or not stat.S_ISREG(st.st_mode) or row(leaf, st)["version"] != ref["version"]:
             raise ValueError("文件已变化，请刷新。")
         yield stream, st.st_size
 
@@ -150,13 +158,14 @@ def trashdir(root, create=False):
             os.mkdir(TRASH, 0o700, dir_fd=root)
         except FileExistsError:
             pass
-    return os.open(TRASH, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root)
+    return open_directory(root, TRASH, os.fstat(root).st_dev)
 
 
 def handle(root, op, p):
     parent = p.get("parent", "")
     if op == "disk-list":
         with folder(root, parent) as fd:
+            device = os.fstat(fd).st_dev
             rows = []
             query = p.get("query", "").casefold()
             with os.scandir(fd) as entries:
@@ -164,7 +173,7 @@ def handle(root, op, p):
                     if f.name.startswith(".") or query not in f.name.casefold():
                         continue
                     st = f.stat(follow_symlinks=False)
-                    if stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode):
+                    if st.st_dev == device and (stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode)):
                         rows.append(row("/".join(filter(None, (parent, f.name))), st))
             rows.sort(key=lambda f: (f["kind"] != "folder", f["name"].casefold()))
             offset = max(0, int(p.get("offset", 0)))

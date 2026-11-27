@@ -8,11 +8,12 @@ import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 
-test("managed worker retires a matching scoped engine and replaces a stale API before mixed collection", async t => {
+test("managed worker retires a scoped engine and waits for the replacement API's first bootstrap", async t => {
   const root = await mkdtemp(path.join(tmpdir(), "memobox-unified-worker-"));
   const source = path.join(root, "source"), home = path.join(root, "home");
   const service = path.join(home, "memory-service"), configPath = path.join(home, "config.yaml");
   const descriptor = path.join(home, "wanx-memobox-runtime.json"), databasePath = path.join(service, "memory.sqlite");
+  const readyProbe = path.join(root, "ready-probe");
   await mkdir(service, { recursive: true });
   await writeFile(databasePath, "synthetic-database-placeholder");
   let retired = 0;
@@ -54,7 +55,20 @@ process.once('SIGTERM',()=>server.close(()=>process.exit(0)));
   await moduleFile("App/backend/dist/src/adapters/outbound/memory-client/index.js", `export const createHttpMemoryClient=()=>({});`);
   await moduleFile("App/backend/dist/src/index.js", `
 import {createServer} from 'node:http';import {writeFileSync} from 'node:fs';
-export async function createLocalBackend(options){const server=createServer((req,res)=>{res.setHeader('content-type','application/json');res.end(JSON.stringify(req.url.endsWith('health')?{ok:true,storage:{ready:true}}:{}))});await new Promise(done=>server.listen(0,'127.0.0.1',done));writeFileSync(options.runtimeConfigPath,JSON.stringify({baseUrl:'http://127.0.0.1:'+server.address().port,localToken:'new-fixture-api',memory:{baseUrl:options.memoryBaseUrl}}));return {close:()=>new Promise(done=>{server.close(done);server.closeAllConnections()})}}
+export async function createLocalBackend(options) {
+  const server = createServer((req, res) => {
+    res.setHeader('content-type', 'application/json');
+    if (req.url === '/api/app/bootstrap') {
+      setTimeout(() => res.end('{}'), 2500);
+      return;
+    }
+    if (req.headers['x-memmy-local-token'] === 'new-fixture-api') writeFileSync(${JSON.stringify(readyProbe)}, 'ready');
+    res.end(JSON.stringify({ok:true,storage:{ready:true}}));
+  });
+  await new Promise(done => server.listen(0, '127.0.0.1', done));
+  writeFileSync(options.runtimeConfigPath, JSON.stringify({baseUrl:'http://127.0.0.1:'+server.address().port,localToken:'new-fixture-api',memory:{baseUrl:options.memoryBaseUrl}}));
+  return { close: () => new Promise(done => {server.close(done);server.closeAllConnections()}) };
+}
 `);
   const workerFile = fileURLToPath(new URL("../shell/local-memory-worker.mjs", import.meta.url));
   const child = spawn(process.execPath, [workerFile, source, home, descriptor, path.join(root, "api.sqlite")], {
@@ -71,15 +85,22 @@ export async function createLocalBackend(options){const server=createServer((req
     await rm(root, { recursive: true, force: true });
   });
   let configured;
+  let ready = false;
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline && !exited) {
     configured = JSON.parse(await readFile(descriptor, "utf8"));
-    if (configured.localToken === "new-fixture-api") break;
+    if (await readFile(readyProbe, "utf8").catch(error => {
+      if (error.code !== "ENOENT") throw error;
+    }) === "ready") {
+      ready = true;
+      break;
+    }
     await delay(50);
   }
   assert.equal(retired, 1);
   assert.equal(configured.localToken, "new-fixture-api", errors);
   assert.equal(configured.memory.baseUrl, engineUrl);
+  assert.equal(ready, true, errors);
   const healthy = await fetch(new URL("/api/v1/health", configured.baseUrl));
   assert.equal((await healthy.json()).storage.ready, true);
 });

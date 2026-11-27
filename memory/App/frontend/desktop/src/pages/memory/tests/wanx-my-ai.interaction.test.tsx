@@ -60,6 +60,13 @@ beforeEach(() => {
       folders: body.parent ? [] : [{ id: "docs-one", name: "测试文件夹" }],
       agents: [{ id: "claude_code", name: "Claude Code" }, { id: "codex", name: "Codex" }],
     });
+    if (action === "review-handoff") return Response.json({ confirmation: "checked", context: {
+      agentName: agents.find(item => item.id === body.agent)?.name, model: "原客户端配置", sources: body.agentContext,
+    } });
+    if (action === "handoff") {
+      const delivery = agents.find(item => item.id === body.agent)?.capabilities?.delivery;
+      return Response.json({ opened: true, delivery, prepared: delivery === "terminal-confirm", copied: delivery === "copy-open" });
+    }
     if (action === "optimize") return Response.json({ text: "优化后的测试任务" });
     if (action === "copy") return Response.json({ copied: true });
     return Response.json({ opened: true });
@@ -72,6 +79,10 @@ const button = (name: string, scope: ParentNode = document.body) => [...scope.qu
 async function render() {
   await act(async () => root.render(<I18nProvider language="zh-CN"><MyAi sessionToken="synthetic-session" memoryError={false} retryMemory={() => {}} /></I18nProvider>));
 }
+async function confirmCodexConnection() {
+  await act(async () => button("连接并授权").click());
+  await act(async () => button("确认连接并授权").click());
+}
 async function enter(element: HTMLInputElement | HTMLTextAreaElement, value: string) {
   await act(async () => {
     const prototype = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -79,32 +90,31 @@ async function enter(element: HTMLInputElement | HTMLTextAreaElement, value: str
     element.dispatchEvent(new Event("input", { bubbles: true }));
   });
 }
+async function confirmOptimization() {
+  await act(async () => button("优化提示词").click());
+  await act(async () => button("开始优化").click());
+  const adopt=button("采用提示词");
+  if (adopt) await act(async () => adopt.click());
+}
 async function optimize() {
   await enter(host.querySelector<HTMLTextAreaElement>('textarea[placeholder^="例如"]')!, "测试任务");
-  await act(async () => button("优化提示词").click());
+  await confirmOptimization();
 }
 
-it('blocks refresh and optimization until the chosen source scope has finished saving',async()=>{
+it("only offers launch and leaves a draft intact when the handoff needs review again", async () => {
   await render();
-  await enter(host.querySelector<HTMLTextAreaElement>('textarea[placeholder^="例如"]')!, '测试任务');
-  let save!: (value:Response)=>void;
-  respond=async(action,body)=>{
-    if(action==='agent-context/selection'&&body.selection)return new Promise(resolve=>{save=resolve;});
-  };
-  await act(async()=>button('智能体记忆').click());
-  await act(async()=>{
-    button('全部 Agent').click();
-    // Both handlers can run before React has committed the disabled state.
-    button('优化提示词').click();
-  });
-  expect(posts.some(item=>item.action==='optimize')).toBe(false);
-  expect(button('优化提示词').disabled).toBe(true);
-  expect(button('重新检测').disabled).toBe(true);
-  await act(async()=>save(Response.json({selection:{memoryEnabled:true}})));
-  expect(button('智能体记忆').querySelector("small")?.textContent).toBe("全部 Agent");
-  expect(button('优化提示词').disabled).toBe(false);
-  await act(async()=>button('优化提示词').click());
-  expect(posts.find(item=>item.action==='optimize')?.body.agentContext).toEqual({memoryEnabled:true,memoryAgent:null});
+  await enter(host.querySelector<HTMLTextAreaElement>('textarea[placeholder^="例如"]')!, "整理完整发布清单");
+  expect(host.textContent).toContain("发起任务");
+  expect(host.textContent).not.toMatch(/任务工作台|最近任务|协作任务/);
+  await act(async () => button("核对交接").click());
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain("原客户端配置");
+  expect(posts.some(item => item.action === "handoff")).toBe(false);
+  respond = async action => action === "handoff"
+    ? Response.json({ error: { message: "资料范围已变化，请重新核对。" } }, { status: 400 }) : undefined;
+  await act(async () => button("交给 Codex 客户端").click());
+  expect(host.textContent).toContain("资料范围已变化");
+  expect(host.querySelector<HTMLTextAreaElement>('textarea[placeholder^="例如"]')?.value).toBe("整理完整发布清单");
+  expect(posts.some(item => /^(tasks|collaboration)\//.test(item.action))).toBe(false);
 });
 
 it("keeps only the approved nine entries and filters retired sources without revoking or deleting them", async () => {
@@ -159,13 +169,13 @@ it("shows configured separately from verified and uses the selected Claude mode 
   expect(mocks.sourcePanel.mock.calls.at(-1)![0].focusedSourceId).toBe("claude_code");
   await act(async () => button("连接详情").click());
   expect(host.textContent).toContain("支持配置逐轮采集");
-  await act(async () => button("优化提示词").click());
+  await confirmOptimization();
   expect(posts.filter(item => item.action === "optimize").at(-1)?.body.mode).toBe("code");
   await act(async () => {
     const select = host.querySelector<HTMLSelectElement>('[aria-label="Claude 运行模式"]')!;
     select.value = "cowork"; select.dispatchEvent(new Event("change", { bubbles: true }));
   });
-  await act(async () => button("优化提示词").click());
+  await confirmOptimization();
   expect(posts.filter(item => item.action === "optimize").at(-1)?.body).toMatchObject({ mode: "cowork", agentContext: { memoryEnabled: false } });
 });
 
@@ -232,14 +242,15 @@ it.each([
   { id: "workbuddy_cn", name: "WorkBuddy（国内版）", delivery: "copy-open" as const, title: "首次连接 WorkBuddy：信任记忆盒子" },
 ])("explains how to load changed MCP configuration for $name after authorization", async ({ id, name, delivery, title }) => {
   agents = [agent(id, name, delivery)];
-  const ready = { authorized: true, configured: true, boxReady: true, serviceReady: true };
+  const ready = { authorized: true, configured: true, boxReady: true, serviceReady: true, allPersonalReadOnly: id !== "workbuddy_cn" };
   respond = async action => {
     if (action === "status") return Response.json({ agents, agentAccess: {} });
     if (action === "agent-access/connect") return Response.json({ ...ready, configurationChanged: true });
     if (action === "agent-access/test") return Response.json({ ...ready, connectionTested: true, loaded: false });
   };
   await render();
-  await act(async () => button("连接智能体").click());
+  if (id === "workbuddy_cn") await act(async () => button("连接智能体").click());
+  else await confirmCodexConnection();
   const notice = document.querySelector('[role="dialog"]')!;
   expect(notice.textContent).toContain(title);
   expect(notice.textContent).toContain("资料授权与连接配置已保存");
@@ -263,7 +274,7 @@ it.each([
   { configurationChanged: true, loaded: false, failed: true },
 ])("does not request a restart for reused, already loaded, or failed connections: %j", async ({ configurationChanged, loaded, failed }) => {
   agents = [agent("codex", "Codex 客户端")];
-  const ready = { authorized: true, configured: true, boxReady: true, serviceReady: true };
+  const ready = { authorized: true, configured: true, boxReady: true, serviceReady: true, allPersonalReadOnly: true };
   respond = async action => {
     if (action === "status") return Response.json({ agents, agentAccess: {} });
     if (action === "agent-access/connect") return failed
@@ -272,7 +283,7 @@ it.each([
     if (action === "agent-access/test") return Response.json({ ...ready, connectionTested: true, loaded });
   };
   await render();
-  await act(async () => button("连接智能体").click());
+  await confirmCodexConnection();
   expect(document.querySelector('[role="dialog"]')).toBeNull();
   if (failed) expect(host.textContent).toContain("已取消更新");
 });
@@ -336,7 +347,35 @@ it("offers Claude Code repair and copies the manual command only when needed", a
   expect(host.textContent).toContain("本机测试通过，等待智能体加载");
 });
 
-it("reconnects Codex for selected sources after revocation and asks separately for full access", async () => {
+it.each([
+  { id: "codex", name: "Codex 客户端", access: { boxReady: true } },
+  { id: "codex_cli", name: "Codex CLI", access: { boxReady: true, configured: true, loaded: true, authorized: true } },
+])("combines connection and read-only authorization for $name", async ({ id, name, access }) => {
+  agents = [agent(id, name)];
+  const ready = { authorized: true, configured: true, boxReady: true, allPersonalReadOnly: true };
+  respond = async action => {
+    if (action === "status") return Response.json({ agents, agentAccess: { codex: access } });
+    if (action === "agent-access/connect") return Response.json(ready);
+    if (action === "agent-access/test") return Response.json({ ...ready, loaded: true, connectionTested: true });
+  };
+  await render();
+  expect(button("授权全部个人资料")).toBeUndefined();
+  expect(host.textContent).not.toContain("已授权全部个人资料 · 只读");
+  await act(async () => button("连接并授权").click());
+  const dialog = document.querySelector('[role="dialog"]')!;
+  expect(dialog.textContent).toContain("当前账号连接的盒子");
+  expect(dialog.textContent).toContain("Codex 客户端和 CLI");
+  expect(posts.some(item => item.action.startsWith("agent-access/"))).toBe(false);
+  await act(async () => button("确认连接并授权", dialog).click());
+  expect(posts.filter(item => item.action.startsWith("agent-access/"))).toEqual([
+    { action: "agent-access/connect", body: { agent: id, allPersonalReadOnly: true } },
+    { action: "agent-access/test", body: { agent: id } },
+  ]);
+  expect(host.textContent).toContain("已授权全部个人资料 · 只读");
+  expect(button("连接并授权")).toBeUndefined();
+});
+
+it("requires fresh confirmation when reconnecting Codex after revocation", async () => {
   const ready = { authorized: true, configured: true, boxReady: true, allPersonalReadOnly: true };
   let allPersonalReadOnly = true;
   respond = async (action, body) => {
@@ -352,6 +391,7 @@ it("reconnects Codex for selected sources after revocation and asks separately f
   };
   await render();
   expect(host.textContent).toContain("已授权全部个人资料 · 只读");
+  expect(button("连接并授权")).toBeUndefined();
   expect(host.textContent).not.toContain("成果回写");
   expect(button("撤销授权")).toBeUndefined();
   await act(async () => button("连接详情").click());
@@ -361,18 +401,17 @@ it("reconnects Codex for selected sources after revocation and asks separately f
   expect(posts).toContainEqual({ action: "agent-access/disconnect", body: { agent: "codex" } });
   expect(host.textContent).not.toContain("已授权全部个人资料 · 只读");
   expect(details.textContent).toContain("退出当前 Codex CLI 后重新启动");
-  await act(async () => button("授权全部个人资料").click());
+  expect(button("连接所选资料", details)).toBeUndefined();
+  await act(async () => button("连接并授权").click());
   await act(async () => button("取消授权").click());
   expect(posts.some(item => item.action === "agent-access/connect")).toBe(false);
-  await act(async () => button("连接所选资料", details).click());
-  expect(posts.filter(item => item.action === "agent-access/connect")).toEqual([{ action: "agent-access/connect", body: { agent: "codex" } }]);
   expect(host.textContent).not.toContain("已授权全部个人资料 · 只读");
-  expect(button("连接所选资料", details)).toBeUndefined();
-  await act(async () => button("授权全部个人资料").click());
-  await act(async () => button("确认只读授权").click());
-  expect(posts).toContainEqual({ action: "agent-access/connect", body: { agent: "codex", allPersonalReadOnly: true } });
+  await confirmCodexConnection();
+  expect(posts.filter(item => item.action === "agent-access/connect")).toEqual([
+    { action: "agent-access/connect", body: { agent: "codex", allPersonalReadOnly: true } },
+  ]);
   expect(host.textContent).toContain("已授权全部个人资料 · 只读");
-  expect(button("连接所选资料", details)).toBeUndefined();
+  expect(button("连接并授权")).toBeUndefined();
 });
 
 it("shows connection controls for WorkBuddy and DeepSeek history sources without detected desktop apps", async () => {
@@ -482,69 +521,62 @@ it("keeps task drafting available while an isolated library disables integration
   expect(host.textContent).toContain("当前为独立测试记忆库");
   expect(button("连接智能体")).toBeUndefined();
   expect(posts.some(item => item.action.startsWith("agent-context/"))).toBe(false);
-  await optimize();
-  expect(posts.find(item => item.action === "optimize")?.body).not.toHaveProperty("agentContext");
+  await enter(host.querySelector<HTMLTextAreaElement>('textarea[placeholder^="例如"]')!, "离线整理资料");
+  expect(host.querySelector<HTMLTextAreaElement>('textarea[placeholder^="例如"]')?.value).toBe("离线整理资料");
+  await act(async () => button("核对交接").click());
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain("未授权检索资料");
 });
 
 it("prepares Gemini in a terminal without asking for a workspace or claiming the task executed", async () => {
   agents = [agent("gemini", "Google", "terminal-confirm")];
-  respond = async action => action === "handoff" ? Response.json({ opened: true, prepared: true, delivery: "terminal-confirm" }) : undefined;
   await render();
   expect(host.querySelector('[aria-label="工作目录"]')).toBeNull();
   await optimize();
+  await act(async () => button("核对交接").click());
   await act(async () => button("在终端核对任务").click());
   const handoff = posts.find(item => item.action === "handoff")?.body;
-  expect(handoff).toMatchObject({ agent: "gemini" });
+  expect(handoff).toMatchObject({ confirmation: "checked", agent: "gemini", text: "优化后的测试任务" });
   expect(handoff).not.toHaveProperty("workspacePath");
-  expect(host.textContent).toContain("按回车后才会开始执行");
+  expect(host.textContent).toContain("终端待核对");
   expect(host.textContent).not.toContain("任务已执行");
 });
 
 it("reports copy-and-open as a manual paste for WorkBuddy", async () => {
   agents = [agent("workbuddy", "WorkBuddy", "copy-open")];
-  respond = async action => action === "handoff" ? Response.json({ opened: true, copied: true, delivery: "copy-open" }) : undefined;
   await render(); await optimize();
-  await act(async () => button("复制并打开 WorkBuddy").click());
-  expect(host.textContent).toContain("请在应用中粘贴后发送");
+  await act(async () => button("核对交接").click());
+  await act(async () => button("交给 WorkBuddy").click());
+  expect(host.textContent).toContain("请在智能体客户端粘贴后发送");
   expect(host.textContent).not.toContain("注入成功");
 });
 
-it("persists source selections and leaves the previous value when saving fails", async () => {
-  agents = [agent("gemini", "Google", "terminal-confirm")];
-  let saveFails = false;
-  respond = async (action, body) => action === "agent-context/selection" && body.selection && saveFails
-    ? Response.json({ error: { message: "范围保存失败" } }, { status: 400 }) : undefined;
+it("starts with empty sources and applies agent defaults only after the user requests them", async () => {
+  respond = async (action, body) => action === "agent-context/selection" && body.agent === "codex"
+    ? Response.json({ selection: { warehouseId: "saved-warehouse", memoryEnabled: false },
+      resources: { warehouse: { id: "saved-warehouse", name: "旧默认星图" } } }) : undefined;
   await render();
-  await act(async () => button("参考星图").click());
-  await act(async () => button("测试星图").click());
-  expect(posts.find(item => item.action === "agent-context/selection" && item.body.selection)?.body).toMatchObject({ agent: "gemini", selection: { warehouseId: "warehouse-one", memoryEnabled: false } });
-  saveFails = true;
-  const toggle = button("智能体记忆");
-  await act(async () => toggle.click());
-  await act(async () => button("Codex", document.querySelector('[role="dialog"]')!).click());
-  expect(toggle.dataset.selected).toBe("false");
-  expect(document.querySelector('[role="dialog"]')?.textContent).toContain("范围保存失败");
-  expect(host.textContent).toContain("测试星图");
+  expect(button("星图仓库").dataset.selected).toBe("false");
+  expect(posts.some(item => item.action === "agent-context/selection")).toBe(false);
+  await act(async () => button("沿用智能体默认范围").click());
+  expect(button("星图仓库").textContent).toContain("旧默认星图");
+  await act(async () => button("清空本次资料").click());
+  expect(button("星图仓库").dataset.selected).toBe("false");
+  expect(posts.filter(item => item.action === "agent-context/selection")).toHaveLength(1);
 });
 
-it("ignores the previous agent's delayed selection after the target changes", async () => {
-  agents = [agent("codex", "Codex 客户端"), agent("gemini", "Google", "terminal-confirm")];
-  let finishOld: ((response: Response) => void) | undefined;
-  respond = async (action, body) => {
-    if (action === "agent-context/selection" && body.agent === "codex") return new Promise<Response>(resolve => { finishOld = resolve; });
-    if (action === "agent-context/selection" && body.agent === "gemini") return Response.json({
-      selection: { warehouseId: "gemini-warehouse", memoryEnabled: false }, resources: { warehouse: { id: "gemini-warehouse", name: "Gemini 范围" } },
-    });
-    return undefined;
-  };
+it("hands off original text directly and does not offer tracking or collaboration", async () => {
+  respond = async action => action === "status"
+    ? Response.json({ agents, apps: agents, collaboration: true }) : undefined;
   await render();
-  await act(async () => button("Google", host.querySelector(".my-ai-agent-list")!).click());
-  expect(host.textContent).toContain("Gemini 范围");
-  await act(async () => finishOld!(Response.json({
-    selection: { warehouseId: "old-warehouse", memoryEnabled: true }, resources: { warehouse: { id: "old-warehouse", name: "过期 Codex 范围" } },
-  })));
-  expect(host.textContent).not.toContain("过期 Codex 范围");
-  expect(button("智能体记忆").dataset.selected).toBe("false");
+  await enter(host.querySelector<HTMLTextAreaElement>('textarea[placeholder^="例如"]')!, "整理发布清单");
+  await act(async () => button("核对交接").click());
+  expect(document.querySelector('[role="dialog"] textarea')?.textContent).toContain("整理发布清单");
+  await act(async () => button("交给 Codex 客户端").click());
+  expect(host.textContent).toContain("已请求打开草稿");
+  expect(posts.filter(item => item.action === "handoff").map(item => item.body)).toEqual([
+    { agent: "codex", text: "整理发布清单", agentContext: { memoryEnabled: false }, confirmation: "checked" },
+  ]);
+  expect(host.textContent).not.toMatch(/任务结果|继续任务|协作任务|最近任务/);
 });
 
 it("clears session-bound drafts and pending state when the account session changes", async () => {
@@ -600,9 +632,9 @@ it("uses brand icons for every supported entry and omits the duplicate memory-tr
 it("shows all three selections on a second line and sends the chosen memory scope with the task", async () => {
   await render();
   const composer = host.querySelector(".my-ai-composer")!;
-  const memory = button("智能体记忆", composer);
-  const warehouse = button("参考星图", composer);
-  const folder = button("空间文件", composer);
+  const memory = button("历史记忆", composer);
+  const warehouse = button("星图仓库", composer);
+  const folder = button("个人空间", composer);
   for (const trigger of [warehouse, folder, memory]) {
     expect(trigger.classList.contains("my-ai-source-trigger")).toBe(true);
     expect(trigger.dataset.selected).toBe("false");
@@ -623,13 +655,14 @@ it("shows all three selections on a second line and sends the chosen memory scop
   await act(async () => memory.click());
   await act(async () => button("全部 Agent").click());
   expect(memory.querySelector("small")?.textContent).toBe("全部 Agent");
-  expect(posts.filter(item => item.action === "agent-context/selection" && item.body.selection).at(-1)?.body)
-    .toMatchObject({ selection: { folderId: "docs-one", warehouseId: "warehouse-one", memoryEnabled: true, memoryAgent: null } });
+  await act(async () => button("核对交接").click());
+  expect(posts.find(item => item.action === "review-handoff")?.body.agentContext)
+    .toMatchObject({ memoryEnabled: true, memoryAgent: null });
+  await act(async () => button("关闭核对", document.querySelector('[role="dialog"]')!).click());
   await act(async () => memory.click());
   await act(async () => button("不检索记忆").click());
   expect(memory.dataset.selected).toBe("false");
-  expect(posts.filter(item => item.action === "agent-context/selection" && item.body.selection).at(-1)?.body)
-    .toEqual({ agent: "codex", selection: { folderId: "docs-one", warehouseId: "warehouse-one", memoryEnabled: false } });
+  expect(posts.some(item => item.action === "agent-context/selection")).toBe(false);
 });
 
 it("omits the accessory agent section and its capture controls from My AI", async () => {
@@ -691,4 +724,19 @@ it("explains the shared Codex default and distinguishes writing the model config
   expect(host.querySelector('input[value="/private/helper"]')).toBeNull();
   await act(async () => button("切回原订阅").click());
   expect(host.textContent).toContain("已恢复 Codex 原模型配置");
+});
+
+it("waits for configuration and uses the user's edited prompt only after adoption",async()=>{
+  await render();
+  await enter(host.querySelector<HTMLTextAreaElement>('textarea[placeholder^="例如"]')!,"任务原文");
+  await act(async()=>button("优化提示词").click());
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain("任务原文");
+  expect(posts.some(p=>p.action==="optimize")).toBe(false);
+  await act(async()=>button("开始优化").click());
+  const edit=document.querySelector<HTMLTextAreaElement>('textarea[aria-label="优化稿"]')!;
+  await enter(edit,"采用这份修改稿");
+  expect(host.querySelector(".my-ai-task-card textarea[maxlength=\"16000\"]")).toBeNull();
+  await act(async()=>button("采用提示词").click());
+  expect(host.querySelector<HTMLTextAreaElement>('textarea[maxlength="16000"]')?.value).toBe("采用这份修改稿");
+  expect(posts.some(p=>p.action==="handoff")).toBe(false);
 });

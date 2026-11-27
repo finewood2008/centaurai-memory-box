@@ -23,8 +23,9 @@ function macCliDirectories(home) {
 
 export function myAiCliEnvironment(env = process.env, platform = process.platform, home = homedir()) {
   if (platform !== 'darwin') return env;
-  const directories = (env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin').split(':');
-  return {...env, PATH: [...new Set([...directories, ...macCliDirectories(home)])].join(':')};
+  const fallback = ['/usr/bin', '/bin', '/usr/sbin', '/sbin'];
+  const directories = env.PATH ? env.PATH.split(path.delimiter) : fallback;
+  return {...env, PATH: [...new Set([...directories, ...macCliDirectories(home)])].join(path.delimiter)};
 }
 
 async function isExecutable(filename, platform) {
@@ -50,7 +51,7 @@ async function localCodexBinaries(base) {
 export async function findCodexCli({env = process.env, platform = process.platform, arch = process.arch, home = homedir(),
   macApplicationDirectories = ['/Applications', path.join(home, 'Applications')]} = {}) {
   const windows = platform === 'win32';
-  const delimiter = windows ? ';' : ':';
+  const delimiter = windows ? ';' : path.delimiter;
   const pathEnv = env.PATH ?? (windows ? env.Path : undefined) ?? '';
   const directories = pathEnv.split(delimiter).map(entry => entry.trim().replace(/^"(.*)"$/, '$1')).filter(entry => path.isAbsolute(entry));
   const binaryName = windows ? 'codex.exe' : 'codex';

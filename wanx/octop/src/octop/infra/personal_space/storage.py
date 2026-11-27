@@ -23,9 +23,22 @@ def directory_for(service: Any, db: sqlite3.Connection, space_id: str) -> Path:
     return Path(row[0]) if row else Path(service.objects)
 
 
+def check_mounted_storage(db: sqlite3.Connection, directory: Path) -> None:
+    binding = db.execute(
+        "SELECT base FROM space_storage JOIN space_mounted_volumes USING(space_id) WHERE directory=?",
+        (str(directory),),
+    ).fetchone()
+    if binding:
+        base = Path(binding["base"])
+        safe_directory(directory)
+        if not base.is_mount() or base.stat().st_dev != directory.stat().st_dev:
+            raise SpaceError("SPACE_VOLUME_OFFLINE", 409)
+
+
 def bind_object(service: Any, db: sqlite3.Connection, blob: str, space_id: str) -> None:
     directory = directory_for(service, db, space_id)
     safe_directory(directory)
+    check_mounted_storage(db, directory)
     db.execute("INSERT OR REPLACE INTO object_locations VALUES(?,?)", (blob, str(directory)))
 
 
@@ -39,6 +52,7 @@ def info(service: Any, db: sqlite3.Connection, space_id: str) -> dict[str, Any]:
     }
     try:
         safe_directory(directory)
+        check_mounted_storage(db, directory)
         disk = shutil.disk_usage(directory)
         result.update(available=True, free=disk.free, total=disk.total, used=disk.used)
     except (OSError, SpaceError):
@@ -46,7 +60,14 @@ def info(service: Any, db: sqlite3.Connection, space_id: str) -> dict[str, Any]:
     return result
 
 
-def destination(service: Any, db: sqlite3.Connection, space_id: str, base: str) -> Path:
+def destination(
+    service: Any,
+    db: sqlite3.Connection,
+    space_id: str,
+    base: str,
+    *,
+    private_directory: str = ".wanx-space",
+) -> Path:
     if not base:
         return Path(service.objects)
     selected = Path(base)
@@ -64,7 +85,7 @@ def destination(service: Any, db: sqlite3.Connection, space_id: str, base: str) 
         0
     ]
     directory = selected
-    for component in (".wanx-space", namespace, space_id):
+    for component in (private_directory, namespace, space_id):
         directory = directory / component
         directory.mkdir(exist_ok=True, mode=0o700)
         safe_directory(directory)
@@ -86,6 +107,7 @@ def relocate(
 ) -> tuple[list[Path], list[Path]]:
     """Copy and verify before changing mappings inside the caller's transaction."""
     safe_directory(directory)
+    check_mounted_storage(db, directory)
     originals: list[Path] = []
     created: list[Path] = []
     staging: Path | None = None

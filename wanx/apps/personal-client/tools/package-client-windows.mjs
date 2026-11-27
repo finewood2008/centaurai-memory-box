@@ -1,3 +1,4 @@
+import { audioToolsResources, prepareAudioTools } from "./package-audio-tools.mjs";
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { createReadStream } from "node:fs";
@@ -37,7 +38,7 @@ export function windowsReleaseConfiguration({ pkg, version, arch, out, trustFile
     asar: true, npmRebuild: false, nodeGypRebuild: false, forceCodeSigning: true,
     directories: { ...pkg.build.directories, output: path.resolve(out) },
     extraMetadata: { version, wanxEdition: pkg.wanxEdition, wanxBuild: { ...build, distributionClass: "formal", installationScope: "per-user" } },
-    extraResources: [...pkg.build.extraResources, ...packagedMemoryResources(projectRoot),
+    extraResources: [...pkg.build.extraResources, ...packagedMemoryResources(projectRoot), ...(arch === "x64" ? audioToolsResources(projectRoot, arch) : []),
       { from: path.resolve(trustFile), to: "wanx-update-trust.json" },
       { from: path.join(projectRoot, "shell/windows-private-acl.ps1"), to: "security/windows-private-acl.ps1" },
       { from: path.join(projectRoot, "shell/verify-signed.ps1"), to: "security/verify-signed.ps1" }],
@@ -79,6 +80,7 @@ export async function packageWindowsClient({ version, arch = process.arch, out, 
   const build = { schemaVersion: 1, buildId: `${stamp}-${randomBytes(6).toString("hex")}`,
     ...source,
     channel, securityEpoch, distributionClass: "formal", installationScope: "per-user" };
+  await prepareAudioTools({ clientRoot: root, arch });
   const config = windowsReleaseConfiguration({ pkg, version, arch, out, trustFile, publisherName, certificateFile, certificateSha1, build });
   function run(command, args) {
     const result = spawnSync(command, args, { cwd: root, stdio: "inherit" });

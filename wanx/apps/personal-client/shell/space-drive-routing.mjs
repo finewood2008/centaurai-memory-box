@@ -21,8 +21,21 @@ export function createDriveRouting({catalog, scope, send}) {
     const u=new URL(path,'http://space'), parts=u.pathname.split('/').filter(Boolean), method=options.method||'GET', body=options.body||{};
     const sid=options.spaceId||body.space_id||u.searchParams.get('space_id');
     const target=parts[1]||body.id||body.parent||u.searchParams.get('parent');
+    if(sid&&sid!=='personal'&&!disks.has(sid)) {pending=null;await refresh();}
     const disk=disks.get(sid)||disks.get(items.get(target));
     if(!disk){if(sid&&sid!=='personal')throw fail('MCP_DRIVE_NOT_READY');return {handled:false};}
+    if(disk.kind==='volume-space'){
+      if(!disk.storage?.available){pending=null;await refresh();}
+      const live=disks.get(disk.id);
+      if(!live?.storage?.available)throw fail('SPACE_VOLUME_OFFLINE');
+      if (parts.length===1&&parts[0]==='files'&&method==='GET') {
+        const parent=u.searchParams.get('parent')||live.root;
+        u.searchParams.set('parent',parent);
+        u.searchParams.delete('space_id');
+        return {handled:false,path:u.pathname+u.search};
+      }
+      return {handled:false};
+    }
     const params={...(Buffer.isBuffer(body)?{}:body),...Object.fromEntries(u.searchParams)};
     if(parts[1])params.id=parts[1];
     let action;

@@ -59,3 +59,15 @@ test("allows Codex to reformat its managed table and retains unrelated settings"
   config.restore();
   assert.deepEqual(getStaticTOMLValue(parseTOML(readFileSync(file,"utf8"))),{model:"old",features:{example:true}});
 });
+
+test("Windows credential interpreter and arguments survive TOML configuration and restore", t => {
+  const {file,config}=fixture(t,null);
+  const helperCommand="C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
+  const helperArgs=["-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass","-File","C:\\Users\\测试 空格\\credential.ps1"];
+  config.apply({...route,helperCommand,helperArgs});
+  const value=getStaticTOMLValue(parseTOML(readFileSync(file,"utf8")));
+  assert.equal(value.model_providers[value.model_provider].auth.command,helperCommand);
+  assert.deepEqual(value.model_providers[value.model_provider].auth.args,helperArgs);
+  config.restore();
+  assert.equal(existsSync(file),false);
+});

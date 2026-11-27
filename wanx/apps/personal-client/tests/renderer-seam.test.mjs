@@ -156,7 +156,12 @@ async function harness(initial = state(), installed = [application], options = {
     account: { snapshot: () => rawState.account, subscribe: (fn) => { accountListeners.add(fn); return () => accountListeners.delete(fn); } },
     serviceURL: "https://example.test", preferenceFile: path.join(preferenceDir, "preferences.json"), onChanged: publish,
   });
-  cleanup.push(async () => { await uiState.dispose(); await rm(preferenceDir, { recursive: true, force: true }); });
+  const rendererTimeouts = new Set();
+  cleanup.push(async () => {
+    for (const timer of rendererTimeouts) clearTimeout(timer);
+    await uiState.dispose();
+    await rm(preferenceDir, { recursive: true, force: true });
+  });
   registerControlActions({
     personalDataService: options.personalDataService,
     personalWorkshop: options.personalWorkshop,
@@ -246,7 +251,19 @@ async function harness(initial = state(), installed = [application], options = {
     window, setInterval() {}, clearInterval() {},
     ResizeObserver: class { observe() {} disconnect() {} },
     Date, URL, crypto: globalThis.crypto,
-    setTimeout, clearTimeout, TextEncoder, queueMicrotask,
+    setTimeout(callback, delay, ...args) {
+      const timer = setTimeout(() => {
+        rendererTimeouts.delete(timer);
+        callback(...args);
+      }, delay);
+      rendererTimeouts.add(timer);
+      return timer;
+    },
+    clearTimeout(timer) {
+      rendererTimeouts.delete(timer);
+      clearTimeout(timer);
+    },
+    TextEncoder, queueMicrotask,
     document: { body:{dataset:{},classList:{toggle(){}},append(){}},createElement:()=>({dataset:{},setAttribute(){}}),addEventListener() {}, getElementById: (id) => id === "app" ? app : null, querySelector: (selector) => selector === "#app" ? app : selector === "#account-name" ? { value: forms.get("auth")?.values.username || "" } : null },
     FormData: class { constructor(form) { return Object.entries(form.values || {}); } },
   });
@@ -1497,6 +1514,9 @@ const flushActions = () => new Promise(resolve => setImmediate(resolve));
 const actionButton = (h, action) => h.app.innerHTML.match(new RegExp(`<button[^>]*data-action="${action}"[^>]*>[\\s\\S]*?</button>`))?.[0];
 
 test("Owner support uses cloud IPC while offline, confirms approval and keeps revocation pending device cleanup", async () => {
+  const css = await readFile(new URL("../local-ui/renderer/styles.css", import.meta.url), "utf8");
+  assert.equal(/\[data-action="support-open"\][^{]*\{[^}]*display:\s*none\b/.test(css), false,
+    "the box owner's remote assistance button must be visible");
   let receipt = supportReceipt();
   const decisions = [], revocations = [];
   const h = await harness(supportState(), [], { support: {

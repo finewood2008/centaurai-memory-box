@@ -74,7 +74,8 @@ export async function runLaunchReview(file, { question, output = process.stdout,
     await terminal?.releaseInput();
     if (answer.trim()) return { started: false, canceled: true };
     if (task.expires <= now()) throw new Error("任务已过期，请在盒子中重新发起。");
-    const command = platform === "win32" ? await resolveCli(task.executable, task.args) : { executable: task.executable, args: [...cloud.args, ...task.args] };
+    const args = [...cloud.args, ...task.args];
+    const command = platform === "win32" ? await resolveCli(task.executable, args) : { executable: task.executable, args };
     if (task.expires <= now()) throw new Error("任务已过期，请在盒子中重新发起。");
     await approve(file, task);
     const childEnv = { ...myAiCliEnvironment(env, platform), ...cloud.env };

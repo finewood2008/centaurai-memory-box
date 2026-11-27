@@ -43,6 +43,7 @@ const expertAppRecords = {
 };
 const expertAppCalls = [];
 const appLaunches = [];
+const feedbackRequests = [];
 const baseState = {
   phase: "ready",
   account: { phase: "authenticated", accountId: "sidebar-fixture", clientId: "test-client" },
@@ -154,6 +155,12 @@ async function holdNoteSave(text) {
 function mockIPC() {
   const handle = (name, handler) => ipcMain.handle("wanx-client:" + name, handler);
   handle("get-state", () => hostState);
+  handle("help-feedback", (_event, input) => {
+    feedbackRequests.push(input);
+    return feedbackRequests.length === 1
+      ? { ok: false, code: "FAQ_FEEDBACK_RATE_LIMITED", limitScope: "minute", retryAfterSeconds: 1 }
+      : { ok: true, value: { received: true, duplicate: false } };
+  });
   handle("market-list", () => ({ items: [] }));
   handle("market-candidate", () => ({ status: "unavailable" }));
   handle("credits-balance", () => ({ available: 0 }));
@@ -1003,6 +1010,56 @@ async function verifyAccessoryOverlay() {
   }
 }
 
+async function verifyGuideFeedback() {
+  const tool = "#academy-feedback-tool";
+  const form = '[data-form="help-feedback"]';
+  const draft = "切换侧栏后，仍能找到我填的问题。";
+  const modelCalls = guideModelCalls;
+  await click(tool);
+  await waitForPanel("feedback");
+  assert.equal(await run("document.activeElement.id"), "guide-feedback-content");
+  assert.equal(feedbackRequests.length, 0);
+  await run(`document.querySelector("#guide-feedback-content").form.requestSubmit()`);
+  assert.equal(feedbackRequests.length, 0);
+  assert.match(await run('document.querySelector("#academy-feedback [role=alert]").textContent'), /请填写/);
+  await run(`const field = document.querySelector("#guide-feedback-content");
+    field.value = ${JSON.stringify(draft)}; field.dispatchEvent(new Event("input", { bubbles: true }));`);
+  await click(tool);
+  await waitForPanel("assistant");
+  assert.equal(await dialogueDraft(), "未发送的引导问题");
+  await click(tool);
+  await waitForPanel("feedback");
+  assert.equal(await run('document.querySelector("#guide-feedback-content").value'), draft);
+
+  const [width, height] = await run("[innerWidth, innerHeight]");
+  window.setContentSize(560, 720);
+  await until(() => run("innerWidth === 560"), "narrow feedback sidebar");
+  await waitForEdge(true);
+  if (process.env.WANX_SIDEBAR_SCREENSHOTS) {
+    await mkdir(process.env.WANX_SIDEBAR_SCREENSHOTS, { recursive: true });
+    await writeFile(join(process.env.WANX_SIDEBAR_SCREENSHOTS, "guide-feedback.png"),
+      (await window.webContents.capturePage()).toPNG());
+  }
+  const submit = `#academy-feedback ${form} [type="submit"]`;
+  const scrollToSubmit = () => run(`document.querySelector(${JSON.stringify(submit)}).scrollIntoView({block:"nearest"})`);
+  await scrollToSubmit();
+  await click(submit);
+  await until(() => run('document.querySelector("#academy-feedback [role=alert]")?.textContent.includes("倒计时")'), "feedback rate limit");
+  assert.equal(await run('document.querySelector("#guide-feedback-content").value'), draft);
+  await until(() => run(`!document.querySelector(${JSON.stringify(submit)}).disabled`), "feedback retry");
+  await scrollToSubmit();
+  await click(submit);
+  await until(() => run('document.querySelector("#academy-feedback [role=status]")?.textContent.includes("反馈已收到")'), "feedback receipt");
+  const payload = { content: draft, contact: "", categoryId: null, itemId: null };
+  assert.deepEqual(feedbackRequests, [payload, payload]);
+  assert.equal(guideModelCalls, modelCalls);
+  await click(tool);
+  await waitForPanel("assistant");
+  assert.equal(await dialogueDraft(), "未发送的引导问题");
+  window.setContentSize(width, height);
+  await waitForEdge(true);
+}
+
 async function verify() {
   await app.whenReady();
   try {
@@ -1047,6 +1104,7 @@ async function verify() {
       window.activeSidebar = () => {
         const drawer = document.querySelector("#academy-drawer");
         const assistant = document.querySelector("#academy-assistant");
+        const feedback = document.querySelector("#academy-feedback");
         const notePanel = document.querySelector("#academy-note");
         const note = document.querySelector("#super-clipboard");
         const open = element => element && !element.hidden && !element.inert;
@@ -1055,6 +1113,7 @@ async function verify() {
         if (open(assistant) && noteOpen) return "both";
         if (open(assistant)) return "assistant";
         if (noteOpen) return "note";
+        if (open(feedback)) return "feedback";
         return null;
       };
       window.overlapSeen = false;
@@ -1073,6 +1132,7 @@ async function verify() {
         assert.equal(await run('document.querySelector("#academy-title").textContent'), "CentaurAI");
         await run('document.querySelector("#memo-guide-panel textarea").value="未发送的引导问题"');
         await waitForEdge(true);
+        await verifyGuideFeedback();
         await click('#memo-guide-panel textarea');
         await click('.main-nav [data-action=show-boxes]');
         assert(await shown("assistant"));
@@ -1173,6 +1233,7 @@ async function verify() {
         }
         assert(await run('document.querySelector(".academy-guide-logo").src.endsWith("/centaurai-mark.png")'));
         assert(await run('document.querySelector("[data-guide-question]").getClientRects().length===0'));
+        await waitForEdge(true);
         await click('[popovertarget="guide-suggestions"]');
         assert(await run('document.querySelector("#guide-suggestions").matches(":popover-open")'));
         const suggestion=await run('document.querySelector("[data-guide-question]").textContent');

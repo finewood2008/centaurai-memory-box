@@ -1,3 +1,4 @@
+import {audioToolsResources, prepareAudioTools} from './package-audio-tools.mjs';
 import {execFileSync} from 'node:child_process';
 import {mkdtemp, rm, writeFile} from 'node:fs/promises';
 import os from 'node:os';
@@ -14,6 +15,7 @@ async function packagePreview(platform, arch) {
   assertPackagedMemoryTarget({platform, arch});
   const {pkg} = await readSourceClientManifest(root);
   const windows = platform === 'win32';
+  if (windows) await prepareAudioTools({clientRoot:root, arch});
   const run = (command, args) => execFileSync(command, args, {cwd:root, stdio:'inherit'});
   for (const task of ['build:studio', 'build:renderer', 'build:maintenance']) {
     run(...npmCommand(['run', task]));
@@ -30,6 +32,7 @@ async function packagePreview(platform, arch) {
     await writeFile(configFile, JSON.stringify({
       ...pkg.build,
       extraResources: [...pkg.build.extraResources, ...memory.extraResources,
+        ...(windows ? audioToolsResources(root, arch) : []),
         ...(windows ? [{from:'shell/windows-private-acl.ps1', to:'security/windows-private-acl.ps1'}] : [])],
     }));
     const targets = (windows ? Platform.WINDOWS : Platform.MAC)

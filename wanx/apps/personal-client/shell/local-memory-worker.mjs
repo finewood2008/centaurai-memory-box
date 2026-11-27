@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
 const STARTUP_TIMEOUT_MS = 40_000;
+const NEW_API_PROBE_TIMEOUT_MS = 10_000;
 
 function usableLocalUrl(value) {
   if (typeof value !== "string") return null;
@@ -45,10 +46,10 @@ async function samePath(expected, actual) {
   return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 
-async function readEndpoint(base, route, headers = {}, method = "GET") {
+async function readEndpoint(base, route, headers = {}, { method = "GET", timeoutMs = 2000 } = {}) {
   try {
     const response = await fetch(new URL(route, base), {
-      method, headers, redirect: "error", signal: AbortSignal.timeout(2000),
+      method, headers, redirect: "error", signal: AbortSignal.timeout(timeoutMs),
     });
     return { status: response.status, body: await response.json().catch(() => null) };
   } catch {
@@ -82,7 +83,7 @@ async function ensureEngine({ configFile, databasePath, serviceHome, engineEntry
       if (process.env.MEMMY_UNIFY_AGENT_SOURCES === "1" && ready.sourceProfile) {
         if (!["codex-desktop", "codex-cli"].includes(ready.sourceProfile)) throw new Error("MEMORY_SOURCE_PROFILE_UNKNOWN");
         if (retiring !== record.pid) {
-          const stopped = await readEndpoint(ready.endpoint, "/api/v1/admin/shutdown", { authorization: `Bearer ${config.storage.token}` }, "POST");
+          const stopped = await readEndpoint(ready.endpoint, "/api/v1/admin/shutdown", { authorization: `Bearer ${config.storage.token}` }, { method: "POST" });
           if (![200, 202].includes(stopped.status)) throw new Error("MEMORY_SOURCE_UPGRADE_FAILED");
           retiring = record.pid;
         }
@@ -114,7 +115,7 @@ async function ensureEngine({ configFile, databasePath, serviceHome, engineEntry
   throw new Error("MEMORY_ENGINE_NOT_READY");
 }
 
-async function probeApi(descriptor, engine) {
+async function probeApi(descriptor, engine, options) {
   const configured = await jsonFile(descriptor).catch(error => {
     if (error instanceof SyntaxError) return null;
     throw error;
@@ -123,9 +124,9 @@ async function probeApi(descriptor, engine) {
   if (!endpoint || endpoint.hostname !== "127.0.0.1" || typeof configured.localToken !== "string" || !configured.localToken) return false;
   const headers = { "x-memmy-local-token": configured.localToken };
   if (usableLocalUrl(configured.memory?.baseUrl)?.origin !== engine.origin) return false;
-  const bootstrap = await readEndpoint(endpoint, "/api/app/bootstrap", headers);
+  const bootstrap = await readEndpoint(endpoint, "/api/app/bootstrap", headers, options);
   if (bootstrap.status !== 200 || !bootstrap.body) return false;
-  const health = await readEndpoint(endpoint, "/api/v1/health", headers);
+  const health = await readEndpoint(endpoint, "/api/v1/health", headers, options);
   if (health.status !== 200 || health.body?.storage?.ready !== true) return false;
   return true;
 }
@@ -182,7 +183,9 @@ async function run(sourceRoot, runtimeHome, descriptor, apiDatabasePath) {
     skipAgentMcpReload: true,
   });
   try {
-    if (!await probeApi(descriptor, engine)) throw new Error("MEMORY_API_NOT_READY");
+    if (!await probeApi(descriptor, engine, { timeoutMs: NEW_API_PROBE_TIMEOUT_MS })) {
+      throw new Error("MEMORY_API_NOT_READY");
+    }
   } catch (error) {
     await backend.close();
     throw error;

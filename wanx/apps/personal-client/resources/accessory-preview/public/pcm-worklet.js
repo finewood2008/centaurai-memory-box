@@ -12,6 +12,7 @@ class Pcm16kProcessor extends AudioWorkletProcessor {
     this.chunk = Math.round(sampleRate * 5) * this.channels;
     this.buf = new Int16Array(this.chunk);
     this.len = 0;
+    this.capturedFrames = 0;
     this.frames = po.live ? new Int16Array(1600) : null;
     this.frameLen = 0;
     this.active = true;
@@ -21,6 +22,9 @@ class Pcm16kProcessor extends AudioWorkletProcessor {
       const t = e.data && e.data.type;
       if (t === 'pause') { this.flush(); this.flushFrame(); this.active = false; this.reset(); }
       else if (t === 'resume') { this.reset(); this.active = true; }
+      else if (t === 'bookmark') {
+        this.port.postMessage({ type: 'bookmark', id: e.data.id, sampleOffset: this.capturedFrames });
+      }
       else if (t === 'flush') { this.flush(); this.flushFrame(); this.port.postMessage({ type: 'flushed', id: e.data.id }); }
     };
   }
@@ -28,7 +32,7 @@ class Pcm16kProcessor extends AudioWorkletProcessor {
     if (!this.frameLen) return;
     const out = this.frames.slice(0, this.frameLen);
     this.frameLen = 0;
-    this.port.postMessage({ type: 'frame', pcm: out.buffer }, [out.buffer]);
+    this.port.postMessage({ type: 'frame', pcm: out.buffer, sampleOffset: this.capturedFrames }, [out.buffer]);
   }
   reset() { this.phase = 0; this.sum = 0; this.n = 0; }
   push(v) {
@@ -55,6 +59,7 @@ class Pcm16kProcessor extends AudioWorkletProcessor {
       for (let c = 0; c < chs; c++) v += input[c][i];
       v /= chs;
       if (this.active) {
+        this.capturedFrames++;
         for (let c = 0; c < this.channels; c++) this.buf[this.len++] = this.pcm(input[c]?.[i] ?? 0);
         if (this.len >= this.chunk) this.flush();
         this.lvlSum += v * v;

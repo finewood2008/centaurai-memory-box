@@ -35,7 +35,7 @@
   }
   async function refresh() {
     const before=epoch;
-    try { const result=await manage('spaces',{personalOnly:options.personalOnly===true}); if(Array.isArray(result)) spaces=options.personalOnly ? result.filter(s=>s.id==='personal') : result; requests=[]; }
+    try { const result=await manage('spaces',{personalOnly:options.personalOnly===true}); if(Array.isArray(result)) spaces=options.personalOnly ? result.filter(s=>s.id==='personal'||s.kind==='volume-space') : result; requests=[]; }
     catch(error) { if(before!==epoch)throw error; if(!String(error.message).includes('UPGRADE')&&!String(error.message).includes('404'))throw error; }
     cache.clear();
     await Promise.all([...new Set([...expanded,...automatic])].map(async k=>{const [space,id]=k.split(':');if(!spaces.some(s=>s.id===space&&!s.trashed)){expanded.delete(k);return;}try{await children(space,id);}catch(error){if(before!==epoch)throw error;expanded.delete(k);}}));
@@ -73,12 +73,15 @@
   const pinned = (space,id) => favorites.some(f=>f.space===space&&f.id===id);
   function tree(space,id,name,depth=0,description='') {
     const k=nodeKey(space,id),open=expanded.has(k)||(automatic.has(k)&&!collapsed.has(k)),selected=!position.trash&&position.space===space&&position.parent===id;
+    const disk=spaces.find(s=>s.id===space);
+    const offline=disk?.kind==='volume-space'&&disk.storage?.available===false;
+    if(offline&&!depth)return `<button class="space-nav" disabled title="接回硬盘后可打开">${icon('drive')}<span>${esc(name)}</span><small>未连接</small></button>`;
     const data=`data-id="${esc(id)}" data-space="${esc(space)}" data-name="${esc(name)}"`,kind=depth?'folder':'space';
     return `<div class="space-tree-node" style="--depth:${depth}" data-sidebar-kind="${kind}" ${data}><button class="space-tree-toggle ${open?'is-expanded':''}" data-workspace-action="expand" ${data} aria-label="${open?'折叠':'展开'}${esc(name)}" aria-expanded="${open}">${icon('chevron')}</button><button class="space-nav ${selected?'active':''}" data-action="space-folder" ${data} title="${esc(description?name+' · '+description:name)}" ${selected?'aria-current="page"':''}>${icon(depth?'folder':'drive')}<span>${esc(name)}</span>${depth===0&&spaces.find(s=>s.id===space)?.writable===false?'<small class="space-readonly">只读</small>':''}</button><button class="space-tree-more" data-workspace-action="menu" data-sidebar-kind="${kind}" ${data} aria-label="${esc(name)}的侧栏操作" title="更多操作" aria-haspopup="menu">${icon('more')}</button></div>${open&&depth<40?(cache.get(k)||[]).map(c=>tree(space,c.id,c.name,depth+1)).join(''):''}`;
   }
   function sidebar() {
     const own=spaces.find(s=>s.id==='personal') || personal();
-    if (options.personalOnly) return `<nav class="space-tree" aria-label="空间位置"><section class="space-nav-section" aria-label="我的空间">${tree(own.id,own.root,'我的空间')}</section></nav>`;
+    if (options.personalOnly) return `<nav class="space-tree" aria-label="空间位置"><section class="space-nav-section" aria-label="存储盘">${tree(own.id,own.root,own.name)}${spaces.filter(s=>s.kind==='volume-space').map(s=>tree(s.id,s.root,s.name,0,'外接硬盘')).join('')}</section></nav>`;
     return `<nav class="space-tree" aria-label="空间位置">${favorites.length?`<section class="space-nav-section" aria-label="常用位置"><h3 class="space-sidebar-caption">常用位置</h3>${favorites.map(f=>{const data=`data-id="${esc(f.id)}" data-space="${esc(f.space)}" data-name="${esc(f.name)}"`;return `<div class="space-favorite" data-sidebar-kind="favorite" ${data}><button class="space-nav ${!position.trash&&position.space===f.space&&position.parent===f.id?'active':''}" data-action="space-folder" ${data} title="${esc(f.name)}${f.unavailable?' · 位置暂不可用':''}" ${f.unavailable?'disabled':''}>${icon('star')}<span>${esc(f.name || '位置暂不可用')}</span></button><button class="space-tree-more" data-workspace-action="menu" data-sidebar-kind="favorite" ${data} aria-label="${esc(f.name)}的快捷入口操作" title="更多操作" aria-haspopup="menu">${icon('more')}</button></div>`;}).join('')}</section>`:''}<section class="space-nav-section" aria-label="我的空间">${tree(own.id,own.root,'我的空间')}</section>${spaces.filter(s=>s.id!=='personal'&&!hiddenSpaces.has(s.id)).map(s=>`<section class="space-nav-section" aria-label="${esc(s.name)}专属盘">${tree(s.id,s.root,s.name,0,[s.member,s.domain==='company'?'公司可见':'个人专属',s.writable===false?'只读':''].filter(Boolean).join(' · '))}</section>`).join('')}</nav>`;
   }
   function footerNavigation() {return `<button class="space-nav space-recycle-entry ${position.trash?'active':''}" data-action="space-recycle" ${position.trash?'aria-current="page"':''}>${icon('trash')}<span>回收站</span></button>`;}
@@ -93,6 +96,7 @@
     if(!menu||modal)return '';
     const t=menu,choice=(text,command,danger=false)=>`<button role="menuitem" data-workspace-action="menu-command" data-command="${command}" ${danger?'class="danger-text"':''}>${esc(text)}</button>`;
     const disk=spaces.find(s=>s.id===t.space);
+    if(disk?.kind==='volume-space'&&t.id===disk.root)return `<div class="space-context-menu space-sidebar-menu" role="menu" style="left:${t.x}px;top:${t.y}px">${choice('打开','open')}${choice('调用链接','agent-provide')}</div>`;
     if(disk?.kind==='agent-drive'&&t.id===disk.root)return `<div class="space-context-menu space-sidebar-menu" role="menu" style="left:${t.x}px;top:${t.y}px">${choice('打开专属盘','open')}${choice('接入详情…','manage')}${choice('从侧栏隐藏','hide-space')}${choice(pinned(t.space,t.id)?'取消固定':'固定到常用位置',pinned(t.space,t.id)?'unpin':'pin')}</div>`;
     let items=choice(t.kind==='folder'?'打开文件夹':'打开','open')+choice(options.personalOnly?'调用链接':'提供给 Agent…','agent-provide');
     if(t.kind==='favorite')items+=choice('在空间中显示','locate')+'<hr role="separator">'+choice('取消固定','unpin');
@@ -147,7 +151,7 @@
   function storageView() {
     if(position.trash)return '';
     const space=current(),location=space.storage;
-    if(space.kind==='agent-drive')return '';
+    if(space.kind==='agent-drive'||space.kind==='volume-space')return '';
     return `<div class="space-storage-location"><button class="text-button" data-workspace-action="storage" data-space="${esc(space.id)}" aria-label="设置当前空间存储目录" title="${esc(location?.path || '默认位置')}">存储设置</button>${location?.available===false?'<small class="danger-text">目录暂不可用</small>':''}</div>`;
   }
   function recycled() { return spaces.filter(s=>s.trashed).map(s=>`<div class="space-recycled"><strong>${esc(s.name)}</strong><span>空间 · ${bytes(s.bytes+s.pending_bytes)}</span>${button('恢复空间','restore',`data-space="${s.id}"`)}</div>`).join(''); }

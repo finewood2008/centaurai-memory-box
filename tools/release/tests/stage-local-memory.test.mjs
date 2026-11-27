@@ -127,8 +127,11 @@ test('real electron-builder resolves each native resource once from a complete c
   const configFile = await writePreviewBuildConfig({ configFile: path.join(root, 'resolved-build-config.json'), pkg, client, staged, output, version, buildIdentity });
   const resolved = await getConfig(client, configFile);
   assert.deepEqual(resolved.win.extraResources, sourceResources);
-  assert.equal(resolved.extraResources.length, pkg.build.extraResources.length + 3);
+  assert.equal(resolved.extraResources.length, pkg.build.extraResources.length + 4);
   assert.deepEqual(resolved.extraResources.slice(0, pkg.build.extraResources.length), pkg.build.extraResources);
+  const audio = resolved.extraResources.filter(row => row.to === 'audio-tools');
+  assert.equal(audio.length, 1);
+  assert.match(path.relative(client, audio[0].from).split(path.sep).join('/'), /^build\/audio-tools\/[a-f0-9]{64}$/);
   assert.deepEqual(resolved.extraResources.find(row => row.to === 'local-memory'), { from: staged, to: 'local-memory' });
   assert.deepEqual(resolved.extraResources.find(row => row.to === 'local-memory/node_modules'), { from: path.join(staged, 'node_modules'), to: 'local-memory/node_modules' });
   assert.equal(resolved.afterPack, path.join(client, 'tools/package-client-native.mjs'));

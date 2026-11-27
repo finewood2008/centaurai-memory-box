@@ -53,7 +53,7 @@ test("launcher stages a private literal payload and does not start any CLI befor
   const answer = new Promise(resolve => { release = resolve; });
   const spawned = [], output = [];
   const run = runLaunchReview(file, {
-    platform: "darwin", env: { PATH: "/usr/bin:/bin", ELECTRON_RUN_AS_NODE: "1" },
+    platform: "darwin", env: { PATH: ["/usr/bin", "/bin"].join(path.delimiter), ELECTRON_RUN_AS_NODE: "1" },
     question: async () => answer, output: { write: value => { output.push(value); } },
     spawnChild(...args) { spawned.push(args); return successfulChild(); },
   });
@@ -64,7 +64,7 @@ test("launcher stages a private literal payload and does not start any CLI befor
   assert.deepEqual(spawned[0][1], ["--", h.prompt]);
   assert.equal(spawned[0][2].shell, false);
   assert.equal(spawned[0][2].env.ELECTRON_RUN_AS_NODE, undefined);
-  assert.ok(spawned[0][2].env.PATH.split(":").includes("/opt/homebrew/bin"));
+  assert.ok(spawned[0][2].env.PATH.split(path.delimiter).includes("/opt/homebrew/bin"));
   assert.doesNotMatch(output.join(""), /\u001b/);
   await assert.rejects(readFile(file), { code: "ENOENT" });
 });
@@ -282,3 +282,20 @@ test("Windows acknowledges a review even when the user cancels before the launch
   assert.equal((await h.prepare()).opened, true);
   assert.deepEqual(await readdir(path.join(h.root, "pending")), []);
 });
+
+for (const platform of ["win32", "darwin"]) for (const agent of ["codex_cli", "claude_code", "gemini"]) {
+  test(`cloud launch preserves selected provider and model arguments on ${platform}: ${agent}`, async t => {
+    const { cloudCliOptions } = await import("../shell/my-ai-cloud-protocol.mjs");
+    const h = await fixture(t);
+    await h.prepare();
+    const file = h.opened[0].replace(/\.command$/, ".json");
+    const task = JSON.parse(await readFile(file, "utf8"));
+    task.cloudRoute = {agent, port:1, token:"a".repeat(64), model:"test-model"};
+    await writeFile(file, JSON.stringify(task));
+    let argv;
+    await runLaunchReview(file, {platform, question:async()=>"", approve:async()=>{}, output:{write(){}},
+      resolveCli:async(executable,args)=>({executable,args}),
+      spawnChild(_executable,args){argv=args;return successfulChild();}});
+    assert.deepEqual(argv,[...cloudCliOptions(task.cloudRoute).args,...task.args]);
+  });
+}

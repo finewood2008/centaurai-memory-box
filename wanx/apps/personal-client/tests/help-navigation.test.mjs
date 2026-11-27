@@ -27,7 +27,7 @@ async function harness(initial) {
       return { ok: true, value: name === "help.faq" ? calls.filter(row => row.name === name).length === 1 ? { data, etag: 'W/"faq-v1"' } : { notModified: true } : name === "market.list" ? { items: [] } : undefined, state: current };
     },
   } };
-  vm.runInNewContext(source, { window, document: {
+  vm.runInNewContext(source, { window, queueMicrotask, document: {
     body: { dataset: {}, classList: { toggle() {} }, append() {} }, createElement: () => ({ dataset: {}, setAttribute() {} }),
     addEventListener() {}, querySelector: selector => selector === "#app" ? app : null,
   }, Date, TextEncoder, setTimeout, clearTimeout, setInterval: () => null, clearInterval() {} });

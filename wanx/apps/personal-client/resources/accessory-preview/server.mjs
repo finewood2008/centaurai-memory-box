@@ -11,6 +11,7 @@ import { HttpError, RE } from './lib/util.mjs';
 import { media, attachMedia } from './lib/media.mjs';
 import { usbInputs } from './lib/usb-inputs.mjs';
 import { audioType } from './lib/audio-input.mjs';
+import { AUDIO_IMPORT_CHUNK_BYTES, createAudioImports } from './lib/audio-imports.mjs';
 import * as M from './lib/meetings.mjs';
 import * as Lib from './lib/library.mjs';
 
@@ -199,8 +200,14 @@ async function route(req, res, url) {
   }
   if (seg[0] !== 'api') throw new HttpError(404, '未找到');
 
-  if (p.startsWith('/api/nas/') && is('POST') && PROFILE === 'accessories' && process.send) {
+  const agent = req.headers['x-recording-agent'];
+  const storageRequest = p.startsWith('/api/nas/') && is('POST');
+  if (PROFILE === 'accessories' && agent === 'storage' && !storageRequest)
+    throw new HttpError(403, '硬盘管理智能体仅可访问外接硬盘服务');
+  if (storageRequest && PROFILE === 'accessories' && process.send) {
     const id=randomUUID(), op=p.slice('/api/nas/'.length), input=await readJsonBody(req);
+    const summary = agent === 'catalog' && op === 'volume-status';
+    if (!summary && agent !== 'storage') throw new HttpError(403, '请从配件打开硬盘管理智能体');
     const result=await new Promise((resolve,reject) => {
       const done=(error,value) => {
         clearTimeout(timer); process.off('message',receive);
@@ -209,7 +216,7 @@ async function route(req, res, url) {
       const receive=m => { if (m?.type==='nas-result' && m.id===id) done(m.error,m.result); };
       const timer=setTimeout(()=>done('盒端等待超时'),op==='ask'?270000:120000);
       process.on('message',receive);
-      process.send({type:'nas-request',id,op,input},e=>{if (e) done('宿主连接已关闭');});
+      process.send({type:'nas-request',id,op,input,summary},e=>{if (e) done('宿主连接已关闭');});
     });
     return send(res,200,result);
   }
@@ -220,6 +227,23 @@ async function route(req, res, url) {
   if (p === '/api/import-audio' && is('POST')) {
     const imported = await acceptRecordingFile(req, url.searchParams.get('name') || '', url.searchParams);
     return send(res, 202, imported);
+  }
+  if (p === '/api/audio-imports' && is('POST')) {
+    return send(res, 200, await audioImports.begin(await readJsonBody(req)));
+  }
+  if (seg[1] === 'audio-imports' && seg.length === 3 && is('PUT')) {
+    const id = param(seg[2], /^[a-f0-9]{32}$/, '录音导入 ID');
+    const offsets = url.searchParams.getAll('offset');
+    if (offsets.length !== 1 || !/^(0|[1-9]\d{0,10})$/.test(offsets[0])) throw new HttpError(400, '录音上传位置无效');
+    if (req.headers['content-type'] !== 'application/octet-stream') throw new HttpError(415, '需要二进制录音分片');
+    const bytes = await readBody(req, AUDIO_IMPORT_CHUNK_BYTES);
+    return send(res, 200, await audioImports.append(id, Number(offsets[0]), bytes));
+  }
+  if (seg[1] === 'audio-imports' && seg[3] === 'complete' && seg.length === 4 && is('POST')) {
+    if (req.headers['content-type'] || req.headers['transfer-encoding'] || Number(req.headers['content-length']) > 0) {
+      await readJsonBody(req);
+    }
+    return send(res, 202, await audioImports.complete(seg[2]));
   }
   if (p === '/api/recording-capture' && PROFILE === 'accessories') {
     const kind = req.headers['x-recording-agent'];
@@ -238,7 +262,7 @@ async function route(req, res, url) {
     if (is('GET')) return send(res, 200, { meetings: M.listMeetings() });
     if (is('POST')) {
       const b = await readJsonBody(req);
-      const project = await M.createMeeting({ title: b.title, inputLabel: b.inputLabel, memoryEnabled: b.memoryEnabled, source: b.source, sampleRate: b.sampleRate, channels: b.channels, templateId: b.templateId, templateRevision: b.templateRevision });
+      const project = await M.createMeeting({ title: b.title, inputLabel: b.inputLabel, memoryEnabled: b.memoryEnabled, liveCaptionMode: b.liveCaptionMode, liveCloudConsent: b.liveCloudConsent, source: b.source, sampleRate: b.sampleRate, channels: b.channels, templateId: b.templateId, templateRevision: b.templateRevision });
       return send(res, 201, project);
     }
   }
@@ -250,6 +274,8 @@ async function route(req, res, url) {
       if (is('PATCH')) return send(res, 200, await M.patchMeeting(id, await readJsonBody(req)));
     }
     if (seg.length === 4) {
+      if (sub === 'bookmarks' && is('POST')) return send(res, 201, await M.addBookmark(id, await readJsonBody(req)));
+      if (sub === 'speakers' && is('PATCH')) return send(res, 200, await M.patchSpeakers(id, await readJsonBody(req)));
       if (sub === 'chunks' && is('POST')) {
         const ct = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
         if (ct !== 'application/octet-stream') throw new HttpError(415, '需要 Content-Type: application/octet-stream（PCM16LE 16 kHz 单声道）');
@@ -262,7 +288,12 @@ async function route(req, res, url) {
         if (req.headers['content-type'] !== 'application/octet-stream') throw new HttpError(415, '需要 PCM 音频帧');
         const frame = await readBody(req, 6400);
         if (!frame.length || frame.length % 2) throw new HttpError(400, 'PCM 音频帧长度无效');
-        return send(res, 200, await M.pushLiveFrame(id, frame));
+        const rawOffset = url.searchParams.get('samples');
+        const sampleOffset = rawOffset === null ? undefined : Number(rawOffset);
+        if (rawOffset !== null && (!/^\d+$/.test(rawOffset) || !Number.isSafeInteger(sampleOffset))) {
+          throw new HttpError(400, '字幕帧采样位置无效');
+        }
+        return send(res, 200, await M.pushLiveFrame(id, frame, sampleOffset));
       }
       if (sub === 'finish' && is('POST')) return send(res, 202, await M.finishMeeting(id, await readJsonBody(req)));
       if (sub === 'retry' && is('POST')) {
@@ -283,6 +314,10 @@ async function route(req, res, url) {
         if (!r.deduped) await M.recordImport(id, { vaultId: vid, materialId: r.material.id, version: r.material.version, at: r.material.importedAt });
         return send(res, r.deduped ? 200 : 201, r);
       }
+    }
+    if (seg.length === 5 && sub === 'bookmarks' && (is('PATCH') || is('DELETE'))) {
+      const bookmarkId = param(seg[4], /^[0-9a-f-]{36}$/, '重点标记 ID');
+      return send(res, 200, await M.changeBookmark(id, bookmarkId, is('PATCH') ? await readJsonBody(req) : null));
     }
   }
   if (p === '/api/space' && is('GET')) return send(res, 200, { root: '试用空间/录音记录', meetings: await M.spaceList() });
@@ -336,6 +371,7 @@ server.headersTimeout = 20000;
 
 await M.initStore(DATA_DIR);
 await M.openLegacyProjects(process.env.RECORDING_LEGACY_DATA);
+const audioImports = await createAudioImports(DATA_DIR, M);
 if (PROFILE === 'accessories') {
   let retrying = false;
   setInterval(async () => {

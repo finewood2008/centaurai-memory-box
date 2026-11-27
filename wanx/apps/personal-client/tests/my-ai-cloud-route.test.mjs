@@ -53,7 +53,7 @@ test("switching applies to new launches, disconnect revokes old leases, failures
 
 
 test("desktop gateway advertises the selected model, reports inference, and invalidates its credential on restore",async t => {
-  const directory = await mkdtemp(path.join(tmpdir(),"codex-gateway-test-"));
+  const directory = await mkdtemp(path.join(tmpdir(),"codex-gateway-test-中文 空格-"));
   const model = {ref:"admin-managed-a/cloud",model:"cloud",name:"Cloud"};
   let scope = "one";
   const check=()=>{};
@@ -62,8 +62,8 @@ test("desktop gateway advertises the selected model, reports inference, and inva
   t.after(async()=>{ service.close(); await rm(directory,{recursive:true,force:true}); });
   const select = ref => service.action("select","codex",ref,check);
   const {gateway} = await select(model.ref);
-  assert.equal((await stat(gateway.helper)).mode & 0o777,0o700);
-  const headers = {authorization:"Bearer "+execFileSync(gateway.helper,{encoding:"utf8"}).trim()};
+  if (process.platform !== "win32") assert.equal((await stat(gateway.helper)).mode & 0o777,0o700);
+  const headers = {authorization:"Bearer "+execFileSync(gateway.helperCommand,gateway.helperArgs,{encoding:"utf8",windowsHide:true}).trim()};
   const models = await (await fetch(gateway.base+"/models?client_version=0.171.0",{headers})).json();
   assert.equal(models.models[0].slug,model.model);
   assert.equal((await service.action("status","codex",null,check)).gateway.receivedAt,null);

@@ -155,7 +155,12 @@ export function createMyAiCollaboration({ identity, sources, models, store, save
       const current = jobs[job.id];
       job = await update(current, typeof patch === "function" ? patch(current) : patch);
     });
-    const input = { task: job.task, evidence: job.evidence.map(({ id, text }) => ({ id, text })) };
+    const prompt = job.purpose === "prompt";
+    const team = job.recipients.map(row => row.id);
+    const writers = prompt ? team.slice(0, 2) : ["claude", "gemini"];
+    const lead = prompt ? team[0] : "claude";
+    const reviewer = prompt ? team.at(-1) : "gpt";
+    const input = { ...(prompt && { purpose:"prompt", target:job.target }), task: job.task, evidence: job.evidence.map(({ id, text }) => ({ id, text })) };
     const call = async (provider, stage, extra = {}) => {
       check();
       const { output, usage } = await abortable(models.call(provider, stage, { ...input, ...extra }, signal), signal);
@@ -167,7 +172,7 @@ export function createMyAiCollaboration({ identity, sources, models, store, save
     try {
       const checkedPhase = () => { check(); return abortable(verify(job.selection, job.evidence, check), signal); };
       await checkedPhase();
-      const independent = await Promise.all(["claude", "gemini"].map(async provider => {
+      const independent = await Promise.all(writers.map(async provider => {
         try {
           const analysis = analysisResult(await call(provider, "research"), job.evidence);
           await persist(current => ({ analyses: { ...current.analyses, [provider]: analysis.result } }));
@@ -179,11 +184,11 @@ export function createMyAiCollaboration({ identity, sources, models, store, save
       }));
       await persist({ state: "synthesizing" });
       await checkedPhase();
-      let report = analysisResult(await call("claude", "synthesize", { analyses: independent }), job.evidence, true);
+      let report = analysisResult(await call(lead, "synthesize", { analyses: independent }), job.evidence, true);
       for (let round = 1; round <= 2; round++) {
         await persist({ state: "reviewing", report: report.result, reviewRound: round });
         await checkedPhase();
-        const issues = [...report.invalid, ...reviewResult(await call("gpt", "review", { report: report.result }))];
+        const issues = [...report.invalid, ...reviewResult(await call(reviewer, "review", { report: report.result }))];
         await checkedPhase();
         const blocking = issues.filter(issue => issue.severity === "blocking");
         if (!blocking.length || round === 2) {
@@ -192,7 +197,7 @@ export function createMyAiCollaboration({ identity, sources, models, store, save
         }
         await persist({ state: "revising", issues });
         await checkedPhase();
-        report = analysisResult(await call("claude", "revise", { report: report.result, issues: blocking }), job.evidence, true);
+        report = analysisResult(await call(lead, "revise", { report: report.result, issues: blocking }), job.evidence, true);
       }
     } catch (cause) {
       const current = signal.aborted ? signal.reason : cause;
@@ -245,14 +250,26 @@ export function createMyAiCollaboration({ identity, sources, models, store, save
       }
       if (action === "preview") {
         const draft = validateDraft(input);
+        let receivers = recipients;
+        if (input.purpose === "prompt") {
+          if (!Array.isArray(input.team) || input.team.length < 2 || input.team.length > 3 ||
+              new Set(input.team).size !== input.team.length || !id(input.target))
+            throw error("请选择两到三位不同的智能体和有效的交付目标。");
+          receivers = input.team.map(member => {
+            const recipient = recipients.find(row => row.id === member && row.configured);
+            if (!recipient) throw error("所选智能体尚未配置，请重新选择。");
+            return recipient;
+          });
+          Object.assign(draft,{purpose:"prompt",target:input.target,team:input.team.slice()});
+        }
         const check = () => { signal?.throwIfAborted(); bound.check(); };
         const { evidence, notices } = await sources.collect(draft.selection, draft.task, check);
         check();
         const previewId = randomUUID();
         const expiresAt = now() + previewLifetime;
-        previews.set(previewId, { ...draft, bound, evidence, expiresAt, recipientKey: digest(recipients) });
+        previews.set(previewId, { ...draft, bound, evidence, expiresAt, recipientKey: digest(receivers) });
         if (previews.size > 16) previews.delete(previews.keys().next().value);
-        return { previewId, task: draft.task, evidence, notices, recipients, expiresAt };
+        return { previewId, task: draft.task, evidence, notices, recipients:receivers, expiresAt };
       }
       if (action === "start") return serial(async () => {
         await load();
@@ -268,16 +285,17 @@ export function createMyAiCollaboration({ identity, sources, models, store, save
             throw error("此预览已经用于另一组片段，请重新预览。");
           return publicJob(prior);
         }
-        if (!available) throw error("协作模型尚未全部配置。");
         const preview = previews.get(previewId);
+        const receivers = preview?.team ? preview.team.map(member => recipients.find(row => row.id === member)) : recipients;
+        if (receivers.some(row => !row?.configured)) throw error("所选协作模型尚未全部配置。");
         if (!preview || preview.expiresAt <= now() || preview.bound.scope !== bound.scope ||
-            preview.bound.owner !== bound.owner || preview.bound.box !== bound.box || preview.recipientKey !== digest(recipients))
+            preview.bound.owner !== bound.owner || preview.bound.box !== bound.box || preview.recipientKey !== digest(receivers))
           throw error("资料预览已失效，请重新预览。");
         if (running.has(bound.account)) throw error("当前账号已有正在运行的协作任务。");
         const evidence = preview.evidence.filter(item => evidenceIds.includes(item.id));
         if (evidence.length !== evidenceIds.length) throw error("确认的片段不在本次预览范围内。");
         const job = await update({ id: previewId, owner: bound.owner, box: bound.box, task: preview.task,
-          selection: preview.selection, evidence, recipients, createdAt: now(), analyses: {}, usage: [] }, { state: "researching" });
+          selection: preview.selection, evidence, recipients:receivers, ...(preview.purpose && {purpose:preview.purpose,target:preview.target}), createdAt: now(), analyses: {}, usage: [] }, { state: "researching" });
         previews.delete(previewId);
         const run = { bound, controller: new AbortController() };
         running.set(bound.account, run);
@@ -292,7 +310,8 @@ export function createMyAiCollaboration({ identity, sources, models, store, save
       const job = await serial(async () => {
         await load();
         bound.check();
-        if (action === "list") return Object.values(jobs).filter(item => item.owner === bound.owner && item.box === bound.box)
+        if (action === "list") return Object.values(jobs).filter(item => item.owner === bound.owner && item.box === bound.box &&
+          (input.purpose === "prompt" ? item.purpose === "prompt" && item.target === input.target : item.purpose !== "prompt"))
           .sort((a, b) => b.createdAt - a.createdAt)
           .map(({ id, task, state, createdAt }) => ({ id, task: task.slice(0, 160), state, createdAt }));
         return readJob(input.id, bound);

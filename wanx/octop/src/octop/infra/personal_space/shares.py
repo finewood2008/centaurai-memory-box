@@ -83,12 +83,18 @@ class SpaceShares(McpDrives):
                 raise SpaceError("SPACE_SHARE_UNAVAILABLE", 403)
             if resource["space_id"] != row["space_id"]:
                 raise SpaceError("SPACE_SHARE_UNAVAILABLE", 403)
+            mounted = (
+                row["domain"] == "personal"
+                and files.execute(
+                    "SELECT 1 FROM space_mounted_volumes WHERE space_id=?", (row["space_id"],)
+                ).fetchone()
+            )
         disk = db.execute(
             "SELECT agent FROM space_mcp_drives WHERE space_id=?", (row["space_id"],)
         ).fetchone()
         if disk:
             authority.drive(db, disk[0], write=write)
-        elif row["space_id"] != "personal":
+        elif row["space_id"] != "personal" and not mounted:
             raise SpaceError("SPACE_SHARE_UNAVAILABLE", 403)
         elif row["domain"] == "company" and write and not authority.admin:
             raise SpaceError("SPACE_SHARE_READ_ONLY", 403)

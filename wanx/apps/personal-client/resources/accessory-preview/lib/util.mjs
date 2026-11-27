@@ -20,6 +20,20 @@ export async function writeFileAtomic(file, data) {
 
 export const writeJson = (file, obj) => writeFileAtomic(file, JSON.stringify(obj, null, 2));
 
+export async function syncDirectory(directory) {
+  let handle;
+  try {
+    handle = await fs.open(directory, 'r');
+    await handle.sync();
+  } catch (error) {
+    // Some filesystems cannot flush directory handles.
+    if (!['EINVAL', 'ENOTSUP', 'EISDIR'].includes(error.code) &&
+        !(process.platform === 'win32' && ['EACCES', 'EPERM'].includes(error.code))) throw error;
+  } finally {
+    await handle?.close();
+  }
+}
+
 export async function readJson(file, fallback) {
   try {
     return JSON.parse(await fs.readFile(file, 'utf8'));

@@ -26,6 +26,30 @@ function fixture() {
   };
 }
 
+test("owner Space lists and binds paired mounted volumes separately from agent drives", async t => {
+  const f = fixture();
+  const mounted = { id:"e".repeat(32), root:"f".repeat(32), kind:"volume-space", volume:"test-usb",
+    name:"数据盘", storage:{path:"/run/media/user/data",available:true} };
+  let approved = false;
+  f.respond(async input => {
+    if(input.path.endsWith("/spaces")) return [{id:"personal",name:"我的空间"}, ...(approved ? [mounted] : [])];
+    if(input.path.endsWith("/spaces/mounted-volume")) {
+      const body = JSON.parse(input.body);
+      assert.deepEqual(body,{volume:"test-usb",name:"数据盘",mount:"/run/media/user/data"});
+      approved = true;
+      return mounted;
+    }
+    assert.fail("personal Space does not request agent drives");
+  });
+  const bridge = await createSpaceLinkBridge({...f,mountedVolumes:async()=>[
+    {id:"test-usb@8-2",volume:"test-usb",name:"数据盘",mount:"/run/media/user/data"},
+  ]});
+  t.after(() => bridge.close());
+  assert.deepEqual((await bridge.manage("spaces",{personalOnly:true})).map(space=>space.id),["personal",mounted.id]);
+  await bridge.manage("spaces",{personalOnly:true});
+  assert.equal(f.calls.filter(call=>call.path.endsWith("/spaces/mounted-volume")).length,1);
+});
+
 test("retired desktop enrollment and bearer links cannot create a local access surface", async t => {
   const f = fixture(), bridge = await createSpaceLinkBridge(f);
   t.after(() => bridge.close());

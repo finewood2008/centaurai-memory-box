@@ -60,7 +60,7 @@ test('discovers a Mac user CLI outside the desktop PATH', async t => {
 
 test('Codex MCP commands receive the Mac CLI runtime PATH and keep CODEX_HOME', async t => {
   const directory = await tempDirectory(t);
-  const env = {PATH: '/usr/bin:/bin', CODEX_HOME: directory};
+  const env = {PATH: ['/usr/bin', '/bin'].join(path.delimiter), CODEX_HOME: directory};
   const config = createCodexContextConfig({stdioPath, descriptorPath: path.join(directory, 'endpoint.json'), env, platform: 'darwin',
     discover: async options => {
       assert.equal(options.env, env);
@@ -69,7 +69,7 @@ test('Codex MCP commands receive the Mac CLI runtime PATH and keep CODEX_HOME', 
     run: async (_cli, args, options) => {
       assert.deepEqual(args, ['mcp', 'list', '--json']);
       assert.equal(options.env.CODEX_HOME, directory);
-      const directories = options.env.PATH.split(':');
+      const directories = options.env.PATH.split(path.delimiter);
       assert.deepEqual(directories.slice(0, 2), ['/usr/bin', '/bin']);
       assert.ok(directories.includes('/opt/homebrew/bin'));
       assert.ok(directories.includes('/usr/local/bin'));

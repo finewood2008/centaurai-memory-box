@@ -36,19 +36,15 @@ def check_mount(c):
     volume = c.get("uuid")
     if not volume:
         raise Issue("当前仅支持已登记的外接硬盘。", 403)
-    info = subprocess.run(
-        ["findmnt", "-J", "-S", "UUID=" + volume, "-o", "TARGET,SOURCE,FSTYPE,UUID"],
-        capture_output=True,
-        timeout=5,
-    )
-    rows = [
-        r
-        for r in json.loads(info.stdout or b"{}").get("filesystems", [])
-        if r.get("uuid") == volume and r.get("source", "").startswith("/dev/")
+    volumes, _ = space_volumes.usb_storage()
+    matches = [
+        (target, device)
+        for _, target, device, info in volumes.values()
+        if info.get("uuid") == volume
     ]
-    if len(rows) != 1:
-        raise Issue("设备已离线或挂载位置不明确，请重新连接。", 503)
-    return rows[0]["target"]
+    if len(matches) != 1:
+        raise Issue("已登记的外接硬盘未挂载或无法唯一识别。", 503)
+    return matches[0]
 
 
 def parts(name):
@@ -65,19 +61,10 @@ def parts(name):
 
 @contextmanager
 def directory(c):
-    mount = check_mount(c)
-    flags = os.O_DIRECTORY | os.O_RDONLY | os.O_NOFOLLOW
-    fd = os.open(mount, flags)
-    try:
-        if mount != check_mount(c) or os.fstat(fd).st_dev != os.stat(mount).st_dev:
-            raise Issue("挂载已变化，请重新打开。", 409)
-        for name in parts(c["folder"]) if c["folder"] else []:
-            child = os.open(name, flags, dir_fd=fd)
-            os.close(fd)
-            fd = child
+    mount, device = check_mount(c)
+    folder = "/".join(parts(c["folder"])) if c["folder"] else ""
+    with space_volumes.open_item(mount, device, folder, directory=True) as fd:
         yield fd
-    finally:
-        os.close(fd)
 
 
 def metadata(name, st):
@@ -95,9 +82,14 @@ def search(c, keyword):
     matches = []
     visited = 0
     with directory(c) as root:
+        device = os.fstat(root).st_dev
         for base, dirs, files, fd in os.fwalk(".", dir_fd=root, follow_symlinks=False):
             dirs[:] = (
-                sorted(d for d in dirs if not d.startswith("."))
+                sorted(
+                    d for d in dirs
+                    if not d.startswith(".")
+                    and os.stat(d, dir_fd=fd, follow_symlinks=False).st_dev == device
+                )
                 if len(PurePosixPath(base).parts) < 12
                 else []
             )
@@ -112,7 +104,7 @@ def search(c, keyword):
                     st = os.stat(file, dir_fd=fd, follow_symlinks=False)
                 except FileNotFoundError:
                     continue
-                if stat.S_ISREG(st.st_mode):
+                if st.st_dev == device and stat.S_ISREG(st.st_mode):
                     matches.append(metadata(name, st))
     matches.sort(key=lambda r: (-r["modified"], r["path"]))
     return {"files": matches[:100], "total": len(matches)}
@@ -122,12 +114,11 @@ def excerpt(c, ref, *, for_preview=False):
     name = ref["path"]
     components = parts(name)
     with directory(c) as root:
+        device = os.fstat(root).st_dev
         fd = os.dup(root)
         try:
             for part in components[:-1]:
-                sub = os.open(
-                    part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd
-                )
+                sub = disk.open_directory(fd, part, device)
                 os.close(fd)
                 fd = sub
             file = os.open(
@@ -138,7 +129,7 @@ def excerpt(c, ref, *, for_preview=False):
     with os.fdopen(file, "rb") as stream:
         st = os.fstat(stream.fileno())
         doc = metadata(name, st)
-        if not stat.S_ISREG(st.st_mode) or doc["version"] != ref["version"]:
+        if st.st_dev != device or not stat.S_ISREG(st.st_mode) or doc["version"] != ref["version"]:
             raise Issue("文件已变化，请重新查找。", 409)
         ext = Path(name).suffix.lower()
         if ext not in (".md", ".txt", ".docx", ".pdf"):
@@ -262,7 +253,7 @@ class Service:
                 with directory(c):
                     pass
                 online = True
-            except (Issue, OSError):
+            except (Issue, OSError, ValueError):
                 online = False
             with sqlite3.connect(self.db) as db:
                 rows = db.execute(
@@ -357,7 +348,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         code = 200
         try:
-            space_read = self.path in ("/space/volumes", "/space/folder", "/space/preview")
+            space_read = self.path in ("/space/volumes", "/space/folder", "/space/preview", "/space/file")
             key = self.server.agent.c.get("spaceReadToken") if space_read else self.server.agent.c["token"]
             space_edit = self.path in ("/space/text-open", "/space/text-save")
             if space_edit:

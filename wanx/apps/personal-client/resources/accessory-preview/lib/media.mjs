@@ -6,8 +6,12 @@ import { HttpError } from './util.mjs';
 
 const PREFIX = '/api/services/wanx.media/v1';
 const ASR = 'audio.transcribe';
+export const CLOUD_ASR = 'audio.transcribe.cloud';
 const LIVE = 'audio.transcribe.streaming';
+const CLOUD_LIVE = 'audio.transcribe.streaming.cloud';
 const SUMMARY = 'text.summarize';
+const HOUR_MS = 60 * 60 * 1000;
+const SPEAKER_JOB_WAIT_MS = 13 * HOUR_MS;
 const jobPath = (id) => {
   if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(id)) throw new Error('媒体作业 ID 无效');
   return '/jobs/' + id;
@@ -56,23 +60,38 @@ export function createMedia(host, grant, mode = 'box', expectedInstance, summary
     discovery = { validUntil: Date.now() + 8000, result };
     return result;
   }
-  async function requireCapability(capability) {
+  async function requireCapability(capability, { diarization = false } = {}) {
     const discovered = await capabilities();
-    const info = discovered.capabilities.find((entry) => entry.id === capability && entry.configured === true);
-    if (!info) throw unavailable('当前盒子还未开通 ' + capability);
+    const info = discovered.capabilities.find(entry => entry.id === capability && (
+      diarization ? capability === ASR && entry.speakerDiarization === true : entry.configured === true
+    ));
+    if (!info && capability === CLOUD_ASR) throw unavailable('当前盒子尚未开通云端精转');
+    if (!info) throw unavailable(diarization ? '当前盒子暂未提供说话人校正' : '当前盒子还未开通 ' + capability);
     return { ...discovered, info };
   }
-  async function waitJob(job, capability, hash, retryFailed, onJob) {
+  async function waitJob(job, capability, hash, retryFailed, onJob, diarization = false) {
     const path = jobPath(job.id);
     const id = job.id;
-    if (job.state === 'failed' && retryFailed && job.error !== 'AUDIO_NO_SPEECH') {
-      job = await call(path + '/retry', { method: 'POST' });
+    const exhaustedSummary = capability === SUMMARY && job.attempts >= 3;
+    if (job.state === 'failed' && retryFailed && !exhaustedSummary && job.error !== 'AUDIO_NO_SPEECH') {
+      try {
+        job = await call(path + '/retry', { method: 'POST' });
+      } catch (error) {
+        if (capability !== SUMMARY || error.message !== 'RETRY_NOT_ALLOWED') throw error;
+        job = await call(path);
+        if (job.state === 'failed') {
+          const cause = typeof job.error === 'string' && /^[A-Z_0-9]{1,80}$/.test(job.error) ? job.error : error.message;
+          throw Object.assign(new Error(cause), { needsNewSummaryJob: true });
+        }
+      }
     }
-    const deadline = Date.now() + 60 * 60 * 1000;
+    const started = Date.now();
+    const deadline = started + (diarization ? SPEAKER_JOB_WAIT_MS : HOUR_MS);
     let consecutiveErrors = 0;
     while (['queued', 'running'].includes(job.state)) {
       onJob?.(job);
-      await delay(mode === 'demo' ? 20 : 1000);
+      const interval = diarization && Date.now() - started >= 60000 ? 15000 : 1000;
+      await delay(mode === 'demo' ? 20 : interval);
       if (Date.now() > deadline) throw new Error('等待盒端作业超时，可从已提交的作业继续');
       try {
         job = await call(path);
@@ -83,9 +102,11 @@ export function createMedia(host, grant, mode = 'box', expectedInstance, summary
     }
     onJob?.(job);
     if (job.state !== 'done') {
-      if (job.error === 'AUDIO_NO_SPEECH') return { text: '', segments: [] };
+      if (!diarization && job.error === 'AUDIO_NO_SPEECH') return { text: '', segments: [] };
       const code = typeof job.error === 'string' && /^[A-Z_0-9]{1,80}$/.test(job.error) ? job.error : '媒体作业未完成';
-      throw new Error(code);
+      throw Object.assign(new Error(code), {
+        needsNewSummaryJob: capability === SUMMARY && job.state === 'failed' && job.attempts >= 3,
+      });
     }
     const receipt = await call(path + '/result');
     if (receipt.jobId !== id || receipt.capability !== capability || receipt.inputSha256 !== hash || !receipt.result) {
@@ -125,16 +146,19 @@ export function createMedia(host, grant, mode = 'box', expectedInstance, summary
     return job;
   }
 
-  async function transcribe(file, requestId, { retryFailed = false, onJob } = {}) {
-    const { chunkBytes, maxInputBytes } = await requireCapability(ASR);
+  async function transcribe(file, requestId, { retryFailed = false, onJob, options = {}, inputSha256, cloudConsent = false } = {}) {
+    const diarization = options.mode === 'diarize';
+    const capability = cloudConsent === true ? CLOUD_ASR : ASR;
+    const { chunkBytes, maxInputBytes } = await requireCapability(capability, { diarization });
     const size = (await fs.stat(file)).size;
     if (!Number.isSafeInteger(maxInputBytes) || !Number.isSafeInteger(chunkBytes) || chunkBytes < 1 || chunkBytes > 8 * 1024 * 1024) throw new Error('媒体上传限制无效');
     if (!size || size > maxInputBytes) throw new Error('音频超出盒端单文件大小限制');
-    const hash = await fileDigest(file);
-    let job = await call('/jobs', { method: 'POST', body: { requestId, capability: ASR, size, sha256: hash, options: {} } });
+    const hash = inputSha256 ?? await fileDigest(file);
+    if (typeof hash !== 'string' || !/^[0-9a-f]{64}$/.test(hash)) throw new Error('音频摘要无效');
+    let job = await call('/jobs', { method: 'POST', body: { requestId, capability, size, sha256: hash, options: cloudConsent === true ? { cloudConsent: true } : options } });
     onJob?.(job);
     if (job.state === 'uploading') job = await upload(job, file, size, chunkBytes, onJob);
-    return waitJob(job, ASR, hash, retryFailed, onJob);
+    return waitJob(job, capability, hash, retryFailed, onJob, diarization);
   }
   async function ensureTemplate(name, instructions) {
     await requireCapability(SUMMARY);
@@ -156,10 +180,14 @@ export function createMedia(host, grant, mode = 'box', expectedInstance, summary
     const job = await call('/summaries', { method: 'POST', body: { text, requestId, templateId } });
     return waitJob(job, SUMMARY, hash, retryFailed);
   }
-  async function openLive(onEvent, onClosed) {
+  async function openLive(onEvent, onClosed, cloudConsent = false) {
     if (invalidated) throw unavailable('请重新连接盒子');
-    const { info } = await requireCapability(LIVE);
-    const lease = await call('/asr/sessions', { method: 'POST' });
+    const cloud = cloudConsent === true;
+    const { info } = await requireCapability(cloud ? CLOUD_LIVE : LIVE);
+    const lease = await call('/asr/sessions', { method: 'POST', ...(cloud && { body: { capability: CLOUD_LIVE, cloudConsent: true } }) });
+    if (cloud && (lease.capability !== CLOUD_LIVE || lease.processingLocation !== 'cloud')) throw new Error('盒端返回的云端字幕会话无效');
+    if (!cloud && ((lease.capability !== undefined && lease.capability !== LIVE) ||
+        (lease.processingLocation !== undefined && lease.processingLocation !== 'box'))) throw new Error('盒端返回的本地字幕会话无效');
     if (typeof lease.streamPath !== 'string' || !lease.streamPath.startsWith(PREFIX + '/')
       || !/^[A-Za-z0-9_./-]+$/.test(lease.streamPath) || lease.streamPath.includes('..')
       || typeof lease.ticket !== 'string' || !/^[A-Za-z0-9_.~-]{1,2048}$/.test(lease.ticket)) {
@@ -170,12 +198,14 @@ export function createMedia(host, grant, mode = 'box', expectedInstance, summary
     const maximum = lease.maxFrameBytes ?? info.maxFrameBytes;
     if (!Number.isSafeInteger(maximum) || maximum < 2 || maximum > 6400) throw new Error('实时帧长无效');
     const ws = await host.openStream(lease.streamPath, { protocols: ['wanx.asr.v1', 'wanx.asr.ticket.' + lease.ticket] });
+    let finish;
+    const finished = new Promise(resolve => { finish = resolve; });
     try {
       await new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error('实时字幕连接超时')), 6000);
+        const timer = setTimeout(() => reject(new Error('实时字幕连接超时')), cloud ? 20000 : 6000);
         const stop = () => { clearTimeout(timer); reject(new Error('实时字幕连接已中断')); };
-        ws.on('close', () => { stop(); onClosed(); });
-        ws.on('error', () => { stop(); onClosed(); });
+        ws.on('close', () => { finish(); stop(); onClosed(); });
+        ws.on('error', () => { finish(); stop(); onClosed(); });
         ws.on('message', (bytes, binary) => {
           if (binary) return;
           try {
@@ -184,7 +214,8 @@ export function createMedia(host, grant, mode = 'box', expectedInstance, summary
               clearTimeout(timer);
               if (ws.protocol !== 'wanx.asr.v1') reject(new Error('字幕协议协商失败'));
               else resolve();
-            } else if (event.type === 'error') { stop(); onEvent(event); }
+            } else if (event.type === 'error') { finish(); stop(); onEvent(event); }
+            else if (event.type === 'end') finish();
             else onEvent(event);
           } catch { /* 畸形事件不显示 */ }
         });
@@ -196,9 +227,14 @@ export function createMedia(host, grant, mode = 'box', expectedInstance, summary
         ws.send(frame, { binary: true }, (err) => { if (err) onClosed(); });
         return true;
       },
-      end() {
-        if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'end' }), {}, () => {});
-        setTimeout(() => ws.terminate(), 1500).unref();
+      async end() {
+        if (ws.readyState !== 1) return;
+        // Allow the gateway to finish inference and settle the last caption session.
+        const timer = setTimeout(() => { finish(); ws.terminate(); }, cloud ? 135000 : 1800);
+        try {
+          ws.send(JSON.stringify({ type: 'end' }), {}, err => { if (err) finish(); });
+          await finished;
+        } finally { clearTimeout(timer); ws.close(); }
       }
     };
   }
@@ -206,8 +242,9 @@ export function createMedia(host, grant, mode = 'box', expectedInstance, summary
     try {
       const info = await capabilities();
       const ready = (id) => info.capabilities.some((c) => c.id === id && c.configured === true);
-      return { mode, connected: mode === 'box', granted:info.capabilities.map(c => c.id), transcribe: ready(ASR), live: ready(LIVE), summarize: ready(SUMMARY), summaryLocation: info.capabilities.find(c => c.id === SUMMARY)?.processingLocation || info.processingLocation, summaryOnRequest };
-    } catch (e) { return { mode, connected: false, transcribe: false, live: false, summarize: false, summaryOnRequest, reason: e.offline ? e.message : '盒子媒体能力暂不可用' }; }
+      const speakers = info.capabilities.find(c => c.id === ASR && c.speakerDiarization === true);
+      return { mode, connected: mode === 'box', granted:info.capabilities.map(c => c.id), transcribe: ready(ASR), cloudTranscribe: ready(CLOUD_ASR), live: ready(LIVE), cloudLive: ready(CLOUD_LIVE), summarize: ready(SUMMARY), ...(speakers && { speakerDiarization: true, maxDiarizationDurationSeconds: speakers.maxDiarizationDurationSeconds }), summaryLocation: info.capabilities.find(c => c.id === SUMMARY)?.processingLocation || info.processingLocation, summaryOnRequest };
+    } catch (e) { return { mode, connected: false, transcribe: false, cloudTranscribe: false, live: false, cloudLive: false, summarize: false, summaryOnRequest, reason: e.offline ? e.message : '盒子媒体能力暂不可用' }; }
   };
   const scope = async () => { await capabilities(); return ownerScope; };
   return { mode, summaryOnRequest, drive: host?.drive, scope, capabilities, requireCapability, transcribe, summarize, ensureTemplate, openLive, status };

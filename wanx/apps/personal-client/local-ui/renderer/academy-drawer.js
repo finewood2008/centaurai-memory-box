@@ -14,6 +14,7 @@
           <svg class="academy-return-icon" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 5-5 5 5 5M3 10h13"/></svg>
           <span>便签</span>
         </button>
+        <button id="academy-feedback-tool" class="academy-tool" aria-expanded="false" aria-controls="academy-feedback" type="button">问题反馈</button>
         <button id="academy-resource-tool" class="academy-tool" aria-expanded="false" aria-controls="academy-resources" type="button">学院</button>
         <button id="academy-close" class="academy-icon-button" type="button" aria-label="收起 CentaurAI 侧栏" title="收起 CentaurAI 侧栏">×</button>
       </div>
@@ -25,6 +26,8 @@
     </section>
 
     <section id="academy-note" aria-label="便签" hidden></section>
+
+    <section id="academy-feedback" class="content-panel" aria-label="问题反馈" hidden></section>
 
     <section id="academy-resources" class="content-panel" aria-label="半人马AI学院" tabindex="0" hidden>
       <section class="resource-card">
@@ -82,7 +85,7 @@
     return lines.join("\n");
   }
 
-  window.createAcademyDrawer = ({ root, request, onSuggestion, onOpenChange, onTabChange, onSectionRequest, onVisibilityRequest }) => {
+  window.createAcademyDrawer = ({ root, request, feedback, onSuggestion, onOpenChange, onTabChange, onSectionRequest, onVisibilityRequest }) => {
     if (!root) return;
     const app = document.getElementById("app");
     const drawer = document.createElement("aside");
@@ -208,9 +211,66 @@
     let section = "assistant";
     const noteTool = $("note-tool");
     const resourceTool = $("resource-tool");
+    const feedbackTool = $("feedback-tool");
+    const feedbackPanel = $("feedback");
     if (!request) resourceTool.remove();
+    if (!feedback) feedbackTool.remove();
     const availableNow = () => available && !blocked;
     const visible = () => availableNow() && opened;
+
+    let feedbackHtml = "";
+    let composing = false;
+    function focusFeedback() {
+      (feedbackPanel.querySelector('#guide-feedback-content, [data-action="help-feedback-open"]') || feedbackTool)
+        .focus({ preventScroll: true });
+    }
+    function renderFeedback() {
+      if (!feedback || !visible() || section !== "feedback" || composing) return;
+      const markup = feedback.renderFeedback();
+      if (markup === feedbackHtml) return;
+      const active = document.activeElement;
+      const wasFocused = feedbackPanel.contains(active);
+      const field = wasFocused && active.id;
+      const selection = field && active.selectionStart != null
+        ? [active.selectionStart, active.selectionEnd, active.selectionDirection] : null;
+      feedbackPanel.innerHTML = feedbackHtml = markup;
+      if (wasFocused) {
+        const next = field && document.getElementById(field);
+        if (next) {
+          next.focus({ preventScroll: true });
+          if (selection) next.setSelectionRange(...selection);
+        } else focusFeedback();
+      }
+    }
+    function syncFeedback() {
+      const shown = visible() && section === "feedback";
+      if (!shown) composing = false;
+      feedback?.visible(shown);
+      renderFeedback();
+    }
+    if (feedback) {
+      feedbackPanel.addEventListener("input", event => {
+        event.stopPropagation();
+        feedback.input(event.target.name, event.target.value);
+      });
+      feedbackPanel.addEventListener("compositionstart", () => { composing = true; });
+      feedbackPanel.addEventListener("compositionend", event => {
+        feedback.input(event.target.name, event.target.value);
+        composing = false;
+        renderFeedback();
+      });
+      feedbackPanel.addEventListener("click", event => {
+        if (!event.target.closest('[data-action="help-feedback-open"]')) return;
+        event.stopPropagation();
+        feedback.action("help-feedback-open");
+        focusFeedback();
+      });
+      feedbackPanel.addEventListener("submit", event => {
+        event.preventDefault();
+        event.stopPropagation();
+        void feedback.action("help-feedback-submit", Object.fromEntries(new FormData(event.target)));
+      });
+    }
 
     function selectPanel(nextSection) {
       if (nextSection === section) return;
@@ -220,10 +280,13 @@
       $("assistant").hidden = section !== "assistant";
       $("note").hidden = !notesOpen;
       $("resources").hidden = !resourcesOpen;
+      feedbackPanel.hidden = section !== "feedback";
+      feedbackTool.setAttribute("aria-expanded", String(section === "feedback"));
       noteTool.setAttribute("aria-expanded", String(notesOpen));
       noteTool.querySelector("span").textContent = notesOpen ? "返回对话" : "便签";
       resourceTool.setAttribute("aria-expanded", String(resourcesOpen));
       resourceTool.textContent = resourcesOpen ? "返回对话" : "学院";
+      syncFeedback();
       onTabChange?.(section);
     }
 
@@ -233,6 +296,7 @@
     }
 
     noteTool.addEventListener("click", () => requestSection(section === "note" ? "assistant" : "note"));
+    if (feedback) feedbackTool.addEventListener("click", () => requestSection(section === "feedback" ? "assistant" : "feedback"));
     if (request) resourceTool.addEventListener("click", () => requestSection(section === "academy" ? "assistant" : "academy"));
 
     function paintVisibility(wasVisible) {
@@ -245,19 +309,26 @@
       const label = shown ? "收起 CentaurAI 侧栏" : "打开 CentaurAI 侧栏";
       handle.setAttribute("aria-label", label);
       handle.title = shown ? "向右拖动或点击，收起 CentaurAI 侧栏" : "向左拖动或点击，打开 CentaurAI 侧栏";
-      if (shown !== wasVisible) onOpenChange?.(shown);
+      if (shown !== wasVisible) {
+        syncFeedback();
+        onOpenChange?.(shown);
+      }
     }
 
     function open(next) {
       if (!available || (opened && !next)) return;
-      const nextSection = next === "note" || (next === "academy" && request) ? next : "assistant";
+      const nextSection = next === "note" || (next === "academy" && request) || (next === "feedback" && feedback)
+        ? next : "assistant";
       if (opened && section === nextSection) return;
       const wasVisible = visible();
       selectPanel(nextSection);
       opened = true;
       paintVisibility(wasVisible);
-      if (visible()) (section === "note" ? noteTool : section === "academy" ? resourceTool : $("title"))
-        .focus({ preventScroll: true });
+      if (visible()) {
+        if (section === "feedback") focusFeedback();
+        else (section === "note" ? noteTool : section === "academy" ? resourceTool : $("title"))
+          .focus({ preventScroll: true });
+      }
     }
 
     function close({ restoreFocus = true } = {}) {
@@ -422,7 +493,7 @@
       isAvailable: availableNow,
       isOpen: () => opened,
       open, close, toggle,
-      sync, formatPageHelp,
+      sync, formatPageHelp, renderFeedback,
       isPageHelpEnabled: () => pageHelpEnabled,
       dialogueHost: () => $("dialogue-host"),
       noteHost: () => $("note"),

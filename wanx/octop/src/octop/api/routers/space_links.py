@@ -166,6 +166,12 @@ class StorageLocation(Input):
     )
 
 
+class MountedVolume(Input):
+    volume: str = Field(pattern=r"^[A-Za-z0-9_.:-]{1,128}$")
+    name: str = Field(min_length=1, max_length=240)
+    mount: str = Field(min_length=1, max_length=4096)
+
+
 class Approval(Input):
     credential: str = Field(default="", pattern=r"^([A-Za-z0-9_-]{43})?$")
     profile: str = Field(min_length=1, max_length=100)
@@ -240,6 +246,13 @@ class AgentOperation(Operation):
 @router.get("/spaces", summary="List your personal and Agent spaces including recycled spaces")
 async def list_spaces(service: Workspaces = Depends(links)) -> Any:
     return await call(service.spaces)
+
+
+@router.post("/spaces/mounted-volume", summary="Bind a personal space to a mounted disk")
+async def bind_mounted_volume(body: MountedVolume, service: Workspaces = Depends(links)) -> Any:
+    if type(service) is not Workspaces:
+        raise HTTPException(403, detail={"code": "SPACE_FORBIDDEN"})
+    return await call(service.bind_mounted_volume, body.volume, body.name, body.mount)
 
 
 @router.post("/spaces/{space_id}/manage", summary="Rename, recycle or restore an Agent space")

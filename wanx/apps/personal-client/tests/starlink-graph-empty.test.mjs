@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
+import { graphConnections } from "../../starlink/ui/graph-presentation.mjs";
 
 // The personal panel is now built from apps/starlink; team keeps its own payload.
 const useTeam = process.env.STARLINK_GRAPH_TEST_EDITION === "team";
@@ -20,8 +21,9 @@ function render({ warehouses = [], warehouseId = "selected", graphError = null, 
   };
   const state = { warehouses, warehouseId, graphError, showIsolated, ready: true, graph: { nodes, edges: [] } };
   vm.runInNewContext(`${renderSource}\n${warehouseSource}\nrenderGraph();`, {
-    state, $, visibleGraph: () => ({ nodes: [], edges: [] }),
+    state, $, graphConnections, visibleGraph: () => ({ nodes: [], edges: [] }),
     errorText: error => error.message, document: { querySelectorAll: () => [] },
+    starxiaotuMarker: () => "", starxiaotuTermMarker: () => "",
     explorer: { enabled: () => false }, transformScene() {}, renderDetails() {}, canCreateWarehouse: () => true,
   });
   const empty = $("#graph-empty");
@@ -37,7 +39,7 @@ test("native graph with imported materials explains missing knowledge and direct
   const empty = render({ warehouses: [{ id: "selected", document_count: 21, active_jobs: 0 }] });
   assert.equal(empty.hidden, false);
   assert.match(empty.textContent, /21 份材料/);
-  assert.match(empty.textContent, /知识图谱尚未生成/);
+  assert.match(empty.textContent, /星图尚未生成/);
   assert.match(empty.textContent, /任务中心/);
   assert.doesNotMatch(empty.textContent, /第一份|建立.*数据仓/);
 });

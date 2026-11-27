@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import test from "node:test";
 import { agentCatalog, contextAgent, managedAgentIds } from "../shell/my-ai-catalog.mjs";
 import { createMyAiTask } from "../shell/my-ai-task.mjs";
@@ -61,15 +61,15 @@ test("finds Mac CLI installations with a desktop PATH and uses the same PATH for
   await mkdir(localBin, { recursive: true });
   await writeFile(join(localBin, "gemini"), "#!/bin/sh\n", { mode: 0o700 });
   await writeFile(executable, "#!/bin/sh\n", { mode: 0o700 });
-  const pathValue = "/usr/bin:/bin";
+  const pathValue = ["/usr/bin", "/bin"].join(delimiter);
   const launches = [];
   const task = createMyAiTask(options({
     home, env: { PATH: pathValue }, commandInstalled: undefined,
     async version(command, args, { env }) {
       if (command !== executable) return { stdout: "" };
       assert.deepEqual(args, ["--version"]);
-      assert.equal(env.PATH.split(":").slice(0, 2).join(":"), pathValue);
-      assert.ok(env.PATH.split(":").includes(localBin));
+      assert.equal(env.PATH.split(delimiter).slice(0, 2).join(delimiter), pathValue);
+      assert.ok(env.PATH.split(delimiter).includes(localBin));
       return { stdout: "1.2.3" };
     },
     launcher: { async launch(input) { launches.push(input.executable); } },
@@ -315,4 +315,43 @@ test("connected explicit empty scopes create a zero-scope task, while plain disc
   const isolated = createMyAiTask(options({ integrationUnavailable: "isolated", agentAccess: { supports: () => false, status: async () => ({}) } }));
   assert.equal((await isolated("status", {}, check)).integrationUnavailable, "isolated");
   assert.equal((await isolated("optimize", { agent: "claude_desktop", mode: "cowork", draft: "Plain task", agentContext: { memoryEnabled: false } }, check)).text, "Optimized task");
+});
+
+test("review binds the handoff to the confirmed prompt, box and model without persisting the task", async () => {
+  let scope = "box-one", model = null;
+  const copies = [], prepared = [], revoked = [];
+  const task = createMyAiTask(options({
+    boxScope: () => scope,
+    copyText: value => copies.push(value),
+    cloudRoutes: { async action() { return { selected: model }; } },
+    codexContext: {
+      async manage() { return { connected: true }; },
+      async prepare(selected) {
+        prepared.push(selected);
+        return { taskId: "d".repeat(36), resources: {}, revoke: () => revoked.push(true) };
+      },
+    },
+    agentAccess: {
+      async selection() { assert.fail("explicit empty review must never load the saved default scope"); },
+    },
+  }));
+  const input = { agent: "codex", text: "整理发布清单" };
+  const approval = await task("review-handoff", input, check);
+  assert.equal(copies.length, 0);
+  assert.equal(prepared.length, 0);
+  assert.deepEqual(approval.context.sources, { memoryEnabled: false });
+  assert.doesNotMatch(JSON.stringify(approval), /box-one/);
+  const approved = { ...input, confirmation: approval.confirmation };
+  await assert.rejects(task("copy", { ...approved, text: "另一个任务" }, check), /重新核对/);
+  scope = "box-two";
+  await assert.rejects(task("copy", approved, check), /重新核对/);
+  scope = "box-one";
+  model = { model: "selected", ref: "provider/selected" };
+  await assert.rejects(task("copy", approved, check), /重新核对/);
+  assert.equal(copies.length, 0);
+  assert.equal(revoked.length, 3);
+  model = null;
+  assert.deepEqual(await task("copy", approved, check), { copied: true });
+  assert.ok(prepared.every(value => value.memoryEnabled === false));
+  assert.match(copies[0], /整理发布清单.*未授权/s);
 });

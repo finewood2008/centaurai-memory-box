@@ -202,7 +202,7 @@ const actions = {
   ].map(([product, method]) => [`updates.${product}.${method}`, input => ipcRenderer.invoke(`wanx-client:updates-${product}-${method}`, input)])),
 };
 
-for (const method of ["snapshot", "refresh", "stat", "list", "mkdir", "move", "trash", "restore", "purge", "uploads", "download", "downloads", "transfer", "preview", "cancel-preview", "open-text-edit", "save-text-edit", "restore-version", "annotation", "set-annotation", "auto-annotate", "search-annotations", "redaction-rules", "save-redaction-rules", "redact"])
+for (const method of ["snapshot", "refresh", "stat", "list", "mkdir", "move", "trash", "restore", "purge", "uploads", "download", "downloads", "transfer", "preview", "cancel-preview", "open-text-edit", "save-text-edit", "restore-version", "import-volume", "annotation", "set-annotation", "auto-annotate", "search-annotations", "redaction-rules", "save-redaction-rules", "redact"])
   actions[`space.${method}`] = input => ipcRenderer.invoke(`wanx-client:space-${method}`, input);
 
 // Fetch the fixed operation contract from the trusted main process once;
@@ -333,7 +333,10 @@ contextBridge.exposeInMainWorld(
       const receive = (_event, page) => {
         if (page?.destination === "guide-capture" && ["会议录音智能体","随身录音智能体"].includes(page.label) && ["on","off","unknown"].includes(page.capture)) {
           listener({destination:"guide-capture",label:page.label,capture:page.capture});
-        } else if (["my-ai", "memory", "ai-dialogue", "space", "boxes", "settings", "profile", "credits", "notifications","guide-capture","global-guide"].includes(page)) listener(page);
+        } else if (page?.destination === "space-volume" && typeof page.volume === "string" &&
+          page.volume.length > 0 && page.volume.length <= 256 && !/[\p{Cc}\p{Cf}]/u.test(page.volume)) {
+          listener({destination:"space-volume",volume:page.volume});
+        } else if (["my-ai", "memory", "ai-dialogue", "space", "boxes", "accessories", "settings", "profile", "credits", "notifications","guide-capture","global-guide"].includes(page)) listener(page);
       };
       ipcRenderer.on("wanx-client:navigate", receive);
       return () => ipcRenderer.removeListener("wanx-client:navigate", receive);
