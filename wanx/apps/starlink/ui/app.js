@@ -1,5 +1,6 @@
 import {logicalSourcesHTML, logicalSourceGroups, taskUnitLabel, extractionCountsHTML} from './logical-source-view.mjs';
 import { overviewHTML, knowledgeHTML } from './starlink-pages.mjs';
+import { openWarehouseGoalEditor } from './warehouse-goal-editor.mjs';
 import { createStarxiaotu } from './starxiaotu.mjs';
 import {concepts, guideMark, isGuideBackgroundClick, guideShortcut} from '../shared/application-guide.mjs';
 import { mountTermGlossary, starxiaotuTermMarker } from './term-help.mjs';
@@ -32,6 +33,7 @@ const graphMotion = createGraphMotion();
 let graphAutoRotate = false;
 import {createGraphPresentation, graphConnections, presentGraph} from './graph-presentation.mjs';
 const $ = (selector) => document.querySelector(selector);
+let overviewRead = 0;
 const esc = (value) =>
   String(value ?? "").replace(
     /[&<>"']/g,
@@ -400,6 +402,7 @@ async function call(action, input, warehouseId = state.warehouseId) {
       "correct",
       "retry-job",
       "create-warehouse",
+      "onboarding-scope-publish",
       "create-key",
       "revoke-key",
       "prepare-clear",
@@ -530,6 +533,8 @@ function invalidate() {
   $("#warehouse-query").value = "";
   $("#warehouse-picker-query").value = "";
   state.warehouseId = null;
+  state.overview = null;
+  renderOverview();
   state.importFailure = null;
   renderConversation();
   state.runtime = null;
@@ -1886,8 +1891,14 @@ async function refresh() {
     if (w.status === "fulfilled") {
       const previousState = currentWarehouse()?.state;
       state.warehouses = w.value.items;
-      if (previousState !== currentWarehouse()?.state) state.importFailure = null;
+      if (previousState !== currentWarehouse()?.state) {
+        state.importFailure = null;
+        state.overview = null;
+        overviewRead++;
+        if (currentWarehouse()?.state !== 'active') $('.warehouse-goal-dialog[open]')?.close();
+      }
       newlyActive = !scoped && currentWarehouse()?.state === "active";
+      if (newlyActive && state.view === 'overview') void loadOverview();
       renderWarehouses();
       if (state.view === "conversation" && previousState !== currentWarehouse()?.state) void loadConversation();
       if (currentWarehouse()?.state === "import_failed") void loadImportFailure();
@@ -2584,6 +2595,27 @@ function setNavigationOpen(open, restoreFocus = false) {
 
 async function action(name, targetWarehouseId) {
   if (await warehouseAction(name, targetWarehouseId)) return;
+  if (name === 'edit-warehouse-goal') {
+    const id = state.warehouseId;
+    const generation = state.generation;
+    if (!id || state.view !== 'overview' || !canCreateWarehouse() || currentWarehouse()?.state !== 'active' ||
+        document.querySelector('dialog[open]')) return;
+    openWarehouseGoalEditor({
+      request: (action, body) => call(action, {warehouseId:id, ...(body && {body})}, id).then(readWorkbenchReply),
+      onDismiss() {
+        if (state.generation === generation && state.view === 'overview') void loadOverview();
+      },
+      onSaved(result) {
+        if (!result.reused) {
+          state.overview = {...state.overview, goal:result.scope.purposes.join('\n')};
+          renderOverview();
+        }
+        void loadOverview();
+        toast(result.reused ? '已确认上次保存，正在读取当前目标。' : '星图目标已保存。');
+      },
+    });
+    return;
+  }
   if (name === "nav") setNavigationOpen(!$("#app").classList.contains("nav-open"), true);
   else if (name === "help") $("#help-dialog").showModal();
   else if (name === "graph-tasks") setView("tasks");
@@ -2885,27 +2917,41 @@ function renderOverview() {
   const warehouse = currentWarehouse();
   const snapshot = state.overview;
   const root = $('#view-overview');
-  const markup = overviewHTML({warehouse, goal:snapshot?.goal, ontology:state.graphOntology,
+  const goal = state.identity?.dataScope === 'team' ? warehouse?.description ?? ''
+    : warehouse?.state === 'active' ? snapshot?.goal : null;
+  const markup = overviewHTML({warehouse, goal, ontology:state.graphOntology,
+    canEditGoal:warehouse?.state === 'active' && canCreateWarehouse(),
     documents:state.documents,
     pending:snapshot?.pending, esc, date});
-  if (root.renderedMarkup !== markup) { root.innerHTML = markup; root.renderedMarkup = markup; }
+  if (root.renderedMarkup !== markup) {
+    const restoreGoalFocus = root.contains(document.activeElement) && document.activeElement.dataset.action === 'edit-warehouse-goal';
+    root.innerHTML = markup;
+    root.renderedMarkup = markup;
+    if (restoreGoalFocus) root.querySelector('[data-action=edit-warehouse-goal]')?.focus({preventScroll:true});
+  }
 }
 
 async function loadOverview() {
   if (!state.ready || currentWarehouse()?.state !== 'active') return;
+  const read = ++overviewRead;
   const generation = state.generation;
-  const [scope, materials] = await Promise.allSettled([
-    call('onboarding-context', {warehouseId:state.warehouseId}).then(readWorkbenchReply),
-    call('conversation-material-workflows', {offset:0, limit:50}).then(readWorkbenchReply),
+  function update(fields) {
+    if (state.invalid || state.generation !== generation || read !== overviewRead) return;
+    state.overview = {...state.overview, ...fields};
+    if (state.view === 'overview') renderOverview();
+  }
+  await Promise.all([
+    call('onboarding-context', {warehouseId:state.warehouseId}).then(readWorkbenchReply).then(context => {
+      const purposes = context?.warehouse_scope?.purposes;
+      const goal = Array.isArray(purposes) ? purposes.join('\n') : context?.answers?.purpose;
+      update({goal:typeof goal === 'string' ? goal : null});
+    }).catch(() => update({goal:null})),
+    call('conversation-material-workflows', {offset:0, limit:50}).then(readWorkbenchReply).then(materials =>
+      update({pending:materials?.items?.filter(item => item.document_id && item.document?.original_name &&
+        (item.stage === 'review' || item.stage === 'awaiting_review' || item.document.ontology_suggestions?.status === 'completed' &&
+         item.document.ontology_suggestions.count > 0 && !item.document.ontology_suggestions.handled))})
+    ).catch(() => update({pending:undefined})),
   ]);
-  if (state.invalid || state.generation !== generation) return;
-  state.overview = {
-    goal:scope.value?.warehouse_scope?.purposes?.join('\n'),
-    pending:materials.value?.items?.filter(item => item.document_id && item.document?.original_name &&
-      (item.stage === 'review' || item.stage === 'awaiting_review' || item.document.ontology_suggestions?.status === 'completed' &&
-       item.document.ontology_suggestions.count > 0 && !item.document.ontology_suggestions.handled)),
-  };
-  if (state.view === 'overview') renderOverview();
 }
 
 function renderKnowledge() {

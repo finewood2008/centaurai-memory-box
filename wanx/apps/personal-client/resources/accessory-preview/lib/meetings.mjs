@@ -13,7 +13,7 @@ import { audioType, probeAudio, prepareDiarizationAudio, prepareParts, MAX_DIARI
 import { captions, finishCaptions, sendLiveFrame } from './live-captions.mjs';
 import { editSpeakerState, expectedSpeakerCount, newSpeakers, normalizeTurns, speakerProjection, withSpeakerTurns } from './speaker-annotations.mjs';
 import { generateMinutes, meetingTopic, sanitizeItems, openPendingCount, renderMinutesMd, renderTranscriptTxt, legacySummarySections } from './minutes.mjs';
-import { writeMeetingMemory, saveDemoAccessoryMemory, initLibrary, getSettings, resolveMinutesTemplate } from './library.mjs';
+import { writeMeetingMemory, saveDemoAccessoryMemory, initLibrary, getSettings, recordingModel, resolveMinutesTemplate } from './library.mjs';
 import { DEFAULT_TEMPLATE_ID, templateSnapshot, validateInstruction } from './minutes-templates.mjs';
 
 export const P = {};
@@ -157,6 +157,9 @@ export function view(id) {
 
 // —— 创建 / 修改 ——
 export async function createMeeting(options) {
+  if ((options.source ?? 'disk') === 'disk' && options.liveCaptionMode === undefined && await recordingModel() === 'cloud') {
+    options = { ...options, liveCaptionMode: 'cloud', liveCloudConsent: true };
+  }
   const m = await createMeetingRecord(options);
   return view(m.id);
 }
@@ -372,6 +375,7 @@ export async function importAudio(file, name, { source = 'clip', sample = false,
         return view(prior.id);
       }
     }
+    const mode = sample ? 'local' : await recordingModel();
     const title = sample ? (source === 'disk' ? '示例 · 圆盘会议' : '示例 · 领夹巡检') : path.basename(name, ext);
     const m = reserved || await createMeetingRecord(
       { title, inputLabel: sample ? '内置合成音频' : name, source, sample, templateId, templateRevision },
@@ -388,6 +392,7 @@ export async function importAudio(file, name, { source = 'clip', sample = false,
       const row = {
         ...cache.get(m.id), state: 'finished', finishedAt: new Date().toISOString(),
         audio: { ...metadata, name: archived, bytes, status: 'saved', inputSha256: digest },
+        pendingTranscription: mode,
         transcript: { ...m.transcript, status: 'pending' },
         minutes: { ...m.minutes, status: 'pending' },
       };
@@ -401,7 +406,7 @@ export async function importAudio(file, name, { source = 'clip', sample = false,
       }
       cache.set(m.id, row);
     });
-    runPipeline(m.id, 'transcript');
+    runPipeline(m.id, 'transcript', { mode });
     return view(m.id);
   });
 }
@@ -427,7 +432,7 @@ function requestedTranscription({ transcriptionMode = 'local', cloudConsent } = 
 }
 
 export async function finishMeeting(id, body = {}) {
-  const mode = requestedTranscription(body);
+  const mode = !body.audioOnly && body.transcriptionMode === undefined ? await recordingModel() : requestedTranscription(body);
   const expected = body.chunkCount;
   if (expected !== undefined && (!Number.isSafeInteger(expected) || expected < 0)) throw new HttpError(400, 'chunkCount 无效');
   const started = await update(id, (m) => {
@@ -459,8 +464,9 @@ export async function finishMeeting(id, body = {}) {
 const STAGES = ['audio', 'transcript', 'minutes'];
 export async function retryStage(id, stage, body = {}) {
   const { templateId, templateRevision, rev, instruction, expectedSpeakers } = body;
-  const mode = requestedTranscription(body);
-  if (mode === 'cloud' && stage !== 'transcript') throw new HttpError(400, '云端精转仅用于完整逐字稿');
+  const mode = ['audio', 'transcript'].includes(stage) && body.transcriptionMode === undefined
+    ? await recordingModel() : requestedTranscription(body);
+  if (body.transcriptionMode === 'cloud' && stage !== 'transcript') throw new HttpError(400, '云端精转仅用于完整逐字稿');
   const m = must(id);
   if (stage === 'speakers') {
     await startSpeakerCorrection(id, expectedSpeakerCount(expectedSpeakers));

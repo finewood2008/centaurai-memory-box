@@ -5,6 +5,8 @@ window.createSupportView = function ({ request, changed, now = Date.now }) {
   const date = value => value ? new Date(value).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false }) : "—";
   let identity = null, devices = [], device = null, current = null, loaded = false, pending = false, error = "", notice = "", confirmation = null;
   let generation = 0, visible = false, timer;
+  let owners = new Map(), discoveryGeneration = 0, discoveryTimer;
+  const entries = new Map(), reads = new Map();
   const owner = row => (row?.deviceRole || row?.role) === "owner";
   const epoch = row => row?.ownershipEpoch;
   function clear() { generation++; clearTimeout(timer); device = null; current = null; loaded = false; pending = false; error = ""; notice = ""; confirmation = null; }
@@ -23,24 +25,76 @@ window.createSupportView = function ({ request, changed, now = Date.now }) {
     if (!visible || !device || !loaded || pending || confirmation || error) return;
     timer = setTimeout(() => { void refresh(); }, 5000); timer?.unref?.();
   }
+  function validate(result, deviceId, ownershipEpoch) {
+    if (!result || result.deviceId !== deviceId || !Number.isSafeInteger(result.ownershipEpoch) || result.ownershipEpoch < 1 ||
+        (ownershipEpoch !== undefined && result.ownershipEpoch !== ownershipEpoch) ||
+        (result.request !== null && (!result.request || result.request.registryDeviceId !== deviceId || result.request.ownershipEpoch !== result.ownershipEpoch))) throw new Error("SUPPORT_INVALID_RESPONSE");
+    return result.request;
+  }
+  const isPending = row => row?.decision === "pending" && Date.parse(row.requestExpiresAt) > now();
+  const isActive = row => row?.authorization === "active";
+  const hasEntry = deviceId => visible && (entries.get(deviceId) > now());
+  function recordEntry(deviceId, row) {
+    // A pending invitation has a deadline. An active authorization must
+    // remain reachable for revocation until the cloud reports its end.
+    if (isActive(row)) entries.set(deviceId, Infinity);
+    else if (isPending(row)) entries.set(deviceId, Date.parse(row.requestExpiresAt));
+    else entries.delete(deviceId);
+  }
+  function readCurrent(deviceId) {
+    // The host serializes support requests per device. Share an in-flight
+    // discovery read if the owner opens the panel during that read.
+    if (!reads.has(deviceId)) {
+      const read = request("support.current", { deviceId }).finally(() => {
+        if (reads.get(deviceId) === read) reads.delete(deviceId);
+      });
+      reads.set(deviceId, read);
+    }
+    return reads.get(deviceId);
+  }
+  async function discover(g) {
+    if (g !== discoveryGeneration || !visible || !identity || !owners.size) return;
+    await Promise.all([...owners].filter(([id]) => id !== device?.deviceId).map(async ([id, ownershipEpoch]) => {
+      let row = null;
+      try { row = validate(await readCurrent(id), id, ownershipEpoch); }
+      catch { /* Leave the entry hidden if the invitation can't be verified. */ }
+      if (g === discoveryGeneration && id !== device?.deviceId) recordEntry(id, row);
+    }));
+    if (g !== discoveryGeneration) return;
+    changed();
+    discoveryTimer = setTimeout(() => { void discover(g); }, 10000);
+    discoveryTimer?.unref?.();
+  }
+  function resetDiscovery() {
+    const g = ++discoveryGeneration;
+    clearTimeout(discoveryTimer);
+    entries.clear();
+    reads.clear();
+    if (visible && identity && owners.size) queueMicrotask(() => { void discover(g); });
+  }
+  function setVisible(value) {
+    if (visible === value) return;
+    visible = value;
+    if (!visible) clear();
+    resetDiscovery();
+  }
   function accept(result) {
-    if (!result || result.deviceId !== device.deviceId || !Number.isSafeInteger(result.ownershipEpoch) || result.ownershipEpoch < 1 ||
-        (epoch(device) !== undefined && result.ownershipEpoch !== epoch(device)) ||
-        (result.request !== null && (!result.request || result.request.registryDeviceId !== device.deviceId || result.request.ownershipEpoch !== result.ownershipEpoch))) throw new Error("SUPPORT_INVALID_RESPONSE");
+    const row = validate(result, device.deviceId, epoch(device));
     // The network directory has no ownership epoch. Establish it from the
     // independently verified cloud receipt, never from the selected P2P box.
     device.ownershipEpoch = result.ownershipEpoch;
-    current = result.request; loaded = true;
+    current = row; loaded = true;
+    recordEntry(device.deviceId, row);
   }
   async function refresh() {
     if (!identity || !device || pending || confirmation) return;
     const g = generation; pending = true; error = ""; changed();
-    try { const result = await request("support.current", { deviceId: device.deviceId }); if (g === generation) accept(result); }
-    catch (e) { if (g === generation) { loaded = false; error = message(e); } }
+    try { const result = await readCurrent(device.deviceId); if (g === generation) accept(result); }
+    catch (e) { if (g === generation) { entries.delete(device.deviceId); loaded = false; error = message(e); } }
     finally { if (g === generation) { pending = false; changed(); schedule(); } }
   }
-  const pendingRequest = () => loaded && current?.decision === "pending" && Date.parse(current.requestExpiresAt) > now();
-  const active = () => loaded && current?.authorization === "active";
+  const pendingRequest = () => loaded && isPending(current);
+  const active = () => loaded && isActive(current);
   async function submit() {
     if (pending || !confirmation || !current) return;
     const decision = confirmation, g = generation, reviewed = current;
@@ -77,16 +131,23 @@ window.createSupportView = function ({ request, changed, now = Date.now }) {
   return {
     sync(key, rows) {
       devices = rows || [];
-      if (identity !== key) { identity = key; clear(); }
-      if (device && !devices.some(row => row.deviceId === device.deviceId && owner(row) && (epoch(row) === undefined || epoch(row) === epoch(device)))) clear();
+      const next = new Map(devices.filter(owner).map(row => [row.deviceId, epoch(row)]));
+      const accountChanged = identity !== key;
+      const ownersChanged = next.size !== owners.size || [...next].some(([id, value]) => !owners.has(id) || owners.get(id) !== value);
+      if (accountChanged || (device && (!next.has(device.deviceId) ||
+          (next.get(device.deviceId) !== undefined && next.get(device.deviceId) !== epoch(device))))) clear();
+      owners = next;
+      identity = key;
+      if (accountChanged || ownersChanged) resetDiscovery();
     },
-    visible(value) { if (visible === value) return; visible = value; if (!visible) clear(); else schedule(); },
-    close: clear,
+    visible: setVisible,
+    close() { setVisible(false); },
+    hasEntry,
     async action(action, data = {}) {
       if (action === "support-open") {
         const next = devices.find(row => row.deviceId === data.deviceId && owner(row));
-        if (!identity || !next || pending) return;
-        clear(); device = { deviceId: next.deviceId, name: next.name || next.displayName || "万象盒子", ownershipEpoch: epoch(next) }; visible = true;
+        if (!identity || !next || pending || !hasEntry(next.deviceId)) return;
+        clear(); device = { deviceId: next.deviceId, name: next.name || next.displayName || "万象盒子", ownershipEpoch: epoch(next) };
         await refresh(); return;
       }
       if (action === "support-close") { if (!pending) { clear(); changed(); } return; }

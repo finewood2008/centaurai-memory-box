@@ -17,6 +17,7 @@ export function initLibrary({ data, star, memory, space }) {
 // —— 设置（录音偏好设备等）——
 const DEFAULT_SETTINGS = { preferredInput: null, memoryDefault: true };
 export const getSettings = () => readJson(L.settings, DEFAULT_SETTINGS);
+export const recordingModel = async () => (await getSettings()).recordingModel === 'cloud' ? 'cloud' : 'local';
 export async function putSettings(body) {
   return withLock('settings', async () => {
     const s = await getSettings();
@@ -28,6 +29,10 @@ export async function putSettings(body) {
         if (!deviceId && !label) throw new HttpError(400, 'preferredInput 需要 deviceId 或 label');
         s.preferredInput = { deviceId, label, savedAt: new Date().toISOString() };
       } else throw new HttpError(400, 'preferredInput 格式错误');
+    }
+    if ('recordingModel' in body) {
+      if (!['local', 'cloud'].includes(body.recordingModel)) throw new HttpError(400, '录音模型无效');
+      s.recordingModel = body.recordingModel;
     }
     if ('memoryDefault' in body) {
       if (typeof body.memoryDefault !== 'boolean') throw new HttpError(400, 'memoryDefault 必须是布尔值');

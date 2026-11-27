@@ -457,8 +457,9 @@ test('automatic re-extraction uses latest corrected source and waits for preview
   const h=harness();await h.flow.agent.prepareAutomatic();
   assert.equal(h.requests.find(r=>r.action==='conversation-processing-preview').input.documentVersionId,'corrected');
   assert.equal(h.requests.some(r=>r.action==='conversation-processing-confirm'),false);
-  assert.match(materialAutomaticCard(h.flow),/通过校验后自动发布/);
-  assert.match(materialAutomaticCard(h.flow),/完整性未确认或触发人工保护/);
+  const preview = materialAutomaticCard(h.flow);
+  assert.match(preview,/通过校验的候选将自动发布并覆盖本材料的当前知识/);
+  assert.match(preview,/没有可发布候选或任务失败时保留已有知识/);
   await h.flow.agent.confirmAutomatic();assert.equal(h.flow.agent.record.transitionId,'transition');
 });
 test('manual publication protection is shown and not overridden',async()=>{

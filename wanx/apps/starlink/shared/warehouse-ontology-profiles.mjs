@@ -2,10 +2,14 @@ export const DEFAULT_WAREHOUSE_ONTOLOGY_PROFILE = 'general';
 export const WAREHOUSE_ONTOLOGY_NAME = '基础知识本体';
 
 export const WAREHOUSE_ONTOLOGY_PROFILES = Object.freeze([
-  Object.freeze({id: 'general', label: '通用知识', description: '日常资料、会议记录、项目和个人知识整理'}),
-  Object.freeze({id: 'projects', label: '项目与协作', description: '项目推进、会议跟进和交付管理'}),
-  Object.freeze({id: 'research', label: '资料与研究', description: '专题调研、访谈分析和研究结论'}),
-  Object.freeze({id: 'operations', label: '业务与流程', description: '产品服务、合同、运营和制度流程'}),
+  Object.freeze({id: 'general', label: '通用知识', description: '日常资料、会议记录、项目和个人知识整理',
+    goal: '整理日常资料和会议记录，提取重要人物、组织、主题、已确认的决定和待办事项，方便回顾讨论内容、查找相关资料和跟进后续行动。'}),
+  Object.freeze({id: 'projects', label: '项目与协作', description: '项目推进、会议跟进和交付管理',
+    goal: '跟踪项目进展和交付，从项目计划、周报和会议纪要中提取里程碑、交付物、负责人、截止时间和风险，方便查看谁负责什么、何时交付、哪些事项需要跟进。'}),
+  Object.freeze({id: 'research', label: '资料与研究', description: '专题调研、访谈分析和研究结论',
+    goal: '围绕研究问题整理报告、文献和访谈记录，提取主要观点、支持或反驳观点的证据及研究结论，方便比较不同来源的说法，并追溯结论依据。'}),
+  Object.freeze({id: 'operations', label: '业务与流程', description: '产品服务、合同、运营和制度流程',
+    goal: '梳理产品服务、合同和制度文件，提取业务涉及的组织、合同约定、流程步骤和责任分工，方便查询某项业务怎么办理、由谁负责、需要满足哪些条件。'}),
 ]);
 
 function entity(name, label, definition, classification_boundary, fields) {

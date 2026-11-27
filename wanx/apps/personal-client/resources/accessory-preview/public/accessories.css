@@ -663,8 +663,9 @@
 .studio-disk .disk-detail .listening { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:12px; padding:7px var(--disk-inset) }
 .studio-disk .disk-detail .listening :is(.card-h,.audio-strip,.playback-speed,.empty) { padding:0 }
 .studio-disk .disk-detail .listening .card-h { border-bottom:0; white-space:nowrap }
-.studio-disk .disk-detail .listening .playback-speed { white-space:nowrap }
+.studio-disk .disk-detail .listening .playback-speed { grid-row:1; grid-column:-2/-1; white-space:nowrap }
 .studio-disk .disk-detail .listening .playback-speed select { width:auto }
+.studio-disk .disk-detail .transcription-controls { min-width:0; padding:8px 0 0; border-top:1px solid var(--line); overflow-wrap:anywhere }
 .studio-disk .disk-detail-tabs { padding:0; gap:18px; border-bottom:1px solid var(--line) }
 .studio-disk .disk-detail-tabs button { margin-bottom:-1px; padding:8px 4px; border:0; border-bottom:2px solid transparent; border-radius:0; background:transparent; font-size:15px }
 .studio-disk .disk-detail-tabs button[aria-pressed=true] { border-bottom-color:var(--studio-accent); font-weight:650 }
@@ -708,13 +709,14 @@
 .studio-disk .disk-source-link[aria-pressed=true] { font-weight:650 }
 .studio-disk .disk-confirmed-versions { padding:0 var(--disk-inset) 14px; flex-wrap:wrap }
 .studio-disk .disk-speaker-panel { padding:11px; border:1px solid var(--line) }
+.studio-disk .disk-speaker-list { max-height:52vh; overflow-y:auto }
 .studio-disk .disk-speaker-panel h2 { margin:0; font-size:16px }
 .studio-disk .disk-speaker-note { margin-bottom:8px; font-size:12px }
 .studio-disk .disk-speaker-panel [role='status'] { margin-block:8px 0 }
 .studio-disk .disk-speaker-panel .recording-speaker-row { gap:5px; margin:0; padding:9px 0; border-top:1px solid var(--line) }
 .studio-disk .disk-speaker-name { max-width:100%; min-height:26px; background:transparent; color:var(--studio-accent); cursor:pointer }
 .studio-disk .disk-speaker-name:hover, .studio-disk .disk-speaker-name:focus-visible { background:var(--cover-light); text-decoration:underline }
-.studio-disk .disk-speaker-panel .disk-speaker-actions { width:100%; gap:4px; flex-wrap:wrap }
+.studio-disk .disk-speaker-panel .disk-speaker-actions { margin-inline-start:auto; gap:4px; flex-wrap:wrap }
 .studio-disk .disk-speaker-actions .btn { padding-inline:6px }
 .studio-disk .disk-speaker-conflict { color:#82541d }
 .studio-disk .recording-speaker-tag { white-space:normal; overflow-wrap:anywhere }

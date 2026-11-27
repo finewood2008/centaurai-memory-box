@@ -33,7 +33,6 @@ const S = {
   diskSummarySource: null,
   diskSpeakerFilter: '',
   nextTemplateId: '',
-  nextLiveMode: 'local',
   currentId: null,
   meeting: null,
   devices: [],
@@ -193,6 +192,15 @@ async function init() {
       }
       renderMain();
     });
+    window.addEventListener('focus', async () => {
+      if (S.view === 'settings') return renderMain();
+      try {
+        const settings = await api('/api/settings');
+        const changed = settings.recordingModel !== S.settings?.recordingModel;
+        S.settings = settings;
+        if (changed && S.view === 'meeting' && !S.rec && !S.edit) renderMain();
+      } catch { /* Keep the last loaded settings while reconnecting. */ }
+    });
     window.addEventListener('recording-open-project', event => {
       if (!accessoryBoxReady) return;
       if (S.rec || S.starting) return toast('请先结束当前录音');
@@ -205,9 +213,9 @@ async function init() {
   document.querySelectorAll('#nav a').forEach((a) => a.addEventListener('click', (e) => { e.preventDefault(); $('appMenu').open = false; go(a.dataset.view); }));
   $('newMeeting').addEventListener('click', () => { if (S.rec) { toast('请先结束当前录音'); selectMeeting(S.rec.meetingId); return; } selectMeeting(null); });
   window.addEventListener('beforeunload', (e) => { if (S.rec || S.importing || (accessoryAgent && S.starting)) { e.preventDefault(); e.returnValue = ''; } });
+  try { S.settings = await api('/api/settings'); } catch { S.settings = { preferredInput: null, memoryDefault: true }; }
   if (!inAccessories || accessoryPage === 'disk') {
     if (navigator.mediaDevices?.addEventListener) navigator.mediaDevices.addEventListener('devicechange', onDeviceChange);
-    try { S.settings = await api('/api/settings'); } catch { S.settings = { preferredInput: null, memoryDefault: true }; }
     if (!S.settings.preferredInput) {
       try { const p = JSON.parse(localStorage.getItem(LS_PREF) || 'null'); if (p && (p.deviceId || p.label)) S.settings.preferredInput = p; } catch { /* 忽略 */ }
     }
@@ -520,6 +528,7 @@ function renderMain() {
     }
     if (S.view === 'meeting' && !S.currentId) return renderAccessoryWorkbench(main);
   }
+  if (S.view === 'settings') return renderRecordingSettings(main);
   if (S.view === 'templates') return renderTemplates(main);
   if (S.view === 'space') return renderSpace(main);
   if (S.view === 'starmap') return renderStarmap(main);
@@ -549,7 +558,7 @@ function setupAccessoryShell() {
     const rail = h('header', {class:'studio-nav'},
       h('span', {class:'agent-directory-link agent-identity'},
         h('img', {src:'/' + accessoryPage + '-agent.svg', width:30, height:30, alt:''}), accessoryAgent.title),
-      h('nav', {'aria-label':'智能体导航'}, [['meeting','工作台'],['history','历史项目'],['templates','总结模板']].map(([key,label]) =>
+      h('nav', {'aria-label':'智能体导航'}, [['meeting','工作台'],['history','历史项目'],['templates','总结模板'],['settings','录音设置']].map(([key,label]) =>
         h('button', {type:'button', 'data-agent-view':key, onclick:() => navigate(key)}, label))));
     $('main').append(h('div', {class:'agent-frame studio-'+accessoryPage}, rail, h('div', {class:'agent-pane'}, back, content)));
   } else $('main').append(back, content);
@@ -694,7 +703,9 @@ function captureControl() {
 function renderAccessoryWorkbench(main) {
   const media = S.health?.media;
   const disk = accessoryPage === 'disk';
-  const statusText = (capability, label) => media?.[capability] ? (capability === 'transcribe' ? '可转写' : label+'已就绪')
+  const cloud = S.settings?.recordingModel === 'cloud';
+  const fileCapability = transcriptionCapability();
+  const statusText = (capability, label) => media?.[capability] ? (capability === fileCapability ? '可转写' : label+'已就绪')
     : media?.connected ? label+'待盒端就绪' : label+'暂不可用';
   const file = h('input', { type: 'file', hidden: true, accept: 'audio/*,.wav,.flac,.m4a,.mp3,.ogg',
     onchange: e => { if (e.target.files[0]) void importClip(e.target.files[0]); } });
@@ -713,21 +724,21 @@ function renderAccessoryWorkbench(main) {
   const chosen = disk && deviceLabel(S.selectedDeviceId);
   const deviceText = disc ? '圆盘已连接 · '+disc.name : chosen ? '已选输入 · '+chosen :
     S.usb?.supported && !S.usb.unavailable ? '未检测到已识别的圆盘' : '等待识别拾音设备';
-  const status = h('span', {class:'studio-status', 'data-ready':String(disk ? !!(disc || chosen) : !!media?.transcribe)}, disk ? deviceText : '本机音频导入');
+  const status = h('span', {class:'studio-status', 'data-ready':String(disk ? !!(disc || chosen) : !!media?.[fileCapability])}, disk ? deviceText : '本机音频导入');
   const primary = h('button', {class:'studio-action', type:'button', onclick:begin, disabled:S.starting || S.importing || S.micTest?.active},
         S.rec ? '返回当前录音' : S.importing ? '正在导入…' : accessoryAgent.action);
   const setup = [
     h('div', {class:'studio-cover'},
       h('div', {class:'studio-copy'}, status, h('h1', null, accessoryAgent.title),
-        h('p', null, disk ? '拾取现场声音，边录边看字幕。' : '把随身录下的长音频，整理成可以回看的文字。'), disk && !S.rec ? liveModePicker() : null, primary,
+        h('p', null, disk ? '拾取现场声音，边录边看字幕。' : '把随身录下的长音频，整理成可以回看的文字。'), primary,
         disk ? null : importStatus(),
         file), accessoryArt('studio-'+accessoryPage)),
     captureControl(),
     disk && !S.rec ? micPanel() : null,
     h('div', {class:'studio-service'},
-      h('span', null, [disk && statusText(S.nextLiveMode === 'cloud' ? 'cloudLive' : 'live','实时字幕'), statusText('transcribe','文件转写'),
+      h('span', null, [disk && statusText(cloud ? 'cloudLive' : 'live','实时字幕'), statusText(fileCapability,'文件转写'),
         disk && media?.speakerDiarization && '会后可识别发言人'].filter(Boolean).join(' · ')),
-      !media?.transcribe || (disk && !media?.[S.nextLiveMode === 'cloud' ? 'cloudLive' : 'live']) ? mediaReconnectLink() : null),
+      !media?.[fileCapability] || (disk && !media?.[cloud ? 'cloudLive' : 'live']) ? mediaReconnectLink() : null),
     media?.summaryLocation === 'cloud' ? h('small', {class:'muted'}, '总结时由盒子将转录文本发送到云模型。') : null,
     profile && !S.rec ? h('details', {class:'studio-method', open:S.methodOpen,
       ontoggle:e => { if (e.target.isConnected) S.methodOpen = e.target.open; }},
@@ -972,7 +983,7 @@ function renderSetup(main) {
       h('p', null, '记录声音，整理成可以回听的录音总结。')),
     h('div', { class: 'source-grid' },
       sourceCard('disk', '会议圆盘', '边录边看字幕，结束后生成完整转写。',
-        [liveModePicker(), h('button', { class: 'btn pri', type: 'button', disabled: S.starting, onclick: (e) => begin('disk', e.currentTarget) }, '开始录音')],
+        [h('button', { class: 'btn pri', type: 'button', disabled: S.starting, onclick: (e) => begin('disk', e.currentTarget) }, '开始录音')],
         h('small', { class: 'muted' }, deviceLabel(S.selectedDeviceId) || '连接圆盘后选择拾音设备')),
       sourceCard('clip', '领夹麦克风', '长时间录音，导入后交给盒端异步转写。',
         h('button', { class: 'btn', type: 'button', disabled: S.starting || S.importing,
@@ -1241,9 +1252,7 @@ async function startRecording(existing, source = existing?.source || 'disk') {
       const title = (S.draftTitle || '').trim();
       const memoryEnabled = S.settings?.memoryDefault !== false;
       const template = templateById(S.nextTemplateId);
-      const liveChoice = source === 'disk' && S.nextLiveMode === 'cloud' ? { liveCaptionMode: 'cloud', liveCloudConsent: true } : {};
-      m = await api('/api/meetings', { json: { ...liveChoice, title, templateId: template?.id, templateRevision: template?.revision, inputLabel: inp.label, memoryEnabled, source, sampleRate: context.sampleRate, channels } });
-      S.nextLiveMode = 'local';
+      m = await api('/api/meetings', { json: { title, templateId: template?.id, templateRevision: template?.revision, inputLabel: inp.label, memoryEnabled, source, sampleRate: context.sampleRate, channels } });
     }
   } catch (e) {
     void context?.close().catch(() => {});
@@ -1425,7 +1434,7 @@ async function finishRecording() {
   }
   try {
     const audioOnly = rec.boxInterrupted || !accessoryBoxReady;
-    const m = await api(`/api/meetings/${rec.meetingId}/finish`, { json: { chunkCount: rec.nextSeq, ...(audioOnly ? { audioOnly: true } : transcriptionChoice(rec.transcriptionMode)) } });
+    const m = await api(`/api/meetings/${rec.meetingId}/finish`, { json: { chunkCount: rec.nextSeq, ...(audioOnly ? { audioOnly: true } : {}) } });
     await teardown(rec);
     S.rec = null;
     S.meeting = m; S.lastSig = '';
@@ -1497,7 +1506,6 @@ function renderLive(main) {
           h('p', { class: 'muted disk-saved-duration' }, '原音已保存 ', R.saved)),
         h('div', { class: 'disk-capture-meter' }, R.canvas, R.level), controls)
         : [heading, timer, R.canvas, R.level],
-      transcriptionPicker(rec.transcriptionMode, mode => { rec.transcriptionMode = mode; }, rec.state === 'finishing'),
       rec.notice ? h('p', { class: `notice ${rec.notice.kind === 'bad' ? 'bad' : 'info'}` }, rec.notice.text) : null,
       paused && !rec.simulated && rec.state !== 'finishing' ? h('details', { open: !!rec.deviceLost || !S.selectedDeviceId, class: 'setup-settings' },
         h('summary', null, '拾音设备'), devicePicker({ onPick: () => render() })) : null,
@@ -1587,48 +1595,35 @@ function renderInterrupted(main) {
 }
 
 
-function liveModePicker() {
-  const cloudAvailable = S.health?.media?.cloudLive === true;
-  const note = h('small', { class: 'muted', role: 'status' });
-  function describe(mode) {
-    note.textContent = mode === 'cloud' ? '开始录音后，本次麦克风音频将通过万象中转站（QeeToken）实时发送至阿里云百炼。'
-      : cloudAvailable ? '在盒子上识别实时字幕。' : '当前盒子尚未开通云端实时字幕。';
-  }
-  describe(S.nextLiveMode);
-  return h('div', { class: 'field' }, h('label', null, '实时字幕方式 ', h('select', {
-    disabled: S.starting, onchange: event => { S.nextLiveMode = event.target.value; describe(S.nextLiveMode); },
-  }, h('option', { value: 'local', selected: S.nextLiveMode === 'local' }, '本地字幕'),
-  h('option', { value: 'cloud', selected: S.nextLiveMode === 'cloud', disabled: !cloudAvailable }, '云端字幕'))), note);
+async function renderRecordingSettings(main) {
+  const panel = h('section', { class: 'card' }, h('h1', { class: 'card-h' }, '录音设置'));
+  main.append(panel);
+  try {
+    const settings = await api('/api/settings');
+    if (!panel.isConnected) return;
+    S.settings = settings;
+    const picker = h('select', { id: 'recordingModel', onchange: async () => {
+      picker.disabled = true;
+      try {
+        S.settings = await api('/api/settings', { method: 'PUT', json: { recordingModel: picker.value } });
+        toast('录音模型已保存');
+      } catch (error) {
+        picker.value = S.settings.recordingModel || 'local';
+        toast(error.message);
+      } finally { picker.disabled = false; }
+    } }, h('option', { value: 'local' }, '本地模型'), h('option', { value: 'cloud' }, '云端模型'));
+    picker.value = settings.recordingModel || 'local';
+    panel.append(h('div', { class: 'card-b' }, h('div', { class: 'field' }, h('label', { for: 'recordingModel' }, '录音模型'), picker),
+      h('p', { class: 'muted' }, '使用云端模型时，录音音频会上传到云端进行识别。')));
+  } catch (error) { panel.append(h('p', { role: 'alert' }, error.message)); }
+}
+
+function transcriptionCapability() {
+  return S.settings?.recordingModel === 'cloud' ? 'cloudTranscribe' : 'transcribe';
 }
 
 function hasLiveCaptions(rec) {
   return S.health?.media?.[rec.liveCaptionMode === 'cloud' ? 'cloudLive' : 'live'] === true;
-}
-
-function transcriptionChoice(mode) {
-  return mode === 'cloud' ? { transcriptionMode: 'cloud', cloudConsent: true } : { transcriptionMode: 'local' };
-}
-
-function transcriptionPicker(selected = 'local', onChange, disabled = false) {
-  const cloudAvailable = S.health?.media?.cloudTranscribe === true;
-  const note = h('small', { class: 'muted', role: 'status' });
-  function describe(mode) {
-    note.textContent = mode === 'cloud' ? '本条录音将通过万象中转站（QeeToken）发送至阿里云百炼生成逐字稿。'
-      : cloudAvailable ? '在盒子上生成逐字稿。' : '当前盒子尚未开通云端精转。';
-  }
-  describe(selected);
-  return h('div', { class: 'field' },
-    h('label', null, '逐字稿转写方式 ', h('select', { disabled, onchange: event => {
-      describe(event.target.value);
-      onChange(event.target.value);
-    } }, h('option', { value: 'local', selected: selected === 'local' }, '本地转写'),
-    h('option', { value: 'cloud', selected: selected === 'cloud', disabled: !cloudAvailable }, '云端精转'))), note);
-}
-
-function chooseTranscription(m) {
-  let mode = 'local';
-  openRecordingForm('选择本次转写方式', transcriptionPicker(mode, value => { mode = value; }), '开始转写',
-    () => changeRecording(m, '/retry', { json: { stage: 'transcript', ...transcriptionChoice(mode) } }));
 }
 
 // —— 录音总结 ——
@@ -1971,7 +1966,6 @@ function renderReview(main) {
       } }), '确认时提炼到记忆'),
       accessoryAgent ? null : h('button', { type: 'button', onclick: () => { S.lib.spaceId = m.id; S.lib.spaceFile = null; go('space'); } }, '在试用空间查看')));
   const retry = async (stage, button) => {
-    if (stage === 'transcript') return chooseTranscription(m);
     button.disabled = true;
     try { const result = await api(`/api/meetings/${m.id}/retry`, { json: { stage } }); if (S.currentId === m.id) { S.meeting = result; render(); } }
     catch (e) { toast(e.message); button.disabled = false; }
@@ -2031,7 +2025,7 @@ function renderReview(main) {
         summaryUnavailable || '转写已完成，可以生成录音总结。', summaryAction(accessoryAgent ? '选择模板' : '生成总结'), reconnectSummary) : null,
       error && ['error', 'offline', 'partial'].includes(m[stage].status) ? h('p', { class: 'notice info' },
         stage === 'audio' ? '录音保存失败。' : stage === 'transcript' ? (m.transcript.status === 'partial' ? `转录尚未完成，${error}。` : error || '转录暂不可用。') : summaryUnavailable || summaryFailure(error),
-        stage === 'transcript' && m.audio.status === 'saved' && !S.health?.media?.transcribe && accessoryAgent ?
+        stage === 'transcript' && m.audio.status === 'saved' && !S.health?.media?.[transcriptionCapability()] && accessoryAgent ?
           h('span', null, ' 原音已保存在本机，可随时回听。',
             S.health?.media?.connected ? '盒端转写尚未就绪。' : '请确认已连接盒子。',
             mediaReconnectLink()) :
@@ -2068,8 +2062,8 @@ function renderReview(main) {
     m.audio.status === 'saved' ? h('div', { class: 'transcription-controls' },
       h('span', { class: 'muted', role: 'status' }, m.pipelineRunning && m.pendingTranscription === 'cloud' ? '正在云端精转…'
         : m.transcript.status === 'done' || m.transcript.status === 'partial'
-          ? ['当前逐字稿', m.transcript.mode === 'cloud' ? '云端精转' : '本地转写', m.transcript.model].filter(Boolean).join(' · ') : '逐字稿转写方式'),
-      h('button', { class: 'btn sm', type: 'button', disabled: !!m.pipelineRunning || !!editor, onclick: () => chooseTranscription(m) }, '选择转写方式')) : null,
+          ? ['当前逐字稿', m.transcript.mode === 'cloud' ? '云端精转' : '本地转写', m.transcript.model].filter(Boolean).join(' · ') : '逐字稿'),
+      h('button', { class: 'btn sm', type: 'button', disabled: !!m.pipelineRunning || !!editor, onclick: e => retry('transcript', e.currentTarget) }, m.transcript.segments.length ? '重新转写' : '开始转写')) : null,
     m.transcriptionError ? h('p', { class: 'notice', role: 'status' }, '重新转写未完成，已保留原逐字稿。', m.transcriptionError)
       : m.transcript.mode === 'cloud' && m.transcript.error ? h('p', { class: 'notice', role: 'status' }, '云端精转未完成。', m.transcript.error) : null,
     accessoryAgent && player ? h('label', {class:'playback-speed'}, '播放速度',
@@ -2299,6 +2293,23 @@ function speakerControls(meeting, { panel = false, playable = true } = {}) {
       stage: 'speakers', expectedSpeakers: input.value === '' ? null : Number(input.value),
     } }));
   };
+  const rows = labels.map((label) => {
+    const segments = meeting.transcript.segments.filter((segment) => segment.speakerIds?.includes(label.id));
+    const example = panel ? segments.find((segment) => segment.speakerIds.length === 1) || segments[0] : segments[0];
+    const turn = speakers.turns?.find((segment) => segment.speakerIds.includes(label.id));
+    const position = example?.fromMs ?? turn?.startMs;
+    const actions = [
+      playable && Number.isFinite(position) ? h('button', { class: 'btn sm', type: 'button',
+        'aria-label': panel ? `试听 ${label.name}` : null, onclick: () => seek(position) }, '试听') : null,
+      panel ? null : h('button', { class: 'btn sm', type: 'button', onclick: () => editSpeakerName(meeting, label) }, '改名'),
+      labels.length > 1 ? h('button', { class: 'btn sm', type: 'button',
+        'aria-label': panel ? `合并 ${label.name}` : null, onclick: () => mergeSpeaker(meeting, label) }, '合并') : null,
+    ];
+    return h('div', { class: 'recording-speaker-row' }, panel
+      ? [speakerTagButton(label.name, '修改本场发言人姓名', () => editSpeakerName(meeting, label)),
+        h('small', { class: 'muted' }, segments.length ? `${segments.length} 段` : '未关联逐字稿'), h('div', { class: 'row disk-speaker-actions' }, actions)]
+      : [h('span', null, label.name), actions]);
+  });
   return h('section', { class: panel ? 'card recording-speaker-tools disk-speaker-panel' : 'recording-speaker-tools', 'aria-label': '发言人管理' },
     h('div', { class: 'recording-speaker-heading' }, panel ? h('h2', null, '本场发言人') : h('strong', null, '发言人'),
       panel && labels.length ? h('span', { class: 'muted' }, `${labels.length} 位`) : null,
@@ -2308,23 +2319,7 @@ function speakerControls(meeting, { panel = false, playable = true } = {}) {
     panel && labels.length ? h('p', { class: 'muted disk-speaker-note' }, '系统分离发言，姓名可试听后备注。') : null,
     message ? h('p', { class: 'muted', role: 'status' }, message) : null,
     panel && speakers?.conflicts?.length ? h('p', { class: 'disk-speaker-conflict' }, `${speakers.conflicts.length} 段归属待核对`) : null,
-    labels.map((label) => {
-      const segments = meeting.transcript.segments.filter((segment) => segment.speakerIds?.includes(label.id));
-      const example = panel ? segments.find((segment) => segment.speakerIds.length === 1) || segments[0] : segments[0];
-      const turn = speakers.turns?.find((segment) => segment.speakerIds.includes(label.id));
-      const position = example?.fromMs ?? turn?.startMs;
-      const actions = [
-        playable && Number.isFinite(position) ? h('button', { class: 'btn sm', type: 'button',
-          'aria-label': panel ? `试听 ${label.name}` : null, onclick: () => seek(position) }, '试听') : null,
-        panel ? null : h('button', { class: 'btn sm', type: 'button', onclick: () => editSpeakerName(meeting, label) }, '改名'),
-        labels.length > 1 ? h('button', { class: 'btn sm', type: 'button',
-          'aria-label': panel ? `合并 ${label.name}` : null, onclick: () => mergeSpeaker(meeting, label) }, '合并') : null,
-      ];
-      return h('div', { class: 'recording-speaker-row' }, panel
-        ? [speakerTagButton(label.name, '修改本场发言人姓名', () => editSpeakerName(meeting, label)),
-          h('small', { class: 'muted' }, `${segments.length} 段`), h('div', { class: 'row disk-speaker-actions' }, actions)]
-        : [h('span', null, label.name), actions]);
-    }));
+    panel && rows.length ? h('div', { class: 'disk-speaker-list', role: 'region', 'aria-label': '发言人列表', tabindex: 0 }, rows) : rows);
 }
 
 function recordingBookmarks(meeting, player) {

@@ -1,5 +1,6 @@
-export function overviewHTML({warehouse, goal, ontology, documents, setup, pending, esc, date}) {
+export function overviewHTML({warehouse, goal, canEditGoal, ontology, documents, setup, pending, esc, date}) {
   if (!warehouse) return '<div class="empty">请从「我的项目」选择或新建一张星图。</div>';
+  const goalText = goal === undefined ? '正在读取星图目标…' : goal === null ? '暂时无法读取星图目标。' : goal || '尚未填写目标。';
   const counts = [['资料', warehouse.document_count], ['实体', warehouse.entity_count], ['关系', warehouse.relation_count]];
   const metrics = counts.map(([label, count]) => `<div><dt>${label}</dt><dd>${esc(count ?? '—')}</dd></div>`).join('');
   const recent = [...documents].sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))).slice(0, 4);
@@ -8,8 +9,10 @@ export function overviewHTML({warehouse, goal, ontology, documents, setup, pendi
     : pending?.length ? `<p>${pending.length} 份已加载资料待核对。</p><ul class="overview-documents">${pending.slice(0, 4).map(item => `<li><button type="button" class="text-link" data-overview-document="${esc(item.document_id)}">${esc(item.document.original_name)}</button></li>`).join('')}</ul>`
     : `<p class="muted">${pending ? '最近加载的资料没有待核对项。' : '可在资料库查看待核对的资料。'}</p>`;
   return `<div class="starlink-overview">
-    <section class="overview-goal"><header><h2>星图目标</h2><button type="button" class="text-link" data-view="ontology">查看本体</button></header>
-      <p>${esc(goal || warehouse.description || '尚未填写目标。')}</p></section>
+    <section class="overview-goal"><header><h2>星图目标</h2><div class="overview-goal-actions">
+      ${canEditGoal ? `<button type="button" class="text-link" data-action="edit-warehouse-goal">${goal === '' ? '填写目标' : '编辑目标'}</button>` : ''}
+      <button type="button" class="text-link" data-view="ontology">查看本体</button></div></header>
+      <p>${esc(goalText)}</p></section>
     <section><header><h2>当前快照</h2><button type="button" class="text-link" data-view="graph">打开星图</button></header>
       <dl class="overview-numbers">${metrics}</dl>
       ${ontology ? `<p class="muted">本体 v${esc(ontology.version_number)} · ${esc(ontology.name)}</p>` : ''}</section>

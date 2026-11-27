@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
+import { graphConnections } from "../ui/graph-presentation.mjs";
 
 const source = await readFile(new URL("../ui/app.js", import.meta.url), "utf8");
 const renderSource = source.slice(source.indexOf("function renderGraph() {"), source.indexOf("function renderDetails(g) {"));
@@ -15,7 +16,7 @@ function render({ warehouses = [], warehouseId = "selected", graphError = null, 
   };
   const state = { warehouses, warehouseId, graphError, showIsolated, ready: true, graph: { nodes, edges: [] } };
   vm.runInNewContext(`${renderSource}\n${warehouseSource}\nrenderGraph();`, {
-    state, $, visibleGraph: () => ({ nodes: [], edges: [] }),
+    state, $, graphConnections, visibleGraph: () => ({ nodes: [], edges: [] }),
     starxiaotuMarker: () => "", starxiaotuTermMarker: () => "",
     currentSetup:()=>null, unfinishedStarlinkDraft:()=>false, errorText: error => error.message, document: { querySelectorAll: () => [] },
     explorer: { enabled: () => false }, transformScene() {}, renderDetails() {}, canCreateWarehouse: () => true,

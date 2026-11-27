@@ -910,7 +910,7 @@ function deviceCard(device) {
   return `<article class="device-card ${selected ? "selected" : ""}">
     <span class="box-connect-icon">${boxConnectionIcon}</span>
     <div class="device-main"><h3>${escapeHTML(device.name || device.displayName || "盒子")}</h3><p class="device-meta"><span class="status-dot ${selected ? "ready" : ""}"></span>${device.local ? "本机服务 · " : ""}${escapeHTML(statusLabel(device))}</p>${device.accessState === "authorization_pending" ? `<p class="device-meta">${authorizationHint()}</p>` : ""}${networkHint ? `<p class="device-meta" role="status">${escapeHTML(networkHint)}</p>` : ""}${connectionFailure?.deviceId === device.deviceId ? `<p class="inline-error" role="alert">${escapeHTML(connectionFailure.message)} <button class="text-button" data-action="show-help" data-scene="box_connection">查看常见问题</button></p>` : ""}</div>
-    <div class="device-action">${action}${!currentState.dataIdentity?.profileId && (device.deviceRole === "owner" || device.role === "owner") ? `${!device.local ? `<button class="text-button" data-action="configure-network" data-device-id="${escapeHTML(device.deviceId)}" ${busy ? "disabled" : ""}>配置网络</button>` : ""}<button class="text-button" data-action="support-open" data-device-id="${escapeHTML(device.deviceId)}" ${busy ? "disabled" : ""}>远程协助</button><button class="text-button" data-action="transfer-open" data-device-id="${escapeHTML(device.deviceId)}" ${busy ? "disabled" : ""}>转移所有权</button>` : ""}</div></article>`;
+    <div class="device-action">${action}${!currentState.dataIdentity?.profileId && (device.deviceRole === "owner" || device.role === "owner") ? `${!device.local ? `<button class="text-button" data-action="configure-network" data-device-id="${escapeHTML(device.deviceId)}" ${busy ? "disabled" : ""}>配置网络</button>` : ""}${supportView.hasEntry(device.deviceId) ? `<button class="text-button" data-action="support-open" data-device-id="${escapeHTML(device.deviceId)}" ${busy ? "disabled" : ""}>远程协助</button>` : ""}<button class="text-button" data-action="transfer-open" data-device-id="${escapeHTML(device.deviceId)}" ${busy ? "disabled" : ""}>转移所有权</button>` : ""}</div></article>`;
 }
 
 function networkStatus() {
@@ -2306,7 +2306,7 @@ function render(state) {
   if (!viewingRedactionSettings || !redactionRuleComposition?.isConnected) redactionRuleComposition = null;
   window.wanxSpace?.activate(!auth && (page === "boxes" || page === "space"), page === "space");
   supportView.sync(auth || state.account?.phase !== "authenticated" ? null : JSON.stringify([state.account?.accountId, state.account?.clientId]), state.devices || []);
-  supportView.visible(!auth && page === "boxes");
+  supportView.visible(!auth && page === "boxes" && !state.dataIdentity?.profileId);
   creditsView.visible(!auth && page === "credits");
   if (activeInteraction || window.wanxSpace?.isSelecting?.() || window.wanxSpace?.isDragging?.()) return;
   // Moving even the same input node interrupts the native IME candidate session.

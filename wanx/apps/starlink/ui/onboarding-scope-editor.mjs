@@ -155,8 +155,8 @@ export function mountScopeEditor({host, call, warehouse, identity, storage, onCl
         return;
       }
       const scope = {...initial.scope, ...changes};
-      if (!scope.service_objects.length || !scope.purposes.length) {
-        message = '请填写服务对象和用途。';
+      if (!scope.purposes.length) {
+        message = '请填写星图目标。';
         return;
       }
       if (Object.keys(changes).length) review = {changes, scope, operationId:crypto.randomUUID()};

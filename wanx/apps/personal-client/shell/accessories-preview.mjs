@@ -23,14 +23,12 @@ function toolEnvironment(app) {
 }
 
 export const ACCESSORY_SCHEME = "wanx-accessories";
-const MEETING_RECORDING_APP = "centaurai.memobox.recording";
 const catalogFiles = new Set(["/accessories", "/app.js", "/style.css", "/accessories.css",
   "/box-connection.css", "/accessory-art.svg", "/centaurai-mark.png", "/favicon.svg"]);
 
-export function createAccessoriesPreview({ app, window, BrowserWindow, navigate, resourceDirectory, dataDirectory, memoryFile, ensureMemory, client, account, dialog, safeStorage, launchApplication, installApplication, onError }) {
+export function createAccessoriesPreview({ app, window, BrowserWindow, navigate, resourceDirectory, dataDirectory, memoryFile, ensureMemory, client, account, dialog, safeStorage, onError }) {
   let worker, catalog, revision = 0;
   let runtime;
-  let openingRecorder;
   const windows = new Map();
   const names = { disk: "会议录音智能体", clip: "随身录音智能体", storage: "硬盘管理智能体" };
   const validKind = kind => kind === "disk" || kind === "clip";
@@ -339,32 +337,6 @@ export function createAccessoriesPreview({ app, window, BrowserWindow, navigate,
       && selected.box === connectionKey();
   }
 
-  async function openMeetingRecorder(box) {
-    try { await launchApplication(MEETING_RECORDING_APP); }
-    catch (error) {
-      if (error.code !== "APPLICATION_NOT_INSTALLED") throw error;
-      const {response} = await dialog.showMessageBox(window, {
-        type:"info", title:"会议录音智能体", message:"请先安装会议录音智能体",
-        detail:"选择会议录音智能体的 ZIP 安装包。安装完成后会打开独立应用。",
-        buttons:["取消", "选择安装包"], defaultId:1, cancelId:0, noLink:true,
-      });
-      if (response !== 1) return {status:"not-installed"};
-      requireBox(box);
-      try {
-        if (!await installApplication(MEETING_RECORDING_APP)) return {status:"not-installed"};
-      } catch (failure) {
-        const message = failure.code === "APPLICATION_MANIFEST_MISMATCH"
-          ? "请选择会议录音智能体的 ZIP 安装包。" : "暂时无法安装，请检查安装包后重试。";
-        await dialog.showMessageBox(window, {type:"warning", title:"会议录音智能体", message, buttons:["知道了"]});
-        return {status:"not-installed"};
-      }
-      requireBox(box);
-      await launchApplication(MEETING_RECORDING_APP);
-    }
-    requireBox(box);
-    return {status:"ready"};
-  }
-
   // Only the catalog's public assets and its two hardware indicators are exposed
   // to the embedded origin. Recording windows keep their own session and permissions.
   async function handleCatalog(request) {
@@ -401,9 +373,6 @@ export function createAccessoriesPreview({ app, window, BrowserWindow, navigate,
     const box = requireBox();
     if (input?.project && validKind(input.project.kind)) return openAgent(input.project.kind, input.project.id);
     if (input?.guideOpen && activeCatalog(catalog) && input.catalogHost === catalog.host) {
-      if (input.guideOpen === "disk") {
-        return openingRecorder ||= openMeetingRecorder(box).finally(() => { openingRecorder = undefined; });
-      }
       if (validKind(input.guideOpen) || input.guideOpen === "storage") return openAgent(input.guideOpen);
       if (input.guideOpen === "storage-space") { navigate("space"); return {status:"ready"}; }
     }

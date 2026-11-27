@@ -494,10 +494,10 @@ if (process.argv.includes("--wanx-managed-app")) {
       control.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
       control.webContents.on("will-navigate", event => event.preventDefault());
       control.webContents.on("will-attach-webview", event => event.preventDefault());
-      const confirmLocalApplicationArchive = async (archivePath, openAfterInstall = false) => {
+      const confirmLocalApplicationArchive = async archivePath => {
         const result = await dialog.showMessageBox(control, {
           type: "warning", title: "安装本地应用", message: "确认安装此应用包？",
-          detail: `${path.basename(archivePath)}\n请仅安装来自可信来源的应用包。${openAfterInstall ? "安装完成后会打开应用。" : "安装不会自动打开应用，已有业务数据会保留。"}`,
+          detail: `${path.basename(archivePath)}\n请仅安装来自可信来源的应用包。安装不会自动打开应用，已有业务数据会保留。`,
           buttons: ["取消", "安装"], defaultId: 0, cancelId: 0, noLink: true,
         });
         return result.response === 1;
@@ -513,13 +513,6 @@ if (process.argv.includes("--wanx-managed-app")) {
       };
       const accessoriesPreview = createAccessoriesPreview({
         app, window: control, BrowserWindow, client, account, dialog, safeStorage,
-        launchApplication: applicationId => applications.launch(applicationId),
-        installApplication: async expectedApplicationId => {
-          const archivePath = await selectApplicationArchive();
-          if (!archivePath || !await confirmLocalApplicationArchive(archivePath, true)) return false;
-          await applications.install({ archivePath, expectedApplicationId });
-          return true;
-        },
         navigate: page => sendToLiveFrame(control, "wanx-client:navigate", page),
         memoryFile: () => memoryRuntimeFile, ensureMemory: () => memoryRuntime.ensure(),
         resourceDirectory: app.isPackaged ? path.join(process.resourcesPath, "accessory-preview")

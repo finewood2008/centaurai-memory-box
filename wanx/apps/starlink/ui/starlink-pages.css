@@ -25,6 +25,10 @@
 }
 .starlink-overview h2, .knowledge-section h3 { margin: 0; font-size: 15px; }
 .overview-goal p { max-width: 76ch; margin: 10px 0 0; white-space: pre-line; overflow-wrap: anywhere; }
+.overview-goal-actions { display: flex; gap: 12px; }
+.warehouse-goal-dialog form { display: grid; gap: 10px; }
+.warehouse-goal-dialog textarea { width: 100%; resize: vertical; }
+.warehouse-goal-dialog [role=status] { white-space: pre-line; }
 .overview-numbers {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

@@ -177,7 +177,7 @@ export function createOnboardingUI({ bridge, call, enter, onChange, onCreated })
       } else {
         await quickCreateWarehouse({
           storage, identity: entry.identity, call: request, enter: enterCurrent, legacyQuick, isCurrent,
-          name: name.value.trim(), description: '', profileId: entry.profileId,
+          name: name.value.trim(), description: profileById.get(entry.profileId).goal, profileId: entry.profileId,
           installOntology: (record, save) => keepCurrentRules && record.input.operationId === entry.conflict
             ? undefined : installInitialOntology({
             record, save,

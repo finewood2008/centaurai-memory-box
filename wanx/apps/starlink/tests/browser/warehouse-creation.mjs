@@ -31,6 +31,9 @@ const calls = [];
 const receipts = new Map();
 const warehouses = new Map();
 const versions = new Map();
+const goals = new Map();
+const goalReceipts = new Map();
+const failedGoalReads = new Set();
 const lostCreates = new Set();
 const lostDrafts = new Set();
 const lostPublications = new Set();
@@ -62,6 +65,25 @@ ipc('starlink', async (_event, {action, input = {}}) => {
   if (action === 'warehouse') return ok(warehouses.get(input.id ?? input.warehouseId));
   if (action === 'graph') return ok({nodes:[], edges:[]});
   if (action === 'conversation-ontologies') return ok({items:projectVersions || []});
+  if (action === 'onboarding-context' && failedGoalReads.delete(input.warehouseId)) return lost();
+  if (action === 'onboarding-context') return ok({
+    purpose_revision:goals.get(input.warehouseId).revision,
+    warehouse_scope:{purposes:goals.get(input.warehouseId).purposes, service_objects:[]},
+    base_ontology_id:projectVersions.find(row => row.status === 'published').id,
+  });
+  if (action === 'onboarding-scope-publish') {
+    const body = input.body, goal = goals.get(input.warehouseId);
+    if (goalReceipts.has(body.operation_id)) return ok({...goalReceipts.get(body.operation_id), reused:true});
+    if (body.expected_revision !== goal.revision) return {ok:false, code:'MODELING_REVISION_CHANGED', status:409};
+    assert.deepEqual(Object.keys(body.changes), ['purposes']);
+    assert.equal(body.base_ontology_id, projectVersions.find(row => row.status === 'published').id);
+    assert.equal(body.confirmed, true);
+    goal.purposes = body.changes.purposes;
+    goal.revision++;
+    goalReceipts.set(body.operation_id, {status:'published', scope:{purposes:goal.purposes},
+      ontology_id:body.base_ontology_id, purpose_revision:goal.revision});
+    return goalReceipts.size === 1 ? lost() : ok(goalReceipts.get(body.operation_id));
+  }
   if (action === 'processing') return ok({revision:0, affected_warehouses:[...warehouses.values()].map(item => item.name), stages:[],
     effective:{revision:0, mode:'automatic', source:'default', extraction:sharedModel, sensitive:sharedModel}});
   if (action === 'model-catalog') return ok({items:[sharedModel], default:sharedModel});
@@ -77,6 +99,7 @@ ipc('starlink', async (_event, {action, input = {}}) => {
       receipts.set(input.operationId, created);
       warehouses.set(id, created);
       versions.set(id, [base]);
+      goals.set(id, {purposes:[input.description], revision:1});
     }
     if (lostCreates.delete(input.name)) return lost();
     return ok(created);
@@ -173,7 +196,7 @@ app.whenReady().then(async () => {
     assert.equal(await read('#model-source', '!node.hidden && node.textContent.includes("跟随万象底座默认模型")'), true);
     assert.ok(calls.filter(({action}) => ['processing','model-catalog','starxiaotu-models'].includes(action)).every(({input}) => input.warehouseId === null));
 
-    for (const {id, label} of WAREHOUSE_ONTOLOGY_PROFILES) {
+    for (const {id, label, goal} of WAREHOUSE_ONTOLOGY_PROFILES) {
       const projectName = '验收星图 · ' + label;
       const firstCall = calls.length;
       await open();
@@ -208,13 +231,13 @@ app.whenReady().then(async () => {
       assert.equal(await read('#warehouse-creation', '!node.open'), true);
       assert.equal(await read('#starlink-current-name', 'node.textContent.trim()'), projectName);
       assert.equal(await read('#view-conversation', 'node.querySelectorAll("#cv-message,.conversation-composer,[data-cv=library-start],[data-cv=material-dialogue]").length'), 0);
-      assert.equal(await star('Boolean(document.querySelector("[data-sx-toggle]:not([hidden])"))'), true);
+      assert.equal(await star('typeof window.semantica.openGuide === "function" || Boolean(document.querySelector("[data-sx-toggle]:not([hidden])"))'), true);
 
       const requestLog = calls.slice(firstCall);
       assert.equal(requestLog.some(({action}) => ['check-models', 'save-models'].includes(action)), false, 'New projects must use the platform model without writing a preference');
       const requests = requestLog.filter(({action}) => action === 'create-warehouse');
       assert.equal(requests.length, id === 'projects' ? 2 : 1);
-      assert.ok(requests.every(({input}) => input.name === projectName && input.description === '' && !input.warehouseScope));
+      assert.ok(goal && requests.every(({input}) => input.name === projectName && input.description === goal && !input.warehouseScope));
       const op = requests[0].input.operationId;
       assert.ok(requests.every(({input}) => input.operationId === op), 'Creating after response loss resumes the original operation');
       const created = receipts.get(op);
@@ -238,8 +261,90 @@ app.whenReady().then(async () => {
         ['conversation-create','conversation-send','assistant-intent','starxiaotu-answer'].includes(action) ||
         (action === 'workbench-request' && input.method === 'POST' && input.url.startsWith('/api/conversations'))), false);
       if (id === 'general') await capture('03-直接进入资料库');
+      await runClick('.starlink-rail [data-view=overview]');
+      await until(async () => await read('.overview-goal p', 'node?.textContent') === goal, 'Default goal missing in overview');
+      if (id === 'general') {
+        const edit = '[data-action=edit-warehouse-goal]';
+        const save = '.warehouse-goal-dialog[open] [type=submit]';
+        const setGoal = value => star(`(() => {
+          const field = document.querySelector('.warehouse-goal-dialog[open] textarea');
+          field.value = ${JSON.stringify(value)};
+          field.dispatchEvent(new Event('input', {bubbles:true}));
+        })()`);
+        // Reopen a warehouse with no stored purpose, as on a pre-upgrade box.
+        goals.set(created.id, {purposes:[], revision:0});
+        failedGoalReads.add(created.id);
+        await runClick('.starlink-rail [data-view=conversation]');
+        await runClick('.starlink-rail [data-view=overview]');
+        await until(async () => await read('.overview-goal p', 'node?.textContent') === '暂时无法读取星图目标。', 'Read failure displayed the creation goal');
+        await runClick(edit);
+        await until(() => read('.warehouse-goal-dialog[open] textarea', 'node && !node.disabled'), 'Editor could not recover a failed overview read');
+        await runClick('.warehouse-goal-dialog[open] [type=button]');
+        await until(async () => await read(edit, 'node?.textContent') === '填写目标', 'Empty goal was backfilled');
+        await runClick(edit);
+        await until(() => read('#warehouse-goal-input', 'node && !node.disabled'), 'Goal editor did not load');
+        assert.equal(await read('#warehouse-goal-input', 'node.value'), '');
+        await setGoal('目标\n'.repeat(7));
+        await runClick(save);
+        await until(() => read('.warehouse-goal-dialog [role=status]', "node?.textContent.includes('1–6')"), 'Missing goal limit validation');
+        assert.equal(goalReceipts.size, 0);
+        await setGoal('跟进会议决定');
+        goals.set(created.id, {purposes:['来自另一设备'], revision:1});
+        await runClick(save);
+        await until(() => read('.warehouse-goal-dialog [role=status]', "node?.textContent.includes('来自另一设备')"), 'Conflict did not show current goal');
+        assert.equal(await read('#warehouse-goal-input', 'node.value'), '跟进会议决定');
+        await runClick('.warehouse-goal-dialog[open] [type=button]');
+        await until(async () => await read('.overview-goal p', 'node?.textContent') === '来自另一设备', 'Dismissed conflict left the previous goal on screen');
+        await star("document.querySelector('[data-action=edit-warehouse-goal]').focus()");
+        await runClick(edit);
+        await until(async () => await read('.warehouse-goal-dialog[open] textarea', 'node?.value') === '来自另一设备', 'Reopened editor missed the current goal');
+        await setGoal('跟进会议决定');
+        await runClick(save);
+        await until(() => read('.warehouse-goal-dialog [role=status]', "node?.textContent.includes('重试保存')"), 'Missing retry after response loss');
+        assert.equal(goals.get(created.id).revision, 2);
+        goals.set(created.id, {purposes:['另一设备的最新目标'], revision:3});
+        await star(`{
+          const overview = document.querySelector('#view-overview');
+          window.sawStaleReceipt = false;
+          const observer = new MutationObserver(() => {
+            const text = overview.querySelector('.overview-goal p')?.textContent;
+            if (text === '跟进会议决定') window.sawStaleReceipt = true;
+            if (text === '另一设备的最新目标') observer.disconnect();
+          });
+          observer.observe(overview, {childList:true, subtree:true});
+        }`);
+        await runClick(save);
+        await until(async () => await read('.overview-goal p', 'node?.textContent') === '另一设备的最新目标', 'Replayed receipt hid the newer goal');
+        assert.equal(await star('window.sawStaleReceipt'), false, 'An old receipt appeared as the current goal');
+        assert.equal(await star('document.activeElement?.dataset.action'), 'edit-warehouse-goal', 'Overview refresh lost keyboard focus after saving');
+        await runClick(edit);
+        await until(async () => await read('.warehouse-goal-dialog[open] textarea', 'node?.value') === '另一设备的最新目标', 'Stored goal not restored');
+        await setGoal(' 另一设备的最新目标\n');
+        assert.equal(await read(save, 'node.disabled'), true);
+        await star("document.querySelector('.warehouse-goal-dialog[open] form').requestSubmit()");
+        await setGoal('跟进会议决定\n核对依据');
+        await runClick(save);
+        await until(async () => await read('.overview-goal p', 'node?.textContent') === '跟进会议决定\n核对依据', 'New goal missing from overview');
+        assert.equal(goals.get(created.id).revision, 4);
+        assert.equal(goalReceipts.size, 2);
+        assert.equal(versions.get(created.id).length, 2);
+        await runClick(edit);
+        await until(async () => await read('.warehouse-goal-dialog[open] textarea', 'node?.value') === '跟进会议决定\n核对依据', 'Saved lines did not round trip');
+        // Drive the same refresh used by polling while the hidden test window is idle.
+        const refresh = '.warehouse-directory-tools [data-action=refresh]';
+        warehouses.get(created.id).state = 'importing';
+        await runClick(refresh);
+        await until(() => star('!document.querySelector(".warehouse-goal-dialog[open]")'), 'Unavailable warehouse left its editor open');
+        assert.equal(await read(edit, 'Boolean(node)'), false);
+        goals.set(created.id, {purposes:['恢复后的目标'], revision:5});
+        warehouses.get(created.id).state = 'active';
+        await runClick(refresh);
+        await until(async () => await read('.overview-goal p', 'node?.textContent') === '恢复后的目标', 'Reactivated warehouse did not reload its goal');
+      }
+      await runClick('.starlink-rail [data-view=conversation]');
     }
     assert.equal(warehouses.size, 4);
+    await until(() => read('#page-primary[data-action=import]', 'node && !node.disabled && !node.hidden'), 'Import did not become ready after returning to the library');
     await runClick('#page-primary[data-action=import]');
     await until(() => read('#import-dialog', 'node?.open'), 'Import did not open in the new library');
     console.log('STARLINK_WAREHOUSE_CREATION_PASS');

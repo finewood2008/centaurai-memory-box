@@ -5,6 +5,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import * as Meetings from '../resources/accessory-preview/lib/meetings.mjs';
+import { putSettings } from '../resources/accessory-preview/lib/library.mjs';
 import { createMedia, fileDigest, media, CLOUD_ASR } from '../resources/accessory-preview/lib/media.mjs';
 
 async function scratch(t) {
@@ -107,8 +108,19 @@ test('per-recording choice requires explicit cloud consent and keeps an existing
   const next = await create();
   await Meetings.finishMeeting(next, cloud);
   assert.equal((await settle(next)).transcript.mode, 'cloud');
+  await assert.rejects(putSettings({ recordingModel: 'invalid' }), { status: 400 });
+  await putSettings({ recordingModel: 'cloud' });
+  const preferred = await create();
+  assert.equal(Meetings.view(preferred).liveCaptionMode, 'cloud');
+  await Meetings.finishMeeting(preferred);
+  assert.equal((await settle(preferred)).transcript.mode, 'cloud');
+  const clip = await Meetings.importAudio((await Meetings.spaceFile(id, 'audio')).file, 'clip.wav');
+  assert.equal((await settle(clip.id)).transcript.mode, 'cloud');
+  await putSettings({ recordingModel: 'local' });
+  await Meetings.retryStage(clip.id, 'transcript');
+  assert.equal((await settle(clip.id)).transcript.mode, 'local');
   const ordinary = await create();
   await Meetings.finishMeeting(ordinary);
   assert.equal((await settle(ordinary)).transcript.mode, 'local');
-  assert.deepEqual(calls.map(({ cloudConsent }) => cloudConsent), [false, true, true, true, false]);
+  assert.deepEqual(calls.map(({ cloudConsent }) => cloudConsent), [false, true, true, true, true, true, false, false]);
 });
