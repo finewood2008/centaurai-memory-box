@@ -111,11 +111,8 @@ export async function prepareAudioTools({ clientRoot = root, arch = "x64" } = {}
   mkdirSync(parent, { recursive: true });
   const temp = mkdtempSync(path.join(parent, "prepare-"));
   const extracted = path.join(temp, "extracted");
-  const script = "$ErrorActionPreference='Stop'; Expand-Archive -LiteralPath $env:WANX_AUDIO_ARCHIVE -DestinationPath $env:WANX_AUDIO_EXTRACT";
-  execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
-    windowsHide: true, timeout: 120000,
-    env: { ...process.env, WANX_AUDIO_ARCHIVE: archive, WANX_AUDIO_EXTRACT: extracted },
-  });
+  mkdirSync(extracted);
+  run("tar.exe", ["-xf", archive, "-C", extracted]);
   const folders = readdirSync(extracted);
   if (folders.length !== 1) throw new Error("AUDIO_TOOLS_ARCHIVE_LAYOUT_INVALID");
   const source = path.join(extracted, folders[0]);
